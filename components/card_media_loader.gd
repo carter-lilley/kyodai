@@ -24,7 +24,7 @@ const MAX_COVER_TEXTURE_SIZE: int = 512
 const FAILURE_RETRY_TTL_SEC: int = 300
 # Bound the static failure-TTL map so permanently-failing URLs don't grow it forever.
 const MAX_FAILED_DOWNLOADS: int = 512
-const DEBUG_LOG: bool = true
+const DEBUG_LOG: bool = false
 
 static var _failed_downloads: Dictionary = {}
 
@@ -44,7 +44,10 @@ static func preload_cover(game: GameResource) -> void:
 		var p: String = DataManager.get_cached_image_path(game.cover_url)
 		if FSM.file_exists(p):
 			cache_path = p
-	if cache_path == "" or SystemManager.memory.get_cached_texture(cache_path):
+	if cache_path == "":
+		return
+	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
+	if SystemManager.memory.get_cached_texture(cache_key):
 		return
 	var load_callable = func():
 		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
@@ -52,8 +55,8 @@ static func preload_cover(game: GameResource) -> void:
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
 			if texture:
-				SystemManager.memory.cache_texture(cache_path, texture)
-	SystemManager.memory.queue_image_task(load_callable, callback_callable, false, cache_path)
+				SystemManager.memory.cache_texture(cache_key, texture)
+	SystemManager.memory.queue_image_task(load_callable, callback_callable, false, cache_key)
 
 func _init(card: GameCard) -> void:
 	_card = card
@@ -94,7 +97,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		return
 
 	# Memory cache hit: apply immediately without queueing a worker task.
-	var cached_tex = SystemManager.memory.get_cached_texture(cache_path)
+	var cached_tex = SystemManager.memory.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
 	if cached_tex:
 		_emit_texture(cached_tex)
 		return
@@ -156,7 +159,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
 			if texture:
-				SystemManager.memory.cache_texture(cache_path, texture)
+				SystemManager.memory.cache_texture(MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE), texture)
 				_emit_texture(texture)
 		else:
 			_image_retry_count += 1
@@ -167,7 +170,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 			else:
 				push_error("[CardMediaLoader] Cache file undecodable after %d retries: %s" % [MAX_IMAGE_RETRIES, cache_path])
 
-	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, cache_path)
+	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
 	var target_game_id = _loading_game_id
@@ -191,7 +194,9 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 			return
 		if loaded_texture:
 			_failed_downloads.erase(cover_url)
-			SystemManager.memory.cache_texture(cache_path, loaded_texture)
+			# loaded_texture is full-res (CoverSubManager does not downscale),
+			# so don't cache it under the 512px card key. The file is on disk
+			# now; the next load decodes to the proper card variant.
 			_emit_texture(loaded_texture)
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)

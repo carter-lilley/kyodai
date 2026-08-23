@@ -13,6 +13,7 @@ const WIDTH_FRACTION := 0.75
 const MAX_WIDTH_DP := 1200.0
 const H_MARGIN_DP := 32.0
 const DESCRIPTION_SIZE_DP := 20.0
+const MAX_DETAILS_TEXTURE_SIZE: int = 1024
 
 
 const TAB_MARGIN_TOP_DP := 12.0
@@ -310,15 +311,19 @@ func prepare_for_game(romm_id: int) -> void:
 
 	# Decode the local cover on a background thread so it's ready if Details is selected.
 	if game.cover_path and FSM.file_exists(game.cover_path):
+		var cache_key := MemorySubManager.cover_cache_key(game.cover_path, MAX_DETAILS_TEXTURE_SIZE)
+		var cached := MemorySubManager.get_cached_texture(cache_key)
+		if cached:
+			_prepared_cover = cached
+			return
 		MemorySubManager.queue_image_task(
 			func() -> Image:
-				var img := Image.new()
-				if img.load(game.cover_path) == OK and not img.is_empty():
-					return img
-				return null,
+				return MemorySubManager.prepare_image_for_texture(_decode_cover_downscaled(game.cover_path)),
 			func(img: Image):
 				if is_instance_valid(self) and img and not img.is_empty():
 					_prepared_cover = MemorySubManager.create_texture_from_image(img)
+					if _prepared_cover:
+						MemorySubManager.cache_texture(cache_key, _prepared_cover)
 		)
 
 func _setup_sibling_dropdown(game: GameResource) -> void:
@@ -542,25 +547,37 @@ func _load_cover(game: GameResource) -> void:
 		_prepared_romm_id = 0
 		return
 
-	# Local file: decode on a background thread.
+	var cache_path := ""
 	if game.cover_path and FSM.file_exists(game.cover_path):
+		cache_path = game.cover_path
+	elif game.cover_url and game.cover_url.begins_with("http"):
+		var url_path: String = DataManager.get_cached_image_path(game.cover_url)
+		if FSM.file_exists(url_path):
+			cache_path = url_path
+
+	if cache_path != "":
+		var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_DETAILS_TEXTURE_SIZE)
+		var cached := MemorySubManager.get_cached_texture(cache_key)
+		if cached:
+			_set_cover_texture(cached)
+			return
 		if is_instance_valid(cover_texture):
 			M3Shimmer.attach(cover_texture, 0.0)
 		MemorySubManager.queue_image_task(
 			func() -> Image:
-				var img := Image.new()
-				if img.load(game.cover_path) == OK and not img.is_empty():
-					return img
-				return null,
+				return MemorySubManager.prepare_image_for_texture(_decode_cover_downscaled(cache_path)),
 			func(img: Image):
 				if is_instance_valid(cover_texture):
 					M3Shimmer.detach(cover_texture)
 					if img and not img.is_empty():
-						_set_cover_texture(MemorySubManager.create_texture_from_image(img))
+						var tex := MemorySubManager.create_texture_from_image(img)
+						if tex:
+							MemorySubManager.cache_texture(cache_key, tex)
+							_set_cover_texture(tex)
 		)
 		return
 
-	# Remote URL: keep the existing async path.
+	# Remote URL not yet on disk: keep the existing async path.
 	if game.cover_url and game.cover_url.begins_with("http"):
 		if is_instance_valid(cover_texture):
 			M3Shimmer.attach(cover_texture, 0.0)
@@ -576,6 +593,16 @@ func _set_cover_texture(texture: Texture2D) -> void:
 	if not is_instance_valid(cover_texture):
 		return
 	cover_texture.texture = texture
+
+static func _decode_cover_downscaled(path: String) -> Image:
+	var img := Image.new()
+	if img.load(path) != OK or img.is_empty():
+		return null
+	var max_dim: int = max(img.get_width(), img.get_height())
+	if max_dim > MAX_DETAILS_TEXTURE_SIZE:
+		var tex_scale := float(MAX_DETAILS_TEXTURE_SIZE) / max_dim
+		img.resize(maxi(1, int(img.get_width() * tex_scale)), maxi(1, int(img.get_height() * tex_scale)), Image.INTERPOLATE_LANCZOS)
+	return img
 
 func _format_file_size(bytes: int) -> String:
 	if bytes < 1024:

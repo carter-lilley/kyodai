@@ -667,6 +667,12 @@ static func _move_task_between_queues_locked(task: Dictionary, to_high_priority:
 			to_queue.append(task)
 			break
 
+## Cache keys must include the decoded size variant: cards decode covers to
+## 512px while hero/background layers decode the same file to 1024px, and
+## sharing a bare path key lets whichever loads first poison the other.
+static func cover_cache_key(cache_path: String, max_texture_size: int) -> String:
+	return "%s#%d" % [cache_path, max_texture_size]
+
 static func get_cached_texture(cache_key: String) -> Texture2D:
 	if _instance == null or cache_key == "":
 		return null

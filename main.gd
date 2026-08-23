@@ -1414,7 +1414,6 @@ func _adjust_zoom(delta: float) -> void:
 		var new_index = clampi(current_index + sign(delta), 0, _current_snap_ratios.size() - 1)
 		if new_index != current_index:
 			var focused_index = _get_focused_card_index()
-			print("[ZoomBug] _adjust_zoom: delta=", delta, " current=", current_index, " new=", new_index, " focused_index=", focused_index)
 			zoom_slider.set_value_no_signal(new_index)
 			_on_zoom_changed(new_index)
 			if focused_index >= 0:

@@ -1148,7 +1148,8 @@ func _process_buffer_expansion() -> void:
 
 	if current_first <= _buffer_target_start and current_last >= _buffer_target_end - 1:
 		_pending_buffer_expansion = false
-		print("[Grid] async buffer expansion complete")
+		if debug_mode:
+			print("[Grid] async buffer expansion complete")
 
 func _process_pending_visual_setup() -> void:
 	if _pending_visual_setup.is_empty():
@@ -2492,7 +2493,8 @@ func _instantiate_card_pool():
 	_card_has_show_loading_skeleton = probe.has_method("show_loading_skeleton")
 	_card_has_begin_bulk_layout = probe.has_method("begin_bulk_layout")
 	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
-	print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	if debug_mode:
+		print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 var _pending_pool_growth: int = 0
 var _last_computed_visible_count: int = 0
@@ -2758,7 +2760,7 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_recycle: bool = false):
 	if _is_processing_scroll:
 		_grid_trace_stuck_count += 1
-		if _grid_trace_stuck_count <= 3 or _grid_trace_stuck_count % 100 == 0:
+		if trace_verbose and (_grid_trace_stuck_count <= 3 or _grid_trace_stuck_count % 100 == 0):
 			print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
 		return
 	_grid_trace_stuck_count = 0
@@ -2768,7 +2770,8 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	# corrective write restores the intended position.
 	if _guarded_scroll_target >= 0.0 and not force_recycle:
 		if absf(value - _guarded_scroll_target) > maxf(_get_normal_stride(), 1.0):
-			print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
+			if trace_verbose:
+				print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
 			return
 	_is_processing_scroll = true
 	if trace_verbose:

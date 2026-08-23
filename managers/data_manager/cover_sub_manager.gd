@@ -14,12 +14,88 @@ const CACHE_VALIDATION_VERSION := 1
 # are never mistaken for corrupt cache entries by the background scan.
 const RECENT_FILE_GRACE_SECONDS := 10
 
+# Set while an eviction pass is in flight so sync-end triggers can't stack them.
+var _eviction_running: bool = false
+
 
 func _ready():
 	data_manager = get_parent()
 	_ensure_cache_folder()
-	if _cache_validation_needed():
-		WorkerThreadPool.add_task(_scan_cover_cache)
+	# Read the cap on the main thread; the worker must not touch autoloads.
+	var cap := get_max_cache_bytes()
+	_eviction_running = true
+	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap))
+	if not data_manager.sync_completed.is_connected(_on_sync_completed):
+		data_manager.sync_completed.connect(_on_sync_completed)
+
+
+func _on_sync_completed(success: bool, _message: String) -> void:
+	if success:
+		enforce_cache_limit_async()
+
+
+func _cache_maintenance(run_validation: bool, max_bytes: int) -> void:
+	if run_validation:
+		_scan_cover_cache()
+	_enforce_cache_size_limit(max_bytes)
+
+
+func get_max_cache_bytes() -> int:
+	var setting = DataManager.get_setting("cover_cache_max_mb")
+	var mb: int = int(setting.value) if setting and setting.value != null else (256 if OS.has_feature("android") else 512)
+	return mb * 1024 * 1024
+
+
+func enforce_cache_limit_async() -> void:
+	if _eviction_running:
+		return
+	_eviction_running = true
+	WorkerThreadPool.add_task(_enforce_cache_size_limit.bind(get_max_cache_bytes()))
+
+
+func _enforce_cache_size_limit(max_bytes: int) -> void:
+	"""Worker thread: evict oldest covers (by mtime) until the cache folder is
+	under the configured byte cap. Uses raw DirAccess/FileAccess for the same
+	reason as _scan_cover_cache: FSM reaches autoloads unsafely from workers."""
+	var entries: Array = []
+	var total := 0
+	var now := int(Time.get_unix_time_from_system())
+	var dir := DirAccess.open(CACHE_FOLDER)
+	if dir:
+		dir.list_dir_begin()
+		var file_name := dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				var path := CACHE_FOLDER + file_name
+				var mtime := int(FileAccess.get_modified_time(path))
+				if now - mtime >= RECENT_FILE_GRACE_SECONDS:
+					var file := FileAccess.open(path, FileAccess.READ)
+					if file:
+						var size := file.get_length()
+						file.close()
+						entries.append({"path": path, "size": size, "mtime": mtime})
+						total += size
+			file_name = dir.get_next()
+		dir.list_dir_end()
+
+	var deleted_count := 0
+	var freed := 0
+	if total > max_bytes:
+		entries.sort_custom(func(a, b): return a.mtime < b.mtime)
+		for e in entries:
+			if total <= max_bytes:
+				break
+			if DirAccess.remove_absolute(e.path) == OK:
+				total -= e.size
+				freed += e.size
+				deleted_count += 1
+	call_deferred("_report_cache_eviction", deleted_count, freed)
+
+
+func _report_cache_eviction(deleted_count: int, freed_bytes: int) -> void:
+	_eviction_running = false
+	if deleted_count > 0:
+		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, freed_bytes / (1024 * 1024)])
 
 
 func _ensure_cache_folder():

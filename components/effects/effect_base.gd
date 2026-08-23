@@ -310,9 +310,15 @@ func _ensure_shared_material() -> void:
 		_material = ShaderMaterial.new()
 	else:
 		var mat: ShaderMaterial = _shared_materials.get(key, null)
-		if mat == null:
-			if _shared_materials.size() >= MAX_SHARED_MATERIALS:
-				_shared_materials.clear()
+		if mat:
+			# Insertion-ordered dict: erase+re-set refreshes recency.
+			_shared_materials.erase(key)
+			_shared_materials[key] = mat
+		else:
+			# Evict only the oldest entries; clearing the whole dict here
+			# forced every visible card to rebuild (and recompile) at once.
+			while _shared_materials.size() >= MAX_SHARED_MATERIALS:
+				_shared_materials.erase(_shared_materials.keys()[0])
 			mat = ShaderMaterial.new()
 			_shared_materials[key] = mat
 		_material = mat

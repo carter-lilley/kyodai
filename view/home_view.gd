@@ -108,6 +108,32 @@ func _ready():
 
 	print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
 
+func _exit_tree() -> void:
+	# Mirror the connect block in _ready so a torn-down Home tab can't
+	# double-connect or leave dangling autoload connections behind.
+	if is_instance_valid(DataManager):
+		if DataManager.setting_changed.is_connected(_on_setting_changed):
+			DataManager.setting_changed.disconnect(_on_setting_changed)
+		if DataManager.database_ready.is_connected(_on_database_ready):
+			DataManager.database_ready.disconnect(_on_database_ready)
+		if DataManager.database_failed.is_connected(_on_database_failed):
+			DataManager.database_failed.disconnect(_on_database_failed)
+		if DataManager.game_updated.is_connected(_on_game_updated):
+			DataManager.game_updated.disconnect(_on_game_updated)
+		if DataManager.scan_for_downloaded_games_completed.is_connected(_on_scan_completed):
+			DataManager.scan_for_downloaded_games_completed.disconnect(_on_scan_completed)
+		if DataManager.sync_completed.is_connected(_on_sync_completed):
+			DataManager.sync_completed.disconnect(_on_sync_completed)
+	if is_instance_valid(LaunchManager):
+		if LaunchManager.gamenative_games_updated.is_connected(_on_gamenative_games_updated):
+			LaunchManager.gamenative_games_updated.disconnect(_on_gamenative_games_updated)
+		if LaunchManager.game_launched.is_connected(_on_game_launched):
+			LaunchManager.game_launched.disconnect(_on_game_launched)
+	if is_instance_valid(SystemManager) and SystemManager.download and SystemManager.download.download_completed.is_connected(_on_download_completed):
+		SystemManager.download.download_completed.disconnect(_on_download_completed)
+	if is_instance_valid(UIManager) and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
+
 func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true, on_complete: Callable = Callable(), reload_gamenative: bool = true):
 	var load_start_us := Time.get_ticks_usec()
 

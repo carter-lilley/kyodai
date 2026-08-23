@@ -2,6 +2,7 @@ class_name HeroImage
 extends Control
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const MAX_HERO_TEXTURE_SIZE: int = 1024
 
 var _current_game: GameResource = null
 var _gray_texture: ImageTexture = null
@@ -112,7 +113,7 @@ func set_game(game: GameResource):
 		return
 
 	# Check texture cache first
-	var cached_tex = MemorySubManager.get_cached_texture(cache_path)
+	var cached_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_HERO_TEXTURE_SIZE))
 	if cached_tex:
 		_set_texture(cached_tex)
 		return
@@ -129,8 +130,6 @@ func set_game(game: GameResource):
 		_is_loading = true
 		if _effect_stack:
 			_effect_stack.set_loading(true)
-
-	const MAX_HERO_TEXTURE_SIZE: int = 1024
 
 	var load_callable = func() -> Image:
 		var buffer = FSM.read_file_bytes(cache_path)
@@ -170,7 +169,7 @@ func set_game(game: GameResource):
 		if image and not image.is_empty():
 			var tex = MemorySubManager.create_texture_from_image(image)
 			if tex:
-				MemorySubManager.cache_texture(cache_path, tex)
+				MemorySubManager.cache_texture(MemorySubManager.cover_cache_key(cache_path, MAX_HERO_TEXTURE_SIZE), tex)
 				_set_texture(tex)
 				return
 

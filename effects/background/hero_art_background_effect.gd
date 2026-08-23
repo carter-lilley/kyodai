@@ -71,7 +71,7 @@ func set_game(game: GameResource) -> void:
 		_clear_art()
 		return
 
-	var cached_tex = MemorySubManager.get_cached_texture(cache_path)
+	var cached_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_TEXTURE_SIZE))
 	if cached_tex:
 		_set_art(cached_tex)
 		return
@@ -111,7 +111,7 @@ func set_game(game: GameResource) -> void:
 		if image and not image.is_empty():
 			var tex = MemorySubManager.create_texture_from_image(image)
 			if tex:
-				MemorySubManager.cache_texture(cache_path, tex)
+				MemorySubManager.cache_texture(MemorySubManager.cover_cache_key(cache_path, MAX_TEXTURE_SIZE), tex)
 				_set_art(tex)
 				return
 		_clear_art()
