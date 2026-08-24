@@ -303,7 +303,7 @@ func switch_to_tab(tab_name: String):
 	if icon_name.is_empty() or transition == null or transition.is_animating():
 		view.switch_to_tab(tab_name)
 		return
-	transition.play(icon_name, func(): view.switch_to_tab(tab_name))
+	transition.play_extended(icon_name, func(): view.switch_to_tab(tab_name), func(): return view.is_view_ready_for_reveal(tab_name), 400)
 
 var _view_transition_overlay: ViewTransitionOverlay = null
 

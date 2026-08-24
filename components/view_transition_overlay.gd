@@ -61,6 +61,13 @@ func is_animating() -> bool:
 	return _is_animating
 
 func play(icon_name: String, midpoint: Callable) -> void:
+	play_extended(icon_name, midpoint, Callable(), 0)
+
+## Variant that holds the full-cover midpoint until readiness.call() reports
+## true (or max_hold_ms elapses). Lazy views settle their grid under cover, so
+## the reveal never shows a half-built view; the screen is static during the
+## hold, so the wait reads as a slightly longer cover, not a stutter.
+func play_extended(icon_name: String, midpoint: Callable, readiness: Callable = Callable(), max_hold_ms: int = 400) -> void:
 	if _is_animating:
 		midpoint.call()
 		return
@@ -105,7 +112,7 @@ func play(icon_name: String, midpoint: Callable) -> void:
 	if SystemManager.audio:
 		SystemManager.audio.play_sfx_stream(SNAP_SFX)
 
-	_animate(midpoint, viewport_size, icon_px, icon_rest_y, _travel_duration_scale())
+	_animate(midpoint, viewport_size, icon_px, icon_rest_y, _travel_duration_scale(), readiness, max_hold_ms)
 
 func _travel_duration_scale() -> float:
 	# Large screens: the panel travels farther, so compress the cover/reveal
@@ -114,7 +121,7 @@ func _travel_duration_scale() -> float:
 		return 0.85
 	return 1.0
 
-func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_rest_y: float, travel_scale: float = 1.0) -> void:
+func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_rest_y: float, travel_scale: float = 1.0, readiness: Callable = Callable(), max_hold_ms: int = 0) -> void:
 	# Phase 1: panel sweeps up and covers the screen.
 	var cover := create_tween()
 	cover.set_trans(Tween.TRANS_CUBIC)
@@ -126,6 +133,15 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 
 	# Midpoint: the actual tab switch happens under cover.
 	midpoint.call()
+
+	# Hold the cover until the new view reports ready. No tweens are running
+	# yet, so a wait here cannot break animation timing.
+	if readiness.is_valid() and max_hold_ms > 0:
+		var hold_start := Time.get_ticks_msec()
+		while not readiness.call() and Time.get_ticks_msec() - hold_start < max_hold_ms:
+			await get_tree().process_frame
+		if not is_inside_tree():
+			return
 
 	# Phase 2: icon slides in from the bottom with a springy bounce, gently
 	# straightening from its initial tilt as it lands.

@@ -53,62 +53,32 @@ func setup(tab_container: TabContainer) -> void:
 	# Background-load the Library scene so the first tab switch is instant
 	ResourceLoader.load_threaded_request(_library_scene_path)
 	# The collection scene is shared by Favorites and every collection tab;
-	# warm it on the loader thread too so the prewarm below never decodes it
-	# synchronously on the main thread.
+	# warm it on the loader thread too so first-visit instantiation never
+	# decodes it synchronously on the main thread.
 	ResourceLoader.load_threaded_request(_collection_scene_path)
 
-	# Pre-instantiate lazily created views once startup has settled. The first
-	# tab switch plays a fullscreen transition animation, and instantiating the
-	# view mid-animation stalls the main thread and breaks the tween timing.
-	call_deferred("_pre_instantiate_lazy_views")
+# Views are created lazily on first tab visit; the view transition holds its
+# cover until is_view_ready_for_reveal() reports the grid has settled, so the
+# lazy cost is hidden instead of pre-paid during the startup window.
+var _view_shown_frame: Dictionary = {}
 
-## Idle-driven view prewarm: starts well after the startup critical path
-## (settle, collections sync, first paint) and builds one view per spacing
-## window so hidden-view construction never lands in the launch frame budget.
-const PREWARM_START_DELAY_SEC := 2.0
-const PREWARM_VIEW_SPACING_SEC := 0.15
-## Cap on the per-view idle wait so a busy UI can't starve the prewarm forever.
-const PREWARM_IDLE_TIMEOUT_US := 5000000
-## Prewarm also waits for a gap in user input so hidden-view construction
-## never lands mid-interaction.
-const PREWARM_INPUT_IDLE_MS := 500
-
-var _last_input_msec: int = 0
-
-func _input(event: InputEvent) -> void:
-	if event is InputEventKey or event is InputEventJoypadButton \
-			or event is InputEventMouseButton or event is InputEventMouseMotion \
-			or event is InputEventScreenTouch or event is InputEventScreenDrag:
-		_last_input_msec = Time.get_ticks_msec()
-
-func _pre_instantiate_lazy_views() -> void:
-	await get_tree().create_timer(PREWARM_START_DELAY_SEC).timeout
-	if not is_inside_tree():
-		return
-	await _prewarm_step("Library", _ensure_library_setup, not _views.has("Library"))
-	if not is_inside_tree():
-		return
-	await _prewarm_step(FAVORITES_TAB_TITLE, _ensure_favorites_setup, _favorites_tab != null and is_instance_valid(_favorites_tab) and not _views.has(FAVORITES_TAB_TITLE))
-	for collection_id in _collection_tabs.keys():
-		if not is_inside_tree():
-			return
-		await _prewarm_step(_collection_tab_title(collection_id), _ensure_collection_setup.bind(collection_id), not _views.has(_collection_tab_title(collection_id)))
-
-func _prewarm_step(label: String, ensure: Callable, needed: bool) -> void:
-	if not needed or not is_inside_tree():
-		return
-	# Never build a view mid-transition, while a dialog owns the screen, or
-	# while the user is actively interacting — that stall is exactly what the
-	# transition cover exists to hide.
-	var waited_us := Time.get_ticks_usec()
-	while (ViewTransitionOverlay.is_transition_active or M3Overlay.is_showing("dialog") or Time.get_ticks_msec() - _last_input_msec < PREWARM_INPUT_IDLE_MS) and Time.get_ticks_usec() - waited_us < PREWARM_IDLE_TIMEOUT_US:
-		await get_tree().process_frame
-	if not is_inside_tree():
-		return
-	var step_start_us := Time.get_ticks_usec()
-	ensure.call()
-	print("[ViewSubManager] prewarm ", label, " elapsed_us=", Time.get_ticks_usec() - step_start_us)
-	await get_tree().create_timer(PREWARM_VIEW_SPACING_SEC).timeout
+## True once the named view has been shown for a couple of frames and its grid
+## has content on screen (or is known-empty). Drives the transition hold.
+func is_view_ready_for_reveal(tab_name: String) -> bool:
+	var view = _views.get(tab_name, null)
+	if view == null or not is_instance_valid(view):
+		return false
+	var shown_frame: int = _view_shown_frame.get(tab_name, -1)
+	if shown_frame < 0:
+		return false
+	var frames_since_shown: int = Engine.get_process_frames() - shown_frame
+	if view.games_grid:
+		if view.games_grid._active_cards.size() > 0:
+			return frames_since_shown >= 2
+		# Empty grids are fine to reveal once any async count had a few
+		# frames to land; otherwise we'd hold the cover for no reason.
+		return view.games_grid._total_items == 0 and frames_since_shown >= 10
+	return frames_since_shown >= 2
 
 func _setup_home_tab():
 	var setup_start_us := Time.get_ticks_usec()
@@ -302,6 +272,7 @@ func _ensure_collection_setup(collection_id: int) -> bool:
 
 func _remove_collection_tab(collection_id: int) -> void:
 	var tab_title = _collection_tab_title(collection_id)
+	_view_shown_frame.erase(tab_title)
 	
 	if _current_view and _current_view.view_name == tab_title:
 		switch_to_tab("Home")
@@ -394,6 +365,7 @@ func _sync_current_view_from_tab() -> void:
 		_ensure_collection_setup(_get_collection_id_from_tab_title(current_tab_title))
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
+		_view_shown_frame[current_tab_title] = Engine.get_process_frames()
 		_current_view.on_view_show()
 		ui_manager.navigation._sync_nav_selection(current_tab_title)
 
@@ -418,6 +390,7 @@ func _on_tab_changed(tab_idx: int):
 		_ensure_collection_setup(_get_collection_id_from_tab_title(tab_title))
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
+		_view_shown_frame[tab_title] = Engine.get_process_frames()
 		_current_view.on_view_show()
 
 	ui_manager.tab_changed.emit(tab_title)
