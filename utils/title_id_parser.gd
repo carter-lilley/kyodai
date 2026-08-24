@@ -7,6 +7,9 @@ const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 # Sigil CLI runner for platforms routed through argosy-sigil
 const _SigilRunner = preload("res://utils/sigil_runner.gd")
 
+# ZArchive reader for Xbox 360 .zar ROMs (compressed ISO contents)
+const _ZarReader = preload("res://utils/zar_reader.gd")
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -161,10 +164,13 @@ const _XEX_SECTOR_SIZE = 2048
 const _GDFX_MAGIC = "MICROSOFT*XBOX*MEDIA"
 const _XEX_HEADER_EXECUTION_INFO = 0x00040006
 
-## Extracts Xbox 360 Title ID from an ISO file
-## Parses the GDFX filesystem to find default.xex, then extracts Title ID from XEX header
+## Extracts Xbox 360 Title ID from an ISO or ZAR file
+## ISO: Parses the GDFX filesystem to find default.xex, then extracts Title ID from XEX header
+## ZAR: Looks up default.xex directly in the archive file tree
 ## Returns 8-character hex string (e.g., "545407DF")
 static func extract_xbox360_title_id(iso_path: String) -> String:
+	if iso_path.get_extension().to_lower() == "zar":
+		return _extract_xbox360_title_id_zar(iso_path)
 	return _with_open_file(iso_path, func(file: FileAccess) -> String:
 		print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
 		
@@ -225,6 +231,52 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 		push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ISO")
 		return ""
 	)
+
+## Extracts Xbox 360 Title ID from a .zar archive (ZArchive-compressed ISO contents)
+## The archive contains the extracted filesystem, so default.xex is looked up
+## directly in the archive's file tree instead of parsing GDFX
+static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
+	print("[TitleIDParser] Parsing Xbox 360 ZAR: " + zar_path)
+
+	var reader = _ZarReader.open(zar_path)
+	if reader == null:
+		push_error("[TitleIDParser] Failed to open Xbox 360 ZAR: " + zar_path)
+		return ""
+
+	# ZAR archives store the extracted ISO contents, so default.xex sits at
+	# the root of the archive rather than inside a GDFX partition
+	var xex_entry = reader.find_file("default.xex")
+
+	# If default.xex not found, try GameInfo.bin (XNA/Indie games)
+	if xex_entry.is_empty():
+		print("[TitleIDParser] default.xex not found in ZAR, trying GameInfo.bin...")
+		var gameinfo_entry = reader.find_file("GameInfo.bin")
+		if not gameinfo_entry.is_empty():
+			# Node-relative entry: offset 0 = start of GameInfo.bin
+			var node_entry = {"offset": 0, "length": gameinfo_entry["size"]}
+			var parsed_title_id = _parse_gameinfo_title_id(reader.create_node_io(gameinfo_entry), node_entry)
+			reader.close()
+			if parsed_title_id != "":
+				print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
+				return parsed_title_id.to_upper()
+
+		push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ZAR")
+		reader.close()
+		return ""
+
+	print("[TitleIDParser] Found default.xex in ZAR, length=" + str(xex_entry["size"]))
+
+	# Reuse the XEX header parser against a node-relative IO view (offset 0 = file start)
+	var xex_io = reader.create_node_io(xex_entry)
+	var title_id = _read_xex_title_id(xex_io, 0, xex_entry["size"])
+	reader.close()
+
+	if title_id != "":
+		print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
+		return title_id.to_upper()
+
+	push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ZAR")
+	return ""
 
 ## Searches for GDFX partition by looking for "MICROSOFT*XBOX*MEDIA" magic at known offsets
 ## Returns the game partition base offset, or -1 if not found
@@ -313,7 +365,8 @@ static func _find_file_in_gdfx(file: FileAccess, game_offset: int, dir_offset: i
 ## Reads Title ID from XEX file
 ## XEX structure: magic "XEX2" at 0x0, header_count at 0x14, headers[] at 0x18
 ## Looks for XEX_HEADER_EXECUTION_INFO (0x00040006) and reads title_id at offset + 0x0C
-static func _read_xex_title_id(file: FileAccess, xex_offset: int, xex_length: int) -> String:
+## file is a FileAccess (ISO) or ZarReader.NodeIO (ZAR) with seek/get_buffer
+static func _read_xex_title_id(file, xex_offset: int, xex_length: int) -> String:
 	if xex_length < 0x20:
 		push_error("[TitleIDParser] XEX file too small")
 		return ""
@@ -364,7 +417,8 @@ static func _read_xex_title_id(file: FileAccess, xex_offset: int, xex_length: in
 
 ## Parses GameInfo.bin to extract Title ID (for XNA/Indie games)
 ## GameInfo.bin structure: Starts with "XGI1" magic, Title ID at offset 0x14
-static func _parse_gameinfo_title_id(file: FileAccess, entry: Dictionary) -> String:
+## file is a FileAccess (ISO) or ZarReader.NodeIO (ZAR) with seek/get_buffer
+static func _parse_gameinfo_title_id(file, entry: Dictionary) -> String:
 	if entry.is_empty() or entry["length"] < 0x18:
 		return ""
 	

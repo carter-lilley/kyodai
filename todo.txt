@@ -6,6 +6,10 @@ prewarm covers on random jump
 rework hero to also accept effect stacks
 platform indiciator  &favorites reload after sync finish
 submenus still su ck
+grid flicker on recycle
+make settings cards scrollthrough
+left/right in small screens also wigggles view up/down
+tapping home when in grid doesnt focus it the nav dest?
 
 romm;
 - sort by played
