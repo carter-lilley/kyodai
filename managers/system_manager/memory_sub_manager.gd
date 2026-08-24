@@ -510,6 +510,11 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:
 		push_error("[SystemManager.memory] Not initialized - cannot queue DB task")
 		return
+	# Shutdown race: async view callbacks can outlive the worker pools (e.g.
+	# the startup benchmark's instant quit). Dropping silently is correct —
+	# the app is exiting and no result will be consumed.
+	if _instance._exit_flag:
+		return
 
 	var is_main_thread = OS.get_thread_caller_id() == OS.get_main_thread_id()
 
@@ -546,6 +551,9 @@ static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 static func queue_image_task(callable: Callable, callback: Callable = Callable(), high_priority: bool = false, dedup_key: String = "") -> int:
 	if _instance == null:
 		push_error("[SystemManager.memory] Not initialized - cannot queue image task")
+		return -1
+	# Shutdown race, same as queue_db_task.
+	if _instance._exit_flag:
 		return -1
 
 	_instance._image_mutex.lock()

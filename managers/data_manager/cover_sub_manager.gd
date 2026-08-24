@@ -89,7 +89,9 @@ func _enforce_cache_size_limit(max_bytes: int) -> void:
 				total -= e.size
 				freed += e.size
 				deleted_count += 1
-	call_deferred("_report_cache_eviction", deleted_count, freed)
+	# The manager may already be freed if the app quit mid-scan (benchmark).
+	if is_instance_valid(self):
+		call_deferred("_report_cache_eviction", deleted_count, freed)
 
 
 func _report_cache_eviction(deleted_count: int, freed_bytes: int) -> void:
@@ -151,7 +153,8 @@ func _scan_cover_cache():
 	if marker:
 		marker.store_string(str(CACHE_VALIDATION_VERSION))
 		marker.close()
-	call_deferred("_report_cover_cache_scan", total, deleted)
+	if is_instance_valid(self):
+		call_deferred("_report_cover_cache_scan", total, deleted)
 
 
 func _report_cover_cache_scan(total: int, deleted: Array[String]) -> void:
