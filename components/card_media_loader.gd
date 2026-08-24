@@ -195,9 +195,11 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 		if loaded_texture:
 			_failed_downloads.erase(cover_url)
 			# loaded_texture is full-res (CoverSubManager does not downscale),
-			# so don't cache it under the 512px card key. The file is on disk
-			# now; the next load decodes to the proper card variant.
+			# so it isn't cached under the 512px card key. Show it now, then
+			# warm the proper card variant from the file just written to disk
+			# so the next recycle is a cache hit instead of a decode flash.
 			_emit_texture(loaded_texture)
+			_warm_card_cache_from_disk(cache_path)
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)
 		else:
@@ -207,6 +209,22 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
 			_set_loading_texture()
 	, high_priority)
+
+## Decode the on-disk cover into the 512px card cache without touching the
+## card's current texture. Used after a fresh download so subsequent recycles
+## hit the cache instead of flashing the placeholder.
+func _warm_card_cache_from_disk(cache_path: String) -> void:
+	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
+	if not SystemManager.memory or SystemManager.memory.get_cached_texture(cache_key):
+		return
+	var load_callable = func():
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
+	var callback_callable = func(image):
+		if image and not image.is_empty():
+			var texture = SystemManager.memory.create_texture_from_image(image)
+			if texture:
+				SystemManager.memory.cache_texture(cache_key, texture)
+	SystemManager.memory.queue_image_task(load_callable, callback_callable, false, cache_key)
 
 static func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 	if buffer.size() < 16:

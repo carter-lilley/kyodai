@@ -76,6 +76,12 @@ func set_game(game: GameResource) -> void:
 		_set_art(cached_tex)
 		return
 
+	# Show the 512px card variant instantly while the full-res variant
+	# decodes; _set_art runs again when it lands.
+	var card_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, CardMediaLoader.MAX_COVER_TEXTURE_SIZE))
+	if card_tex:
+		_set_art(card_tex)
+
 	_cancel_pending_load()
 	var loading_id = _current_game_id
 

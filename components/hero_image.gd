@@ -118,6 +118,12 @@ func set_game(game: GameResource):
 		_set_texture(cached_tex)
 		return
 
+	# Show the 512px card variant instantly while the hero-res variant
+	# decodes; _set_texture runs again when the 1024px version lands.
+	var card_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, CardMediaLoader.MAX_COVER_TEXTURE_SIZE))
+	if card_tex:
+		_set_texture(card_tex)
+
 	# Cancel any pending image load
 	if _current_image_task_id > 0:
 		MemorySubManager.cancel_image_task(_current_image_task_id)
