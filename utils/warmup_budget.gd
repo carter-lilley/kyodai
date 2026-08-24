@@ -15,8 +15,6 @@ const LOW_PRIORITY_RESERVE_RATIO := 0.4
 
 # Rough per-unit cost estimates; precision doesn't matter, the cap does.
 const COST_CARD_INSTANTIATE_US := 300
-const COST_CARD_VISUAL_SETUP_US := 400
-const COST_EFFECT_REBUILD_US := 600
 const COST_PLATFORM_CARD_US := 150
 const COST_SHADER_PREWARM_US := 2000
 
@@ -51,13 +49,25 @@ static func input_idle_ms() -> int:
 ## True when the frame still has room for one more unit of warmup work.
 ## try_spend measures real elapsed time, so callers must check before EACH
 ## unit of work — the frame's actual spend accrues between checks.
+## Gating applies ONLY during the startup window: in steady state these
+## drains ARE the interactive path (scroll recycling) and must never starve.
 static func try_spend(estimated_us: int) -> bool:
+	if not _startup_mode:
+		return true
 	if _frame_id != Engine.get_process_frames():
+		return true
+	# Always permit a single oversized unit per frame so no drain can starve
+	# permanently when its cost estimate exceeds the whole budget.
+	if estimated_us > _budget_us():
 		return true
 	return Time.get_ticks_usec() - _frame_start_us + estimated_us <= _budget_us()
 
 ## Low-priority variant: refuses unless the interactive reserve stays intact.
 static func try_spend_low(estimated_us: int) -> bool:
+	if not _startup_mode:
+		return true
+	if estimated_us > _budget_us():
+		return true
 	return remaining_us() - estimated_us > int(_budget_us() * LOW_PRIORITY_RESERVE_RATIO)
 
 static func remaining_us() -> int:

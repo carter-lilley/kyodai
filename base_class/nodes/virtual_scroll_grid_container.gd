@@ -1163,7 +1163,9 @@ func _process_pending_visual_setup() -> void:
 		print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
 	var processed: int = 0
 	var keys := _pending_visual_setup.keys()
-	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty() and WarmupBudget.try_spend(WarmupBudget.COST_CARD_VISUAL_SETUP_US):
+	# Not budget-gated: this drain services ACTIVE cards (a pending card has
+	# no game assigned and renders invisible). Starving it hides rows.
+	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty():
 		var idx = keys[0]
 		keys.remove_at(0)
 		var card = _pending_visual_setup[idx]
@@ -4721,7 +4723,9 @@ func _drain_pending_effect_rebuilds() -> void:
 
 	var force_full_rebuild: bool = _pending_effect_rebuild_force_full
 	var processed: int = 0
-	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty() and WarmupBudget.try_spend(WarmupBudget.COST_EFFECT_REBUILD_US):
+	# Not budget-gated: pending effect rebuilds belong to active cards;
+	# starving the queue leaves stale/missing effect stacks on screen.
+	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty():
 		var card = _pending_effect_rebuilds[0]
 		_pending_effect_rebuilds.remove_at(0)
 		_pending_effect_rebuild_set.erase(card)
