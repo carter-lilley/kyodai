@@ -438,10 +438,13 @@ func _on_oobe_wizard_completed():
 
 func _pre_create_settings_dialog() -> void:
 	"""Build the settings dialog eagerly while the home screen is visible so the
-	platform cards screen can appear instantly when opened. Delayed a few frames
-	so the build doesn't stack onto the collection-sync/startup frame; the
-	category builds themselves spread over frames inside the dialog."""
+	platform cards screen can appear instantly when opened. Waits for a gap in
+	user input (5s cap) so the build can't land mid-interaction; the category
+	builds themselves spread over frames inside the dialog."""
 	for i in range(3):
+		await get_tree().process_frame
+	var waited_ms := Time.get_ticks_msec()
+	while WarmupBudget.input_idle_ms() < 500 and Time.get_ticks_msec() - waited_ms < 5000:
 		await get_tree().process_frame
 	if UIManager:
 		var start_us := Time.get_ticks_usec()
@@ -1233,6 +1236,11 @@ func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, 
 	grid.settle_startup_with_buffer(0)
 	print("[Main] settle: settle_startup_with_buffer elapsed_us=", Time.get_ticks_usec() - sub_start_us)
 	print("[Main] Settled grid for ", view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - settle_start_us)
+	# Open the warmup gates (platform card pool waits on this) and start the
+	# countdown out of startup budgeting back to steady-state.
+	WarmupBudget.notify_home_grid_settled()
+	await get_tree().create_timer(2.0).timeout
+	WarmupBudget.set_startup_mode(false)
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
@@ -1335,6 +1343,10 @@ func _handle_ui_cancel() -> void:
 	call_deferred("reset_focus_to_home_button")
 
 func _input(event: InputEvent):
+	if event is InputEventKey or event is InputEventJoypadButton \
+			or event is InputEventMouseButton or event is InputEventMouseMotion \
+			or event is InputEventScreenTouch or event is InputEventScreenDrag:
+		WarmupBudget.note_input()
 	# Block all input during background state (emulator running)
 	if LaunchManager and LaunchManager.is_in_background_state():
 		get_viewport().set_input_as_handled()

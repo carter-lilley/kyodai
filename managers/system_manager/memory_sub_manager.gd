@@ -277,6 +277,7 @@ func _exit_tree():
 	shutdown()
 
 func _process(_delta):
+	WarmupBudget.begin_frame()
 	_process_batches()
 	_drain_lp_callbacks()
 
@@ -290,7 +291,10 @@ func _drain_lp_callbacks():
 		_lp_callback_mutex.unlock()
 		return
 
-	var to_process = mini(backlog, MAX_LP_CALLBACKS_PER_FRAME)
+	# During the startup window, texture-upload callbacks share the frame with
+	# grid settle work; cap the drain so covers can't crowd out the first paint.
+	var per_frame_cap := 3 if WarmupBudget.is_startup_mode() else MAX_LP_CALLBACKS_PER_FRAME
+	var to_process = mini(backlog, per_frame_cap)
 	var batch: Array = []
 	batch.resize(to_process)
 	for i in range(to_process):

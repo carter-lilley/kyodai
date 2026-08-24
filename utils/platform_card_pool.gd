@@ -7,7 +7,7 @@ extends RefCounted
 ## Maximum cards kept in each named pool. Kept conservative for Android, but the
 ## platform settings screen may need 50-100 cards, so give it more headroom.
 const MAX_SHUFFLER_POOL_SIZE := 40
-const MAX_PLATFORM_POOL_SIZE := 100
+const MAX_PLATFORM_POOL_SIZE := 48
 
 ## Number of cards to pre-create for each pool at startup. Bumped for platform
 ## cards so the RomM settings screen has a warm pool waiting.
@@ -15,10 +15,10 @@ const PREWARM_PER_POOL := 16
 
 ## How many cards to create per process frame during startup warmup. Card _init
 ## is cheap (no _ready until parented), so higher rates are safe.
-const PREWARM_BATCH_PER_FRAME := 8
+const PREWARM_BATCH_PER_FRAME := 4
 
 ## How many cards to create per process frame during continuous background warmup.
-const BACKGROUND_WARM_BATCH_PER_FRAME := 8
+const BACKGROUND_WARM_BATCH_PER_FRAME := 4
 
 const POOL_SHUFFLER := "shuffler"
 const POOL_PLATFORM_SETTINGS := "platform_settings"
@@ -58,6 +58,13 @@ static func is_warm() -> bool:
 ## Drive background warmup and card creation. Call from a node's _process.
 static func process(_delta: float = 0.0) -> void:
 	_initialize()
+	# Warming starts only after the home grid has settled, pauses while the
+	# user is interacting, and always leaves the interactive frame budget
+	# reserve untouched (WarmupBudget).
+	if not WarmupBudget.home_grid_settled:
+		return
+	if WarmupBudget.input_idle_ms() < 300:
+		return
 	if _warmup_remaining > 0:
 		_warmup_step()
 	else:
@@ -67,7 +74,7 @@ static func process(_delta: float = 0.0) -> void:
 static func _warmup_step() -> void:
 	var pool_names := _get_pool_names()
 	var frames_left := PREWARM_BATCH_PER_FRAME
-	while frames_left > 0 and _warmup_remaining > 0:
+	while frames_left > 0 and _warmup_remaining > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US):
 		var pool_name: String = pool_names[_warmup_pool_index % pool_names.size()]
 		var card := PlatformCard.new()
 		card.visible = false
@@ -81,7 +88,7 @@ static func _background_warm_step() -> void:
 	# Warm platform cards first (they're the laggy screen), then shuffler cards.
 	# This runs continuously after the initial prewarm until both pools are full.
 	var frames_left := BACKGROUND_WARM_BATCH_PER_FRAME
-	while frames_left > 0:
+	while frames_left > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US):
 		var target_pool: String = ""
 		if _pools.get(POOL_PLATFORM_SETTINGS, []).size() < MAX_PLATFORM_POOL_SIZE:
 			target_pool = POOL_PLATFORM_SETTINGS

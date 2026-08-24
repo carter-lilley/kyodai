@@ -46,6 +46,11 @@ static func prewarm(tree: SceneTree) -> void:
 
 	var compiled := 0
 	for path in paths:
+		# Pipeline compilation is a frame-time spike by nature; skip frames
+		# where the warmup budget is already spent so compiles never stack
+		# onto grid settle or scroll work.
+		while not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US):
+			await tree.process_frame
 		var shader: Shader = load(path)
 		if shader == null:
 			continue

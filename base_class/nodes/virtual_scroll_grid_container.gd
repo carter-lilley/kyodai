@@ -6,6 +6,10 @@ extends Control
 # the saved window size and saved zoom are stable.
 static var startup_layout_suppressed: bool = true
 
+## Card capability probes, keyed by card scene path, shared across all grids
+## so only the first grid pays the probe instantiation.
+static var _capability_probe_cache: Dictionary = {}
+
 # Libraries below this size load all cards at once to avoid partial-row recycling
 # edge cases. Above this threshold only visible cards plus a buffer are created.
 const SMALL_LIBRARY_THRESHOLD: int = 50
@@ -1114,13 +1118,13 @@ func _process_buffer_expansion() -> void:
 		print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
 
 	var added: int = 0
-	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME:
+	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
 		_add_card_at_end(current_last + 1)
 		current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 		added += 1
 
 	current_first = _active_cards[0].get_meta("virtual_index", 0)
-	while current_first > _buffer_target_start and current_first > 0 and added < ASYNC_BUFFER_CARDS_PER_FRAME:
+	while current_first > _buffer_target_start and current_first > 0 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
 		_add_card_at_start(current_first - 1)
 		current_first = _active_cards[0].get_meta("virtual_index", 0)
 		added += 1
@@ -1159,7 +1163,7 @@ func _process_pending_visual_setup() -> void:
 		print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
 	var processed: int = 0
 	var keys := _pending_visual_setup.keys()
-	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty():
+	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty() and WarmupBudget.try_spend(WarmupBudget.COST_CARD_VISUAL_SETUP_US):
 		var idx = keys[0]
 		keys.remove_at(0)
 		var card = _pending_visual_setup[idx]
@@ -2455,9 +2459,10 @@ func _instantiate_card_pool():
 	# Instantiate only the first visible screen synchronously so startup paints
 	# sooner; the rest of the pool is topped up a few per frame by
 	# _process_pool_growth (off-screen buffer cards don't need to exist yet).
-	# When no layout has run yet (hidden views, pre-settle), the visible count is
-	# unknown — seed a small handful rather than the full pool in one burst.
-	var sync_count = POOL_STARTUP_SEED
+	# Hidden views have no valid size: skip both the seed and the pending
+	# growth — they build their pool under the transition cover on first show
+	# via _ensure_pool_capacity.
+	var sync_count = POOL_STARTUP_SEED if _has_valid_available_size() else 0
 	if _last_computed_visible_count > 0:
 		sync_count = mini(_max_pool_size, _last_computed_visible_count)
 	sync_count = mini(sync_count, _max_pool_size)
@@ -2467,32 +2472,62 @@ func _instantiate_card_pool():
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
 		_card_pool.append(card)
-	_pending_pool_growth = _max_pool_size - sync_count
+	_pending_pool_growth = maxi(0, _max_pool_size - sync_count) if _has_valid_available_size() else 0
 
 	# Cache card capability flags from the first instantiated card so we can
-	# skip has_method() / string lookups in hot loops.
-	var probe = _card_scene.instantiate()
-	probe.queue_free()
-	_card_has_focus_scale_enabled = "focus_scale_enabled" in probe
-	_card_has_set_focus_scale = probe.has_method("set_focus_scale")
-	_card_has_set_game_with_priority = probe.has_method("set_game_with_priority")
-	_card_has_refresh_settings = probe.has_method("refresh_settings")
-	_card_has_reset = probe.has_method("reset")
-	_card_has_game_prop = "game" in probe
-	_card_has_update_media_panel_size = probe.has_method("_update_media_panel_size")
-	_card_has_update_display = probe.has_method("update_display")
-	_card_has_set_image_priority = probe.has_method("set_image_priority")
-	_card_has_set_content_alignment = probe.has_method("set_content_alignment")
-	_card_has_set_media_aspect_ratio = probe.has_method("set_media_aspect_ratio")
-	_card_has_refresh_effects = probe.has_method("refresh_effects")
-	_card_has_update_card_state_from_settings = probe.has_method("_update_card_state_from_settings")
-	_card_has_sync_visual_transform = probe.has_method("sync_visual_transform")
-	_card_has_sync_visual_offset = probe.has_method("sync_visual_transform_with_offset")
-	_card_has_mark_visuals_position_synced = probe.has_method("_mark_visuals_position_synced")
-	_card_has_unmark_visuals_position_synced = probe.has_method("_unmark_visuals_position_synced")
-	_card_has_show_loading_skeleton = probe.has_method("show_loading_skeleton")
-	_card_has_begin_bulk_layout = probe.has_method("begin_bulk_layout")
-	_card_has_end_bulk_layout = probe.has_method("end_bulk_layout")
+	# skip has_method() / string lookups in hot loops. Probed once per card
+	# scene across ALL grids — previously every grid paid a full card
+	# instantiate + queue_free just for these flags.
+	var flags: Dictionary
+	var scene_key := _card_scene.resource_path
+	if _capability_probe_cache.has(scene_key):
+		flags = _capability_probe_cache[scene_key]
+	else:
+		var probe = _card_scene.instantiate()
+		probe.queue_free()
+		flags = {
+			"focus_scale_enabled": "focus_scale_enabled" in probe,
+			"set_focus_scale": probe.has_method("set_focus_scale"),
+			"set_game_with_priority": probe.has_method("set_game_with_priority"),
+			"refresh_settings": probe.has_method("refresh_settings"),
+			"reset": probe.has_method("reset"),
+			"game_prop": "game" in probe,
+			"update_media_panel_size": probe.has_method("_update_media_panel_size"),
+			"update_display": probe.has_method("update_display"),
+			"set_image_priority": probe.has_method("set_image_priority"),
+			"set_content_alignment": probe.has_method("set_content_alignment"),
+			"set_media_aspect_ratio": probe.has_method("set_media_aspect_ratio"),
+			"refresh_effects": probe.has_method("refresh_effects"),
+			"update_card_state_from_settings": probe.has_method("_update_card_state_from_settings"),
+			"sync_visual_transform": probe.has_method("sync_visual_transform"),
+			"sync_visual_offset": probe.has_method("sync_visual_transform_with_offset"),
+			"mark_visuals_position_synced": probe.has_method("_mark_visuals_position_synced"),
+			"unmark_visuals_position_synced": probe.has_method("_unmark_visuals_position_synced"),
+			"show_loading_skeleton": probe.has_method("show_loading_skeleton"),
+			"begin_bulk_layout": probe.has_method("begin_bulk_layout"),
+			"end_bulk_layout": probe.has_method("end_bulk_layout"),
+		}
+		_capability_probe_cache[scene_key] = flags
+	_card_has_focus_scale_enabled = flags["focus_scale_enabled"]
+	_card_has_set_focus_scale = flags["set_focus_scale"]
+	_card_has_set_game_with_priority = flags["set_game_with_priority"]
+	_card_has_refresh_settings = flags["refresh_settings"]
+	_card_has_reset = flags["reset"]
+	_card_has_game_prop = flags["game_prop"]
+	_card_has_update_media_panel_size = flags["update_media_panel_size"]
+	_card_has_update_display = flags["update_display"]
+	_card_has_set_image_priority = flags["set_image_priority"]
+	_card_has_set_content_alignment = flags["set_content_alignment"]
+	_card_has_set_media_aspect_ratio = flags["set_media_aspect_ratio"]
+	_card_has_refresh_effects = flags["refresh_effects"]
+	_card_has_update_card_state_from_settings = flags["update_card_state_from_settings"]
+	_card_has_sync_visual_transform = flags["sync_visual_transform"]
+	_card_has_sync_visual_offset = flags["sync_visual_offset"]
+	_card_has_mark_visuals_position_synced = flags["mark_visuals_position_synced"]
+	_card_has_unmark_visuals_position_synced = flags["unmark_visuals_position_synced"]
+	_card_has_show_loading_skeleton = flags["show_loading_skeleton"]
+	_card_has_begin_bulk_layout = flags["begin_bulk_layout"]
+	_card_has_end_bulk_layout = flags["end_bulk_layout"]
 	if debug_mode:
 		print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
@@ -2524,12 +2559,14 @@ func _process_pool_growth() -> void:
 		return
 	var count = mini(POOL_GROWTH_PER_FRAME, _pending_pool_growth)
 	for i in range(count):
+		if not WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
+			return
 		var card = _card_scene.instantiate()
 		card.visible = false
 		card.set_meta("pooled", true)
 		card.set_meta("virtual_index", -1)
 		_card_pool.append(card)
-	_pending_pool_growth -= count
+		_pending_pool_growth -= 1
 
 func _compute_pool_size(available: Vector2) -> int:
 	if _total_items <= 0 or not _scroll_container:
@@ -4684,7 +4721,7 @@ func _drain_pending_effect_rebuilds() -> void:
 
 	var force_full_rebuild: bool = _pending_effect_rebuild_force_full
 	var processed: int = 0
-	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty():
+	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty() and WarmupBudget.try_spend(WarmupBudget.COST_EFFECT_REBUILD_US):
 		var card = _pending_effect_rebuilds[0]
 		_pending_effect_rebuilds.remove_at(0)
 		_pending_effect_rebuild_set.erase(card)
