@@ -125,7 +125,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 			print("[GameManager] _prepare_game_for_launch: shadPS4 prep result = " + str(result))
 		"xenia":
 			print("[GameManager] _prepare_game_for_launch: Preparing Xenia game...")
-			result = _prepare_xenia_game(game, temp_intent)
+			result = await _prepare_xenia_game(game, temp_intent)
 			print("[GameManager] _prepare_game_for_launch: Xenia prep result = " + str(result))
 		_:
 			print("[GameManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
@@ -356,29 +356,157 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
+	var rom_path = intent.rom_path
+
+	# Already-extracted game folder (XBLA loose files): validate and reuse
+	if FSM.dir_exists(rom_path):
+		if _xbox360_game_has_files(rom_path):
+			_ensure_xenia_title_id(game, rom_path)
+			return true
+		push_error("[GameManager] Xenia: Extracted folder has no launchable files: " + rom_path)
+		SystemManager.notifications.show_notification("Xbox 360 game folder is missing game files", SystemManager.notifications.Type.ERROR)
+		return false
+
+	# XBLA archives (.rar/.zip of loose STFS files) extract lazily on first launch.
+	# The active file name keeps the original archive extension even after
+	# file_path is rewritten to the extracted folder, so a deleted folder
+	# falls through to here and gets re-extracted from the archive
+	var ext = rom_path.get_extension().to_lower()
+	if ext != "zip" and ext != "rar":
+		ext = game.get_active_file_name().get_extension().to_lower()
+	if ext == "zip" or ext == "rar":
+		return await _prepare_xenia_archive_game(game, intent, rom_path)
+
+	# ISO/ZAR: only Title ID extraction is needed, xenia reads these directly
 	if game.get_active_title_id() != "":
 		return true
 	print("[GameManager] Xenia: Preparing game from ROM path: " + intent.rom_path)
-	
-	var rom_path = intent.rom_path
+
 	var title_id = TitleIDParser.extract_xbox360_title_id(rom_path)
 	if title_id == "":
 		push_error("[GameManager] Xenia: Failed to extract TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract Xbox 360 game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
-	
+
 	print("[GameManager] Xenia: TitleID from ISO: " + title_id)
-	
+
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != title_id:
 		print("[GameManager] Xenia: WARNING - Stored TitleID " + active_title_id + " doesn't match ISO TitleID " + title_id)
 		print("[GameManager] Xenia: Updating to correct TitleID from ISO")
-	
+
 	if active_title_id != title_id:
 		_store_title_id(game, title_id)
 		print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
-	
+
 	return true
+
+## Extracts and stores the title ID for a xenia game if not already known
+func _ensure_xenia_title_id(game: GameResource, path: String) -> void:
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "":
+		return
+	var title_id = TitleIDParser.extract_xbox360_title_id(path)
+	if title_id != "":
+		_store_title_id(game, title_id)
+		print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
+
+## Returns true if the folder contains a launchable Xbox 360 file (default.xex or STFS package)
+func _xbox360_game_has_files(dir_path: String) -> bool:
+	return TitleIDParser.find_xbox360_launch_file(dir_path) != ""
+
+## Handles XBLA archives (.rar/.zip of loose STFS files)
+## Extracts to <roms>/xbox360/<TitleID>/ next to the archive (which is kept),
+## then points the intent and game.file_path at the extracted folder
+func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_path: String) -> bool:
+	var archive_path = rom_path
+	if not FSM.file_exists(archive_path):
+		# Extracted files were deleted; relocate the original archive for re-extraction
+		archive_path = _locate_xenia_archive(game)
+		if archive_path == "":
+			push_error("[GameManager] Xenia: XBLA archive not found for: " + game.get_display_name())
+			SystemManager.notifications.show_notification("Xbox 360 game archive not found", SystemManager.notifications.Type.ERROR)
+			return false
+
+	# Title ID is needed for the extraction folder name
+	var title_id = game.get_active_title_id()
+	if title_id == "":
+		title_id = TitleIDParser.extract_xbox360_title_id(archive_path)
+		if title_id == "":
+			push_error("[GameManager] Xenia: Failed to extract TitleID from: " + archive_path)
+			SystemManager.notifications.show_notification("Failed to extract Xbox 360 game TitleID", SystemManager.notifications.Type.ERROR)
+			return false
+		_store_title_id(game, title_id)
+		print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
+
+	var extract_path = FSM.join_paths(archive_path.get_base_dir(), title_id)
+	print("[GameManager] Xenia: XBLA extraction path: " + extract_path)
+
+	if not _xbox360_game_has_files(extract_path):
+		# Remove stale/partial extraction before re-extracting
+		if FSM.dir_exists(extract_path):
+			print("[GameManager] Xenia: Removing stale extraction: " + extract_path)
+			FSM.delete_dir_recursive(extract_path)
+
+		var extract_success := await _extract_xenia_archive(archive_path, extract_path)
+		if not extract_success or not _xbox360_game_has_files(extract_path):
+			push_error("[GameManager] Xenia: Extraction failed or produced no launchable files: " + archive_path)
+			SystemManager.notifications.show_notification("Failed to extract Xbox 360 game archive", SystemManager.notifications.Type.ERROR)
+			return false
+
+	intent.rom_path = extract_path
+	_store_file_path(game, extract_path)
+	print("[GameManager] Xenia: XBLA game ready at: " + extract_path)
+	return true
+
+## Reconstructs the path to the game's source archive from library metadata
+func _locate_xenia_archive(game: GameResource) -> String:
+	var root_folder = DataManager.get_setting("games_root_folder")
+	var root_path = root_folder.value if root_folder else "user://roms/"
+	var archive_path = FSM.join_paths(root_path, game.platform_slug, game.get_active_file_name())
+	if FSM.file_exists(archive_path):
+		return archive_path
+	return ""
+
+## Extracts an XBLA archive to the specified directory (archive is kept)
+func _extract_xenia_archive(archive_path: String, extract_to: String) -> bool:
+	print("[GameManager] Xenia: Extracting archive: " + archive_path + " to: " + extract_to)
+
+	if not FSM.dir_exists(extract_to):
+		FSM.make_dir_recursive(extract_to)
+
+	var item_id: String = SystemManager.download.queue_extraction(archive_path, extract_to, "xbox360_game", "Extracting Xbox 360 Game", false)
+	if item_id == "":
+		push_error("[GameManager] Xenia: Failed to queue extraction")
+		return false
+
+	print("[GameManager] Xenia: Waiting for extraction to complete...")
+
+	var completion_tracker := {"complete": false, "success": false}
+
+	var on_complete = func(completed_item_id: String, success: bool, _message: String):
+		if completed_item_id == item_id:
+			completion_tracker.complete = true
+			completion_tracker.success = success
+			print("[GameManager] Xenia: Extraction callback - success=" + str(success))
+
+	SystemManager.download.extraction_completed.connect(on_complete)
+
+	# Wait for extraction to complete (30 min timeout for large games)
+	var timeout_frames = 0
+	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
+	while not completion_tracker.complete:
+		await get_tree().process_frame
+		timeout_frames += 1
+		if timeout_frames > max_timeout_frames:
+			push_error("[GameManager] Xenia: Extraction timed out after 30 minutes")
+			SystemManager.download.extraction_completed.disconnect(on_complete)
+			return false
+
+	SystemManager.download.extraction_completed.disconnect(on_complete)
+
+	print("[GameManager] Xenia: Extraction complete, success=" + str(completion_tracker.success))
+	return completion_tracker.success
 
 func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
@@ -1343,3 +1471,8 @@ func cleanup_extracted_game_files(game: GameResource) -> void:
 				if FSM.dir_exists(vita_path):
 					print("[GameManager] Cleaning up extracted Vita game: " + vita_path)
 					FSM.delete_dir_recursive(vita_path)
+		"xbox360":
+			# XBLA archives extract next to the source archive; file_path points at the folder
+			if game.file_path != "" and FSM.dir_exists(game.file_path):
+				print("[GameManager] Cleaning up extracted Xbox 360 game: " + game.file_path)
+				FSM.delete_dir_recursive(game.file_path)

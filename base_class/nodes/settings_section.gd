@@ -26,6 +26,9 @@ var surface_tint: Color = Color.TRANSPARENT:
 
 func _init(title: String = "", icon_name: String = "") -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# PASS so touch/drag gestures bubble through to an ancestor ScrollContainer
+	# instead of being consumed by the section's non-interactive surface.
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	add_theme_constant_override("separation", int(M3Units.dp(8)))
 
 	if not title.is_empty():
@@ -33,6 +36,7 @@ func _init(title: String = "", icon_name: String = "") -> void:
 
 	_card = PanelContainer.new()
 	_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_card.mouse_filter = Control.MOUSE_FILTER_PASS
 	var card_style := StyleBoxFlat.new()
 	card_style.anti_aliasing = true
 	card_style.set_corner_radius_all(int(M3Units.dp(16)))
@@ -45,6 +49,7 @@ func _init(title: String = "", icon_name: String = "") -> void:
 
 	_rows = VBoxContainer.new()
 	_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rows.mouse_filter = Control.MOUSE_FILTER_PASS
 	_rows.add_theme_constant_override("separation", int(M3Units.dp(8)))
 	_card.add_child(_rows)
 
@@ -57,6 +62,7 @@ func add_row(content: Control, trailing: Array[Control] = []) -> HBoxContainer:
 	_add_separator_if_needed()
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.custom_minimum_size = Vector2(0, M3Units.dp(64))
 	row.add_theme_constant_override("separation", int(M3Units.dp(12)))
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -124,19 +130,23 @@ func refresh_theme() -> void:
 func _build_header(title: String, icon_name: String) -> Control:
 	var header := HBoxContainer.new()
 	header.alignment = BoxContainer.ALIGNMENT_CENTER
+	header.mouse_filter = Control.MOUSE_FILTER_PASS
 	header.add_theme_constant_override("separation", int(M3Units.dp(12)))
 	header.add_child(_make_rule())
 
 	_header_cluster = HBoxContainer.new()
+	_header_cluster.mouse_filter = Control.MOUSE_FILTER_PASS
 	_header_cluster.add_theme_constant_override("separation", int(M3Units.dp(8)))
 	if not icon_name.is_empty():
 		var icon := FontIcon.new()
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.icon_settings = FontIconSettings.new()
 		icon.icon_settings.icon_name = icon_name
 		icon.icon_settings.icon_size = int(M3Units.dp(18))
 		icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_header_cluster.add_child(icon)
 	var label := M3Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.text = title.to_lower()
 	label.label_style = M3Label.Style.TITLE_MEDIUM
 	# M3Label owns font_color; use its variant-color switch rather than an
@@ -155,6 +165,7 @@ func _add_separator_if_needed() -> void:
 
 func _make_rule() -> HSeparator:
 	var rule := HSeparator.new()
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rule.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rule.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var sb := StyleBoxLine.new()
@@ -165,6 +176,7 @@ func _make_rule() -> HSeparator:
 
 func _make_vrule() -> VSeparator:
 	var rule := VSeparator.new()
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rule.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var sb := StyleBoxLine.new()
 	sb.thickness = 1

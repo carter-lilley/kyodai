@@ -47,9 +47,12 @@ func _add_setting_content(content: Control) -> void:
 func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
 	var block := VBoxContainer.new()
 	block.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# PASS so touch drags bubble through to an ancestor ScrollContainer.
+	block.mouse_filter = Control.MOUSE_FILTER_PASS
 	block.add_theme_constant_override("separation", int(M3Units.dp(2)))
 
 	var title := M3Label.new()
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title.text = settingsvar.display_name
 	title.label_style = M3Label.Style.BODY_LARGE
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -57,6 +60,7 @@ func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
 
 	if not settingsvar.description.is_empty():
 		var description := M3Label.new()
+		description.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		description.text = settingsvar.description
 		description.label_style = M3Label.Style.BODY_SMALL
 		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

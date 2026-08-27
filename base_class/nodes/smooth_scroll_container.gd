@@ -163,7 +163,9 @@ func _on_focus_changed(control: Control) -> void:
 	# the current scroll means no scroll is needed.
 	if scroll_target_provider.is_valid():
 		var provided_target: float = scroll_target_provider.call(control)
-		if is_equal_approx(provided_target, _get_current_scroll()):
+		# 1px deadzone: the scrollbar truncates to int, so an untruncated float
+		# target would otherwise re-trigger a sub-pixel tween on every focus hop.
+		if absf(provided_target - _get_current_scroll()) < 1.0:
 			return
 		_target_scroll = provided_target
 		_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Callable(), Tween.TRANS_CUBIC, Tween.EASE_OUT)

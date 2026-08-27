@@ -4423,7 +4423,16 @@ func get_follow_focus_scroll_target(idx: int) -> float:
 	var view_start := current + margin
 	var view_end := current + viewport_axis - margin
 
-	if visual_start >= view_start and visual_end <= view_end:
+	# On cramped screens the focused card (including its grow overflow) plus
+	# both margins can exceed the viewport, making both-edge containment
+	# impossible. Without a stability out, the MARGIN branch below ping-pongs
+	# between top-align and bottom-align on every same-row focus hop.
+	var fits := (visual_end - visual_start) <= viewport_axis - 2.0 * margin
+	if fits:
+		if visual_start >= view_start and visual_end <= view_end:
+			return current
+	elif absf(visual_start - view_start) < 1.0 or absf(visual_end - view_end) < 1.0:
+		# Doesn't fit: stable once either edge is flush.
 		return current
 
 	if _focus_centering_mode == FocusCentering.CENTER:

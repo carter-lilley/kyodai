@@ -498,6 +498,7 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 		# Pinned shortcut selected; keep static selection highlighted.
 		_set_nav_selected_index_no_signal(_last_nav_index)
 		if dest.get("type") == "collection" or dest.get("type") == "favorites":
+			_focus_tapped_destination(index)
 			ui_manager.switch_to_tab(dest.view)
 		else:
 			_launch_pinned_shortcut(dest)
@@ -506,7 +507,26 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	if index < static_count:
 		# Only remember selection for the static tabs (not shuffle/add/pins).
 		_last_nav_index = index
+	_focus_tapped_destination(index)
 	ui_manager.switch_to_tab(dest.view)
+
+func _focus_tapped_destination(index: int) -> void:
+	"""Focus the tapped destination after a pointer-initiated selection.
+
+	While grid-locked, nav destinations are FOCUS_NONE (UIManager focus lock),
+	so a tap never grabs focus and the ensuing view switch orphans the old
+	focus owner, leaving controller navigation dead. Release the lock (which
+	restores focus modes) and focus the tapped destination. Must run BEFORE
+	switch_to_tab, which synchronously hides the old grid and exits the lock.
+	No-op when the lock isn't active — unlocked taps grab click focus natively."""
+	if not ui_manager.is_focus_lock_active():
+		return
+	ui_manager.release_focus_lock()
+	if not _nav_node or index < 0 or index >= _nav_node._destination_items.size():
+		return
+	var item: Control = _nav_node._destination_items[index]
+	if item.focus_mode != Control.FOCUS_NONE:
+		ui_manager.grab_focus_silent(item)
 
 func _show_add_menu(anchor: Control) -> void:
 	"""Open the add-shortcut context menu anchored to the plus destination."""

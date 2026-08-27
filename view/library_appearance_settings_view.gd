@@ -50,26 +50,12 @@ func _setup_ui() -> void:
 	vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	margin.add_child(vbox)
 
+	# Theme Presets section
+	_create_preset_section(vbox)
+
 	# General layout settings (excluding internal ones)
 	_library_general_menu = SettingsMenu.new()
 	vbox.add_child(_library_general_menu)
-
-	# Background section: entry point to the Background Designer
-	var background_section := SettingsSection.new("Background", "image-outline")
-	vbox.add_child(background_section)
-
-	var designer_button = M3Button.new()
-	designer_button.text = "Open Background Designer"
-	designer_button.icon_name = "image-outline"
-	designer_button.button_variant = M3Button.Variant.TONAL
-	designer_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	designer_button.pressed.connect(func():
-		UIManager.show_settings_dialog_with_category("background_designer")
-	)
-	background_section.add_content(designer_button, false)
-
-	# Theme Presets section
-	_create_preset_section(vbox)
 
 	# Bottom buffer
 	var bottom_buffer = Control.new()

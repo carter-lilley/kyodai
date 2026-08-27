@@ -1238,12 +1238,12 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	else:
 		game.igdb_metadata = {}
 
-	# Release date: RomM exposes first_release_date as unix ms; fall back to
-	# the IGDB blob (unix seconds) when the top-level field is missing.
+	# Release date: RomM exposes first_release_date as unix seconds; fall back
+	# to the IGDB blob (also unix seconds) when the top-level field is missing.
 	game.release_date = 0
 	var raw_release = data.get("first_release_date", 0)
 	if raw_release != null:
-		game.release_date = int(raw_release)
+		game.release_date = int(raw_release) * 1000
 	if game.release_date <= 0 and game.igdb_metadata.has("first_release_date"):
 		var igdb_release = game.igdb_metadata.get("first_release_date", 0)
 		if igdb_release != null:

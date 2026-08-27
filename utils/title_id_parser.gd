@@ -164,12 +164,20 @@ const _XEX_SECTOR_SIZE = 2048
 const _GDFX_MAGIC = "MICROSOFT*XBOX*MEDIA"
 const _XEX_HEADER_EXECUTION_INFO = 0x00040006
 
-## Extracts Xbox 360 Title ID from an ISO or ZAR file
+## Extracts Xbox 360 Title ID from an ISO, ZAR, XBLA archive, or extracted folder
 ## ISO: Parses the GDFX filesystem to find default.xex, then extracts Title ID from XEX header
 ## ZAR: Looks up default.xex directly in the archive file tree
+## ZIP/RAR (XBLA): Matches the <TitleID>/<ContentType>/ folder layout in the archive listing
+## Folder: Same layout match on disk, falling back to STFS header parsing
 ## Returns 8-character hex string (e.g., "545407DF")
 static func extract_xbox360_title_id(iso_path: String) -> String:
-	if iso_path.get_extension().to_lower() == "zar":
+	# XBLA games are loose folders of extensionless STFS containers
+	if FSM.is_dir(iso_path):
+		return _extract_xbox360_title_id_folder(iso_path)
+	var ext = iso_path.get_extension().to_lower()
+	if ext == "zip" or ext == "rar":
+		return _extract_xbox360_title_id_archive(iso_path)
+	if ext == "zar":
 		return _extract_xbox360_title_id_zar(iso_path)
 	return _with_open_file(iso_path, func(file: FileAccess) -> String:
 		print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
@@ -277,6 +285,197 @@ static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
 
 	push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ZAR")
 	return ""
+
+# ==================== Xbox 360 XBLA (STFS loose files) ====================
+
+const _STFS_TITLE_ID_OFFSET = 0x360
+const _STFS_MAGICS = ["CON ", "PIRS", "LIVE"]
+
+## Returns true if the string is exactly 8 hexadecimal characters
+static func _is_hex8(value: String) -> bool:
+	if value.length() != 8:
+		return false
+	for i in range(8):
+		var c = value[i]
+		if not ((c >= '0' and c <= '9') or (c >= 'A' and c <= 'F') or (c >= 'a' and c <= 'f')):
+			return false
+	return true
+
+## Matches the Xbox 360 content layout in a path's components:
+## <TitleID>/<ContentType>/<file> where TitleID and ContentType are 8-hex dirs
+## Returns the Title ID (uppercase) or empty string
+static func _xbox360_title_id_from_path(path: String) -> String:
+	var parts = path.replace("\\", "/").split("/", false)
+	# The TitleID dir always sits outside the ContentType dir, so the first
+	# (outermost) hex8/hex8 pair wins
+	for i in range(parts.size() - 1):
+		if _is_hex8(parts[i]) and _is_hex8(parts[i + 1]):
+			return parts[i].to_upper()
+	return ""
+
+## Reads the Title ID from an STFS package (CON/PIRS/LIVE container)
+## Title ID is a big-endian uint32 at offset 0x360
+static func _xbox360_title_id_from_stfs_file(file_path: String) -> String:
+	return _with_open_file(file_path, func(file: FileAccess) -> String:
+		if file.get_length() < _STFS_TITLE_ID_OFFSET + 4:
+			return ""
+		var magic = file.get_buffer(4).get_string_from_ascii()
+		if not magic in _STFS_MAGICS:
+			return ""
+		file.seek(_STFS_TITLE_ID_OFFSET)
+		var title_id_bytes = file.get_buffer(4)
+		if title_id_bytes.size() < 4:
+			return ""
+		var title_id = ""
+		for b in title_id_bytes:
+			title_id += "%02x" % b
+		if title_id.length() == 8:
+			return title_id.to_upper()
+		return ""
+	)
+
+## Recursively collects all files under a directory
+static func _collect_files_recursive(dir_path: String, results: Array[String], max_depth: int = 8) -> void:
+	if max_depth <= 0:
+		return
+	var dir = DirAccess.open(dir_path)
+	if not dir:
+		return
+	dir.list_dir_begin()
+	var entry = dir.get_next()
+	while entry != "":
+		if entry != "." and entry != "..":
+			var full_path = dir_path.path_join(entry)
+			if dir.current_is_dir():
+				_collect_files_recursive(full_path, results, max_depth - 1)
+			else:
+				results.append(full_path)
+		entry = dir.get_next()
+	dir.list_dir_end()
+
+## Extracts Xbox 360 Title ID from an already-extracted XBLA game folder
+## Primary: <TitleID>/<ContentType>/ folder layout; Fallback: STFS header parse
+static func _extract_xbox360_title_id_folder(folder_path: String) -> String:
+	print("[TitleIDParser] Parsing Xbox 360 folder: " + folder_path)
+
+	var files: Array[String] = []
+	_collect_files_recursive(folder_path, files)
+	if files.is_empty():
+		push_error("[TitleIDParser] Xbox 360 folder is empty: " + folder_path)
+		return ""
+
+	for file_path in files:
+		var title_id = _xbox360_title_id_from_path(file_path)
+		if title_id != "":
+			print("[TitleIDParser] Xbox 360 Title ID found from folder layout: " + title_id)
+			return title_id
+
+	print("[TitleIDParser] No TitleID/ContentType layout found, sniffing STFS headers...")
+	for file_path in files:
+		var title_id = _xbox360_title_id_from_stfs_file(file_path)
+		if title_id != "":
+			print("[TitleIDParser] Xbox 360 Title ID found from STFS header: " + title_id)
+			return title_id
+
+	push_error("[TitleIDParser] Failed to find Title ID in Xbox 360 folder: " + folder_path)
+	return ""
+
+## Extracts Xbox 360 Title ID from an XBLA archive (.rar/.zip of loose files)
+## Matches the <TitleID>/<ContentType>/ layout in the archive's file listing;
+## archive contents are never read, so this is fast even for large packages
+static func _extract_xbox360_title_id_archive(archive_path: String) -> String:
+	print("[TitleIDParser] Parsing Xbox 360 XBLA archive: " + archive_path)
+
+	var entry_names: Array[String] = []
+	if archive_path.get_extension().to_lower() == "zip":
+		entry_names = _list_zip_entries(archive_path)
+	if entry_names.is_empty():
+		# .rar (or ZIPReader failure) - list via bundled 7-Zip
+		entry_names = _list_archive_entries_with_7z(archive_path)
+
+	for entry_name in entry_names:
+		var title_id = _xbox360_title_id_from_path(entry_name)
+		if title_id != "":
+			print("[TitleIDParser] Xbox 360 Title ID found from archive listing: " + title_id)
+			return title_id
+
+	push_error("[TitleIDParser] Failed to find Title ID in Xbox 360 archive: " + archive_path)
+	return ""
+
+## Lists all entry names in a ZIP archive via ZIPReader
+static func _list_zip_entries(zip_path: String) -> Array[String]:
+	var result: Array[String] = []
+	var resolved_path = _resolve_zip_path(zip_path)
+	if resolved_path == "":
+		return result
+	var reader = ZIPReader.new()
+	if reader.open(resolved_path) != OK:
+		return result
+	for f in reader.get_files():
+		result.append(f)
+	reader.close()
+	return result
+
+## Lists all entry names in an archive via the bundled 7-Zip binary
+static func _list_archive_entries_with_7z(archive_path: String) -> Array[String]:
+	var result: Array[String] = []
+	var binary_path = FSM._get_7z_binary_path()
+	if binary_path == "":
+		print("[TitleIDParser] 7-Zip binary not available")
+		return result
+
+	var output = []
+	var exit_code = OS.execute(binary_path, ["l", "-slt", archive_path], output, true)
+	if exit_code != 0:
+		push_error("[TitleIDParser] 7-Zip list failed with exit code: " + str(exit_code))
+		return result
+
+	var output_str = ""
+	if output.size() > 0:
+		output_str = output[0]
+	for line in output_str.split("\n"):
+		if line.begins_with("Path = "):
+			result.append(line.substr(7).strip_edges())
+	return result
+
+## Finds the file xenia should launch inside an extracted Xbox 360 game folder
+## Prefers default.xex (extracted disc/GOD games), otherwise the STFS package
+## (XBLA) - preferring files under a 000D0000 content-type dir, then largest
+## Returns empty string if no launchable file is found
+static func find_xbox360_launch_file(folder_path: String) -> String:
+	if not FSM.is_dir(folder_path):
+		return ""
+
+	var files: Array[String] = []
+	_collect_files_recursive(folder_path, files)
+
+	# default.xex always wins
+	for file_path in files:
+		if file_path.get_file().to_lower() == "default.xex":
+			return file_path
+
+	# Otherwise pick the best STFS package
+	var best_path = ""
+	var best_size = -1
+	var best_preferred = false
+	for file_path in files:
+		var file = FSM.open_file_read(file_path)
+		if not file:
+			continue
+		var is_stfs = false
+		var size = file.get_length()
+		if size >= _STFS_TITLE_ID_OFFSET + 4:
+			is_stfs = file.get_buffer(4).get_string_from_ascii() in _STFS_MAGICS
+		file.close()
+		if not is_stfs:
+			continue
+		var preferred = file_path.get_base_dir().get_file().to_lower() == "000d0000"
+		if (preferred and not best_preferred) or (preferred == best_preferred and size > best_size):
+			best_path = file_path
+			best_size = size
+			best_preferred = preferred
+
+	return best_path
 
 ## Searches for GDFX partition by looking for "MICROSOFT*XBOX*MEDIA" magic at known offsets
 ## Returns the game partition base offset, or -1 if not found

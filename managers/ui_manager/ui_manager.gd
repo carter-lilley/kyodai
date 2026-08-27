@@ -511,6 +511,13 @@ func exit_focus_lock(grid: VirtualScrollGridContainer) -> void:
 		return
 	_exit_focus_lock()
 
+func release_focus_lock() -> void:
+	"""Force-exit the focus lock regardless of which grid holds it.
+
+	Used by pointer-initiated escapes (e.g. tapping a nav destination while
+	grid-locked) where the caller doesn't know the owning grid."""
+	_exit_focus_lock()
+
 func _exit_focus_lock() -> void:
 	if not _focus_lock_active:
 		return

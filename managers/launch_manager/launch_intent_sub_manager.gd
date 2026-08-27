@@ -222,6 +222,20 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 					intent.launch_args[i] = game_path
 					break
 		
+		# Xenia special handling - extracted XBLA folders launch the file inside
+		# (STFS package for XBLA, default.xex for extracted disc games)
+		if intent.emulator_id == "xenia" and FSM.dir_exists(intent.rom_path):
+			var xenia_launch_file = TitleIDParser.find_xbox360_launch_file(intent.rom_path)
+			if xenia_launch_file != "":
+				var global_xenia_launch_file = FSM.resolve_native_path(xenia_launch_file)
+				print("[LaunchIntentManager] Xenia: Using launch file: " + global_xenia_launch_file)
+				for i in range(intent.launch_args.size()):
+					if intent.launch_args[i] == global_rom_path:
+						intent.launch_args[i] = global_xenia_launch_file
+						break
+			else:
+				push_error("[LaunchIntentManager] Xenia: No launchable file in folder: " + intent.rom_path)
+
 		# shadPS4 special handling for desktop - replace ROM path with TitleID
 		# shadPS4 searches configured installDirs for matching TitleID folder
 		var shadps4_title_id = intent.game.get_active_title_id() if intent.game else ""
