@@ -1140,9 +1140,8 @@ func _on_card_pressed():
 
 func _get_show_delete() -> bool:
 	# Cache the result to avoid parent traversal on every context menu open
-	var cached = get_meta("_cached_show_delete", null)
-	if cached != null:
-		return cached
+	if has_meta("_cached_show_delete"):
+		return get_meta("_cached_show_delete")
 
 	var parent = get_parent()
 	while parent:

@@ -175,7 +175,7 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 	if FSM.is_dir(iso_path):
 		return _extract_xbox360_title_id_folder(iso_path)
 	var ext = iso_path.get_extension().to_lower()
-	if ext == "zip" or ext == "rar":
+	if ext == "zip":
 		return _extract_xbox360_title_id_archive(iso_path)
 	if ext == "zar":
 		return _extract_xbox360_title_id_zar(iso_path)
@@ -380,20 +380,13 @@ static func _extract_xbox360_title_id_folder(folder_path: String) -> String:
 	push_error("[TitleIDParser] Failed to find Title ID in Xbox 360 folder: " + folder_path)
 	return ""
 
-## Extracts Xbox 360 Title ID from an XBLA archive (.rar/.zip of loose files)
+## Extracts Xbox 360 Title ID from an XBLA archive (.zip of loose files)
 ## Matches the <TitleID>/<ContentType>/ layout in the archive's file listing;
 ## archive contents are never read, so this is fast even for large packages
 static func _extract_xbox360_title_id_archive(archive_path: String) -> String:
 	print("[TitleIDParser] Parsing Xbox 360 XBLA archive: " + archive_path)
 
-	var entry_names: Array[String] = []
-	if archive_path.get_extension().to_lower() == "zip":
-		entry_names = _list_zip_entries(archive_path)
-	if entry_names.is_empty():
-		# .rar (or ZIPReader failure) - list via bundled 7-Zip
-		entry_names = _list_archive_entries_with_7z(archive_path)
-
-	for entry_name in entry_names:
+	for entry_name in _list_zip_entries(archive_path):
 		var title_id = _xbox360_title_id_from_path(entry_name)
 		if title_id != "":
 			print("[TitleIDParser] Xbox 360 Title ID found from archive listing: " + title_id)
@@ -414,28 +407,6 @@ static func _list_zip_entries(zip_path: String) -> Array[String]:
 	for f in reader.get_files():
 		result.append(f)
 	reader.close()
-	return result
-
-## Lists all entry names in an archive via the bundled 7-Zip binary
-static func _list_archive_entries_with_7z(archive_path: String) -> Array[String]:
-	var result: Array[String] = []
-	var binary_path = FSM._get_7z_binary_path()
-	if binary_path == "":
-		print("[TitleIDParser] 7-Zip binary not available")
-		return result
-
-	var output = []
-	var exit_code = OS.execute(binary_path, ["l", "-slt", archive_path], output, true)
-	if exit_code != 0:
-		push_error("[TitleIDParser] 7-Zip list failed with exit code: " + str(exit_code))
-		return result
-
-	var output_str = ""
-	if output.size() > 0:
-		output_str = output[0]
-	for line in output_str.split("\n"):
-		if line.begins_with("Path = "):
-			result.append(line.substr(7).strip_edges())
 	return result
 
 ## Finds the file xenia should launch inside an extracted Xbox 360 game folder

@@ -184,6 +184,9 @@ func _build_ui():
 
 	_emulator_dropdown = M3OptionButton.new()
 	_emulator_dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# EXPAND_FILL sizes the field; skip the O(n²) longest-item measurement on
+	# every add_item during populate_dropdown().
+	_emulator_dropdown.fit_to_longest_item = false
 	# Placeholder text shown while dropdown population is deferred.
 	_emulator_dropdown.add_item("Loading...", 0)
 	emulator_row.add_child(_emulator_dropdown)
@@ -542,9 +545,15 @@ func refresh_firmware_indicator() -> void:
 		return
 
 	_firmware_indicator.visible = true
-	var firmware_ready = LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator, core_id)
+	# Cache-only lookup: never walk the filesystem on the main thread. Unknown
+	# (-1) means the async warm hasn't reached this combo yet; hide the
+	# indicator until the warm completion refreshes it.
+	var cached: int = LaunchManager.is_platform_firmware_ready_cached(platform_slug, effective_emulator, core_id)
+	if cached == -1:
+		_firmware_indicator.visible = false
+		return
 	var file_list = ", ".join(expected_files)
-	if firmware_ready:
+	if cached == 1:
 		_firmware_indicator.set_status(Indicator.Status.SUCCESS, "Firmware installed", "Expected firmware file(s): " + file_list)
 	else:
 		_firmware_indicator.set_status(Indicator.Status.ERROR, "Firmware missing", "Expected firmware file(s): " + file_list)
@@ -710,7 +719,9 @@ func _on_emulator_selected(index: int):
 	var effective_emu = selected_emulator if selected_emulator != "" else registry_default_emulator
 	if LaunchManager and effective_emu != "":
 		LaunchManager.scan_emulator_install_state(effective_emu)
-		LaunchManager.clear_firmware_cache(platform_slug, effective_emu, selected_core_id)
+		# Note: the firmware cache is NOT cleared here — the cache key already
+		# includes the core id, and the card's indicator lookup is cache-only
+		# (cleared entries would hide the indicator until an async re-warm).
 
 	emulator_changed.emit(selected_emulator, selected_core_id)
 	refresh_ui()
@@ -746,14 +757,17 @@ func refresh_ui() -> void:
 
 ## Formats a version string for display. If it's an ISO date, shows a friendly date.
 ## Otherwise returns the version string with v/V prefix stripped.
+static var _iso_date_regex: RegEx = null
+
 func _format_version_for_display(version: String) -> String:
 	if version == "":
 		return ""
-	
-	# Check if it looks like an ISO date
-	var regex = RegEx.new()
-	regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})T")
-	var match_result = regex.search(version)
+
+	# Check if it looks like an ISO date (compiled once, reused per card)
+	if _iso_date_regex == null:
+		_iso_date_regex = RegEx.new()
+		_iso_date_regex.compile("^(\\d{4})-(\\d{2})-(\\d{2})T")
+	var match_result = _iso_date_regex.search(version)
 	if match_result:
 		var year = match_result.get_string(1)
 		var month = match_result.get_string(2)

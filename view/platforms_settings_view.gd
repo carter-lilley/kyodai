@@ -440,6 +440,11 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 	var platform_default_emulator_cache: Dictionary = precomputed["default_emulator_cache"]
 	var precomputed_status: Dictionary = precomputed["install_status"]
 
+	# Warm firmware caches for every platform/emulator off the critical path;
+	# cards' indicator lookups are cache-only, and the completion callback
+	# refreshes indicators once all combos are cached.
+	_warm_firmware_caches_async(platform_emulator_cache, platform_default_core_cache)
+
 	# Prepare card creation payloads so the work can be batched across frames.
 	var fetched_slugs: Array[String] = []
 	var card_payloads: Array[Dictionary] = []
@@ -469,17 +474,15 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 			on_complete.call()
 		return
 
-	# Create cards off-tree in batched chunks, then bulk-add them to the columns.
-	# begin_bulk_layout()/end_bulk_layout() suppresses per-card layout/appearance
-	# updates so the main UI doesn't hitch while dozens of cards are built.
-	var batched_cards: Array[PlatformCard] = []
-	var cards_added_to_tree: int = 0
+	# Create AND add each card inside the budgeted batch item: the expensive
+	# part of a card is the add_child _ready cascade + layout, so it must be
+	# measured by the frame budget, not deferred to an unbudgeted callback.
 	var card_batch_size = _get_card_batch_size()
 	var dropdown_batch_size = _get_dropdown_batch_size()
 
 	_active_batch_id = MemorySubManager.start_batch(
 		card_payloads,
-		func(payload: Dictionary, _index: int) -> PlatformCard:
+		func(payload: Dictionary, index: int) -> PlatformCard:
 			var card = _create_platform_card(
 				payload.slug,
 				payload.platform_name,
@@ -492,27 +495,16 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 				platform_default_emulator_cache
 			)
 			_register_card(card, payload.slug)
-			batched_cards.append(card)
+			_add_card_to_column(card, index)
+			card.end_bulk_layout()
 			return card,
 		SystemManager.memory.BatchMode.SYNC,
 		card_batch_size,
 		func(_processed: int, _total: int):
-			# Add this frame's chunk to the tree in one pass and then apply layout.
-			for i in range(batched_cards.size()):
-				_add_card_to_column(batched_cards[i], cards_added_to_tree + i)
-			for card in batched_cards:
-				card.end_bulk_layout()
-			cards_added_to_tree += batched_cards.size()
-			batched_cards.clear(),
+			# First chunk landed: swap the skeletons for real cards.
+			_hide_loading_indicator(),
 		func(_results: Array):
 			_active_batch_id = -1
-			# Add any remaining cards from the final chunk.
-			for i in range(batched_cards.size()):
-				_add_card_to_column(batched_cards[i], cards_added_to_tree + i)
-			for card in batched_cards:
-				card.end_bulk_layout()
-			cards_added_to_tree += batched_cards.size()
-			batched_cards.clear()
 
 			if not is_inside_tree():
 				_return_all_cards()
@@ -552,7 +544,30 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 					dropdown_cards.clear()
 					if on_complete.is_valid():
 						on_complete.call()
-			)
+			, _get_frame_budget_us())
+	, _get_frame_budget_us())
+
+func _warm_firmware_caches_async(emulator_cache: Dictionary, default_core_cache: Dictionary) -> void:
+	"""Warm firmware-ready caches for every platform/emulator on the DB thread
+	(off the card-creation critical path), then refresh card indicators once
+	the lookups are all cached. Recursive directory walks never touch the main
+	thread; cards use cache-only indicator lookups in the meantime."""
+	var generation := _render_generation
+	SystemManager.memory.queue_db_task(
+		func():
+			for slug in emulator_cache.keys():
+				var default_core_id: String = default_core_cache.get(slug, "")
+				for emulator in emulator_cache[slug]:
+					var emu_id = emulator.get("id", "")
+					if emu_id != "":
+						LaunchManager.is_platform_firmware_ready(slug, emu_id, default_core_id if emu_id == "retroarch" else "")
+			return true,
+		func(_done):
+			if generation != _render_generation or not is_inside_tree():
+				return
+			for card in _platform_cards.values():
+				if is_instance_valid(card):
+					card.refresh_firmware_indicator()
 	)
 
 func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}, default_emulator_cache: Dictionary = {}) -> PlatformCard:
@@ -665,6 +680,12 @@ func _get_card_batch_size() -> int:
 	# One card per frame on Android keeps each frame under budget; desktop can
 	# afford larger chunks.
 	return 1 if SystemManager.platform.is_android() else 8
+
+func _get_frame_budget_us() -> int:
+	# Per-frame main-thread time budget for batched card work. The batch always
+	# processes at least one item per frame regardless, so this only paces
+	# throughput — cards simply take more frames to appear instead of hitching.
+	return 2500 if SystemManager.platform.is_android() else 6000
 
 func _get_dropdown_batch_size() -> int:
 	return 1 if SystemManager.platform.is_android() else 6
@@ -878,11 +899,24 @@ func _on_emulator_extraction_completed(emulator_id: String, _success: bool):
 			card.refresh_ui()
 
 func _on_firmware_download_completed(platform_slug: String, _success: bool):
-	# Refresh the platform card so the firmware indicator updates immediately
+	# Refresh the platform card so the firmware indicator updates immediately.
 	LaunchManager.clear_firmware_cache_for_platform(platform_slug)
 	var card = _platform_cards.get(platform_slug)
-	if card:
-		card.refresh_ui()
+	if not card:
+		return
+	# Re-warm on the DB thread, then refresh: the card's indicator lookup is
+	# cache-only, so the recursive filesystem walk must not run on this thread.
+	var effective_emulator: String = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
+	var core_id: String = card.selected_core_id if card.selected_emulator == "retroarch" else ""
+	SystemManager.memory.queue_db_task(
+		func():
+			if effective_emulator != "":
+				LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator, core_id)
+			return true,
+		func(_done):
+			if is_instance_valid(card):
+				card.refresh_ui()
+	)
 
 func _refresh_all_card_status() -> void:
 	"""Refresh install/download status indicators for all platform cards."""

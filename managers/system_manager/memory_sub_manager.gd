@@ -124,6 +124,9 @@ class BatchProcess:
 	var process_item: Callable  # func(item, index) -> result
 	var mode: int  # BatchMode
 	var batch_size: int
+	## Optional per-frame main-thread time budget (microseconds) for SYNC batches.
+	## 0 = fixed-count chunks (batch_size items per frame, legacy behavior).
+	var frame_budget_us: int = 0
 	var current_index: int = 0
 	var on_progress: Callable  # func(processed_count, total_count)
 	var on_complete: Callable  # func(results: Array)
@@ -135,14 +138,16 @@ class BatchProcess:
 
 	static var _next_id: int = 0
 
-	func _init(p_items: Array, p_process_item: Callable, p_mode: int, p_batch_size: int, 
-			   p_on_progress: Callable = Callable(), p_on_complete: Callable = Callable()):
+	func _init(p_items: Array, p_process_item: Callable, p_mode: int, p_batch_size: int,
+			   p_on_progress: Callable = Callable(), p_on_complete: Callable = Callable(),
+			   p_frame_budget_us: int = 0):
 		items = p_items
 		process_item = p_process_item
 		mode = p_mode
 		batch_size = p_batch_size
 		on_progress = p_on_progress
 		on_complete = p_on_complete
+		frame_budget_us = p_frame_budget_us
 		id = _next_id
 		_next_id += 1
 		results.resize(items.size())
@@ -1048,7 +1053,8 @@ static func start_batch(
 	mode: int = BatchMode.SYNC,
 	batch_size: int = 10,
 	on_progress: Callable = Callable(),
-	on_complete: Callable = Callable()
+	on_complete: Callable = Callable(),
+	frame_budget_us: int = 0
 ) -> int:
 	if _instance == null:
 		push_error("[SystemManager.memory] Not initialized - cannot start batch")
@@ -1059,7 +1065,7 @@ static func start_batch(
 			on_complete.call([])
 		return -1
 
-	var batch = BatchProcess.new(items, process_item, mode, batch_size, on_progress, on_complete)
+	var batch = BatchProcess.new(items, process_item, mode, batch_size, on_progress, on_complete, frame_budget_us)
 
 	_instance._batch_mutex.lock()
 	_instance._batch_processes.append(batch)
@@ -1096,18 +1102,32 @@ func _process_batches():
 		if batch.pending_callbacks > 0:
 			continue
 
-		var end_index = mini(batch.current_index + batch.batch_size, batch.items.size())
-		var items_this_frame = end_index - batch.current_index
+		# Time-budgeted SYNC chunks: process items until the frame budget is
+		# exhausted (batch_size stays the upper cap, and at least one item per
+		# frame is always processed so no batch can starve). Fixed-count for
+		# everything else: async modes don't burn main-thread time per item.
+		if batch.mode == BatchMode.SYNC and batch.frame_budget_us > 0:
+			var chunk_start_us := Time.get_ticks_usec()
+			var chunk_end := mini(batch.current_index + batch.batch_size, batch.items.size())
+			while batch.current_index < chunk_end:
+				batch.pending_callbacks += 1
+				_process_batch_item(batch, batch.current_index)
+				batch.current_index += 1
+				if Time.get_ticks_usec() - chunk_start_us >= batch.frame_budget_us:
+					break
+		else:
+			var end_index = mini(batch.current_index + batch.batch_size, batch.items.size())
+			var items_this_frame = end_index - batch.current_index
 
-		if items_this_frame <= 0:
-			continue
+			if items_this_frame <= 0:
+				continue
 
-		# Process this batch
-		for i in range(batch.current_index, end_index):
-			batch.pending_callbacks += 1
-			_process_batch_item(batch, i)
+			# Process this batch
+			for i in range(batch.current_index, end_index):
+				batch.pending_callbacks += 1
+				_process_batch_item(batch, i)
 
-		batch.current_index = end_index
+			batch.current_index = end_index
 
 		# Report progress
 		if batch.on_progress.is_valid():

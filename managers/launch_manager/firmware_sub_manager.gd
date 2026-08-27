@@ -66,6 +66,18 @@ func get_firmware_directory(emulator_id: String, platform_slug: String = "", cor
 	dir = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
 	return dir.rstrip("/") + "/"
 
+## Cache-only variant of is_platform_firmware_ready: returns 1/0 for a cached
+## result, or -1 when the lookup has never run. Callers on the main thread use
+## this to avoid triggering the recursive filesystem walk; caches are warmed
+## asynchronously on the DB thread.
+func is_platform_firmware_ready_cached(platform_slug: String, emulator_id: String, core_id: String = "") -> int:
+	var cache_key = platform_slug + ":" + emulator_id
+	if core_id != "":
+		cache_key += ":" + core_id
+	if not _firmware_ready_cache.has(cache_key):
+		return -1
+	return 1 if _firmware_ready_cache[cache_key] else 0
+
 ## Checks if firmware is ready for a platform/emulator
 ## Returns true if firmware directory exists and has any of the expected files
 ## Searches recursively through subdirectories

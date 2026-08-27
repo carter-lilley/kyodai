@@ -27,21 +27,21 @@ const STAR_SIZE_DP := 20.0
 # _reparent_content() moves MarginContainer into the sheet's _content_slot.
 @onready var _content_root: Control = $MarginContainer
 @onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
-@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentVBox/TitleLabel
-@onready var metadata_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
-@onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs
-@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewScroll/DescriptionLabel
-@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard
-@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
-@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
-@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
-@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
-@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
-@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/SiblingDropdown
-@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/StatusDropdown
-@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/ActionButton
-@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/SyncButton
-@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/ButtonRow/FavoriteButton
+@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleLabel
+@onready var metadata_row: HFlowContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow
+@onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs
+@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Overview/OverviewScroll/DescriptionLabel
+@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard
+@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
+@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
+@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
+@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
+@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
+@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/SiblingDropdown
+@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/StatusDropdown
+@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/ActionButton
+@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/SyncButton
+@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/FavoriteButton
 
 ## RomM play-status options. The first five map to the mutually exclusive
 ## rom_user.status enum; the last three are independent boolean flags.
@@ -70,6 +70,10 @@ var _prepared_cover: Texture2D = null
 
 func _ready():
 	super._ready()
+	# Never let content render past the sheet edge; the sheet must never grow
+	# with its contents.
+	if _sheet_container:
+		_sheet_container.clip_contents = true
 	_reparent_content()
 	_setup_tabs()
 	_setup_focus_neighbors()
@@ -77,6 +81,15 @@ func _ready():
 	_set_sheet_height()
 	_reduce_top_padding()
 	_apply_content_scaling()
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
+
+func _on_viewport_size_changed() -> void:
+	# Only recompute while hidden; a visible sheet keeps its current geometry
+	# until the next show. _position_sheet() refreshes width/height/position
+	# even when the peek_height setter no-ops on an unchanged value.
+	if not visible:
+		_set_sheet_height()
+		_position_sheet()
 
 func refresh_theme():
 	super.refresh_theme()
@@ -119,11 +132,12 @@ func _apply_content_scaling() -> void:
 	var hbox := _content_root.get_node_or_null(^"HBoxContainer") as HBoxContainer
 	if hbox:
 		hbox.add_theme_constant_override("separation", edge)
-	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentVBox") as VBoxContainer
+	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentScroll/ContentVBox") as VBoxContainer
 	if vbox:
 		vbox.add_theme_constant_override("separation", M3Units.dpi(12.0))
 	if is_instance_valid(metadata_row):
-		metadata_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
+		metadata_row.add_theme_constant_override("h_separation", M3Units.dpi(8.0))
+		metadata_row.add_theme_constant_override("v_separation", M3Units.dpi(8.0))
 	if is_instance_valid(files_card):
 		files_card.add_theme_stylebox_override("panel", _build_files_card_style())
 		var card_margin := files_card.get_node_or_null(^"CardMargin") as MarginContainer
@@ -293,6 +307,13 @@ func _format_release_date(epoch_ms: int) -> String:
 
 func show_for_game(game: GameResource) -> GameDetailsSheet:
 	clear_content()
+	# Recompute height against the current viewport/scale: the sheet is
+	# persistent, so the one-shot _ready sizing goes stale after screen or
+	# scale changes (dual-screen swap, orientation, display-init ordering).
+	# _position_sheet() refreshes size.x as well — _animate_in() only ever
+	# recomputes position, never width.
+	_set_sheet_height()
+	_position_sheet()
 	show_overlay()
 	# Let the slide-in animation start on a clean frame before populating content.
 	await Engine.get_main_loop().process_frame
@@ -574,10 +595,17 @@ func _load_cover(game: GameResource) -> void:
 						if tex:
 							MemorySubManager.cache_texture(cache_key, tex)
 							_set_cover_texture(tex)
+							return
+				# Decode failed (corrupt or extension-mismatched cache file):
+				# fall back to the remote path rather than showing nothing.
+				_load_cover_remote(game)
 		)
 		return
 
 	# Remote URL not yet on disk: keep the existing async path.
+	_load_cover_remote(game)
+
+func _load_cover_remote(game: GameResource) -> void:
 	if game.cover_url and game.cover_url.begins_with("http"):
 		if is_instance_valid(cover_texture):
 			M3Shimmer.attach(cover_texture, 0.0)
@@ -595,8 +623,24 @@ func _set_cover_texture(texture: Texture2D) -> void:
 	cover_texture.texture = texture
 
 static func _decode_cover_downscaled(path: String) -> Image:
+	# Decode by content, not extension: RomM serves covers whose bytes don't
+	# always match the URL extension (e.g. JPEG/WebP in a .png-named file),
+	# and Image.load() picks its decoder by file extension.
+	var bytes := FSM.read_file_bytes(path)
+	if bytes.size() < 16:
+		return null
 	var img := Image.new()
-	if img.load(path) != OK or img.is_empty():
+	var err := FAILED
+	match FSM.detect_image_format(bytes):
+		FSM.ImageFormat.JPEG:
+			err = img.load_jpg_from_buffer(bytes)
+		FSM.ImageFormat.PNG:
+			err = img.load_png_from_buffer(bytes)
+		FSM.ImageFormat.WEBP:
+			err = img.load_webp_from_buffer(bytes)
+		_:
+			return null
+	if err != OK or img.is_empty():
 		return null
 	var max_dim: int = max(img.get_width(), img.get_height())
 	if max_dim > MAX_DETAILS_TEXTURE_SIZE:

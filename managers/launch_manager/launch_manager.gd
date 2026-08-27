@@ -299,6 +299,9 @@ func get_firmware_directory(emulator_id: String, platform_slug: String = "", cor
 func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core_id: String = "") -> bool:
 	return firmware.is_platform_firmware_ready(platform_slug, emulator_id, core_id)
 
+func is_platform_firmware_ready_cached(platform_slug: String, emulator_id: String, core_id: String = "") -> int:
+	return firmware.is_platform_firmware_ready_cached(platform_slug, emulator_id, core_id)
+
 func get_platform_firmware_expected_files(platform_slug: String) -> Array:
 	return firmware.get_platform_firmware_expected_files(platform_slug)
 

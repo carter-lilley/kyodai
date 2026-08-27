@@ -367,14 +367,14 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
 		SystemManager.notifications.show_notification("Xbox 360 game folder is missing game files", SystemManager.notifications.Type.ERROR)
 		return false
 
-	# XBLA archives (.rar/.zip of loose STFS files) extract lazily on first launch.
+	# XBLA archives (.zip of loose STFS files) extract lazily on first launch.
 	# The active file name keeps the original archive extension even after
 	# file_path is rewritten to the extracted folder, so a deleted folder
 	# falls through to here and gets re-extracted from the archive
 	var ext = rom_path.get_extension().to_lower()
-	if ext != "zip" and ext != "rar":
+	if ext != "zip":
 		ext = game.get_active_file_name().get_extension().to_lower()
-	if ext == "zip" or ext == "rar":
+	if ext == "zip":
 		return await _prepare_xenia_archive_game(game, intent, rom_path)
 
 	# ISO/ZAR: only Title ID extraction is needed, xenia reads these directly
@@ -415,7 +415,7 @@ func _ensure_xenia_title_id(game: GameResource, path: String) -> void:
 func _xbox360_game_has_files(dir_path: String) -> bool:
 	return TitleIDParser.find_xbox360_launch_file(dir_path) != ""
 
-## Handles XBLA archives (.rar/.zip of loose STFS files)
+## Handles XBLA archives (.zip of loose STFS files)
 ## Extracts to <roms>/xbox360/<TitleID>/ next to the archive (which is kept),
 ## then points the intent and game.file_path at the extracted folder
 func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_path: String) -> bool:
