@@ -106,8 +106,19 @@ func initialize(
 	var mcv_index = _main_content_vbox.get_index()
 	_content_wrapper.remove_child(_main_content_vbox)
 	content_margin.add_child(_main_content_vbox)
-	_content_wrapper.add_child(content_margin)
-	_content_wrapper.move_child(content_margin, mcv_index)
+
+	# Dock the status strip (clock + battery) at the top edge, above the margin
+	# container so it is full-bleed and unaffected by the content margins.
+	var status_bar := StatusBar.new()
+	var status_layout := VBoxContainer.new()
+	status_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
+	status_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	status_layout.add_child(status_bar)
+	status_layout.add_child(content_margin)
+
+	_content_wrapper.add_child(status_layout)
+	_content_wrapper.move_child(status_layout, mcv_index)
 	print("[UIManager] content margin reparent elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Ensure MainContentVBox fills the MarginContainer

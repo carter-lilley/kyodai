@@ -22,6 +22,11 @@ var _downloaded_games_count_cache: int = -1
 var _platforms_with_games_cache: Array[Dictionary] = []
 var _platforms_with_games_cache_valid: bool = false
 
+# Cached distinct filter values (Library filter sheet chips). Same
+# invalidation rule as the count cache above.
+var _filter_options_cache: Dictionary = {}
+var _filter_options_cache_valid: bool = false
+
 
 func _ready():
 	data_manager = get_parent()
@@ -106,6 +111,7 @@ func initialize_database() -> bool:
 	_db.verbosity_level = SQLite.QUIET if not _verbose_sql else SQLite.VERBOSE
 
 	if _db.open_db():
+		print("[RelDate] DB opened at: ", ProjectSettings.globalize_path(DB_PATH))
 		_create_tables()
 		_is_db_ready = true
 		return true
@@ -172,6 +178,18 @@ func _create_tables():
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
+
+	# Normalized filter values derived from IGDB metadata (genres, game modes,
+	# age ratings) so library filtering uses indexed lookups instead of JSON scans.
+	query_bool("""
+		CREATE TABLE IF NOT EXISTS game_filter_values (
+			game_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY (game_id, kind, value)
+		)
+	""")
+	query_bool("CREATE INDEX IF NOT EXISTS idx_gfv_kind_value ON game_filter_values(kind, value)")
 
 	# Create cache_metadata table for per-platform sync timestamps
 	query_bool("""
@@ -254,6 +272,8 @@ func invalidate_downloaded_games_count_cache() -> void:
 	_downloaded_games_count_cache = -1
 	_platforms_with_games_cache_valid = false
 	_platforms_with_games_cache.clear()
+	_filter_options_cache_valid = false
+	_filter_options_cache.clear()
 
 
 ## True when the downloaded-games count is already cached, so a synchronous
@@ -282,6 +302,110 @@ func _get_has_cover_art_clause() -> String:
 
 func _get_is_master_entry_clause() -> String:
 	return " AND is_master_entry = 1" if _should_fold_romm_siblings() else ""
+
+
+# ==================== LIBRARY FILTERS ====================
+
+const FILTER_KINDS := ["genre", "game_mode", "esrb", "pegi", "flag", "status"]
+
+## Play-state flag chips map to live per-user columns on games (whitelist).
+## Filtered directly instead of via game_filter_values since they change
+## without a re-sync (favorite toggles, RomM props sync).
+const FILTER_FLAG_COLUMNS := {
+	"Favorites": "is_favorite",
+	"Now Playing": "now_playing",
+	"Backlogged": "backlogged",
+	"Hidden": "hidden",
+}
+
+## Rebuild the normalized filter rows for a game from its genres + IGDB blob.
+## Caller must already hold the DB lock (used inside sync transactions).
+func replace_game_filter_values_unlocked(game: GameResource) -> void:
+	query_bool_unlocked("DELETE FROM game_filter_values WHERE game_id = ?", [game.romm_id])
+	var insert_sql := "INSERT OR IGNORE INTO game_filter_values (game_id, kind, value) VALUES (?, ?, ?)"
+	if game.igdb_metadata is Dictionary:
+		# Genres come from the IGDB blob, not the genres column: RomM merges
+		# multiple scraper taxonomies into the column (147 messy values),
+		# while the IGDB list is the clean canonical 23.
+		var genres = game.igdb_metadata.get("genres", [])
+		if genres is Array:
+			for genre in genres:
+				if genre is String and genre != "":
+					query_bool_unlocked(insert_sql, [game.romm_id, "genre", genre])
+		var modes = game.igdb_metadata.get("game_modes", [])
+		if modes is Array:
+			for mode in modes:
+				if mode is String and mode != "":
+					query_bool_unlocked(insert_sql, [game.romm_id, "game_mode", mode])
+		var ratings = game.igdb_metadata.get("age_ratings", [])
+		if ratings is Array:
+			for rating in ratings:
+				if rating is Dictionary:
+					var category := str(rating.get("category", ""))
+					var value := str(rating.get("rating", ""))
+					if value == "":
+						continue
+					if category == "ESRB":
+						query_bool_unlocked(insert_sql, [game.romm_id, "esrb", value])
+					elif category == "PEGI":
+						query_bool_unlocked(insert_sql, [game.romm_id, "pegi", value])
+
+
+## Builds [sql_clause, bindings] for active library filters.
+## OR within a kind, AND across kinds. Clauses reference the games table
+## unaliased, matching the library query functions below.
+func _get_filter_clause(filters: Dictionary) -> Array:
+	var clause := ""
+	var bindings: Array = []
+	for kind in FILTER_KINDS:
+		var values = filters.get(kind, [])
+		if not values is Array or values.is_empty():
+			continue
+		if kind == "flag":
+			var flag_clauses: Array[String] = []
+			for value in values:
+				var column = FILTER_FLAG_COLUMNS.get(str(value), "")
+				if column != "":
+					flag_clauses.append("games.%s = 1" % column)
+			if not flag_clauses.is_empty():
+				clause += " AND (%s)" % " OR ".join(flag_clauses)
+		elif kind == "status":
+			var status_placeholders = ", ".join(values.map(func(_v): return "?"))
+			clause += " AND games.status IN (%s)" % status_placeholders
+			bindings.append_array(values)
+		else:
+			var placeholders = ", ".join(values.map(func(_v): return "?"))
+			clause += " AND EXISTS (SELECT 1 FROM game_filter_values gfv WHERE gfv.game_id = games.romm_id AND gfv.kind = ? AND gfv.value IN (%s))" % placeholders
+			bindings.append(kind)
+			bindings.append_array(values)
+	return [clause, bindings]
+
+
+## Distinct filter values present in the visible library, keyed by kind.
+## Cached in memory; invalidated alongside the platforms/count caches.
+func get_filter_options() -> Dictionary:
+	if _filter_options_cache_valid:
+		return _filter_options_cache.duplicate(true)
+	var options: Dictionary = {}
+	for kind in FILTER_KINDS:
+		options[kind] = []
+	if not _is_db_ready:
+		return options
+	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
+	var master_clause = _get_is_master_entry_clause().replace("is_master_entry", "g.is_master_entry")
+	var query = "SELECT DISTINCT gfv.kind, gfv.value FROM game_filter_values gfv JOIN games g ON g.romm_id = gfv.game_id WHERE 1=1" + master_clause + cover_clause + " AND g.cover_group_master = 1 ORDER BY gfv.value ASC"
+	for row in query_array(query):
+		var kind := str(row.get("kind", ""))
+		if options.has(kind):
+			options[kind].append(str(row.get("value", "")))
+	# Play states come from live games columns, not the normalized table.
+	options["flag"] = FILTER_FLAG_COLUMNS.keys()
+	var status_query = "SELECT DISTINCT g.status FROM games g WHERE g.status != ''" + master_clause + cover_clause + " AND g.cover_group_master = 1 ORDER BY g.status ASC"
+	for row in query_array(status_query):
+		options["status"].append(str(row.get("status", "")))
+	_filter_options_cache = options.duplicate(true)
+	_filter_options_cache_valid = true
+	return options
 
 
 func count_folded_sibling_entries() -> int:
@@ -316,6 +440,8 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.genres = genres
 	game.rating = row.get("rating", "")
 	game.release_date = int(row.get("release_date", 0) or 0)
+	if game.release_date > 0 and game.release_date < 86400000:
+		print("[RelDate] _row_to_game suspicious: romm_id=", game.romm_id, " raw=", row.get("release_date", 0), " typeof=", typeof(row.get("release_date", 0)), " -> ", game.release_date)
 
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":
@@ -715,6 +841,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 
 			# Delete games from database and get the count
 			var count_before = query_result.size()
+			query_bool_unlocked("DELETE FROM game_filter_values WHERE game_id IN (SELECT romm_id FROM games WHERE platform_slug = ?)", [platform_slug])
 			var success = query_bool_unlocked("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
 
 			_db_unlock()
@@ -821,6 +948,8 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 		game.romm_id
 	]
 			var success = query_bool_unlocked(query, bindings)
+			if success:
+				replace_game_filter_values_unlocked(game)
 			_db_unlock()
 			return success,
 
@@ -960,6 +1089,8 @@ func update_game_user_props(romm_id: int, props: Dictionary) -> bool:
 		return false
 
 	bindings.append(romm_id)
+	_filter_options_cache_valid = false
+	_filter_options_cache.clear()
 	return query_bool("UPDATE games SET %s WHERE romm_id = ?" % ", ".join(sets), bindings)
 
 
@@ -967,6 +1098,8 @@ func set_all_favorites(favorite_romm_ids: Array) -> bool:
 	"""Reset is_favorite for all games, then mark the given romm_ids as favorites."""
 	if not _is_db_ready:
 		return false
+	_filter_options_cache_valid = false
+	_filter_options_cache.clear()
 	var success = query_bool("UPDATE games SET is_favorite = 0", [])
 	if favorite_romm_ids.is_empty():
 		return success
@@ -1045,7 +1178,7 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	return games
 
 
-func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
+func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
@@ -1054,15 +1187,16 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	var allowed_sort_fields = {"title": true, "romm_id": true, "rating": true, "last_played": true, "platform": true}
 	var safe_sort_field = sort_field if allowed_sort_fields.has(sort_field) else "title"
 	var order = "ASC" if ascending else "DESC"
+	var filter_parts: Array = _get_filter_clause(filters)
 	var query: String
 	var bindings: Array = []
 
 	if platform_slug.is_empty():
-		query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
-		bindings = [limit, offset]
+		query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
+		bindings = filter_parts[1] + [limit, offset]
 	else:
-		query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
-		bindings = [platform_slug, limit, offset]
+		query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 ORDER BY %s %s LIMIT ? OFFSET ?" % [safe_sort_field, order]
+		bindings = [platform_slug] + filter_parts[1] + [limit, offset]
 
 	var query_result = query_array(query, bindings)
 
@@ -1105,17 +1239,19 @@ func get_platforms_with_games() -> Array[Dictionary]:
 	return platforms
 
 
-func get_total_games_count(platform_slug: String = "") -> int:
+func get_total_games_count(platform_slug: String = "", filters: Dictionary = {}) -> int:
 	if not _is_db_ready:
 		return 0
 
+	var filter_parts: Array = _get_filter_clause(filters)
 	var query: String
 	var bindings: Array = []
 	if platform_slug.is_empty():
-		query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
+		query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
+		bindings = filter_parts[1]
 	else:
-		query = "SELECT COUNT(*) as count FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1"
-		bindings = [platform_slug]
+		query = "SELECT COUNT(*) as count FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
+		bindings = [platform_slug] + filter_parts[1]
 
 	var query_result = query_array(query, bindings)
 	if query_result.size() > 0:
@@ -1127,31 +1263,33 @@ func get_total_games_count(platform_slug: String = "") -> int:
 	return 0
 
 
-func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:
+func search_games_paginated(query: String, offset: int, limit: int, filters: Dictionary = {}) -> Array[GameResource]:
 	"""Search games by title with pagination."""
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
 
 	var pattern = "%" + query + "%"
-	var sql = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE ? ORDER BY title ASC LIMIT ? OFFSET ?"
+	var filter_parts: Array = _get_filter_clause(filters)
+	var sql = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 AND title LIKE ? ORDER BY title ASC LIMIT ? OFFSET ?"
 
-	var query_result = query_array(sql, [pattern, limit, offset])
+	var query_result = query_array(sql, filter_parts[1] + [pattern, limit, offset])
 	for row in query_result:
 		games.append(_row_to_game(row))
 
 	return games
 
 
-func get_search_results_count(query: String) -> int:
+func get_search_results_count(query: String, filters: Dictionary = {}) -> int:
 	"""Get count of search results."""
 	if not _is_db_ready:
 		return 0
 
 	var pattern = "%" + query + "%"
-	var sql = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND title LIKE ?"
+	var filter_parts: Array = _get_filter_clause(filters)
+	var sql = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 AND title LIKE ?"
 
-	var query_result = query_array(sql, [pattern])
+	var query_result = query_array(sql, filter_parts[1] + [pattern])
 	if query_result.size() > 0:
 		var row = query_result[0]
 		if row.has("count"):

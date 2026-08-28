@@ -998,7 +998,9 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 
 		var insert_data = _build_insert_query(game, existing_rows.get(game.romm_id, {}))
 		var insert_result = data_manager.database.query_bool_unlocked(insert_data.query, insert_data.bindings)
-		if not insert_result:
+		if insert_result:
+			data_manager.database.replace_game_filter_values_unlocked(game)
+		else:
 			success = false
 			error_count += 1
 			print("[DatabaseManager] ERROR: Failed to insert game '%s' (ID: %d)" % [game.title, game.romm_id])

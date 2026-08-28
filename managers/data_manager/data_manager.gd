@@ -150,24 +150,29 @@ func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
 	return database.get_games_by_platform(platform_slug)
 
 
-func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "") -> Array[GameResource]:
-	return database.get_games_paginated(offset, limit, sort_field, ascending, platform_slug)
+func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:
+	return database.get_games_paginated(offset, limit, sort_field, ascending, platform_slug, filters)
 
 
 func get_platforms_with_games() -> Array[Dictionary]:
 	return database.get_platforms_with_games()
 
 
-func get_total_games_count(platform_slug: String = "") -> int:
-	return database.get_total_games_count(platform_slug)
+func get_total_games_count(platform_slug: String = "", filters: Dictionary = {}) -> int:
+	return database.get_total_games_count(platform_slug, filters)
 
 
-func search_games_paginated(query: String, offset: int, limit: int) -> Array[GameResource]:
-	return database.search_games_paginated(query, offset, limit)
+func search_games_paginated(query: String, offset: int, limit: int, filters: Dictionary = {}) -> Array[GameResource]:
+	return database.search_games_paginated(query, offset, limit, filters)
 
 
-func get_search_results_count(query: String) -> int:
-	return database.get_search_results_count(query)
+func get_search_results_count(query: String, filters: Dictionary = {}) -> int:
+	return database.get_search_results_count(query, filters)
+
+
+## Distinct library filter values keyed by kind (genre, game_mode, esrb, pegi).
+func get_filter_options() -> Dictionary:
+	return database.get_filter_options()
 
 
 func get_downloaded_games_count() -> int:

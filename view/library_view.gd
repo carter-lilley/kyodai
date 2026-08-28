@@ -25,6 +25,9 @@ var _search_query: String = ""
 var _is_search_active: bool = false
 var _pre_search_platform_index: int = -1  # Remember platform before search
 
+# Filter state (IGDB metadata chips; kind -> Array of selected values)
+var _active_filters: Dictionary = {}
+
 func _exit_tree() -> void:
 	# Disconnect from autoload signals so the view can be freed when the tree tears down.
 	if DataManager:
@@ -143,7 +146,16 @@ func _refresh_grid_dimensions() -> void:
 
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
-	LibraryFilterSheet.show_sheet()
+	var sheet := LibraryFilterSheet.show_sheet()
+	if not sheet.filters_changed.is_connected(_on_filters_changed):
+		sheet.filters_changed.connect(_on_filters_changed)
+
+func _on_filters_changed(filters: Dictionary) -> void:
+	"""Handle live filter chip changes from the filter sheet."""
+	_active_filters = filters
+	if platform_indicator:
+		platform_indicator.set_filter_active(not filters.is_empty())
+	_load_total_count()
 
 func _on_search_button_clicked() -> void:
 	"""Handle search button click — clear active search or show overlay."""
@@ -242,7 +254,7 @@ func _load_total_count_with_search(on_complete: Callable = Callable()):
 
 	SystemManager.memory.queue_db_task(
 		func():
-			var count = DataManager.get_search_results_count(_search_query)
+			var count = DataManager.get_search_results_count(_search_query, _active_filters)
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -374,7 +386,7 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 	
 	SystemManager.memory.queue_db_task(
 		func():
-			var count = DataManager.get_total_games_count(_current_platform_slug)
+			var count = DataManager.get_total_games_count(_current_platform_slug, _active_filters)
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -451,7 +463,7 @@ func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Cal
 	# Query total count asynchronously
 	SystemManager.memory.queue_db_task(
 		func():
-			var count = DataManager.get_total_games_count(_current_platform_slug)
+			var count = DataManager.get_total_games_count(_current_platform_slug, _active_filters)
 			return count,
 		func(count: int):
 			if not is_instance_valid(games_grid):
@@ -478,7 +490,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 					var stale: Array[GameResource] = []
 					return stale
 				var db_start_us := Time.get_ticks_usec()
-				var games = DataManager.search_games_paginated(_search_query, offset, limit)
+				var games = DataManager.search_games_paginated(_search_query, offset, limit, _active_filters)
 				if DEBUG_LOG: print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):
@@ -493,7 +505,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 					var stale: Array[GameResource] = []
 					return stale
 				var db_start_us := Time.get_ticks_usec()
-				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug)
+				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug, _active_filters)
 				if DEBUG_LOG: print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
 			func(games: Array[GameResource]):

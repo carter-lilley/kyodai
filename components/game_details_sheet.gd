@@ -262,6 +262,7 @@ func _populate_metadata_chips(game: GameResource) -> void:
 		child.queue_free()
 	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true)
 	if game.release_date > 0:
+		print("[RelDate] chip: romm_id=", game.romm_id, " release_date=", game.release_date, " typeof=", typeof(game.release_date))
 		_add_metadata_chip(_format_release_date(game.release_date), "calendar", false)
 	for genre in game.genres:
 		_add_metadata_chip(str(genre), "", false)
@@ -303,7 +304,9 @@ const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 func _format_release_date(epoch_ms: int) -> String:
 	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000))
 	var month: String = MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)]
-	return "%s %d, %d" % [month, dict.day, dict.year]
+	var result := "%s %d, %d" % [month, dict.day, dict.year]
+	print("[RelDate] fmt: in=", epoch_ms, " seconds=", int(epoch_ms / 1000), " -> ", result)
+	return result
 
 func show_for_game(game: GameResource) -> GameDetailsSheet:
 	clear_content()
