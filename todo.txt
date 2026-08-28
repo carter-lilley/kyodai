@@ -9,8 +9,6 @@ submenus still suck
 add downloads screen
 ship w music?
 cover step & eviction..?
-we download in background in shuffler, but what if that fails? start after 2?
-mute music in shuffle/launch mode
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

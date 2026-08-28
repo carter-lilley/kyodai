@@ -35,6 +35,13 @@ var _reroll_in_progress: bool = false
 var _reroll_download_id: String = ""
 var _shuffle_overrides: Dictionary = {}  # platform_slug -> {"emulator_id": String, "core_id": String}
 var _shuffle_session_active: bool = false
+
+# "Preparing Shuffle" progress notification: tracks only the FIRST queued
+# download so the user can tell the session is about to start. Dismissed when
+# the first game is ready (_enter_shuffler_mode) or the session aborts.
+var _prep_notification_id: int = 0
+var _prep_first_item_id: String = ""
+var _prep_first_title: String = ""
 var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
 var _download_item_ids: Array[String] = []
@@ -230,6 +237,7 @@ func stop_session() -> void:
 
 	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
 	_state = State.STOPPING
+	_dismiss_prep_notification()
 
 	_reroll_in_progress = false
 	_reroll_download_id = ""
@@ -702,6 +710,8 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		_download_sizes[item_id] = file_size
 		_download_progresses[item_id] = 0.0
 		entry.download_id = item_id
+		if _prep_notification_id == 0:
+			_show_prep_notification(item_id, game.title)
 	else:
 		entry.status = ShufflerBag.EntryStatus.FAILED
 		_pending_downloads -= 1
@@ -836,12 +846,37 @@ func _reset_download_tracking() -> void:
 # SHUFFLER MODE
 # ============================================================================
 
+func _show_prep_notification(item_id: String, game_title: String) -> void:
+	_prep_first_item_id = item_id
+	_prep_first_title = game_title
+	_prep_notification_id = SystemManager.notifications.show_notification(
+		"Preparing Shuffle...",
+		SystemManager.notifications.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return _download_progresses.get(_prep_first_item_id, 0.0),
+		func(progress_frac: float) -> String:
+			return "Preparing Shuffle: %s (%d%%)" % [_prep_first_title, int(progress_frac * 100)],
+		false,  # pulsing
+		true  # pinned
+	)
+
+func _dismiss_prep_notification() -> void:
+	if _prep_notification_id == 0:
+		return
+	SystemManager.notifications.dismiss_notification(_prep_notification_id)
+	_prep_notification_id = 0
+	_prep_first_item_id = ""
+	_prep_first_title = ""
+
 func _enter_shuffler_mode() -> void:
 	if _state != State.DOWNLOADING:
 		print("[ShufflerSubManager] _enter_shuffler_mode ignored: state=" + str(_state))
 		return
 	_state = State.ACTIVE
 	_shuffle_session_active = true
+	_dismiss_prep_notification()
 	_start_session_log_capture()
 	print("[ShufflerSubManager] _enter_shuffler_mode: " + _format_bag())
 

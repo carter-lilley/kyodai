@@ -59,6 +59,9 @@ class DownloadProgress:
 var _download_progress: Dictionary = {}  # item_id -> DownloadProgress
 const DOWNLOAD_TIMEOUT_MS: int = 30 * 60 * 1000  # 30 minutes max
 const STALL_TIMEOUT_MS: int = 120 * 1000  # 120 seconds with no progress = stall
+
+## Total plays of the download loop SFX before it cuts itself off.
+const DOWNLOAD_LOOP_MAX_PLAYS: int = 4
 const INITIAL_GRACE_PERIOD_MS: int = 30 * 1000  # 30 second grace period at start
 
 # Chunked download constants
@@ -954,12 +957,13 @@ func _start_download(item: QueueItem):
 
 	download_started.emit(item.id)
 
-	# Start looping sound while downloading
+	# Start looping sound while downloading (capped so long downloads don't
+	# loop the SFX forever; it still stops early when the download finishes)
 	if SystemManager.audio:
-		SystemManager.audio.play_loop_while("loading_2", func(): 
+		SystemManager.audio.play_loop_while("loading_2", func():
 			var still_active = item.status == "downloading"
 			return still_active
-		)
+		, 0.0, DOWNLOAD_LOOP_MAX_PLAYS)
 
 	# Make HTTP request through SystemManager.network
 	# Always include User-Agent to prevent blocking (archive.org requires this)

@@ -23,6 +23,9 @@ var _loop_player: AudioStreamPlayer
 var _loop_check_timer: Timer
 var _loop_should_continue: Callable
 var _current_loop_stream: AudioStream = null
+## Remaining plays before the loop cuts itself off (0 = unlimited). Set via
+## the max_loops param of play_loop_while/play_loop_stream_while.
+var _loop_plays_remaining: int = 0
 
 # State
 var _current_music_stream: AudioStream = null
@@ -184,36 +187,38 @@ func _check_loop_condition() -> void:
 		#print("[SystemManager.audio] Loop condition returned false, stopping")
 		stop_loop()
 
-func play_loop_while(sfx_name: String, should_continue: Callable, volume_db: float = 0.0) -> bool:
+func play_loop_while(sfx_name: String, should_continue: Callable, volume_db: float = 0.0, max_loops: int = 0) -> bool:
 	"""Play a looping sound while the should_continue callable returns true.
-	The callable is checked every 0.1 seconds. When it returns false, the loop stops."""
+	The callable is checked every 0.1 seconds. When it returns false, the loop stops.
+	max_loops > 0 cuts the loop off after that many total plays."""
 	#print("[SystemManager.audio] play_loop_while called for: " + sfx_name)
-	
+
 	if not _sfx_library.has(sfx_name):
 		push_warning("[SystemManager.audio]: SFX not found: ", sfx_name)
 		return false
-	
+
 	# Prevent duplicate loops
 	if _loop_player.playing:
 		#print("[SystemManager.audio] Loop already playing, ignoring duplicate call")
 		return true
-	
+
 	# Use the preloaded stream
 	var stream = _sfx_library[sfx_name]
-	return play_loop_stream_while(stream, should_continue, volume_db)
+	return play_loop_stream_while(stream, should_continue, volume_db, max_loops)
 
-func play_loop_stream_while(stream: AudioStream, should_continue: Callable, volume_db: float = 0.0) -> bool:
+func play_loop_stream_while(stream: AudioStream, should_continue: Callable, volume_db: float = 0.0, max_loops: int = 0) -> bool:
 	"""Play a custom audio stream as a loop while the should_continue callable returns true."""
 	#print("[SystemManager.audio] play_loop_stream_while called")
-	
+
 	if not stream:
 		#print("[SystemManager.audio] Stream is null!")
 		return false
-	
+
 	# Stop any existing loop first
 	stop_loop()
-	
+
 	_loop_should_continue = should_continue
+	_loop_plays_remaining = max_loops
 	
 	# Note: We use manual looping via finished signal instead of stream.loop_mode
 	# because loop_mode doesn't always work reliably with imported WAV files
@@ -267,7 +272,14 @@ func _on_loop_player_finished() -> void:
 		#print("[SystemManager.audio] Loop condition returned false, not restarting")
 		stop_loop()
 		return
-	
+
+	# Capped loops cut off at the boundary of the last allowed play
+	if _loop_plays_remaining > 0:
+		_loop_plays_remaining -= 1
+		if _loop_plays_remaining == 0:
+			stop_loop()
+			return
+
 	# Restart playback
 	#print("[SystemManager.audio] Restarting loop")
 	_loop_player.play()
@@ -279,6 +291,7 @@ func stop_loop() -> void:
 		_loop_player.stop()
 	_loop_check_timer.stop()
 	_loop_should_continue = Callable()
+	_loop_plays_remaining = 0
 	_loop_player.stream = null
 	_current_loop_stream = null
 	#print("[SystemManager.audio] Loop stopped and cleared")
