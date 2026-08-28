@@ -111,7 +111,6 @@ func initialize_database() -> bool:
 	_db.verbosity_level = SQLite.QUIET if not _verbose_sql else SQLite.VERBOSE
 
 	if _db.open_db():
-		print("[RelDate] DB opened at: ", ProjectSettings.globalize_path(DB_PATH))
 		_create_tables()
 		_is_db_ready = true
 		return true
@@ -439,9 +438,10 @@ func _row_to_game(row: Dictionary) -> GameResource:
 			genres.append(g)
 	game.genres = genres
 	game.rating = row.get("rating", "")
-	game.release_date = int(row.get("release_date", 0) or 0)
-	if game.release_date > 0 and game.release_date < 86400000:
-		print("[RelDate] _row_to_game suspicious: romm_id=", game.romm_id, " raw=", row.get("release_date", 0), " typeof=", typeof(row.get("release_date", 0)), " -> ", game.release_date)
+	# NOTE: no "or 0" coalesce here — GDScript's "or" returns a bool, so
+	# "value or 0" evaluates to true and int(true) = 1 for any nonzero value.
+	var release_date_value = row.get("release_date", 0)
+	game.release_date = int(release_date_value) if release_date_value != null else 0
 
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":

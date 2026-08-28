@@ -331,6 +331,10 @@ func _on_game_background_entered(_pid: int, _game: GameResource) -> void:
 	pause_background_music()
 
 func _on_game_background_exited(_game: GameResource, _exit_code: int) -> void:
+	# A shuffler session owns the music pause end-to-end; don't resume
+	# between rounds when an individual game process exits.
+	if LaunchManager.is_session_active():
+		return
 	resume_background_music()
 
 func _play_startup_sound() -> void:

@@ -125,7 +125,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 			print("[GameManager] _prepare_game_for_launch: shadPS4 prep result = " + str(result))
 		"xenia":
 			print("[GameManager] _prepare_game_for_launch: Preparing Xenia game...")
-			result = await _prepare_xenia_game(game, temp_intent)
+			result = await _prepare_xenia_game(game, temp_intent, is_shuffler)
 			print("[GameManager] _prepare_game_for_launch: Xenia prep result = " + str(result))
 		_:
 			print("[GameManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
@@ -355,7 +355,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	return true
 
-func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
+func _prepare_xenia_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:
 	var rom_path = intent.rom_path
 
 	# Already-extracted game folder (XBLA loose files): validate and reuse
@@ -375,7 +375,7 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if ext != "zip":
 		ext = game.get_active_file_name().get_extension().to_lower()
 	if ext == "zip":
-		return await _prepare_xenia_archive_game(game, intent, rom_path)
+		return await _prepare_xenia_archive_game(game, intent, rom_path, is_shuffler)
 
 	# ISO/ZAR: only Title ID extraction is needed, xenia reads these directly
 	if game.get_active_title_id() != "":
@@ -418,7 +418,7 @@ func _xbox360_game_has_files(dir_path: String) -> bool:
 ## Handles XBLA archives (.zip of loose STFS files)
 ## Extracts to <roms>/xbox360/<TitleID>/ next to the archive (which is kept),
 ## then points the intent and game.file_path at the extracted folder
-func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_path: String) -> bool:
+func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_path: String, is_shuffler: bool = false) -> bool:
 	var archive_path = rom_path
 	if not FSM.file_exists(archive_path):
 		# Extracted files were deleted; relocate the original archive for re-extraction
@@ -455,7 +455,10 @@ func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_p
 			return false
 
 	intent.rom_path = extract_path
-	_store_file_path(game, extract_path)
+	if not is_shuffler:
+		# Shuffler extractions live in the session temp dir, which is deleted
+		# when the session ends; don't point the library record at it.
+		_store_file_path(game, extract_path)
 	print("[GameManager] Xenia: XBLA game ready at: " + extract_path)
 	return true
 

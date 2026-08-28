@@ -11,12 +11,6 @@ ship w music?
 cover step & eviction..?
 we download in background in shuffler, but what if that fails? start after 2?
 mute music in shuffle/launch mode
-xbla games in shuffler - failed to launch c000bbb
-
-x make settings cards scrollthrough
-x left/right in small screens also wigggles view up/down
-x tapping home when in grid doesnt focus it the nav dest?
-x dates show 1970
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

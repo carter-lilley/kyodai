@@ -215,6 +215,10 @@ func start_session(config: Dictionary) -> void:
 	_reset_download_tracking()
 	_shuffler_vita_apps.clear()
 
+	# Cut background music for the whole session (resumed in stop_session);
+	# per-game exit signals must not resume it mid-session.
+	SystemManager.audio.pause_background_music()
+
 	print("[ShufflerSubManager] Starting session with bag size " + str(_bag.size()) + ": " + _format_bag())
 	_start_bag_preparation()
 	_await_first_ready()
@@ -296,6 +300,9 @@ func stop_session() -> void:
 	_config.clear()
 	_state = State.IDLE
 	_shuffle_session_active = false
+
+	# State is IDLE again, so the audio guard no longer suppresses this resume.
+	SystemManager.audio.resume_background_music()
 
 	_finalize_session_log()
 	session_stopped.emit()
@@ -711,7 +718,10 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
 	print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
 
-	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")):
+	# Only emulators whose launch can require prep (archive extraction /
+	# title-id-based launch paths) go through preparation. Xenia is included
+	# for XBLA archives, which must be extracted before xenia can launch them.
+	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3") or emulator_id == "xenia"):
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
 		print("[ShufflerSubManager] Ready (no prep needed): " + game.title)

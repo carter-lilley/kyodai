@@ -482,7 +482,6 @@ func show_game_details(romm_id: int) -> void:
 	if not game:
 		push_warning("[OverlayManager] Cannot show details - game not found: ", romm_id)
 		return
-	print("[RelDate] show_game_details: romm_id=", romm_id, " release_date=", game.release_date, " typeof=", typeof(game.release_date))
 
 	_ensure_game_details_sheet()
 	_game_details_sheet.show_for_game(game)
