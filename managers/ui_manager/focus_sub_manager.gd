@@ -233,6 +233,25 @@ func refresh() -> void:
 	if t and _ring_visible:
 		_show_target(false)
 
+## Re-point the manager at a different viewport (dual screen mode reparents the
+## whole UI into a SubViewport, which owns its own gui_focus_changed signal).
+## Pass null to fall back to this node's own viewport.
+func reconnect_viewport(vp: Viewport = null) -> void:
+	if vp == null:
+		vp = get_viewport()
+	if vp == null:
+		return
+	if _attached_viewport and is_instance_valid(_attached_viewport) \
+			and _attached_viewport != vp \
+			and _attached_viewport.gui_focus_changed.is_connected(_on_gui_focus_changed):
+		_attached_viewport.gui_focus_changed.disconnect(_on_gui_focus_changed)
+	if not vp.gui_focus_changed.is_connected(_on_gui_focus_changed):
+		vp.gui_focus_changed.connect(_on_gui_focus_changed)
+	_attach_to_viewport(vp)
+	_untrack_target()
+	_hide_ring()
+	_on_gui_focus_changed(vp.gui_get_focus_owner())
+
 # ============================================================================
 # Focus tracking (signal driven)
 # ============================================================================

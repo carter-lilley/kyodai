@@ -450,7 +450,7 @@ func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_p
 			print("[GameManager] Xenia: Removing stale extraction: " + extract_path)
 			FSM.delete_dir_recursive(extract_path)
 
-		var extract_success := await _extract_xenia_archive(archive_path, extract_path)
+		var extract_success := await _extract_xenia_archive(archive_path, extract_path, is_shuffler)
 		if not extract_success or not _xbox360_game_has_files(extract_path):
 			push_error("[GameManager] Xenia: Extraction failed or produced no launchable files: " + archive_path)
 			SystemManager.notifications.show_notification("Failed to extract Xbox 360 game archive", SystemManager.notifications.Type.ERROR)
@@ -474,13 +474,16 @@ func _locate_xenia_archive(game: GameResource) -> String:
 	return ""
 
 ## Extracts an XBLA archive to the specified directory (archive is kept)
-func _extract_xenia_archive(archive_path: String, extract_to: String) -> bool:
+func _extract_xenia_archive(archive_path: String, extract_to: String, suppress_notification: bool = false) -> bool:
 	print("[GameManager] Xenia: Extracting archive: " + archive_path + " to: " + extract_to)
 
 	if not FSM.dir_exists(extract_to):
 		FSM.make_dir_recursive(extract_to)
 
-	var item_id: String = SystemManager.download.queue_extraction(archive_path, extract_to, "xbox360_game", "Extracting Xbox 360 Game", false)
+	# Shuffler preps suppress the extraction notification: progress snackbars
+	# are singletons, and one would replace the "Preparing Shuffle" download
+	# notification mid-session.
+	var item_id: String = SystemManager.download.queue_extraction(archive_path, extract_to, "xbox360_game", "Extracting Xbox 360 Game", false, suppress_notification)
 	if item_id == "":
 		push_error("[GameManager] Xenia: Failed to queue extraction")
 		return false

@@ -1305,6 +1305,10 @@ func _handle_ui_cancel() -> void:
 	if M3Overlay.is_showing("bottom_sheet"):
 		return
 
+	# If a side sheet (library filters, etc.) is open, let it dismiss itself
+	if M3Overlay.is_showing("side_sheet"):
+		return
+
 	# If in Library view with an active search, clear the search first
 	var current_view = UIManager.get_current_view()
 	if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_search"):

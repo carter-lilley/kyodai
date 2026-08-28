@@ -31,17 +31,25 @@ var _pending_preparations: int = 0
 var _tools_dir: String = ""
 var _ahk_path: String = ""
 var _pssuspend_path: String = ""
+# Max time to wait for pssuspend to confirm a process is frozen before
+# launching the next emulator instance (defensive: a wedged pssuspend must
+# not stall switching forever).
+const SUSPEND_AWAIT_TIMEOUT_SEC := 2.0
+
 var _reroll_in_progress: bool = false
-var _reroll_download_id: String = ""
+# Slot being refilled by a reroll (-1 = none). The refill runs in the
+# background; completion is detected in _prepare_entry/_fail_entry outcomes.
+var _reroll_slot_index: int = -1
+# Per-slot candidate replacement attempts (shared by initial bag fill and
+# rerolls; capped at MAX_CANDIDATE_RETRIES).
+var _candidate_retry_attempts: Dictionary = {}
+const MAX_CANDIDATE_RETRIES := 3
 var _shuffle_overrides: Dictionary = {}  # platform_slug -> {"emulator_id": String, "core_id": String}
 var _shuffle_session_active: bool = false
 
-# "Preparing Shuffle" progress notification: tracks only the FIRST queued
-# download so the user can tell the session is about to start. Dismissed when
-# the first game is ready (_enter_shuffler_mode) or the session aborts.
-var _prep_notification_id: int = 0
-var _prep_first_item_id: String = ""
-var _prep_first_title: String = ""
+# The session's first download gets the standard (unsuppressed) download
+# notification labeled "Preparing Shuffle"; later downloads stay silent.
+var _first_download_notification_shown: bool = false
 var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
 var _download_item_ids: Array[String] = []
@@ -237,10 +245,9 @@ func stop_session() -> void:
 
 	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
 	_state = State.STOPPING
-	_dismiss_prep_notification()
 
 	_reroll_in_progress = false
-	_reroll_download_id = ""
+	_reroll_slot_index = -1
 	_pending_switch_index = -1
 	_maximize_token += 1
 
@@ -319,9 +326,6 @@ func pause_session() -> void:
 	if not can_pause():
 		print("[ShufflerSubManager] pause_session ignored: state=" + str(_state))
 		return
-	if _reroll_in_progress:
-		print("[ShufflerSubManager] pause_session ignored: reroll in progress")
-		return
 	print("[ShufflerSubManager] pause_session")
 	_state = State.PAUSED
 	if _round_timer:
@@ -330,9 +334,6 @@ func pause_session() -> void:
 func resume_session() -> void:
 	if not can_resume():
 		print("[ShufflerSubManager] resume_session ignored: state=" + str(_state))
-		return
-	if _reroll_in_progress:
-		print("[ShufflerSubManager] resume_session ignored: reroll in progress")
 		return
 	print("[ShufflerSubManager] resume_session")
 	_state = State.ACTIVE
@@ -346,9 +347,6 @@ func skip_game() -> void:
 	if not can_skip():
 		print("[ShufflerSubManager] skip_game ignored: state=" + str(_state))
 		return
-	if _reroll_in_progress:
-		print("[ShufflerSubManager] skip_game ignored: reroll in progress")
-		return
 	print("[ShufflerSubManager] skip_game: current=" + str(_current_game_index) + " " + _format_bag())
 	_kill_round_timer()
 	_switch_to_next_game()
@@ -356,9 +354,6 @@ func skip_game() -> void:
 func restart_game() -> void:
 	if not can_restart():
 		print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
-		return
-	if _reroll_in_progress:
-		print("[ShufflerSubManager] restart_game ignored: reroll in progress")
 		return
 	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
 	if _current_game_index >= 0:
@@ -416,99 +411,24 @@ func remove_game() -> void:
 	if entry.pid != -1:
 		LaunchManager.process.kill_process_async(entry.pid)
 		await LaunchManager.process.confirm_process_dead_async(entry.pid)
-	entry.pid = -1
-	entry.started = false
-	entry.active = false
+		entry.pid = -1
+		entry.started = false
+		entry.active = false
 
-	var candidate = _bag.pick_reroll_candidate(_bag.get_bag_ids())
-	if candidate == null:
-		_reset_reroll_state()
+	# Replace the slot with a fresh candidate and refill it in the background
+	# (download/prep completion is detected via _maybe_complete_reroll), then
+	# immediately skip to another ready game instead of waiting for the refill.
+	_reroll_slot_index = index
+	if not _try_replace_with_candidate(index):
+		_reroll_slot_index = -1
 		push_warning("[ShufflerSubManager] No alternative game found for reroll")
-		_switch_to_game(index)
-		return
-
-	_bag.replace_entry(index, candidate, "")
-	var new_entry = _bag.entries[index]
-
-	var library_m3u := _get_library_m3u(candidate)
-	if library_m3u != "":
-		new_entry.temp_path = library_m3u
-		await _prepare_entry(index, new_entry)
-		_finish_reroll(index)
-		return
-
-	if _is_multi_disc_m3u(candidate):
-		# Incomplete multi-disc set: temp-download the missing discs, then
-		# shuffle through a temp m3u playlist
-		_download_discs_to_temp(candidate, Callable(), func(m3u_path: String):
-			if _state != State.ACTIVE and _state != State.PAUSED:
-				print("[ShufflerSubManager] Reroll disc downloads finished but session is no longer active; discarding result")
-				_reset_reroll_state()
-				return
-			if m3u_path == "" or index < 0 or index >= _bag.size():
-				push_warning("[ShufflerSubManager] Reroll disc downloads failed for " + candidate.title + "; relaunching previous game")
-				_reset_reroll_state()
-				_switch_to_game(index)
-				return
-			_bag.entries[index].temp_path = m3u_path
-			await _prepare_entry(index, _bag.entries[index])
-			_finish_reroll(index)
-		)
-		return
-
-	if candidate.is_active_variant_downloaded() and FileAccess.file_exists(candidate.file_path):
-		new_entry.temp_path = candidate.file_path
-		await _prepare_entry(index, new_entry)
-		_finish_reroll(index)
-		return
-
-	var download_url = SystemManager.network.get_romm_download_url(candidate.get_active_game_id(), candidate.get_active_file_name())
-	var temp_dir = TEMP_DIR + str(candidate.romm_id)
-	var temp_path = FSM.join_paths(temp_dir, candidate.get_active_file_name())
-	FSM.make_dir_recursive(temp_dir)
-	new_entry.temp_path = temp_path
-	var file_size = candidate.get_active_file_size()
-
-	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.connect(_on_download_progress)
-
-	_reroll_download_id = SystemManager.download.queue_download(
-		download_url,
-		temp_path,
-		"game",
-		"",
-		false,
-		"",
-		candidate,
-		{"on_complete": _on_reroll_download_complete.bind(index, candidate)},
-		candidate.romm_id,
-		true,
-		true,
-		file_size,
-		false
-	)
-
-	if _reroll_download_id == "":
 		_reset_reroll_state()
-		push_error("[ShufflerSubManager] Failed to queue reroll download")
-		_switch_to_game(index)
+		_kill_round_timer()
+		_switch_to_next_game()
 		return
 
-func _finish_reroll(index: int) -> void:
-	if not can_reroll():
-		print("[ShufflerSubManager] _finish_reroll: session no longer active; abandoning reroll")
-		_reset_reroll_state()
-		return
-	if index < 0 or index >= _bag.size():
-		push_error("[ShufflerSubManager] _finish_reroll: invalid index " + str(index))
-		_reset_reroll_state()
-		return
-	if _bag.entries[index].status != ShufflerBag.EntryStatus.READY:
-		# Launch anyway: launch_shuffler_game re-runs preparation for
-		# vita3k/rpcs3, so a failed pre-prep can still recover at launch time.
-		push_warning("[ShufflerSubManager] Rerolled entry not READY (status=" + _status_name(_bag.entries[index].status) + "); attempting launch anyway")
-	_reset_reroll_state()
-	_switch_to_game(index)
+	_kill_round_timer()
+	_switch_to_next_game()
 
 # ============================================================================
 # LOGGING HELPERS
@@ -562,48 +482,96 @@ func _start_bag_preparation() -> void:
 		SystemManager.download.download_progress.connect(_on_download_progress)
 
 	for i in range(_bag.entries.size()):
-		var entry = _bag.entries[i]
-		var game = entry.game
-		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(entry))
-		var library_m3u := _get_library_m3u(game)
-		if library_m3u != "":
-			entry.temp_path = library_m3u
-			_prepare_entry(i, entry)
-		elif _is_multi_disc_m3u(game):
-			# Multi-disc m3u game with an incomplete set: temp-download the
-			# missing discs and shuffle through a temp m3u playlist
-			var missing_count := 0
-			for e in game.get_disc_entries():
-				if not e["downloaded"]:
-					missing_count += 1
-					_total_download_bytes += int(e.get("file_size", 0))
-			_total_downloads += missing_count
-			_pending_downloads += missing_count
-			entry.status = ShufflerBag.EntryStatus.DOWNLOADING
-			_download_discs_to_temp(game,
-				func(success: bool):
-					_pending_downloads -= 1
-					download_progress.emit(_total_downloads - _pending_downloads, _total_downloads)
-					if not success:
-						entry.status = ShufflerBag.EntryStatus.FAILED
-						push_error("[ShufflerSubManager] Disc download failed for " + game.title)
-					_check_all_preparations_complete(),
-				func(m3u_path: String):
-					if m3u_path == "":
-						entry.status = ShufflerBag.EntryStatus.FAILED
-						_check_all_preparations_complete()
-						return
-					entry.temp_path = m3u_path
-					_prepare_entry(i, entry)
-			)
-		elif game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
-			entry.temp_path = game.file_path
-			_prepare_entry(i, entry)
-		else:
-			_total_downloads += 1
-			_pending_downloads += 1
-			_total_download_bytes += game.get_active_file_size()
-			_download_entry(i, entry)
+		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(_bag.entries[i]))
+		_start_entry_acquisition(i)
+
+## Starts acquiring one bag entry (local path, disc downloads, or full download).
+## Shared by initial bag fill and candidate-retry refills; runs in the
+## background for rerolls. Failure paths replace the slot via
+## _try_replace_with_candidate (bounded by MAX_CANDIDATE_RETRIES).
+func _start_entry_acquisition(index: int) -> void:
+	var entry = _bag.entries[index]
+	var game = entry.game
+	var library_m3u := _get_library_m3u(game)
+	if library_m3u != "":
+		entry.temp_path = library_m3u
+		_prepare_entry(index, entry)
+	elif _is_multi_disc_m3u(game):
+		# Multi-disc m3u game with an incomplete set: temp-download the
+		# missing discs and shuffle through a temp m3u playlist
+		var missing_count := 0
+		for e in game.get_disc_entries():
+			if not e["downloaded"]:
+				missing_count += 1
+				_total_download_bytes += int(e.get("file_size", 0))
+		_total_downloads += missing_count
+		_pending_downloads += missing_count
+		entry.status = ShufflerBag.EntryStatus.DOWNLOADING
+		_download_discs_to_temp(game,
+			func(_success: bool):
+				_pending_downloads -= 1
+				download_progress.emit(_total_downloads - _pending_downloads, _total_downloads)
+				_check_all_preparations_complete(),
+			func(m3u_path: String):
+				if m3u_path == "":
+					if not _try_replace_with_candidate(index):
+						_fail_entry(index, "[ShufflerSubManager] Disc download failed for " + game.title)
+					_check_all_preparations_complete()
+					return
+				_bag.entries[index].temp_path = m3u_path
+				_prepare_entry(index, _bag.entries[index])
+		)
+	elif game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
+		entry.temp_path = game.file_path
+		_prepare_entry(index, entry)
+	else:
+		_total_downloads += 1
+		_pending_downloads += 1
+		_total_download_bytes += game.get_active_file_size()
+		_download_entry(index, entry)
+
+## Replaces a failed/refilling bag slot with a fresh candidate and starts
+## acquiring it in the background. Returns false when out of candidates or
+## out of retry attempts for this slot.
+func _try_replace_with_candidate(index: int) -> bool:
+	if index < 0 or index >= _bag.size():
+		return false
+	var attempts: int = _candidate_retry_attempts.get(index, 0)
+	if attempts >= MAX_CANDIDATE_RETRIES:
+		return false
+	var candidate = _bag.pick_reroll_candidate(_bag.get_bag_ids())
+	if candidate == null:
+		return false
+	_candidate_retry_attempts[index] = attempts + 1
+	print("[ShufflerSubManager] Replacing slot " + str(index) + " with candidate " + candidate.title + " (attempt " + str(attempts + 1) + "/" + str(MAX_CANDIDATE_RETRIES) + ")")
+	_bag.replace_entry(index, candidate, "")
+	_start_entry_acquisition(index)
+	return true
+
+## Marks a slot FAILED (retry exhausted) and completes a reroll if it owned the slot.
+func _fail_entry(index: int, reason: String) -> void:
+	if index < 0 or index >= _bag.size():
+		return
+	_bag.entries[index].status = ShufflerBag.EntryStatus.FAILED
+	push_error(reason)
+	_maybe_complete_reroll(index)
+
+func _maybe_complete_reroll(index: int) -> void:
+	if index != _reroll_slot_index:
+		return
+	_reroll_slot_index = -1
+	_complete_reroll_background(index)
+
+func _complete_reroll_background(index: int) -> void:
+	_reset_reroll_state()
+	if _state != State.ACTIVE and _state != State.PAUSED:
+		return
+	# Fill-switch: if the immediate skip found no other ready game, this slot
+	# is still "current" with nothing running - launch the refilled game now.
+	if _current_game_index == index and index >= 0 and index < _bag.size():
+		var entry = _bag.entries[index]
+		if entry.status == ShufflerBag.EntryStatus.READY and entry.pid == -1:
+			_switch_to_game(index)
 
 ## Multi-disc games on m3u-capable platforms shuffle through an m3u playlist
 func _is_multi_disc_m3u(game: GameResource) -> bool:
@@ -677,28 +645,35 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 			download_progress.emit(completed, _total_downloads)
 			_pending_downloads -= 1
 			print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
-			_check_all_preparations_complete()
 			if success:
-				_prepare_entry(index, entry)
+				_prepare_entry(index, _bag.entries[index])
 			else:
-				entry.status = ShufflerBag.EntryStatus.FAILED
-				push_error("[ShufflerSubManager] Download failed for " + game.title)
+				if not _try_replace_with_candidate(index):
+					_fail_entry(index, "[ShufflerSubManager] Download failed for " + game.title)
+			_check_all_preparations_complete()
 	}
 
 	print("[ShufflerSubManager] Queueing download for " + game.title + " to " + temp_path)
+
+	# The session's first download shows the standard download notification
+	# (the same moving MB progress a main-UI download gets) labeled "Preparing
+	# Shuffle" so the user can tell the session is about to start; all later
+	# downloads stay silent.
+	var is_first_download := not _first_download_notification_shown
+	_first_download_notification_shown = true
 
 	var item_id = SystemManager.download.queue_download(
 		download_url,
 		temp_path,
 		"game",
-		"",
+		"Preparing Shuffle" if is_first_download else "",
 		false,
 		"",
 		game,
 		callbacks,
 		game.romm_id,
 		true,
-		true,
+		not is_first_download,
 		file_size,
 		false
 	)
@@ -710,13 +685,11 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		_download_sizes[item_id] = file_size
 		_download_progresses[item_id] = 0.0
 		entry.download_id = item_id
-		if _prep_notification_id == 0:
-			_show_prep_notification(item_id, game.title)
 	else:
-		entry.status = ShufflerBag.EntryStatus.FAILED
 		_pending_downloads -= 1
+		if not _try_replace_with_candidate(index):
+			_fail_entry(index, "[ShufflerSubManager] Failed to queue download for " + game.title)
 		_check_all_preparations_complete()
-		push_error("[ShufflerSubManager] Failed to queue download for " + game.title)
 
 func _prepare_entry(index: int, entry: Dictionary) -> void:
 	if entry.status == ShufflerBag.EntryStatus.READY or entry.status == ShufflerBag.EntryStatus.FAILED:
@@ -738,12 +711,14 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 		_pending_preparations -= 1
 		print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
 		game_ready.emit(index)
+		_maybe_complete_reroll(index)
 		return
 
 	if entry.temp_path == "":
 		push_warning("[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
-		entry.status = ShufflerBag.EntryStatus.FAILED
 		_pending_preparations -= 1
+		if not _try_replace_with_candidate(index):
+			_fail_entry(index, "[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
 		return
 
 	var prep_success = await LaunchManager.prepare_game_for_shuffler(game, emulator_id, entry.temp_path)
@@ -755,10 +730,12 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 		_pending_preparations -= 1
 		print("[ShufflerSubManager] Ready after prep: " + game.title)
 		game_ready.emit(index)
+		_maybe_complete_reroll(index)
 	else:
 		push_error("[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
-		entry.status = ShufflerBag.EntryStatus.FAILED
 		_pending_preparations -= 1
+		if not _try_replace_with_candidate(index):
+			_fail_entry(index, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 
 	print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
 	_check_all_preparations_complete()
@@ -792,34 +769,10 @@ func _random_round_time() -> float:
 		_config.get("round_time_max", 120.0)
 	)
 
-func _on_reroll_download_complete(success: bool, path: String, index: int, game: GameResource) -> void:
-	print("[ShufflerSubManager] _on_reroll_download_complete: index=" + str(index) + " game=" + game.title + " success=" + str(success) + " path=" + path)
-	_reroll_download_id = ""
-
-	if _state != State.ACTIVE and _state != State.PAUSED:
-		print("[ShufflerSubManager] Reroll download finished but session is no longer active; discarding result")
-		_reset_reroll_state()
-		return
-
-	if index < 0 or index >= _bag.size():
-		push_error("[ShufflerSubManager] Reroll completion called with invalid index " + str(index))
-		_reset_reroll_state()
-		return
-
-	if success and FileAccess.file_exists(path):
-		print("[ShufflerSubManager] Reroll download complete: " + game.title)
-		_bag.entries[index].temp_path = path
-		await _prepare_entry(index, _bag.entries[index])
-		_finish_reroll(index)
-	else:
-		push_warning("[ShufflerSubManager] Reroll download failed for " + game.title + "; relaunching previous game")
-		_reset_reroll_state()
-		_switch_to_game(index)
-
 func _reset_reroll_state() -> void:
 	print("[ShufflerSubManager] _reset_reroll_state")
 	_reroll_in_progress = false
-	_reroll_download_id = ""
+	_reroll_slot_index = -1
 	_set_controls_reroll_enabled(true)
 
 func _set_controls_reroll_enabled(enabled: bool) -> void:
@@ -843,34 +796,12 @@ func _reset_download_tracking() -> void:
 	_download_sizes.clear()
 	_total_download_bytes = 0
 	_active_download_item_id = ""
+	_first_download_notification_shown = false
+	_candidate_retry_attempts.clear()
 
 # ============================================================================
 # SHUFFLER MODE
 # ============================================================================
-
-func _show_prep_notification(item_id: String, game_title: String) -> void:
-	_prep_first_item_id = item_id
-	_prep_first_title = game_title
-	_prep_notification_id = SystemManager.notifications.show_notification(
-		"Preparing Shuffle...",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return _download_progresses.get(_prep_first_item_id, 0.0),
-		func(progress_frac: float) -> String:
-			return "Preparing Shuffle: %s (%d%%)" % [_prep_first_title, int(progress_frac * 100)],
-		false,  # pulsing
-		true  # pinned
-	)
-
-func _dismiss_prep_notification() -> void:
-	if _prep_notification_id == 0:
-		return
-	SystemManager.notifications.dismiss_notification(_prep_notification_id)
-	_prep_notification_id = 0
-	_prep_first_item_id = ""
-	_prep_first_title = ""
 
 func _enter_shuffler_mode() -> void:
 	if _state != State.DOWNLOADING:
@@ -878,7 +809,6 @@ func _enter_shuffler_mode() -> void:
 		return
 	_state = State.ACTIVE
 	_shuffle_session_active = true
-	_dismiss_prep_notification()
 	_start_session_log_capture()
 	print("[ShufflerSubManager] _enter_shuffler_mode: " + _format_bag())
 
@@ -1095,7 +1025,23 @@ func _suspend_game(entry: Dictionary) -> void:
 	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
 	_hide_window_async(entry.pid, exe_name)
 
-	LaunchManager.process.suspend_process_async(entry.pid, _pssuspend_path)
+	# Await the suspension before returning: _switch_to_game launches the next
+	# emulator instance immediately after this, and a still-running previous
+	# instance races it (GPU/display/cache contention = hang/crash on launch).
+	var suspend_start := Time.get_ticks_msec()
+	var done := {"complete": false, "exit_code": -1}
+	LaunchManager.process.suspend_process_async(entry.pid, _pssuspend_path, func(result: Dictionary):
+		done.complete = true
+		done.exit_code = result.get("exit_code", -1)
+	)
+	var elapsed := 0.0
+	while not done.complete and elapsed < SUSPEND_AWAIT_TIMEOUT_SEC:
+		await get_tree().create_timer(0.05).timeout
+		elapsed += 0.05
+	if done.complete:
+		print("[ShufflerSubManager] _suspend_game: pid " + str(entry.pid) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(done.exit_code) + ")")
+	else:
+		push_warning("[ShufflerSubManager] _suspend_game: timed out waiting for pssuspend (pid " + str(entry.pid) + "); continuing anyway")
 
 	entry.active = false
 
@@ -1151,10 +1097,6 @@ func _on_round_timer_timeout() -> void:
 	print("[ShufflerSubManager] _on_round_timer_timeout: state=" + str(_state) + " " + _format_bag())
 	if _state != State.ACTIVE:
 		print("[ShufflerSubManager] _on_round_timer_timeout ignored: state=" + str(_state))
-		return
-	if _reroll_in_progress:
-		# The reroll flow owns the current switch; its completion re-arms the timer.
-		print("[ShufflerSubManager] _on_round_timer_timeout ignored: reroll in progress")
 		return
 	if _countdown_timer and is_instance_valid(_countdown_timer):
 		_countdown_timer.stop()

@@ -975,7 +975,8 @@ static func extract_archive_async(
 	archive_name: String = "",
 	delete_after: bool = false,
 	on_progress: Callable = Callable(),
-	on_complete: Callable = Callable()
+	on_complete: Callable = Callable(),
+	show_notification: bool = true
 ) -> void:
 	var display_name = archive_name if archive_name != "" else archive_path.get_file().get_basename()
 	
@@ -1018,16 +1019,20 @@ static func extract_archive_async(
 			return "%s... (%d files)%s" % [display_name, counts.extracted_files, file_part]
 		return display_name + "..."
 	
-	var notification_id = SystemManager.notifications.show_notification_safe(
-		display_name + "...",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		progress_callable,
-		text_formatter,
-		true,  # pulsing (indeterminate until byte totals are known)
-		true  # pinned
-	)
+	# Suppressed for shuffler preps etc.: a second progress snackbar would
+	# replace the currently displayed one (progress notifications are singletons).
+	var notification_id: int = -1
+	if show_notification:
+		notification_id = SystemManager.notifications.show_notification_safe(
+			display_name + "...",
+			SystemManager.notifications.Type.INFO,
+			null,
+			0.0,
+			progress_callable,
+			text_formatter,
+			true,  # pulsing (indeterminate until byte totals are known)
+			true  # pinned
+		)
 	
 	var progress_callback = func(info: Dictionary):
 		counts.extracted_files = int(info.get("extracted_files", counts.extracted_files))
@@ -1041,9 +1046,10 @@ static func extract_archive_async(
 		# determinate progress bar. This callback runs on the extraction worker
 		# thread, so route UI changes through the main-thread queue.
 		if counts.total_bytes > 0 or counts.total_files > 0:
-			SystemManager.memory.queue_main_thread_callback(func():
-				SystemManager.notifications.set_notification_pulsing(notification_id, false)
-			)
+			if notification_id != -1:
+				SystemManager.memory.queue_main_thread_callback(func():
+					SystemManager.notifications.set_notification_pulsing(notification_id, false)
+				)
 		
 		# Forward to caller
 		if on_progress.is_valid():
@@ -1058,7 +1064,7 @@ static func extract_archive_async(
 		return success
 	
 	SystemManager.memory.queue_extraction_task(extraction_callable, func(success: bool):
-		if success:
+		if success and notification_id != -1:
 			# Snap the notification to the actual final totals (the fallback total
 			# may have been an estimate) and show it briefly before dismissing.
 			counts.total_estimated = false
@@ -1067,8 +1073,9 @@ static func extract_archive_async(
 			if counts.total_files > 0:
 				counts.extracted_files = counts.total_files
 			SystemManager.notifications.refresh_progress_notification()
-		
-		SystemManager.notifications.dismiss_notification_safe(notification_id)
+
+		if notification_id != -1:
+			SystemManager.notifications.dismiss_notification_safe(notification_id)
 		
 		var error_msg = ""
 		if not success:

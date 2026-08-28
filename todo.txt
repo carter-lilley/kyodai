@@ -7,10 +7,19 @@ rework hero to also accept effect stacks
 platform indiciator & favorites reload after sync finish
 submenus still suck
 add downloads screen
-ship w music?
-cover step & eviction..?
-reroll should skip while waiting
-xenia crash on shuffle, but works on restart?
+ship w music
+
+x true LRU
+sync breaks on app resume during cover step (then, platform indicators broken until restart)
+x cover step & eviction..?
+
+x xenia crash on shuffle, but works on restart?
+
+x m3textinput field labels overlap with default text
+x battery indicator missing on android?
+grid not vertically OR horizontally centered?
+removing nav shortcut doesnt actually remove it 
+cant touch checkbuttons or some? optionbutton submenus in settings menu
 
 ## saves
 	check emulator config for save/user folder(s) at synctime
@@ -50,3 +59,12 @@ xenia crash on shuffle, but works on restart?
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
 	linux
+	
+	
+	auto m3us
+	emulator repo downloads & updates
+	romm firmware & save sync
+	gamenative support
+	gavel & sigil support
+	themes
+	shuffler

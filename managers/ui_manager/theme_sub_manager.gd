@@ -108,3 +108,24 @@ func _on_apply_preset_end() -> void:
 		call_deferred("_do_refresh_theme")
 	# Re-apply tab container transparency after theme refresh in case overrides were reset
 	call_deferred("_setup_library_appearance")
+	# Last-resort focus guarantee: the rebuild churn above often leaves no valid
+	# focus owner once all deferred restores have settled.
+	call_deferred("_ensure_focus_after_preset")
+
+func _ensure_focus_after_preset() -> void:
+	# Let the deferred _do_refresh_theme restore (and its nested deferred grab)
+	# land first; we only act if focus is genuinely absent afterwards.
+	await get_tree().process_frame
+	# An open overlay (settings dialog, confirm) owns focus via its own machinery.
+	if M3Overlay._get_topmost_overlay() != null:
+		return
+	var viewport: Viewport = null
+	if ui_manager and ui_manager.navigation:
+		viewport = ui_manager.navigation._get_active_viewport()
+	if not viewport:
+		return
+	var focused := viewport.gui_get_focus_owner()
+	if focused and is_instance_valid(focused) and focused.is_visible_in_tree():
+		return
+	if ui_manager:
+		ui_manager.get_focus_restore_fallback_to_home().call()

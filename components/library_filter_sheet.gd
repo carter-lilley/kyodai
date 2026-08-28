@@ -170,6 +170,73 @@ func _on_clear_all() -> void:
 	reload_options()
 	filters_changed.emit({})
 
+# ============================================================================
+# Focus
+# ============================================================================
+
+func _focus_first_chip() -> void:
+	"""Focus the first filter chip so controller users land on content instead
+	of the header close button. No-op in the loading/empty states."""
+	# _populate() queue_frees the previous chips; they linger as children until
+	# the frame ends, so wait a frame before searching (and skip queued strays
+	# regardless) or the grab lands on a freed node.
+	await get_tree().process_frame
+	var chip := _find_first_chip(_sections_vbox)
+	if chip == null:
+		return
+	if UIManager:
+		UIManager.suppress_next_focus_sound()
+	chip.grab_focus()
+
+func _find_first_chip(node: Node) -> M3Chip:
+	if node is M3Chip and node.focus_mode != Control.FOCUS_NONE and not node.is_queued_for_deletion():
+		return node
+	for child in node.get_children():
+		if child.is_queued_for_deletion():
+			continue
+		var found := _find_first_chip(child)
+		if found:
+			return found
+	return null
+
+func _focus_restore_to_grid_or_home() -> void:
+	"""Fallback when the captured summoner is gone: filter changes recycle grid
+	cards, so the exact card rarely survives. Restore the grid's last focused
+	card position instead; home button as the final fallback."""
+	if UIManager:
+		var view = UIManager.get_current_view()
+		var grid = view.get("games_grid") if view else null
+		if grid is VirtualScrollGridContainer and grid.is_visible_in_tree():
+			grid.focus_last_or_first_card()
+			return
+		UIManager.get_focus_restore_fallback_to_home().call()
+
+func _input(event: InputEvent) -> void:
+	# Handle ui_cancel deterministically when this sheet is the topmost visible
+	# overlay, bypassing the base class's _max_layer gate (a stale registered
+	# overlay above our layer would otherwise silently block dismissal).
+	if visible and event.is_action_pressed("ui_cancel") \
+			and M3Overlay._get_topmost_overlay() == self:
+		get_viewport().set_input_as_handled()
+		dismiss()
+		return
+	super._input(event)
+
+func dismiss() -> void:
+	# Restore focus to the summoner before the slide-out so the focus ring
+	# doesn't ride the sheet off-screen. The overlay pull-back would yank the
+	# deferred grab back into the still-visible sheet, so keep it suppressed
+	# until the dismissal completes; the built-in post-animation restore is
+	# disabled for this dismiss and re-armed afterwards for the next open.
+	M3Overlay._suppress_focus_pullback = true
+	_restore_focus_on_dismiss = false
+	if UIManager:
+		UIManager.restore_focus(_summoner_focus, _focus_restore_fallback)
+	super.dismiss()
+	dismissed.connect(func():
+		M3Overlay._suppress_focus_pullback = false
+		_restore_focus_on_dismiss = true, CONNECT_ONE_SHOT | CONNECT_DEFERRED)
+
 func _update_clear_button() -> void:
 	if _clear_button:
 		_clear_button.visible = not get_active_filters().is_empty()
@@ -191,8 +258,10 @@ static func show_sheet() -> LibraryFilterSheet:
 
 	_instance.headline_text = "Filters"
 	_instance.sheet_variant = Variant.MODAL
+	_instance.set_focus_restore_fallback(Callable(_instance, "_focus_restore_to_grid_or_home"))
 	_instance.show_overlay()
 	_instance.reload_options()
+	_instance._focus_first_chip()
 	return _instance
 
 static func cleanup_instance() -> void:

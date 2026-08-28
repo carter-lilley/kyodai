@@ -210,22 +210,33 @@ func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
 	return false
 
 ## Suspends a process via pssuspend (Windows only; path supplied by caller).
-func suspend_process_async(pid: int, pssuspend_path: String) -> void:
+## on_done(result: Dictionary {exit_code, output}) fires on the main thread
+## when pssuspend exits - callers that must not race the suspended process
+## (e.g. launching a new emulator instance) should await it.
+func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
 	if pid <= 0 or pssuspend_path == "":
+		if on_done.is_valid():
+			on_done.call({"exit_code": -1, "output": []})
 		return
 	if not SystemManager.platform.is_windows():
 		push_warning("[ProcessManager] suspend_process_async is only supported on Windows")
+		if on_done.is_valid():
+			on_done.call({"exit_code": -1, "output": []})
 		return
-	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)])
+	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)], on_done)
 
 ## Resumes a suspended process via pssuspend (Windows only; path supplied by caller).
-func resume_process_async(pid: int, pssuspend_path: String) -> void:
+func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
 	if pid <= 0 or pssuspend_path == "":
+		if on_done.is_valid():
+			on_done.call({"exit_code": -1, "output": []})
 		return
 	if not SystemManager.platform.is_windows():
 		push_warning("[ProcessManager] resume_process_async is only supported on Windows")
+		if on_done.is_valid():
+			on_done.call({"exit_code": -1, "output": []})
 		return
-	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)])
+	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)], on_done)
 
 ## Force exit background state (for crashes/emergencies)
 func force_exit_background_state() -> void:

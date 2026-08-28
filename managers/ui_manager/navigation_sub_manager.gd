@@ -746,6 +746,18 @@ func _get_all_nav_destinations() -> Array[M3NavigationDestination]:
 		return []
 	return _nav_node._destination_items
 
+func _get_focused_destination_index(focused: Control) -> int:
+	"""Index into the nav destinations of the focused destination, or -1.
+	Uses an ancestor walk so focus held by a destination's child still counts."""
+	if not focused:
+		return -1
+	var destinations := _get_all_nav_destinations()
+	for i in range(destinations.size()):
+		var dest := destinations[i]
+		if dest == focused or dest.is_ancestor_of(focused):
+			return i
+	return -1
+
 func _setup_nav_focus_neighbors() -> void:
 	"""Block the one direction that leaks from nav into the game grid and
 	wire the last destination directly to the settings button so controller
@@ -1101,33 +1113,52 @@ func _try_nav_to_grid(dir: String) -> bool:
 
 	var nav_type := get_nav_type()
 	var settings_btn := find_nav_settings_button()
-	var last_dest := get_last_nav_destination()
+	var destinations := _get_all_nav_destinations()
+	var dest_idx := _get_focused_destination_index(focused)
 
-	# From nav destination -> Grid (UP for bar, RIGHT for rail)
-	if focused is M3NavigationDestination:
+	# From nav destination -> siblings / Grid / Settings.
+	# Sibling movement is walked manually through the destination list: Godot's
+	# spatial search can pick a grid card instead (seen most in pagination
+	# views where card rects rebuild constantly), leaking focus into the grid.
+	if dest_idx >= 0:
 		if nav_type == 0:  # Bar
 			if dir == "ui_up":
 				return _enter_grid()
-			if dir == "ui_right" and focused == last_dest:
+			if dir == "ui_right":
+				if dest_idx < destinations.size() - 1:
+					destinations[dest_idx + 1].grab_focus()
+					return true
 				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
 					settings_btn.grab_focus()
-					return true
+				return true  # Clamp at the last destination
+			if dir == "ui_left":
+				if dest_idx > 0:
+					destinations[dest_idx - 1].grab_focus()
+				return true  # Clamp at the first destination
+			return false
 		else:  # Rail
 			if dir == "ui_right":
 				return _enter_grid()
-			if dir == "ui_down" and (focused == last_dest or last_dest.is_ancestor_of(focused)):
+			if dir == "ui_down":
+				if dest_idx < destinations.size() - 1:
+					destinations[dest_idx + 1].grab_focus()
+					return true
 				if settings_btn and settings_btn.focus_mode != Control.FOCUS_NONE:
 					settings_btn.grab_focus()
-					return true
-				# Fallback: force focus onto settings if neighbor wiring is missing.
 				elif settings_btn:
+					# Fallback: force focus onto settings if neighbor wiring is missing.
 					settings_btn.focus_mode = Control.FOCUS_ALL
 					settings_btn.grab_focus()
-					return true
-		return false
+				return true  # Clamp at the last destination
+			if dir == "ui_up":
+				if dest_idx > 0:
+					destinations[dest_idx - 1].grab_focus()
+				return true  # Clamp at the first destination
+			return false
 
 	# From Settings -> Last nav destination (LEFT for bar, UP for rail)
-	if focused == settings_btn:
+	if focused == settings_btn and destinations.size() > 0:
+		var last_dest := destinations[destinations.size() - 1]
 		if nav_type == 0:  # Bar
 			if dir == "ui_left":
 				if last_dest and last_dest.focus_mode != Control.FOCUS_NONE:

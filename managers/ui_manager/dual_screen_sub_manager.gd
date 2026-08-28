@@ -8,6 +8,7 @@ var _dual_screen_viewport_mode: bool = false
 
 # Node reparenting state for Android dual screen
 var _main_ui_original_parent: Node = null
+var _ui_layer: CanvasLayer = null
 var _ui_layer_original_parent: Node = null
 var _settings_dialog_original_parent: Node = null
 var _is_nodes_reparented: bool = false
@@ -359,8 +360,14 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	if _root_control:
 		_main_ui_original_parent = _root_control.get_parent()
 
-	# Find and store UILayer original parent
-	var ui_layer = get_node_or_null("/root/Main/UILayer")
+	# Find and store UILayer original parent. Cache the node reference: after
+	# reparenting its absolute path is inside MainViewport, so re-resolving by
+	# path ("/root/Main/UILayer") fails on restore and strands it in the
+	# disabled DualScreenSetup.
+	var ui_layer := _ui_layer
+	if not ui_layer or not is_instance_valid(ui_layer):
+		ui_layer = get_node_or_null("/root/Main/UILayer") as CanvasLayer
+		_ui_layer = ui_layer
 	if ui_layer:
 		_ui_layer_original_parent = ui_layer.get_parent()
 
@@ -399,8 +406,9 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 
 	_is_nodes_reparented = true
 
-	# Reconnect OnscreenKeyboard to new viewport after reparenting
-	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
+	# Reconnect OnscreenKeyboard to new viewport after reparenting.
+	# find_child: the absolute path is stale while UILayer sits inside MainViewport.
+	var keyboard = get_tree().root.find_child("OnscreenKeyboard", true, false)
 	if keyboard and keyboard.has_method("reconnect_viewport"):
 		keyboard.reconnect_viewport()
 
@@ -408,6 +416,9 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	for view in ui_manager.view.get_all_views():
 		if view and view.has_method("reconnect_viewport"):
 			view.reconnect_viewport()
+
+	# Reconnect the global focus ring to the SubViewport's focus signal
+	ui_manager.focus.reconnect_viewport(main_viewport)
 
 	# Reconnect feedback handlers to new viewport
 	ui_manager.navigation._reconnect_feedback_viewport()
@@ -439,14 +450,16 @@ func _restore_ui_to_original_parents() -> void:
 			_root_control.get_parent().remove_child(_root_control)
 		_main_ui_original_parent.add_child(_root_control)
 
-	# Restore UILayer
-	var ui_layer = get_node_or_null("/root/Main/UILayer")
-	if ui_layer and _ui_layer_original_parent:
+	# Restore UILayer via the cached reference (path lookup fails here: its
+	# current path is inside MainViewport, not /root/Main).
+	var ui_layer := _ui_layer
+	if ui_layer and is_instance_valid(ui_layer) and _ui_layer_original_parent:
 		if ui_layer.get_parent():
 			ui_layer.get_parent().remove_child(ui_layer)
 		_ui_layer_original_parent.add_child(ui_layer)
 
-	# Restore SettingsDialog to its original parent (or _root_control as fallback)
+	# Restore SettingsDialog to its original parent (or the DS-aware overlay
+	# parent as fallback — resolves to root now that the group is cleared)
 	var settings_dialog = ui_manager.overlay._settings_dialog
 	if settings_dialog:
 		if settings_dialog.get_parent():
@@ -454,16 +467,20 @@ func _restore_ui_to_original_parents() -> void:
 		if _settings_dialog_original_parent:
 			_settings_dialog_original_parent.add_child(settings_dialog)
 		else:
-			# Created after reparenting — move back to _root_control
-			_root_control.add_child(settings_dialog)
+			# Created after reparenting — resolve via the overlay parent resolver
+			var fallback_parent := M3Overlay.get_overlay_parent()
+			if fallback_parent == null:
+				fallback_parent = _root_control
+			fallback_parent.add_child(settings_dialog)
 
 	_is_nodes_reparented = false
 	_main_ui_original_parent = null
 	_ui_layer_original_parent = null
 	_settings_dialog_original_parent = null
 
-	# Reconnect OnscreenKeyboard to original viewport after restoring
-	var keyboard = get_node_or_null("/root/Main/UILayer/OnscreenKeyboard")
+	# Reconnect OnscreenKeyboard to original viewport after restoring.
+	# find_child: the absolute path is stale while UILayer sits inside MainViewport.
+	var keyboard = get_tree().root.find_child("OnscreenKeyboard", true, false)
 	if keyboard and keyboard.has_method("reconnect_viewport"):
 		keyboard.reconnect_viewport()
 
@@ -471,6 +488,9 @@ func _restore_ui_to_original_parents() -> void:
 	for view in ui_manager.view.get_all_views():
 		if view and view.has_method("reconnect_viewport"):
 			view.reconnect_viewport()
+
+	# Reconnect the global focus ring back to the root viewport's focus signal
+	ui_manager.focus.reconnect_viewport()
 
 	# Reconnect feedback handlers to original viewport
 	ui_manager.navigation._reconnect_feedback_viewport()

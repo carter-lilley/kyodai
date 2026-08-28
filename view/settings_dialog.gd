@@ -13,6 +13,7 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 }
 
 var _left_pane: VBoxContainer
+var _left_scroll: ScrollContainer
 var _left_column: VBoxContainer
 var _right_pane: MarginContainer
 var _right_scroll: ScrollContainer
@@ -20,6 +21,12 @@ var _right_content: Control
 var _category_buttons: Dictionary[String, M3Button] = {}
 var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
+
+# Built-in ScrollContainer.follow_focus binds to the viewport at
+# NOTIFICATION_READY and never re-binds, so it dies when the dialog is
+# reparented into the dual-screen SubViewport. We track the viewport
+# ourselves and scroll manually instead.
+var _focus_follow_viewport: Viewport = null
 
 const DEBUG_LAYOUT: bool = false
 
@@ -109,25 +116,26 @@ func _build_two_pane_layout() -> void:
 	# Left sidebar. The category list lives in a ScrollContainer so its natural
 	# height can never inflate the dialog's minimum size (a Control's rect can
 	# never go below its minimum, which previously forced shrink-to-fit buttons).
-	# The Exit button sits outside the scroll, pinned to the sidebar bottom.
+	# The Exit button is the last item of the same scrollable list.
 	_left_pane = VBoxContainer.new()
 	_left_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_left_pane.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_left_pane.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 
-	var left_scroll := ScrollContainer.new()
-	left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	left_scroll.follow_focus = true
-	left_scroll.add_child(_left_pane)
+	_left_scroll = ScrollContainer.new()
+	_left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Handled manually via _on_focus_follow_changed (viewport-proof).
+	_left_scroll.follow_focus = false
+	_left_scroll.add_child(_left_pane)
 
 	_left_column = VBoxContainer.new()
 	_left_column.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(200), 0)
 	_left_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_column.add_theme_constant_override("separation", int(M3Units.dp(4)))
-	_left_column.add_child(left_scroll)
+	_left_column.add_child(_left_scroll)
 
 	var left_margin = MarginContainer.new()
 	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
@@ -160,7 +168,8 @@ func _build_two_pane_layout() -> void:
 	_right_scroll = ScrollContainer.new()
 	_right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_right_scroll.follow_focus = true
+	# Handled manually via _on_focus_follow_changed (viewport-proof).
+	_right_scroll.follow_focus = false
 	_right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_right_pane.add_child(_right_scroll)
 	hbox.add_child(_right_pane)
@@ -240,10 +249,10 @@ func _build_categories() -> void:
 		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
 		_category_contents["gamenative"] = gamenative
 
-	# Exit — closes the app via the shared shutdown path in main.gd. Added to
-	# the column (outside the scrolling category list) so it stays pinned to
-	# the bottom of the sidebar.
-	_add_category_button("exit", "Exit", "logout", _left_column)
+	# Exit — closes the app via the shared shutdown path in main.gd. Added as
+	# the last item of the scrollable category list (not a pinned slot) so
+	# directional focus flows through it like any other category.
+	_add_category_button("exit", "Exit", "logout")
 
 	# Select first category that has content
 	for btn_id in _category_buttons.keys():
@@ -384,6 +393,33 @@ func _dump_layout_metrics(id: String) -> void:
 func get_current_category() -> String:
 	return _current_category
 
+# ============================================================================
+# Manual follow-focus (viewport-proof)
+# ============================================================================
+
+func _reconnect_focus_follow() -> void:
+	_disconnect_focus_follow()
+	var viewport := get_viewport()
+	if not is_instance_valid(viewport):
+		return
+	if not viewport.gui_focus_changed.is_connected(_on_focus_follow_changed):
+		viewport.gui_focus_changed.connect(_on_focus_follow_changed)
+	_focus_follow_viewport = viewport
+
+func _disconnect_focus_follow() -> void:
+	if _focus_follow_viewport and is_instance_valid(_focus_follow_viewport):
+		if _focus_follow_viewport.gui_focus_changed.is_connected(_on_focus_follow_changed):
+			_focus_follow_viewport.gui_focus_changed.disconnect(_on_focus_follow_changed)
+	_focus_follow_viewport = null
+
+func _on_focus_follow_changed(control: Control) -> void:
+	if control == null:
+		return
+	if _left_scroll and _left_scroll.is_ancestor_of(control):
+		_left_scroll.ensure_control_visible(control)
+	elif _right_scroll and _right_scroll.is_ancestor_of(control):
+		_right_scroll.ensure_control_visible(control)
+
 func cancel_and_dismiss() -> void:
 	_cancelled = true
 	dismiss()
@@ -397,7 +433,18 @@ func show_overlay() -> void:
 	_set_initial_focus()
 
 func _set_initial_focus() -> void:
+	# Deferred one frame so layout settles and a select_category() issued right
+	# after show_overlay() (show_settings_dialog_with_category) has landed.
 	await get_tree().process_frame
+	# Focus the button of the auto-opened category (last-used, or first) so the
+	# focus ring matches the page being shown.
+	if _category_buttons.has(_current_category):
+		var btn := _category_buttons[_current_category]
+		if is_instance_valid(btn) and btn.focus_mode != Control.FOCUS_NONE:
+			if UIManager:
+				UIManager.suppress_next_focus_sound()
+			btn.grab_focus()
+			return
 	for child in _left_pane.get_children():
 		if child is M3Button and child.focus_mode != Control.FOCUS_NONE:
 			if UIManager:
@@ -529,3 +576,9 @@ func _refresh_settings_menu_values_recursive(node: Node) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
 		pass
+	elif what == NOTIFICATION_ENTER_TREE:
+		# Fires on every reparent (dual screen mode moves this dialog
+		# between the root viewport and the MainViewport SubViewport).
+		_reconnect_focus_follow()
+	elif what == NOTIFICATION_EXIT_TREE:
+		_disconnect_focus_follow()

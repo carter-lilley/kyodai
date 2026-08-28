@@ -106,23 +106,18 @@ func show_settings_dialog() -> void:
 	_settings_dialog.show_overlay()
 
 func _add_settings_dialog_to_correct_parent() -> void:
-	"""Add SettingsDialog to a parent where its CanvasLayer script will attach correctly.
-	SubViewports break CanvasLayer script attachment; keep it in the root viewport."""
+	"""Add SettingsDialog to the DS-aware overlay parent (MainViewport in dual
+	screen mode, root viewport otherwise). The parent is resolved lazily inside
+	the deferred call so a pending add during a DS transition lands correctly."""
 	if _settings_dialog.is_inside_tree():
 		return
-	var tree = Engine.get_main_loop()
-	if tree and tree.root:
-		# Deferred to avoid "busy parent" during _ready, but check again at execution
-		# time in case show_overlay() auto-added it to a SubViewport in the meantime.
-		var add_fn = func():
-			if is_instance_valid(_settings_dialog) and not _settings_dialog.is_inside_tree():
-				tree.root.add_child(_settings_dialog)
-		add_fn.call_deferred()
-	else:
-		var add_fn = func():
-			if is_instance_valid(_settings_dialog) and not _settings_dialog.is_inside_tree():
-				_root_control.add_child(_settings_dialog)
-		add_fn.call_deferred()
+	var add_fn = func():
+		if is_instance_valid(_settings_dialog) and not _settings_dialog.is_inside_tree():
+			var parent := M3Overlay.get_overlay_parent()
+			if parent == null:
+				parent = _root_control
+			parent.add_child(_settings_dialog)
+	add_fn.call_deferred()
 
 func show_settings_dialog_with_category(category_id: String) -> void:
 	"""Open the settings dialog and jump to a specific category."""

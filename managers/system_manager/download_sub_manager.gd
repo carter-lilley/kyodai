@@ -806,6 +806,12 @@ func cancel(item_id: String) -> bool:
 	for i in range(_queue.size()):
 		if _queue[i].id == item_id:
 			var item = _queue[i]
+			# Dismiss the progress notification: cancel bypasses the completion
+			# path, and the snackbar's progress callable would freeze below 1.0
+			# so its auto-dismiss never fires.
+			if item.notification_id != -1:
+				SystemManager.notifications.dismiss_notification(item.notification_id)
+				item.notification_id = -1
 			_cleanup_item(item)
 			_queue.remove_at(i)
 			queue_changed.emit()
@@ -817,6 +823,9 @@ func cancel(item_id: String) -> bool:
 		if item.http_request:
 			item.http_request.cancel_request()
 		item.http_request = null
+		if item.notification_id != -1:
+			SystemManager.notifications.dismiss_notification(item.notification_id)
+			item.notification_id = -1
 		# Clean up chunked download resources if this was a chunked download
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
@@ -2860,7 +2869,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		item.status = "failed"
 		item.error_message = error_msg
 		print("[SystemManager.download] Download failed for " + item.name + ": " + error_msg)
-		SystemManager.notifications.update_notification_text(item.notification_id, "Download failed: " + item.name)
+		_notify_download_failed(item)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on failure
@@ -2875,7 +2884,7 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		item.status = "failed"
 		item.error_message = "Download file not found"
 		print("[SystemManager.download] Download file not found after completion: " + item.destination_path)
-		SystemManager.notifications.update_notification_text(item.notification_id, "Download failed: " + item.name)
+		_notify_download_failed(item)
 		_cleanup_item(item)
 		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on failure
@@ -2943,10 +2952,23 @@ func _fail_download(item_id: String, error_msg: String):
 	_active_items.erase(item_id)
 	_stop_foreground_service()  # Stop foreground service on failure
 
-	SystemManager.notifications.update_notification_text(item.notification_id, "Download failed: " + item.name)
+	_notify_download_failed(item)
 	download_completed.emit(item_id, false, error_msg)
 	queue_changed.emit()
 	_process_queue()
+
+func _notify_download_failed(item: QueueItem) -> void:
+	if item.suppress_notification:
+		return
+	if item.notification_id != -1:
+		SystemManager.notifications.dismiss_notification(item.notification_id)
+		item.notification_id = -1
+	SystemManager.notifications.show_notification(
+		"Download failed: " + item.name,
+		SystemManager.notifications.Type.ERROR,
+		null,
+		10.0
+	)
 
 func _start_extraction(item: QueueItem):
 	item.status = "extracting"
@@ -3005,7 +3027,7 @@ func _start_extraction(item: QueueItem):
 				extraction_completed.emit(item.id, false, item.error_message)
 				queue_changed.emit()
 				_process_queue()
-	)
+	, not item.suppress_notification)
 
 func _finish_download_completion(item: QueueItem):
 	"""Complete the download after file operations are done"""
