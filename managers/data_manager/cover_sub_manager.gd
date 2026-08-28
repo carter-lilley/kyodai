@@ -13,20 +13,84 @@ const CACHE_VALIDATION_VERSION := 1
 # Skip files modified within this window so covers being downloaded right now
 # are never mistaken for corrupt cache entries by the background scan.
 const RECENT_FILE_GRACE_SECONDS := 10
+# Sidecar storing last-access times ({filename: unix_time}) for true LRU
+# eviction: Godot has no utime API and rewriting files per cache hit is too
+# much I/O. Advisory only - missing or corrupt data falls back to mtime order.
+const LRU_SIDECAR_PATH = "user://cache/covers_lru.json"
+const LRU_FLUSH_INTERVAL_SECONDS := 5.0
+# Used to size the cover download budget when the cache has no files yet.
+const ESTIMATED_COVER_BYTES := 150 * 1024
 
 # Set while an eviction pass is in flight so sync-end triggers can't stack them.
 var _eviction_running: bool = false
+
+# filename -> unix time of last access. Main thread only; the eviction worker
+# receives a duplicate snapshot instead of touching this map or the sidecar.
+var _lru_map: Dictionary = {}
+var _lru_dirty: bool = false
+var _lru_flush_timer: Timer = null
 
 
 func _ready():
 	data_manager = get_parent()
 	_ensure_cache_folder()
+	_load_lru_sidecar()
+	_lru_flush_timer = Timer.new()
+	_lru_flush_timer.wait_time = LRU_FLUSH_INTERVAL_SECONDS
+	_lru_flush_timer.autostart = true
+	_lru_flush_timer.timeout.connect(_flush_lru_sidecar)
+	add_child(_lru_flush_timer)
 	# Read the cap on the main thread; the worker must not touch autoloads.
 	var cap := get_max_cache_bytes()
 	_eviction_running = true
-	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap))
+	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap, _lru_map.duplicate()))
 	if not data_manager.sync_completed.is_connected(_on_sync_completed):
 		data_manager.sync_completed.connect(_on_sync_completed)
+
+
+func _exit_tree() -> void:
+	_flush_lru_sidecar()
+
+
+## Record a cover use for LRU eviction. Main thread only.
+func note_cover_access(cache_path: String) -> void:
+	if cache_path.is_empty():
+		return
+	_lru_map[cache_path.get_file()] = int(Time.get_unix_time_from_system())
+	_lru_dirty = true
+
+
+func _load_lru_sidecar() -> void:
+	_lru_map.clear()
+	var file := FileAccess.open(LRU_SIDECAR_PATH, FileAccess.READ)
+	if not file:
+		return
+	var text := file.get_as_text()
+	file.close()
+	var json := JSON.new()
+	if json.parse(text) != OK or not json.data is Dictionary:
+		return
+	for key in json.data:
+		var value = json.data[key]
+		if value is float or value is int:
+			_lru_map[key] = int(value)
+
+
+func _flush_lru_sidecar() -> void:
+	if not _lru_dirty:
+		return
+	_lru_dirty = false
+	# Atomic-ish write: temp file, then remove+rename (rename can't overwrite
+	# an existing file on Windows). A crash between the two loses at most the
+	# previous sidecar, which only degrades eviction to mtime order.
+	var tmp_path := LRU_SIDECAR_PATH + ".tmp"
+	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
+	if not file:
+		return
+	file.store_string(JSON.stringify(_lru_map))
+	file.close()
+	DirAccess.remove_absolute(LRU_SIDECAR_PATH)
+	DirAccess.rename_absolute(tmp_path, LRU_SIDECAR_PATH)
 
 
 func _on_sync_completed(success: bool, _message: String) -> void:
@@ -34,15 +98,15 @@ func _on_sync_completed(success: bool, _message: String) -> void:
 		enforce_cache_limit_async()
 
 
-func _cache_maintenance(run_validation: bool, max_bytes: int) -> void:
+func _cache_maintenance(run_validation: bool, max_bytes: int, lru_snapshot: Dictionary) -> void:
 	if run_validation:
 		_scan_cover_cache()
-	_enforce_cache_size_limit(max_bytes)
+	_enforce_cache_size_limit(max_bytes, lru_snapshot)
 
 
 func get_max_cache_bytes() -> int:
 	var setting = DataManager.get_setting("cover_cache_max_mb")
-	var mb: int = int(setting.value) if setting and setting.value != null else (256 if OS.has_feature("android") else 512)
+	var mb: int = int(setting.value) if setting and setting.value != null else 1024
 	return mb * 1024 * 1024
 
 
@@ -50,13 +114,15 @@ func enforce_cache_limit_async() -> void:
 	if _eviction_running:
 		return
 	_eviction_running = true
-	WorkerThreadPool.add_task(_enforce_cache_size_limit.bind(get_max_cache_bytes()))
+	WorkerThreadPool.add_task(_enforce_cache_size_limit.bind(get_max_cache_bytes(), _lru_map.duplicate()))
 
 
-func _enforce_cache_size_limit(max_bytes: int) -> void:
-	"""Worker thread: evict oldest covers (by mtime) until the cache folder is
-	under the configured byte cap. Uses raw DirAccess/FileAccess for the same
-	reason as _scan_cover_cache: FSM reaches autoloads unsafely from workers."""
+func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary) -> void:
+	"""Worker thread: evict least-recently-used covers until the cache folder
+	is under the configured byte cap. Recency comes from the LRU sidecar
+	snapshot, falling back to file mtime for files with no recorded access.
+	Uses raw DirAccess/FileAccess for the same reason as _scan_cover_cache:
+	FSM reaches autoloads unsafely from workers."""
 	var entries: Array = []
 	var total := 0
 	var now := int(Time.get_unix_time_from_system())
@@ -73,15 +139,20 @@ func _enforce_cache_size_limit(max_bytes: int) -> void:
 					if file:
 						var size := file.get_length()
 						file.close()
-						entries.append({"path": path, "size": size, "mtime": mtime})
+						entries.append({"path": path, "name": file_name, "size": size, "mtime": mtime})
 						total += size
 			file_name = dir.get_next()
 		dir.list_dir_end()
 
 	var deleted_count := 0
 	var freed := 0
+	var deleted_names: Array = []
 	if total > max_bytes:
-		entries.sort_custom(func(a, b): return a.mtime < b.mtime)
+		entries.sort_custom(func(a, b):
+			var a_time: int = lru_snapshot.get(a.name, a.mtime)
+			var b_time: int = lru_snapshot.get(b.name, b.mtime)
+			return a_time < b_time
+		)
 		for e in entries:
 			if total <= max_bytes:
 				break
@@ -89,13 +160,16 @@ func _enforce_cache_size_limit(max_bytes: int) -> void:
 				total -= e.size
 				freed += e.size
 				deleted_count += 1
+				deleted_names.append(e.name)
 	# The manager may already be freed if the app quit mid-scan (benchmark).
 	if is_instance_valid(self):
-		call_deferred("_report_cache_eviction", deleted_count, freed)
+		call_deferred("_report_cache_eviction", deleted_count, freed, deleted_names)
 
 
-func _report_cache_eviction(deleted_count: int, freed_bytes: int) -> void:
+func _report_cache_eviction(deleted_count: int, freed_bytes: int, deleted_names: Array) -> void:
 	_eviction_running = false
+	for file_name in deleted_names:
+		_lru_dirty = _lru_map.erase(file_name) or _lru_dirty
 	if deleted_count > 0:
 		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, freed_bytes / (1024 * 1024)])
 
@@ -235,6 +309,7 @@ func load_image(url: String, callback: Callable = Callable(), high_priority: boo
 
 	# Try cache first - using background thread
 	if FSM.file_exists(cache_path):
+		note_cover_access(cache_path)
 		MemorySubManager.queue_image_task(
 			func():
 				return MemorySubManager.prepare_image_for_texture(_load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path)),
@@ -283,6 +358,9 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 func clear_cache():
 	for file_name in FSM.list_dir(CACHE_FOLDER):
 		FSM.delete_file(FSM.join_paths(CACHE_FOLDER, file_name))
+	_lru_map.clear()
+	_lru_dirty = false
+	DirAccess.remove_absolute(LRU_SIDECAR_PATH)
 	# Wipe the in-memory texture cache too, or stale textures survive the disk wipe
 	MemorySubManager.clear_texture_cache()
 	data_manager.cache_cleared.emit()

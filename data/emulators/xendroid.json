@@ -36,7 +36,14 @@
 		"package": "xendroid.compose",
 		"class": "xendroid.compose.EmulatorHostActivity",
 		"rom_delivery": "intent_data",
-		"mime_type": "application/octet-stream"
+		"mime_type": "application/octet-stream",
+		"extras": [
+		  {
+			"key": "game_uri",
+			"value": "{rom}",
+			"type": "file_path"
+		  }
+		]
 	  }
 	}
   },

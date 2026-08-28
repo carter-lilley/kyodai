@@ -77,13 +77,7 @@ func _kill_focus_tweens() -> void:
 # on card behavior (focus, input, badges) rather than download/cache logic.
 var _media_loader: CardMediaLoader = null
 
-# Status badge overlay (direct child of GameCard, positioned over media panel)
-var _status_badge_canvas_item: RID = RID()
-var _status_badge_style: StyleBoxFlat = null
-var _status_badge_rect: Rect2 = Rect2()
 var _badge_update_pending: bool = false
-const STATUS_BADGE_SIZE_RATIO: float = 0.04
-const STATUS_BADGE_MARGIN_RATIO: float = 0.05
 
 # Platform badge icon assets
 const PLATFORM_ICON_DIR := "res://assets/icons/platforms"
@@ -174,12 +168,6 @@ func _enter_tree():
 		var focus_parent_rid := _focus_ring_canvas_item if _focus_ring_canvas_item.is_valid() else get_canvas_item()
 		_focus_stack.set_parent_rid(focus_parent_rid)
 		_update_effect_transforms()
-	if _status_badge_canvas_item.is_valid():
-		var badge_parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
-		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, badge_parent_rid)
-	else:
-		_setup_status_badge()
-	_update_status_icon()
 	_update_media()
 
 func _ready():
@@ -209,8 +197,6 @@ func _ready():
 	focus_exited.connect(_on_focus_exited)
 	mouse_entered.connect(_on_card_mouse_entered)
 
-	_setup_status_badge()
-
 func _has_media_content() -> bool:
 	return _media_stack != null
 
@@ -225,33 +211,7 @@ func _exit_tree():
 
 	# Keep the node-less effect stacks allocated while the card is pooled. They
 	# are only freed in NOTIFICATION_PREDELETE when the card is truly destroyed.
-	_free_status_badge_canvas_item()
 	super._exit_tree()
-
-func _free_status_badge_canvas_item() -> void:
-	if _status_badge_canvas_item.is_valid():
-		RenderingServer.free_rid(_status_badge_canvas_item)
-		_status_badge_canvas_item = RID()
-	_status_badge_style = null
-
-func _update_visual_items_visibility() -> void:
-	super._update_visual_items_visibility()
-	if _status_badge_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, visible and is_inside_tree() and _visuals_position_synced and game != null)
-
-func _setup_status_badge():
-	_free_status_badge_canvas_item()
-	_status_badge_style = StyleBoxFlat.new()
-	_status_badge_style.anti_aliasing = true
-	_status_badge_style.anti_aliasing_size = 1.0
-	_status_badge_canvas_item = RenderingServer.canvas_item_create()
-	# Parent the badge to the visual layer if one is set; otherwise keep it under
-	# the card for standalone/preview mode.
-	var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
-	RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, parent_rid)
-	RenderingServer.canvas_item_set_draw_index(_status_badge_canvas_item, 50)
-	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
-	_update_status_badge_style()
 
 func get_card_state() -> MediaContainer:
 	return _media_container
@@ -282,9 +242,6 @@ func _setup_preview_mode():
 			_set_texture(_loading_texture)
 	else:
 		_set_texture(_loading_texture)
-
-	if _status_badge_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 
 	disabled = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -660,7 +617,6 @@ func refresh_settings() -> void:
 	# rebuilds when effect IDs actually change, which saves a lot of work when
 	# cards are recycled during fast scroll.
 	_build_media_stack(false)
-	_update_status_icon()
 	_update_platform_badge()
 	_update_card_text()
 	# Now that both media and focus stacks exist, run the focus tween.
@@ -681,7 +637,6 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	_sync_focus_state_from_viewport()
 	_ensure_media_stack_parent()
 	_build_media_stack(force_full_rebuild)
-	_update_status_icon()
 	_update_platform_badge()
 	_update_card_text()
 	# Now that both media and focus stacks exist, run the focus tween.
@@ -724,8 +679,6 @@ func reset(for_pooling: bool = false) -> void:
 	_sync_focus_visuals()
 	if _media_loader:
 		_media_loader.cancel()
-	if _status_badge_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
 	headline = ""
 	supporting_text = ""
 
@@ -840,9 +793,7 @@ func _persist_unwrapped() -> void:
 
 func set_placeholder(enabled: bool) -> void:
 	super.set_placeholder(enabled)
-	# Placeholders render only the blank media panel: no badge, no effect stacks.
-	if enabled and _status_badge_canvas_item.is_valid():
-		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
+	# Placeholders render only the blank media panel: no effect stacks.
 	if _media_stack:
 		_media_stack.set_visible(not enabled)
 	# The focus stack is only ever re-shown by focus logic; never restore it here.
@@ -854,7 +805,6 @@ func set_placeholder(enabled: bool) -> void:
 func _update_display():
 	if not game or not is_node_ready():
 		return
-	_update_status_icon()
 	_update_platform_badge()
 	_update_present_wrap()
 	_load_cover(false)
@@ -864,7 +814,6 @@ func _update_display():
 func _update_display_with_priority(high_priority: bool):
 	if not game or not is_node_ready():
 		return
-	_update_status_icon()
 	_update_platform_badge()
 	_update_present_wrap()
 	# If the texture is already cached and the game hasn't changed, reuse it
@@ -876,60 +825,9 @@ func _update_display_with_priority(high_priority: bool):
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
 
-func _deferred_update_badges():
+func _deferred_update_platform_badge():
 	_badge_update_pending = false
-	_update_status_badge_layout()
 	_update_platform_badge()
-
-func _update_status_badge_layout():
-	if not _status_badge_canvas_item.is_valid():
-		return
-
-	var panel_width: float = size.x
-	if _media_container.size.x > 0:
-		panel_width = _media_container.size.x
-
-	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
-	var margin = max(M3Units.dp(4.0), panel_width * STATUS_BADGE_MARGIN_RATIO)
-
-	var pos: Vector2
-	if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
-		# Anchor to the media bounds so the badge hugs the artwork even when
-		# the card rect is larger (list/carousel media-only modes).
-		pos = _media_bounds.position + _media_bounds.size - Vector2(badge_size + margin, badge_size + margin)
-	else:
-		pos = Vector2(size.x - badge_size - margin, size.y - badge_size - margin)
-	var rect = Rect2(pos, Vector2(badge_size, badge_size))
-	_status_badge_rect = rect
-
-	RenderingServer.canvas_item_clear(_status_badge_canvas_item)
-	_update_status_badge_style()
-	_status_badge_style.draw(_status_badge_canvas_item, rect)
-
-func _update_status_badge_style():
-	if not _status_badge_style:
-		return
-	var panel_width = size.x if size.x > 0 else _media_container.size.x
-	if _media_container.size.x > 0:
-		panel_width = _media_container.size.x
-	var badge_size = max(M3Units.dp(6.0), panel_width * STATUS_BADGE_SIZE_RATIO)
-	var circle_radius = int(badge_size / 2.0)
-
-	if game and game.is_active_variant_downloaded():
-		_status_badge_style.bg_color = Color(0.49, 0.714, 0.0, 1.0)
-	else:
-		_status_badge_style.bg_color = Color(0.0, 0.624, 0.922, 1.0)
-
-	_status_badge_style.set_corner_radius_all(circle_radius)
-
-func _update_status_icon():
-	if not _status_badge_canvas_item.is_valid():
-		return
-	if not game:
-		RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, false)
-		return
-	RenderingServer.canvas_item_set_visible(_status_badge_canvas_item, visible and is_inside_tree() and _visuals_position_synced)
-	_update_status_badge_layout()
 
 static func _resolve_platform_icon_name(slug: String) -> String:
 	return PLATFORM_ICON_MAP.get(slug, slug)
@@ -1289,42 +1187,6 @@ func _find_home_view() -> Node:
 		current = current.get_parent()
 	return null
 
-func _reparent_visual_items() -> void:
-	super._reparent_visual_items()
-	if _status_badge_canvas_item.is_valid():
-		var parent_rid := _visual_layer_rid if _visual_layer_rid.is_valid() else get_canvas_item()
-		RenderingServer.canvas_item_set_parent(_status_badge_canvas_item, parent_rid)
-
-func sync_visual_transform() -> void:
-	# The badge is stamped by the sync_visual_transform_with_offset() override
-	# below; the base implementation funnels here with the grid-preferred
-	# offset, so a second stamp here would fight it with a measured one.
-	super.sync_visual_transform()
-
-func sync_visual_transform_with_offset(base_offset: Vector2) -> void:
-	super.sync_visual_transform_with_offset(base_offset)
-	if not _visual_layer or not _visual_layer.is_inside_tree():
-		return
-	if not _status_badge_canvas_item.is_valid():
-		return
-
-	var base_transform := Transform2D().translated(base_offset)
-	if not content_scale.is_equal_approx(Vector2.ONE):
-		var pivot := _get_content_scale_pivot()
-		base_transform = base_transform * Transform2D().translated(pivot) * Transform2D().scaled(content_scale) * Transform2D().translated(-pivot)
-
-	RenderingServer.canvas_item_set_transform(_status_badge_canvas_item, base_transform)
-
-func set_visual_draw_index(base_index: int) -> void:
-	super.set_visual_draw_index(base_index)
-
-func _apply_visual_draw_index() -> void:
-	super._apply_visual_draw_index()
-	if _status_badge_canvas_item.is_valid():
-		var boost := 1000000 if has_focus() else 0
-		var idx := _base_visual_draw_index + boost
-		RenderingServer.canvas_item_set_draw_index(_status_badge_canvas_item, idx + 3)
-
 func _apply_content_scale() -> void:
 	super._apply_content_scale()
 	_update_effect_transforms()
@@ -1385,7 +1247,6 @@ func _on_focus_entered():
 	else:
 		Input.start_joy_vibration(0, 0.08, 0.03, 0.08)
 
-	_update_status_icon()
 	z_index = 2
 	if _focus_tween:
 		_focus_tween.kill()
@@ -1407,7 +1268,6 @@ func _on_focus_entered():
 
 func _on_focus_exited():
 	_is_focused = false
-	_update_status_icon()
 	z_index = 1
 	_kill_focus_tweens()
 	if _focus_tween:
@@ -1493,7 +1353,7 @@ func _notification(what: int):
 		pivot_offset = size / 2.0
 		if not _badge_update_pending:
 			_badge_update_pending = true
-			call_deferred("_deferred_update_badges")
+			call_deferred("_deferred_update_platform_badge")
 		# _update_media_panel_size(true) is called by the layout system on resize,
 		# which already refreshes the media stack. Avoid a second deferred refresh
 		# that duplicates the work and can stall the render thread.

@@ -71,6 +71,8 @@ func set_game(game: GameResource) -> void:
 		_clear_art()
 		return
 
+	DataManager.cover.note_cover_access(cache_path)
+
 	var cached_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_TEXTURE_SIZE))
 	if cached_tex:
 		_set_art(cached_tex)

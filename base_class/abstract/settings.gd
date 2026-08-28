@@ -54,7 +54,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export var steam_folder := SettingsVar.new(Type.PATH, "", State.ENABLED, "Steam Installation Folder", "Path to your Steam installation (e.g., C:\\Program Files (x86)\\Steam)")
 @export var save_sync_auto := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Auto-sync saves", "Automatically upload saves after playing and download before launch")
 @export var download_speed_profile := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Download Speed", "Higher settings use more network connections per file and more simultaneous downloads", 0.0, 3.0, 1.0, ["Conservative", "Balanced", "Fast", "Unrestricted"])
-@export var cover_cache_max_mb := SettingsVar.new(Type.INT, 256 if OS.has_feature("android") else 512, State.ENABLED, "Cover Cache Limit", "Maximum disk space used for cached cover art; the oldest covers are evicted when the limit is exceeded", 64.0, 4096.0, 64.0, [], false, {"display_unit": " MB"})
+@export var cover_cache_max_mb := SettingsVar.new(Type.INT, 1024, State.ENABLED, "Cover Cache Limit", "Maximum disk space used for cached cover art; the least recently used covers are evicted when the limit is exceeded", 64.0, 4096.0, 64.0, [], false, {"display_unit": " MB"})
 
 # Internal GameNative games list (not displayed in settings menu)
 @export var gamenative_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "GameNative Games")

@@ -112,6 +112,8 @@ func set_game(game: GameResource):
 		clear()
 		return
 
+	DataManager.cover.note_cover_access(cache_path)
+
 	# Check texture cache first
 	var cached_tex = MemorySubManager.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_HERO_TEXTURE_SIZE))
 	if cached_tex:

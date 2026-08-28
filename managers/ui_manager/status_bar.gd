@@ -59,21 +59,15 @@ func _ready() -> void:
 	_background.content_margin_right = h_padding
 	add_theme_stylebox_override("panel", _background)
 
+	# PanelContainer fits each child into the same content rect, so the battery
+	# cluster (right-aligned via expanding spacer) and the clock (center-aligned
+	# over the full width) live in overlapping children. The clock stays dead
+	# center regardless of whether the battery cluster is visible.
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_theme_constant_override("separation", M3Units.dp(6))
 	add_child(hbox)
-
-	var left_spacer := Control.new()
-	left_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(left_spacer)
-
-	_clock_label = Label.new()
-	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_clock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(_clock_label)
 
 	var right_spacer := Control.new()
 	right_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -95,6 +89,13 @@ func _ready() -> void:
 	_battery_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_battery_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(_battery_icon)
+
+	# Added after hbox so it draws on top if the window gets extremely narrow.
+	_clock_label = Label.new()
+	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_clock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_clock_label)
 
 	_poll_timer = Timer.new()
 	_poll_timer.wait_time = POLL_INTERVAL_S

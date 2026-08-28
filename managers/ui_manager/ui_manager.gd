@@ -31,6 +31,7 @@ var _root_control: Control = null  # Plain control, never replaced
 var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orientation change
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 var _content_wrapper: Control = null
+var _status_bar: StatusBar = null
 
 # Cached on-screen keyboard reference (survives reparenting in dual-screen mode)
 var _onscreen_keyboard: PanelContainer = null
@@ -109,12 +110,13 @@ func initialize(
 
 	# Dock the status strip (clock + battery) at the top edge, above the margin
 	# container so it is full-bleed and unaffected by the content margins.
-	var status_bar := StatusBar.new()
+	# Stored as a member: compute_grid_available_size subtracts its height.
+	_status_bar = StatusBar.new()
 	var status_layout := VBoxContainer.new()
 	status_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
 	status_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	status_layout.add_child(status_bar)
+	status_layout.add_child(_status_bar)
 	status_layout.add_child(content_margin)
 
 	_content_wrapper.add_child(status_layout)
@@ -240,6 +242,11 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 	var margin: int = int(M3Units.dp(16))
 	var available_width := maxf(1.0, viewport_size.x - margin * 2)
 	var available_height := maxf(1.0, viewport_size.y - margin * 2)
+
+	# Subtract the docked status bar strip (added above the content margin).
+	if _status_bar and is_instance_valid(_status_bar) and _status_bar.visible:
+		var status_h := maxf(_status_bar.get_combined_minimum_size().y, _status_bar.size.y)
+		available_height -= status_h
 
 	# Subtract navigation bar/rail dimensions.
 	# Use the node's intended minimum size rather than its actual size, because

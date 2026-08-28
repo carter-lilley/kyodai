@@ -148,6 +148,17 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		intent.android_extras = android_template.get("extras", [])
 		intent.android_config = android_template
 		
+		# Xenia special handling - extracted XBLA folders can't be handed to the
+		# emulator as intent data; resolve the launchable file inside instead
+		# (STFS package for XBLA, default.xex for extracted disc games)
+		if launch_manager.registry.get_emulator_architecture(intent.emulator_id) == "xenia" and FSM.dir_exists(intent.rom_path):
+			var android_xenia_launch_file = TitleIDParser.find_xbox360_launch_file(intent.rom_path)
+			if android_xenia_launch_file != "":
+				print("[LaunchIntentManager] Xenia: Using launch file: " + android_xenia_launch_file)
+				intent.rom_path = android_xenia_launch_file
+			else:
+				push_error("[LaunchIntentManager] Xenia: No launchable file in folder: " + intent.rom_path)
+
 		# Vita3K special handling - pass TitleID as command-line args via AppStartParameters
 		# Vita3K expects StringArray extra with key "AppStartParameters" containing ["-r", "TitleID"]
 		var vita_title_id = intent.game.get_active_title_id() if intent.game else ""

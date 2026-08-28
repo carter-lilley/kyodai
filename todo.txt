@@ -13,13 +13,12 @@ x true LRU
 sync breaks on app resume during cover step (then, platform indicators broken until restart)
 x cover step & eviction..?
 
-x xenia crash on shuffle, but works on restart?
-
-x m3textinput field labels overlap with default text
-x battery indicator missing on android?
-grid not vertically OR horizontally centered?
+no details sheet in DS view?
+small screen submenus not showing up
+switchin screens in page view breaks layout
 removing nav shortcut doesnt actually remove it 
 cant touch checkbuttons or some? optionbutton submenus in settings menu
+download copying step
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

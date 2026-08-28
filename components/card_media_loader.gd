@@ -46,6 +46,7 @@ static func preload_cover(game: GameResource) -> void:
 			cache_path = p
 	if cache_path == "":
 		return
+	DataManager.cover.note_cover_access(cache_path)
 	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
 	if SystemManager.memory.get_cached_texture(cache_key):
 		return
@@ -97,6 +98,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		return
 
 	# Memory cache hit: apply immediately without queueing a worker task.
+	DataManager.cover.note_cover_access(cache_path)
 	var cached_tex = SystemManager.memory.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
 	if cached_tex:
 		_emit_texture(cached_tex)

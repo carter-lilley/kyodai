@@ -332,6 +332,7 @@ func prepare_for_game(romm_id: int) -> void:
 
 	# Decode the local cover on a background thread so it's ready if Details is selected.
 	if game.cover_path and FSM.file_exists(game.cover_path):
+		DataManager.cover.note_cover_access(game.cover_path)
 		var cache_key := MemorySubManager.cover_cache_key(game.cover_path, MAX_DETAILS_TEXTURE_SIZE)
 		var cached := MemorySubManager.get_cached_texture(cache_key)
 		if cached:
@@ -577,6 +578,7 @@ func _load_cover(game: GameResource) -> void:
 			cache_path = url_path
 
 	if cache_path != "":
+		DataManager.cover.note_cover_access(cache_path)
 		var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_DETAILS_TEXTURE_SIZE)
 		var cached := MemorySubManager.get_cached_texture(cache_key)
 		if cached:

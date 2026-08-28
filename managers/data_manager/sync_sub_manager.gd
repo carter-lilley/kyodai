@@ -70,6 +70,13 @@ var _sync_covers_counted_set: Dictionary = {}
 # Every cover URL collected during this sync (pending, dispatched, or done)
 var _sync_covers_seen_set: Dictionary = {}
 
+# Max new covers to download this sync, derived from the cache size cap so we
+# don't fetch covers the post-sync eviction pass would immediately delete.
+# Written on the main thread before the sync task starts; budget is only
+# touched on the sync thread, so no locking is needed for either.
+var _sync_cover_cap_bytes: int = 0
+var _sync_covers_budget: int = 0
+
 # Tracks cover downloads that are still in flight so the sync can wait for
 # them before completing.
 var _sync_pending_downloads: int = 0
@@ -241,6 +248,11 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_pending_downloads = 0
 	_sync_pending_downloads_mutex.unlock()
 
+	# Read the cap on the main thread; the sync thread must not touch autoloads.
+	# The budget itself is computed on the sync thread once it starts.
+	_sync_cover_cap_bytes = data_manager.cover.get_max_cache_bytes()
+	_sync_covers_budget = 0
+
 	var enabled = data_manager.database.get_enabled_platforms()
 	print("[Sync] Enabled platforms: %d" % enabled.size())
 
@@ -327,6 +339,11 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		OS.delay_usec(500)
 
 	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
+
+	# Size the cover download budget from the cache cap before any covers are
+	# collected: downloading past the cap only feeds the post-sync eviction.
+	_sync_covers_budget = _compute_cover_download_budget(_sync_cover_cap_bytes)
+	print("[SyncThread] Cover download budget: %d new covers" % _sync_covers_budget)
 
 	for platform_idx in range(enabled_platforms.size()):
 		_sync_current_platform_idx = platform_idx
@@ -542,6 +559,32 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 	)
 
 
+func _compute_cover_download_budget(cap_bytes: int) -> int:
+	"""Sync thread: estimate how many new covers fit under the cache size cap,
+	using the average size of already-cached covers (or a flat estimate when
+	the cache is empty). Raw DirAccess/FileAccess because FSM reaches
+	autoloads unsafely from worker threads."""
+	var total_bytes := 0
+	var file_count := 0
+	var dir := DirAccess.open(CoverSubManager.CACHE_FOLDER)
+	if dir:
+		dir.list_dir_begin()
+		var file_name := dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir():
+				var file := FileAccess.open(CoverSubManager.CACHE_FOLDER + file_name, FileAccess.READ)
+				if file:
+					total_bytes += file.get_length()
+					file.close()
+					file_count += 1
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	var avg_size: int = int(total_bytes / file_count) if file_count > 0 else CoverSubManager.ESTIMATED_COVER_BYTES
+	if avg_size <= 0:
+		avg_size = CoverSubManager.ESTIMATED_COVER_BYTES
+	return maxi(0, int((cap_bytes - total_bytes) / avg_size))
+
+
 func _process_cover_download_phase() -> void:
 	"""Download all collected and backfill covers as a sync phase.
 
@@ -554,11 +597,19 @@ func _process_cover_download_phase() -> void:
 	# 1. Query distinct cover URLs already in the library whose image files are
 	#    not cached on disk. Covers collected during the sync were already
 	#    dispatched incrementally by _process_batch_sync.
+	#    Ranked by favorites, then recently played, then recently updated (ISO
+	#    text timestamps sort chronologically; empty strings sink under DESC)
+	#    so a tight budget goes to the covers the user is most likely to see.
 	var rows = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_array(
-					"SELECT DISTINCT cover_url FROM games WHERE cover_url != '' AND cover_url IS NOT NULL"
+					"""SELECT cover_url, MAX(is_favorite) AS fav,
+						MAX(COALESCE(last_played, '')) AS lp,
+						MAX(COALESCE(last_updated, '')) AS lu
+					FROM games WHERE cover_url != '' AND cover_url IS NOT NULL
+					GROUP BY cover_url
+					ORDER BY fav DESC, lp DESC, lu DESC, cover_url ASC"""
 				),
 			func(result: Array):
 				callback.call(result)
@@ -569,10 +620,12 @@ func _process_cover_download_phase() -> void:
 		rows = []
 
 	# Only count URLs not already collected during the sync toward the
-	# progress total.
+	# progress total, and only while the download budget lasts.
 	var backfill_urls: Array[String] = []
 	_sync_covers_mutex.lock()
 	for row in rows:
+		if _sync_covers_budget <= 0:
+			break
 		var url = row.get("cover_url", "")
 		if url == "" or not url.begins_with("http"):
 			continue
@@ -582,15 +635,25 @@ func _process_cover_download_phase() -> void:
 		if FSM.file_exists(cache_path):
 			continue
 		_sync_covers_seen_set[url] = true
+		_sync_covers_budget -= 1
 		_sync_total += 1  # Each unique backfill cover is also a work unit
 		backfill_urls.append(url)
 	_sync_covers_mutex.unlock()
 
 	var cover_total = backfill_urls.size()
+	print("[SyncThread] Cover download phase: %d backfill covers to process" % cover_total)
+
+	# Skip the Covers phase entirely rather than showing an empty progress
+	# step - but only when no interleaved covers from the platform loop are
+	# still waiting to be dispatched and drained below.
+	_sync_covers_mutex.lock()
+	var leftover_pending := _sync_covers_pending.size()
+	_sync_covers_mutex.unlock()
+	if cover_total == 0 and leftover_pending == 0:
+		return
 
 	_sync_platform = "Covers"
 	_sync_platform_index = _sync_platform_count + 1
-	print("[SyncThread] Cover download phase: %d backfill covers to process" % cover_total)
 
 	# Emit progress so the total includes the new cover work.
 	var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
@@ -872,14 +935,16 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var _db_time = Time.get_ticks_msec() - db_start
 
 	# Phase 3: Collect unique cover URLs and queue them for interleaved
-	# dispatch during the sync.
+	# dispatch during the sync. Gated on the download budget so we never fetch
+	# covers that the post-sync eviction pass would immediately delete.
 	var cover_start = Time.get_ticks_msec()
 	var new_urls: Array[String] = []
 	_sync_covers_mutex.lock()
 	for game in games:
 		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
-			if not _sync_covers_seen_set.has(game.cover_url):
+			if not _sync_covers_seen_set.has(game.cover_url) and _sync_covers_budget > 0:
 				_sync_covers_seen_set[game.cover_url] = true
+				_sync_covers_budget -= 1
 				_sync_total += 1  # Each unique cover is a download work unit
 				new_urls.append(game.cover_url)
 	for url in new_urls:
