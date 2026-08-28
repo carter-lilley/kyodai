@@ -437,7 +437,8 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	"""Show the standard game context menu."""
 	var items: Array[Dictionary] = [
 		{"id": "launch", "text": "Launch", "icon": "play"},
-		{"id": "details", "text": "Details", "icon": "information"}
+		{"id": "details", "text": "Details", "icon": "information"},
+		{"id": "add_to_collection", "text": "Add to Collection", "icon": "folder-plus"}
 	]
 
 	# Add delete option only if game is downloaded and show_delete is true
@@ -457,6 +458,15 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 		_game_details_sheet.prepare_for_game(romm_id)
 
 	return show_context_menu(items, anchor, {"romm_id": romm_id})
+
+func show_add_to_collection_picker(romm_id: int) -> void:
+	"""Open the collection picker to add a game to a RomM collection."""
+	var picker := CollectionPicker.new()
+	picker.configure_for_add(DataManager.get_collection_ids_for_rom(romm_id))
+	picker.collection_selected.connect(func(collection_id: int, _collection_name: String):
+		DataManager.add_rom_to_collection(romm_id, collection_id)
+	)
+	picker.show_overlay()
 
 func dismiss_modal() -> void:
 	"""Dismiss the active menu if one exists.

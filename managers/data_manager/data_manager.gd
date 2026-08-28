@@ -220,6 +220,14 @@ func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
 	return collections.get_romm_ids_for_collection(romm_id)
 
 
+func get_collection_ids_for_rom(romm_id: int) -> Array[int]:
+	return collections.get_collection_ids_for_rom(romm_id)
+
+
+func add_rom_to_collection(romm_id: int, collection_id: int, callback: Callable = Callable()) -> void:
+	collections.add_rom_to_collection(romm_id, collection_id, callback)
+
+
 func get_favorite_collection_id() -> int:
 	return collections.get_favorite_collection_id()
 

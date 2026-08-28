@@ -7,25 +7,42 @@ signal collection_selected(collection_id: int, collection_name: String)
 var _option_button: M3OptionButton = null
 var _refresh_hint: Label = null
 var _collections: Array[Dictionary] = []
-var _pinned_ids: Array[int] = []
+var _disabled_ids: Array[int] = []
 var _is_syncing: bool = false
+
+var dialog_title: String = "Pin Collection"
+var dialog_body: String = "Choose a RomM collection to pin to the navigation bar."
+var confirm_label: String = "Pin"
+var all_disabled_placeholder: String = "All collections already pinned"
+var option_icon: String = "star"
 
 func _init():
 	super._init()
-	title_text = "Pin Collection"
 	dismissible = true
 	disable_default_action = true
 
 func _ready():
 	super._ready()
+	title_text = dialog_title
 	_build_content()
 	_add_actions()
 	_load_collections()
 	_refresh_collections()
 
-func set_pinned_ids(ids: Array[int]) -> void:
-	_pinned_ids = ids.duplicate()
+func set_disabled_ids(ids: Array[int]) -> void:
+	_disabled_ids = ids.duplicate()
 	_update_option_items()
+
+func set_pinned_ids(ids: Array[int]) -> void:
+	set_disabled_ids(ids)
+
+func configure_for_add(disabled_ids: Array[int]) -> void:
+	dialog_title = "Add to Collection"
+	dialog_body = "Choose a RomM collection to add this game to."
+	confirm_label = "Add"
+	all_disabled_placeholder = "Already in all collections"
+	option_icon = "folder-plus"
+	set_disabled_ids(disabled_ids)
 
 func _build_content() -> void:
 	if not content_slot:
@@ -37,14 +54,14 @@ func _build_content() -> void:
 	content_slot.add_child(vbox)
 	
 	var body = Label.new()
-	body.text = "Choose a RomM collection to pin to the navigation bar."
+	body.text = dialog_body
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(body)
 	
 	_option_button = M3OptionButton.new()
 	_option_button.placeholder_text = "Select a collection..."
-	_option_button.leading_icon = "star"
+	_option_button.leading_icon = option_icon
 	_option_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_option_button.item_selected.connect(_on_collection_selected)
 	vbox.add_child(_option_button)
@@ -59,12 +76,12 @@ func _build_content() -> void:
 
 func _add_actions() -> void:
 	add_action("Cancel", _on_cancel, false)
-	add_action("Pin", _on_pin, true)
+	add_action(confirm_label, _on_confirm, true)
 
 func _on_cancel() -> void:
 	dismiss()
 
-func _on_pin() -> void:
+func _on_confirm() -> void:
 	if _option_button == null:
 		return
 	var selected_idx = _option_button.selected
@@ -99,7 +116,7 @@ func _update_option_items() -> void:
 		var collection = _collections[i]
 		var id = collection.get("id", 0)
 		var collection_name = collection.get("name", "")
-		var disabled = id == 0 or _pinned_ids.has(id)
+		var disabled = id == 0 or _disabled_ids.has(id)
 		_option_button.add_item(collection_name, id)
 		if disabled:
 			_option_button.set_item_disabled(i, true)
@@ -107,7 +124,7 @@ func _update_option_items() -> void:
 			valid_count += 1
 	
 	if valid_count == 0 and _collections.size() > 0:
-		_option_button.placeholder_text = "All collections already pinned"
+		_option_button.placeholder_text = all_disabled_placeholder
 	elif _collections.size() == 0:
 		_option_button.placeholder_text = "No collections available"
 	else:
@@ -134,11 +151,10 @@ func _set_refresh_hint(p_visible: bool) -> void:
 
 func _on_action_pressed(label: String) -> void:
 	action_pressed.emit(label)
-	match label:
-		"Pin":
-			_on_pin()
-		"Cancel":
-			_on_cancel()
+	if label == confirm_label:
+		_on_confirm()
+	elif label == "Cancel":
+		_on_cancel()
 
 func _on_close_button_pressed() -> void:
 	dismiss()

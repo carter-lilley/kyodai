@@ -383,6 +383,9 @@ func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
 func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
 	return overlay.show_game_context_menu(romm_id, anchor, show_delete)
 
+func show_add_to_collection_picker(romm_id: int) -> void:
+	overlay.show_add_to_collection_picker(romm_id)
+
 func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dictionary = {}) -> String:
 	return overlay.show_context_menu(items, anchor, context)
 

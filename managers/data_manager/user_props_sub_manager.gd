@@ -241,6 +241,15 @@ func _flush_next(pending: Array[Dictionary], index: int) -> void:
 	var payload: Dictionary = entry["payload"]
 	var advance := func(): _flush_next(pending, index + 1)
 
+	if kind.begins_with(CollectionSubManager.COLLECTION_ADD_KIND_PREFIX):
+		var collection_id := int(kind.split(":")[1])
+		SystemManager.network.add_roms_to_collection(collection_id, [romm_id], func(_data, error):
+			if error == "":
+				data_manager.database.clear_pending_props(romm_id, kind)
+			advance.call()
+		)
+		return
+
 	match kind:
 		"props":
 			var props: Dictionary = payload.get("props", {})

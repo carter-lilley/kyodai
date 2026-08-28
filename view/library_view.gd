@@ -655,6 +655,8 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 	match item_id:
 		"details":
 			UIManager.show_game_details(romm_id)
+		"add_to_collection":
+			UIManager.show_add_to_collection_picker(romm_id)
 		"launch":
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:

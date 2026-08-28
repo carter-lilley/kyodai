@@ -1480,6 +1480,17 @@ func get_romm_ids_for_collection(romm_id: int) -> Array[int]:
 	return rom_ids
 
 
+func get_collection_ids_for_rom(romm_id: int) -> Array[int]:
+	"""Return ids of collections that already contain this ROM."""
+	var collection_ids: Array[int] = []
+	if not _is_db_ready:
+		return collection_ids
+	var query_result = query_array("SELECT collection_id FROM collection_roms WHERE romm_id = ?", [romm_id])
+	for row in query_result:
+		collection_ids.append(int(row.get("collection_id", 0)))
+	return collection_ids
+
+
 func get_games_for_collection_count(romm_id: int) -> int:
 	"""Count how many synced games are in this collection."""
 	if not _is_db_ready:

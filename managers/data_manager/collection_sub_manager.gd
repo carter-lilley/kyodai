@@ -7,6 +7,10 @@ var data_manager: Node
 
 signal collections_synced(success: bool, message: String)
 
+## Pending-sync queue kind for collection membership adds; the collection id is
+## embedded in the kind so one ROM can queue adds to multiple collections.
+const COLLECTION_ADD_KIND_PREFIX := "collection_add:"
+
 var _is_syncing: bool = false
 
 func _ready() -> void:
@@ -48,6 +52,12 @@ func sync_collections(callback: Callable = Callable()) -> void:
 		data_manager.database.clear_all_collections()
 		for collection in collections:
 			_save_collection(collection)
+
+		# Re-apply locally queued collection adds so pending offline edits win
+		for entry in data_manager.database.get_pending_props_sync():
+			var kind := str(entry["kind"])
+			if kind.begins_with(COLLECTION_ADD_KIND_PREFIX):
+				data_manager.database.add_collection_roms(int(kind.split(":")[1]), [entry["romm_id"]])
 
 		_is_syncing = false
 		print("[CollectionSubManager] Synced %d collections" % collections.size())
@@ -129,6 +139,46 @@ func is_syncing() -> bool:
 	return _is_syncing
 
 
-# Future: add/remove ROMs from a collection and push to server.
-# func add_roms_to_collection(romm_id: int, rom_ids: Array[int], callback: Callable = Callable()) -> void:
-# func remove_roms_from_collection(romm_id: int, rom_ids: Array[int], callback: Callable = Callable()) -> void:
+func get_collection_ids_for_rom(romm_id: int) -> Array[int]:
+	if not data_manager or not data_manager.database.is_database_ready():
+		return []
+	return data_manager.database.get_collection_ids_for_rom(romm_id)
+
+
+## Add a ROM to a collection: apply locally, push to RomM, and queue the write
+## for retry when the push fails (offline etc.), mirroring the favourites flow.
+func add_rom_to_collection(romm_id: int, collection_id: int, callback: Callable = Callable()) -> void:
+	if not data_manager or not data_manager.database.is_database_ready() or collection_id == 0:
+		if callback.is_valid():
+			callback.call(false)
+		return
+
+	var collection_name: String = get_collection(collection_id).get("name", "")
+
+	data_manager.database.add_collection_roms(collection_id, [romm_id])
+
+	if not SystemManager.network.is_online():
+		_queue_collection_add(romm_id, collection_id)
+		_notify("Saved - will sync to RomM when back online", SystemManager.notifications.Type.WARNING)
+		if callback.is_valid():
+			callback.call(false)
+		return
+
+	SystemManager.network.add_roms_to_collection(collection_id, [romm_id], func(_data, error):
+		if error != "":
+			_queue_collection_add(romm_id, collection_id)
+			_notify("Saved - will sync to RomM when back online", SystemManager.notifications.Type.WARNING)
+		else:
+			_notify("Added to " + collection_name if collection_name != "" else "Added to collection", SystemManager.notifications.Type.SUCCESS)
+		if callback.is_valid():
+			callback.call(error == "")
+	)
+
+
+func _queue_collection_add(romm_id: int, collection_id: int) -> void:
+	data_manager.database.queue_pending_props(romm_id, COLLECTION_ADD_KIND_PREFIX + str(collection_id), {})
+
+
+func _notify(message: String, type: int) -> void:
+	if SystemManager.notifications:
+		SystemManager.notifications.show_notification(message, type)
