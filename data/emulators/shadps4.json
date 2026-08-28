@@ -5,6 +5,10 @@
 	"name": "shadPS4",
 	"platforms": [
       "ps4"
+	],
+	"os": [
+      "windows",
+      "linux"
 	]
   },
   "requires_working_dir": true,
@@ -48,9 +52,6 @@
 		  "--fullscreen",
           "true"
 		]
-	  },
-	  "android": {
-		"action_type": "none"
 	  }
 	}
   },
@@ -67,9 +68,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "shadps4-emu/shadPS4",
 		  "asset_pattern": "shadps4-linux-sdl-.*\\.zip"
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -93,9 +91,6 @@
 			"action_type": "file_exists",
 			"file": "shadps4"
 		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -111,9 +106,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "shadps4-emu/shadps4-qtlauncher",
 		  "asset_pattern": "shadPS4QtLauncher-linux-qt-.*\\.zip"
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -137,9 +129,6 @@
 			"action_type": "file_exists",
 			"file": "shadPS4QtLauncher"
 		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -169,9 +158,6 @@
 			"action_type": "folder_exists",
 			"path": "user/savedata/1"
 		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -207,9 +193,6 @@
               "user/config.toml"
 			]
 		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	}

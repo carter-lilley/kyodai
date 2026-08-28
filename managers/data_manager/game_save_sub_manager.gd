@@ -259,9 +259,14 @@ func _init_strategies() -> void:
 	}
 
 func _get_strategy(emulator_id: String, strategy_name: String) -> Callable:
-	if not _emulator_strategies.has(emulator_id):
+	# Strategies are keyed by architecture family so forks (nethersx2,
+	# x360-mobile, ...) share their parent emulator's save handling.
+	var key = emulator_id
+	if not _emulator_strategies.has(key):
+		key = LaunchManager.registry.get_emulator_architecture(emulator_id)
+	if not _emulator_strategies.has(key):
 		return Callable()
-	var strategies = _emulator_strategies[emulator_id] as Dictionary
+	var strategies = _emulator_strategies[key] as Dictionary
 	if not strategies.has(strategy_name):
 		return Callable()
 	return strategies[strategy_name] as Callable
@@ -710,7 +715,7 @@ func _compute_local_save_hash(emulator_id: String, game: GameResource, local_sav
 ## Root folder name used by the emulator's upload zip. Must mirror the
 ## strategy "zip" lambdas so simulated hashes match the uploaded bytes.
 func _get_upload_zip_root_name(emulator_id: String, game: GameResource, src_path: String) -> String:
-	match emulator_id:
+	match LaunchManager.registry.get_emulator_architecture(emulator_id):
 		"cemu":
 			return _get_save_identity(game).id
 		"pcsx2", "ppsspp", "vita3k", "rpcs3", "shadps4", "xenia":
@@ -2004,7 +2009,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 				if not extract_success:
 					on_done.call(false)
 					return
-				if emulator_id == "pcsx2":
+				if LaunchManager.registry.get_emulator_architecture(emulator_id) == "pcsx2":
 					ensure_pcsx2_superblock(save_dir)
 				_record_sync_boundary(game, emulator_id, file_name, boundary_path, current_timestamp, save_id, remote.get("content_hash", ""))
 				# Small delay to let the filesystem settle before emulator launch

@@ -7,6 +7,15 @@ const REGISTRY_DIR := "res://data/emulators/"
 const PLATFORMS_PATH := "res://data/platforms.json"
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
+## Renamed emulator ids mapped to their canonical successors.
+const LEGACY_ID_ALIASES := {
+	"xenia": "xenia-edge",
+}
+
+## Maps a possibly-legacy emulator id to its canonical id.
+func canonicalize_emulator_id(emulator_id: String) -> String:
+	return LEGACY_ID_ALIASES.get(emulator_id, emulator_id)
+
 ## Returns the configured emulators directory from settings, or default if not set
 func get_emulators_directory() -> String:
 	if DataManager:
@@ -50,11 +59,16 @@ func _load_registry():
 			platforms_file.close()
 			if platforms_error == OK:
 				_platforms_data = platforms_json.data
+				var platform_name = SystemManager.platform.get_platform_name().to_lower()
 				for platform_id in _platforms_data.keys():
 					if platform_id.begins_with("_"):
 						continue
 					var platform = _platforms_data[platform_id]
 					var default_emulator = platform.get("default_emulator", "")
+					# default_emulator may be a plain id or a per-OS map
+					# ({ "_default": "xemu", "android": "hakux" })
+					if default_emulator is Dictionary:
+						default_emulator = default_emulator.get(platform_name, default_emulator.get("_default", ""))
 					if default_emulator != "":
 						_platform_defaults[platform_id] = default_emulator
 	
@@ -76,48 +90,128 @@ func _load_registry():
 						var emulator_id = emulator_data.get("meta", {}).get("id", "")
 						if emulator_id != "":
 							_emulator_registry[emulator_id] = emulator_data
-							
-							# For platforms without an explicit default, use first available emulator
-							var platforms = emulator_data.get("meta", {}).get("platforms", [])
-							for platform in platforms:
-								if not _platform_defaults.has(platform):
-									_platform_defaults[platform] = emulator_id
 			file_name = dir.get_next()
-		
+
+		# Resolve platform defaults now that availability is known: drop
+		# defaults pointing at emulators unavailable on this OS, then fill
+		# gaps with the first available emulator claiming each platform.
+		for platform_id in _platform_defaults.keys():
+			if not is_emulator_available(_platform_defaults[platform_id]):
+				_platform_defaults.erase(platform_id)
+		for emulator_id in _emulator_registry.keys():
+			if not is_emulator_available(emulator_id):
+				continue
+			var platforms = _emulator_registry[emulator_id].get("meta", {}).get("platforms", [])
+			for platform in platforms:
+				if not _platform_defaults.has(platform):
+					_platform_defaults[platform] = emulator_id
+
+		_migrate_legacy_emulator_state()
+
 		launch_manager.emulator_registry_loaded.emit(true)
 	else:
 		push_error("[RegistryManager] Failed to open emulators directory: " + REGISTRY_DIR)
 		launch_manager.emulator_registry_loaded.emit(false)
+
+## One-time, idempotent migration for renamed emulator ids: moves install
+## directories and remaps stored settings keys to the canonical ids.
+func _migrate_legacy_emulator_state() -> void:
+	var settings_dirty := false
+	for legacy_id in LEGACY_ID_ALIASES.keys():
+		var canonical_id: String = LEGACY_ID_ALIASES[legacy_id]
+
+		# Install directory: user://emulators/<legacy> -> <canonical>
+		var legacy_dir = _get_emulator_directory(legacy_id)
+		var canonical_dir = _get_emulator_directory(canonical_id)
+		if FSM.dir_exists(legacy_dir) and not FSM.dir_exists(canonical_dir):
+			if FSM.move(legacy_dir, canonical_dir):
+				print("[RegistryManager] Migrated emulator directory: " + legacy_id + " -> " + canonical_id)
+			else:
+				push_warning("[RegistryManager] Failed to migrate emulator directory: " + legacy_dir)
+
+		if not DataManager:
+			continue
+
+		# installed_emulator_versions
+		var version_setting = DataManager.get_setting("installed_emulator_versions")
+		if version_setting and version_setting.value is Dictionary:
+			var versions: Dictionary = version_setting.value
+			if versions.has(legacy_id):
+				versions[canonical_id] = versions[legacy_id]
+				versions.erase(legacy_id)
+				DataManager.set_setting(versions, version_setting, true)
+				settings_dirty = true
+
+		# enabled_platforms per-platform emulator selections
+		var platforms_setting = DataManager.get_setting("enabled_platforms")
+		if platforms_setting and platforms_setting.value is Dictionary:
+			var enabled: Dictionary = platforms_setting.value
+			var changed := false
+			for slug in enabled.keys():
+				var config = enabled[slug]
+				if config is Dictionary and config.get("emulator_id", "") == legacy_id:
+					config["emulator_id"] = canonical_id
+					changed = true
+			if changed:
+				DataManager.set_setting(enabled, platforms_setting, true)
+				settings_dirty = true
+
+	if settings_dirty:
+		DataManager.save_settings()
+		print("[RegistryManager] Migrated legacy emulator settings")
 
 func _ensure_emulators_directory():
 	var dir = DirAccess.open("user://")
 	if dir and not dir.dir_exists("emulators"):
 		dir.make_dir("emulators")
 
+## Returns true if an emulator can run on the current OS.
+## Reads meta.os; falls back to launch.platforms keys for legacy files.
+func is_emulator_available(emulator_id: String) -> bool:
+	if not _emulator_registry.has(emulator_id):
+		return false
+	var emulator = _emulator_registry[emulator_id]
+	var platform_name = SystemManager.platform.get_platform_name().to_lower()
+	var supported_os = emulator.get("meta", {}).get("os", [])
+	if not supported_os.is_empty():
+		return platform_name in supported_os
+	return emulator.get("launch", {}).get("platforms", {}).has(platform_name)
+
+## Gets the architecture family for an emulator (e.g. "xenia" for
+## xenia-edge and x360-mobile). Defaults to the emulator id itself.
+func get_emulator_architecture(emulator_id: String) -> String:
+	if not _emulator_registry.has(emulator_id):
+		return emulator_id
+	return _emulator_registry[emulator_id].get("meta", {}).get("architecture", emulator_id)
+
 ## Gets all available emulators from registry
 func get_all_emulators() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	
+
 	for emulator_id in _emulator_registry.keys():
+		if not is_emulator_available(emulator_id):
+			continue
 		var emulator = _emulator_registry[emulator_id].duplicate()
 		emulator["id"] = emulator_id
 		result.append(emulator)
-	
+
 	return result
 
 ## Gets emulators that support a specific platform
 func get_emulators_for_platform(platform_slug: String) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	
+
 	for emulator_id in _emulator_registry.keys():
+		if not is_emulator_available(emulator_id):
+			continue
 		var emulator = _emulator_registry[emulator_id]
 		var platforms = emulator.get("meta", {}).get("platforms", [])
-		
+
 		if platform_slug in platforms:
 			var emu_copy = emulator.duplicate()
 			emu_copy["id"] = emulator_id
 			result.append(emu_copy)
-	
+
 	return result
 
 ## Gets the default emulator for a platform

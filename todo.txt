@@ -9,6 +9,8 @@ submenus still suck
 add downloads screen
 ship w music?
 cover step & eviction..?
+reroll should skip while waiting
+xenia crash on shuffle, but works on restart?
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

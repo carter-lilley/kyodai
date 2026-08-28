@@ -5,6 +5,11 @@
 	"name": "Azahar",
 	"platforms": [
       "3ds"
+	],
+	"os": [
+      "windows",
+      "linux",
+      "android"
 	]
   },
   "paths": {

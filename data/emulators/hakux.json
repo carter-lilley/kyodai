@@ -1,0 +1,67 @@
+{
+  "suspend_method": "tcp",
+  "meta": {
+	"id": "hakux",
+	"name": "hakuX",
+	"architecture": "xemu",
+	"platforms": [
+      "xbox"
+	],
+	"os": [
+      "android"
+	]
+  },
+  "requires_working_dir": true,
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {},
+		"extensions": [],
+		"uses_folder_saves": false
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "android": "{emulator_dir}"
+		}
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "com.rfandango.haku_x",
+		"class": "com.rfandango.haku_x.LauncherActivity",
+		"rom_delivery": "intent_data"
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "rfandango/hakuX",
+		  "asset_pattern": "app-.*\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "com.rfandango.haku_x",
+		  "expected_file": "app-release.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "com.rfandango.haku_x"
+		  }
+		}
+	  }
+	}
+  ]
+}

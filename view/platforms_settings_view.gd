@@ -598,6 +598,10 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 	if platform_config is Dictionary:
 		emulator_id = platform_config.get("emulator_id", "")
 		core_id = platform_config.get("core_id", "")
+	# Drop stale selections that no longer exist on this OS
+	emulator_id = LaunchManager.registry.canonicalize_emulator_id(emulator_id)
+	if emulator_id != "" and not LaunchManager.registry.is_emulator_available(emulator_id):
+		emulator_id = ""
 	card.selected_emulator = emulator_id
 	card.selected_core_id = core_id
 

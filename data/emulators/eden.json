@@ -5,6 +5,11 @@
 	"name": "Eden",
 	"platforms": [
       "switch"
+	],
+	"os": [
+      "windows",
+      "linux",
+      "android"
 	]
   },
   "paths": {

@@ -5,14 +5,17 @@
 	"name": "Cemu",
 	"platforms": [
       "wiiu"
+	],
+	"os": [
+      "windows",
+      "linux"
 	]
   },
   "paths": {
 	"saves": {
 	  "_default": {
 		"directories": {
-		  "windows": "{emulator_dir}/portable/mlc01/usr/save/00050000",
-		  "android": "{app_data}/mlc01/usr/save/00050000"
+		  "windows": "{emulator_dir}/portable/mlc01/usr/save/00050000"
 		},
 		"extensions": [
           "*"
@@ -47,11 +50,6 @@
 		  "{rom}",
           "-f"
 		]
-	  },
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "info.cemu.cemu",
-		"rom_delivery": "intent_data"
 	  }
 	}
   },
@@ -68,11 +66,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "cemu-project/Cemu",
 		  "asset_pattern": "cemu-.*-linux\\.AppImage"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "SSimco/Cemu",
-		  "asset_pattern": "Cemu-.*\\.apk"
 		}
 	  }
 	},
@@ -93,15 +86,6 @@
 		  "validate": {
 			"action_type": "file_exists",
 			"file": "cemu.AppImage"
-		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "info.cemu.cemu",
-		  "expected_file": "Cemu-*.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "info.cemu.cemu"
 		  }
 		}
 	  }

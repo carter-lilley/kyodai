@@ -5,6 +5,10 @@
 	"name": "Xemu",
 	"platforms": [
       "xbox"
+	],
+	"os": [
+	  "windows",
+      "linux"
 	]
   },
   "requires_working_dir": true,
@@ -20,8 +24,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}",
-		  "android": "{emulator_dir}"
+		  "linux": "{emulator_dir}"
 		}
 	  }
 	}
@@ -46,12 +49,6 @@
 		  "-dvd_path",
           "{rom}"
 		]
-	  },
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "com.rfandango.haku_x",
-		"class": "com.rfandango.haku_x.LauncherActivity",
-		"rom_delivery": "intent_data"
 	  }
 	}
   },
@@ -68,11 +65,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "xemu-project/xemu",
 		  "asset_pattern": "xemu-.*-x86_64\\.AppImage"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "rfandango/hakuX",
-		  "asset_pattern": "app-.*\\.apk"
 		}
 	  }
 	},
@@ -93,15 +85,6 @@
 		  "validate": {
 			"action_type": "file_exists",
 			"file": "xemu"
-		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "com.rfandango.haku_x",
-		  "expected_file": "app-release.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "com.rfandango.haku_x"
 		  }
 		}
 	  }
@@ -138,9 +121,6 @@
               "xemu.toml"
 			]
 		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	}

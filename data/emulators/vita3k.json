@@ -5,6 +5,11 @@
 	"name": "Vita3K",
 	"platforms": [
       "psvita"
+	],
+	"os": [
+      "windows",
+      "linux",
+      "android"
 	]
   },
   "paths": {

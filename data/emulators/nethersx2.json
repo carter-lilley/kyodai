@@ -1,0 +1,107 @@
+{
+  "suspend_method": "suspend",
+  "meta": {
+	"id": "nethersx2",
+	"name": "NetherSX2",
+	"architecture": "pcsx2",
+	"platforms": [
+      "ps2"
+	],
+	"os": [
+      "android"
+	]
+  },
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "android": "{app_data}/memcards/main.ps2"
+		},
+		"extensions": [
+          "*"
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "android": "{app_data}"
+		}
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "android": {
+		"action": "android.intent.action.MAIN",
+		"package": "xyz.aethersx2.android",
+		"class": "xyz.aethersx2.android.EmulationActivity",
+		"rom_delivery": "extra",
+		"extras": [
+		  {
+			"key": "bootPath",
+			"value": "{rom}",
+			"type": "file_path"
+		  }
+		]
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "Trixarian/NetherSX2-patch",
+		  "asset_pattern": "NetherSX2-.*-.*\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "xyz.aethersx2.android",
+		  "expected_file": "NetherSX2-*.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "xyz.aethersx2.android"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_memcards_dir",
+	  "platforms": {
+		"android": {
+		  "action_type": "create_folders",
+		  "folders": [
+            "{app_data}/memcards/main.ps2"
+		  ],
+		  "validate": {
+			"action_type": "folder_exists",
+			"path": "{app_data}/memcards/main.ps2"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_superblock",
+	  "platforms": {
+		"android": {
+		  "action_type": "create_pcsx2_superblock",
+		  "path": "memcards/main.ps2",
+		  "validate": {
+			"action_type": "files_exist",
+			"files": [
+              "{app_data}/memcards/main.ps2/_pcsx2_superblock"
+			]
+		  }
+		}
+	  }
+	}
+  ]
+}

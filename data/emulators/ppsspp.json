@@ -5,6 +5,10 @@
 	"name": "PPSSPP",
 	"platforms": [
       "psp"
+	],
+	"os": [
+      "windows",
+      "android"
 	]
   },
   "paths": {

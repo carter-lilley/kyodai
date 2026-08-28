@@ -1,0 +1,78 @@
+{
+  "suspend_method": "suspend",
+  "meta": {
+	"id": "melonds-android",
+	"name": "melonDS Android",
+	"architecture": "melonds",
+	"platforms": [
+      "nds"
+	],
+	"os": [
+      "android"
+	]
+  },
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "android": "{app_data}/saves"
+		},
+		"extensions": [
+          ".sav"
+		],
+		"uses_folder_saves": false
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {
+		  "android": "{emulator_dir}"
+		}
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "android": {
+		"action": "me.magnum.melonds.nightly.LAUNCH_ROM",
+		"package": "me.magnum.melonds.nightly",
+		"class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
+		"rom_delivery": "intent_data",
+		"extras": [
+		  {
+			"key": "uri",
+			"value": "{rom}",
+			"type": "content_uri"
+		  }
+		]
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "rafaelvcaetano/melonDS-android",
+		  "asset_pattern": "app-gitHub-nightly-release\\.apk",
+		  "release_tag": "nightly-release"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "me.magnum.melonds.nightly",
+		  "expected_file": "app-gitHub-nightly-release.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "me.magnum.melonds.nightly"
+		  }
+		}
+	  }
+	}
+  ]
+}

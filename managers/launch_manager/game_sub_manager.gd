@@ -85,8 +85,10 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 				temp_intent.rom_path = m3u_path
 
 	var result = true
-	
-	match emulator_id:
+
+	# Dispatch prep on architecture family so forks (nethersx2, aps3e,
+	# x360-mobile, ...) share their parent emulator's preparation logic.
+	match launch_manager.registry.get_emulator_architecture(emulator_id):
 		"azahar":
 			print("[GameManager] _prepare_game_for_launch: Preparing Azahar game...")
 			result = _prepare_azahar_game(game, temp_intent)

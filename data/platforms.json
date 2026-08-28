@@ -184,7 +184,10 @@
 	},
 	"nds": {
 		"name": "Nds",
-		"default_emulator": "melonds",
+		"default_emulator": {
+			"_default": "melonds",
+			"android": "melonds-android"
+		},
 		"firmware": {
 			"expected_files": [
 				"bios7.bin",
@@ -241,7 +244,10 @@
 	},
 	"ps2": {
 		"name": "Ps2",
-		"default_emulator": "pcsx2",
+		"default_emulator": {
+			"_default": "pcsx2",
+			"android": "nethersx2"
+		},
 		"firmware": {
 			"expected_files": [
 				"bios/ps2-0200a-20040614.bin",
@@ -252,7 +258,10 @@
 	},
 	"ps3": {
 		"name": "Ps3",
-		"default_emulator": "rpcs3",
+		"default_emulator": {
+			"_default": "rpcs3",
+			"android": "armsx3"
+		},
 		"firmware": {
 			"expected_files": [
 				"dev_flash/vsh/etc/index.dat"
@@ -398,7 +407,10 @@
 	},
 	"wiiu": {
 		"name": "Wiiu",
-		"default_emulator": "cemu",
+		"default_emulator": {
+			"_default": "cemu",
+			"android": "cemu-android"
+		},
 		"firmware": {
 
 		}
@@ -415,7 +427,10 @@
 	},
 	"xbox": {
 		"name": "Xbox",
-		"default_emulator": "xemu",
+		"default_emulator": {
+			"_default": "xemu",
+			"android": "hakux"
+		},
 		"firmware": {
 			"expected_files": [
 				"Complex_4627.bin",
@@ -425,7 +440,10 @@
 	},
 	"xbox360": {
 		"name": "Xbox360",
-		"default_emulator": "xenia",
+		"default_emulator": {
+			"_default": "xenia-edge",
+			"android": "xendroid"
+		},
 		"firmware": {
 
 		}

@@ -1,0 +1,69 @@
+{
+  "suspend_method": "suspend",
+  "meta": {
+	"id": "xendroid",
+	"name": "XenDroid",
+	"architecture": "xenia",
+	"platforms": [
+      "xbox360"
+	],
+	"os": [
+      "android"
+	]
+  },
+  "paths": {
+	"saves": {
+	  "_default": {
+		"directories": {
+		  "android": "{app_data}/content"
+		},
+		"extensions": [
+          ".zip"
+		],
+		"uses_folder_saves": true
+	  }
+	},
+	"firmware": {
+	  "_default": {
+		"directories": {}
+	  }
+	}
+  },
+  "launch": {
+	"platforms": {
+	  "android": {
+		"action": "android.intent.action.VIEW",
+		"package": "xendroid.compose",
+		"class": "xendroid.compose.EmulatorHostActivity",
+		"rom_delivery": "intent_data",
+		"mime_type": "application/octet-stream"
+	  }
+	}
+  },
+  "install": [
+	{
+	  "step": "download_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "download_repo",
+		  "github_repo": "rfandango/XenDroid",
+		  "asset_pattern": "XenDroid_Release_.*\\.apk"
+		}
+	  }
+	},
+	{
+	  "step": "install_emulator",
+	  "platforms": {
+		"android": {
+		  "action_type": "apk_install",
+		  "package_name": "xendroid.compose",
+		  "expected_file": "XenDroid_Release_*.apk",
+		  "validate": {
+			"action_type": "package_installed",
+			"package": "xendroid.compose"
+		  }
+		}
+	  }
+	}
+  ]
+}

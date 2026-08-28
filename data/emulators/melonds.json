@@ -5,6 +5,10 @@
 	"name": "melonDS",
 	"platforms": [
       "nds"
+	],
+	"os": [
+      "windows",
+      "linux"
 	]
   },
   "paths": {
@@ -12,8 +16,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{games_dir}/nds",
-		  "linux": "{games_dir}/nds",
-		  "android": "{app_data}/saves"
+		  "linux": "{games_dir}/nds"
 		},
 		"extensions": [
           ".sav"
@@ -25,8 +28,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}",
-		  "android": "{emulator_dir}"
+		  "linux": "{emulator_dir}"
 		}
 	  }
 	}
@@ -49,19 +51,6 @@
 		  "{exe}",
           "{rom}"
 		]
-	  },
-	  "android": {
-		"action": "me.magnum.melonds.nightly.LAUNCH_ROM",
-		"package": "me.magnum.melonds.nightly",
-		"class": "me.magnum.melonds.ui.emulator.EmulatorActivity",
-		"rom_delivery": "intent_data",
-		"extras": [
-		  {
-			"key": "uri",
-			"value": "{rom}",
-			"type": "content_uri"
-		  }
-		]
 	  }
 	}
   },
@@ -78,12 +67,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "melonDS-emu/melonDS",
 		  "asset_pattern": "melonDS-.*-appimage-x86_64\\.zip"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "rafaelvcaetano/melonDS-android",
-		  "asset_pattern": "app-gitHub-nightly-release\\.apk",
-		  "release_tag": "nightly-release"
 		}
 	  }
 	},
@@ -107,15 +90,6 @@
 			"action_type": "file_exists",
 			"file": "melonDS"
 		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "me.magnum.melonds.nightly",
-		  "expected_file": "app-gitHub-nightly-release.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "me.magnum.melonds.nightly"
-		  }
 		}
 	  }
 	},
@@ -138,9 +112,6 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none"
-		},
-		"android": {
 		  "action_type": "none"
 		}
 	  }

@@ -5,6 +5,10 @@
 	"name": "PCSX2",
 	"platforms": [
       "ps2"
+	],
+	"os": [
+      "windows",
+      "linux"
 	]
   },
   "paths": {
@@ -12,8 +16,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/memcards/main.ps2",
-		  "linux": "{emulator_dir}/memcards/main.ps2",
-		  "android": "{app_data}/memcards/main.ps2"
+		  "linux": "{emulator_dir}/memcards/main.ps2"
 		},
 		"extensions": [
           "*"
@@ -25,8 +28,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}",
-		  "android": "{app_data}"
+		  "linux": "{emulator_dir}"
 		}
 	  }
 	}
@@ -51,19 +53,6 @@
 		  "-batch",
           "{rom}"
 		]
-	  },
-	  "android": {
-		"action": "android.intent.action.MAIN",
-		"package": "xyz.aethersx2.android",
-		"class": "xyz.aethersx2.android.EmulationActivity",
-		"rom_delivery": "extra",
-		"extras": [
-		  {
-			"key": "bootPath",
-			"value": "{rom}",
-			"type": "file_path"
-		  }
-		]
 	  }
 	}
   },
@@ -80,11 +69,6 @@
 		  "action_type": "download_repo",
 		  "github_repo": "PCSX2/pcsx2",
 		  "asset_pattern": "pcsx2-.*-linux-appimage-x64-Qt\\.AppImage"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "Trixarian/NetherSX2-patch",
-		  "asset_pattern": "NetherSX2-.*-.*\\.apk"
 		}
 	  }
 	},
@@ -106,15 +90,6 @@
 			"action_type": "file_exists",
 			"file": "pcsx2-qt"
 		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "xyz.aethersx2.android",
-		  "expected_file": "NetherSX2-*.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "xyz.aethersx2.android"
-		  }
 		}
 	  }
 	},
@@ -135,9 +110,6 @@
 		},
 		"linux": {
 		  "action_type": "none"
-		},
-		"android": {
-		  "action_type": "none"
 		}
 	  }
 	},
@@ -155,9 +127,6 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none"
-		},
-		"android": {
 		  "action_type": "none"
 		}
 	  }
@@ -181,9 +150,6 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none"
-		},
-		"android": {
 		  "action_type": "none"
 		}
 	  }
@@ -210,16 +176,6 @@
 			"action_type": "folder_exists",
 			"path": "memcards/main.ps2"
 		  }
-		},
-		"android": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "{app_data}/memcards/main.ps2"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "{app_data}/memcards/main.ps2"
-		  }
 		}
 	  }
 	},
@@ -243,16 +199,6 @@
 			"action_type": "files_exist",
 			"files": [
               "memcards/main.ps2/_pcsx2_superblock"
-			]
-		  }
-		},
-		"android": {
-		  "action_type": "create_pcsx2_superblock",
-		  "path": "memcards/main.ps2",
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "{app_data}/memcards/main.ps2/_pcsx2_superblock"
 			]
 		  }
 		}

@@ -729,9 +729,11 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 	print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
 
 	# Only emulators whose launch can require prep (archive extraction /
-	# title-id-based launch paths) go through preparation. Xenia is included
-	# for XBLA archives, which must be extracted before xenia can launch them.
-	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3") or emulator_id == "xenia"):
+	# title-id-based launch paths) go through preparation. Xenia-family
+	# emulators are included for XBLA archives, which must be extracted
+	# before any xenia-based emulator can launch them.
+	var prep_architecture = LaunchManager.registry.get_emulator_architecture(emulator_id)
+	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or prep_architecture in ["rpcs3", "xenia"]):
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
 		print("[ShufflerSubManager] Ready (no prep needed): " + game.title)

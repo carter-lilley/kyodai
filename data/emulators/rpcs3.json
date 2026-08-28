@@ -5,6 +5,10 @@
 	"name": "RPCS3",
 	"platforms": [
       "ps3"
+	],
+	"os": [
+	  "windows",
+      "linux"
 	]
   },
   "paths": {
@@ -12,8 +16,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
-		  "linux": "{emulator_dir}/dev_hdd0/home/00000001/savedata",
-		  "android": "{app_data}/config/dev_hdd0/home/00000001/savedata"
+		  "linux": "{emulator_dir}/dev_hdd0/home/00000001/savedata"
 		},
 		"extensions": [
           "*"
@@ -25,8 +28,7 @@
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}",
-		  "android": "{emulator_dir}"
+		  "linux": "{emulator_dir}"
 		}
 	  }
 	}
@@ -45,15 +47,6 @@
 	  },
 	  "linux": {
 		"action_type": "none"
-	  },
-	  "android": {
-		"action": "aenu.intent.action.APS3E",
-		"package": "aenu.aps3e",
-		"class": "aenu.aps3e.EmulatorActivity",
-		"rom_delivery": "none",
-		"extras": [
-		  {"key": "game_dir", "value": "{rom}", "type": "file_path"}
-		]
 	  }
 	}
   },
@@ -68,11 +61,6 @@
 		},
 		"linux": {
 		  "action_type": "none"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "aenu1/aps3e",
-		  "asset_pattern": ".*\\.apk"
 		}
 	  }
 	},
@@ -90,15 +78,6 @@
 		},
 		"linux": {
 		  "action_type": "none"
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "aenu.aps3e",
-		  "expected_file": "*.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "aenu.aps3e"
-		  }
 		}
 	  }
 	}

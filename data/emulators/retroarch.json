@@ -44,6 +44,11 @@
 	  "virtualboy",
 	  "wii",
 	  "3ds"
+	],
+	"os": [
+      "windows",
+      "linux",
+      "android"
 	]
   },
   "paths": {

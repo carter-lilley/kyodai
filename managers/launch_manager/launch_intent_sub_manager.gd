@@ -12,32 +12,43 @@ func _ready():
 
 ## Resolves which emulator to use for a game
 ## Priority: 1. Game override, 2. Active shuffler override, 3. User platform setting, 4. Registry default
+## Stored selections that are unavailable on the current OS fall through to the next priority
 func resolve_emulator_for_game(game: GameResource) -> String:
+	var registry = launch_manager.registry
+
 	# 1. Check game override
 	if game.preferred_emulator_id != "":
-		return game.preferred_emulator_id
-	
+		var canonical = registry.canonicalize_emulator_id(game.preferred_emulator_id)
+		if registry.is_emulator_available(canonical):
+			return canonical
+
 	# 2. Check active shuffler override
 	if LaunchManager.is_shuffle_session_active():
 		var override = LaunchManager.get_shuffle_override(game.platform_slug)
 		if override.get("emulator_id", "") != "":
-			return override["emulator_id"]
-	
+			var canonical = registry.canonicalize_emulator_id(override["emulator_id"])
+			if registry.is_emulator_available(canonical):
+				return canonical
+
 	# 2b. Use shuffler-specific defaults if the platform has one configured
 	if LaunchManager.is_shuffle_session_active():
 		if LaunchManager.SHUFFLER_DEFAULT_EMULATORS.has(game.platform_slug):
-			return LaunchManager.SHUFFLER_DEFAULT_EMULATORS[game.platform_slug].emulator_id
-	
+			var shuffler_default = registry.canonicalize_emulator_id(LaunchManager.SHUFFLER_DEFAULT_EMULATORS[game.platform_slug].emulator_id)
+			if registry.is_emulator_available(shuffler_default):
+				return shuffler_default
+
 	# 3. Check user platform settings (empty = use registry default)
 	var enabled_platforms = _get_enabled_platforms()
 	var platform_config = enabled_platforms.get(game.platform_slug, {})
 	var platform_emulator = platform_config.get("emulator_id", "")
-	
+
 	if platform_emulator != "":
-		return platform_emulator
-	
+		var canonical = registry.canonicalize_emulator_id(platform_emulator)
+		if registry.is_emulator_available(canonical):
+			return canonical
+
 	# 4. Use registry default (from _platform_defaults or first available)
-	return launch_manager.registry.get_default_emulator_for_platform(game.platform_slug)
+	return registry.get_default_emulator_for_platform(game.platform_slug)
 
 ## Resolves which RetroArch core id to use for a game.
 ## Priority: 1. Game override, 2. Active shuffler override, 3. User platform setting, 4. platforms.json default
@@ -200,7 +211,7 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# RPCS3 special handling for desktop - replace ROM path with game folder path
 		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
-		if intent.emulator_id.begins_with("rpcs3") and desktop_rpcs3_title_id != "":
+		if launch_manager.registry.get_emulator_architecture(intent.emulator_id) == "rpcs3" and desktop_rpcs3_title_id != "":
 			# Check both disc and digital install locations
 			var disc_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "games", desktop_rpcs3_title_id))
 			var digital_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
@@ -224,7 +235,7 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		
 		# Xenia special handling - extracted XBLA folders launch the file inside
 		# (STFS package for XBLA, default.xex for extracted disc games)
-		if intent.emulator_id == "xenia" and FSM.dir_exists(intent.rom_path):
+		if launch_manager.registry.get_emulator_architecture(intent.emulator_id) == "xenia" and FSM.dir_exists(intent.rom_path):
 			var xenia_launch_file = TitleIDParser.find_xbox360_launch_file(intent.rom_path)
 			if xenia_launch_file != "":
 				var global_xenia_launch_file = FSM.resolve_native_path(xenia_launch_file)

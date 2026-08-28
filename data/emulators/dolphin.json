@@ -6,6 +6,11 @@
 	"platforms": [
 	  "ngc",
       "wii"
+	],
+	"os": [
+      "windows",
+      "linux",
+      "android"
 	]
   },
   "paths": {
