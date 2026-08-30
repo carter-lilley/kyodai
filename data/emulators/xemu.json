@@ -59,12 +59,14 @@
 		"windows": {
 		  "action_type": "download_repo",
 		  "github_repo": "xemu-project/xemu",
-		  "asset_pattern": "xemu-.*-windows-x86_64\\.zip"
+		  "release_tag": "pre-release",
+		  "asset_pattern": "^xemu-(?!.*-dbg-).*-windows-x86_64\\.zip$"
 		},
 		"linux": {
 		  "action_type": "download_repo",
 		  "github_repo": "xemu-project/xemu",
-		  "asset_pattern": "xemu-.*-x86_64\\.AppImage"
+		  "release_tag": "pre-release",
+		  "asset_pattern": "^xemu-(?!.*-dbg-).*-x86_64\\.AppImage$"
 		}
 	  }
 	},

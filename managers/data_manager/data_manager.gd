@@ -33,6 +33,10 @@ signal apply_preset_end()
 # Game save facade signal
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
+# Collection membership facade signal
+@warning_ignore("unused_signal")
+signal collection_membership_changed(collection_id: int, romm_id: int)
+
 @onready var database: DatabaseSubManager = $DatabaseSubManager
 @onready var sync: SyncSubManager = $SyncSubManager
 @onready var cover: CoverSubManager = $CoverSubManager
@@ -84,6 +88,9 @@ func _ready():
 
 	# Wire game save sub-manager signal through the DataManager facade
 	game_save.save_sync_completed.connect(func(game: GameResource, success: bool, message: String): save_sync_completed.emit(game, success, message))
+
+	# Wire collection membership signal through the DataManager facade
+	collections.collection_membership_changed.connect(func(collection_id: int, romm_id: int): collection_membership_changed.emit(collection_id, romm_id))
 
 	# Connect to setting changes for dynamic cover folding
 	settings.setting_changed.connect(_on_setting_changed)

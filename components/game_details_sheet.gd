@@ -81,7 +81,24 @@ func _ready():
 	_set_sheet_height()
 	_reduce_top_padding()
 	_apply_content_scaling()
-	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	_reconnect_viewport_signals()
+
+var _size_changed_viewport: Viewport = null
+
+func _reconnect_viewport_signals() -> void:
+	"""Keep the size_changed connection on the sheet's CURRENT viewport;
+	DS-mode reparenting moves the sheet between the root window and the
+	MainViewport SubViewport."""
+	var viewport := get_viewport()
+	if viewport == _size_changed_viewport:
+		return
+	if _size_changed_viewport and is_instance_valid(_size_changed_viewport):
+		if _size_changed_viewport.size_changed.is_connected(_on_viewport_size_changed):
+			_size_changed_viewport.size_changed.disconnect(_on_viewport_size_changed)
+	_size_changed_viewport = null
+	if viewport:
+		viewport.size_changed.connect(_on_viewport_size_changed)
+		_size_changed_viewport = viewport
 
 func _on_viewport_size_changed() -> void:
 	# Only recompute while hidden; a visible sheet keeps its current geometry
@@ -300,6 +317,27 @@ func _add_metadata_chip(text: String, icon: String, elevated: bool) -> void:
 
 const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+func _debug_tree_state() -> String:
+	# CanvasLayer has no is_visible_in_tree(); walk ancestors for visibility
+	# instead (a stranded sheet in DS mode sits under an invisible/disabled one).
+	var state := "inside_tree=" + str(is_inside_tree()) + " can_process=" + str(can_process())
+	var ancestor := get_parent()
+	while ancestor:
+		if ancestor is CanvasItem or ancestor is Window:
+			state += " | " + str(ancestor.name) + ".visible=" + str(ancestor.visible)
+		ancestor = ancestor.get_parent()
+	return state
+
+func show_overlay():
+	super.show_overlay()
+	print("[DSDebug] sheet show_overlay: visible=", visible, " screen=", _get_screen_size(), " sheet_pos=", _sheet_container.position if _sheet_container else Vector2.ZERO, " state=", _debug_tree_state())
+	# Detect a dead slide-in tween (e.g. a process-disabled ancestor in DS mode):
+	# if the sheet never leaves the off-screen start position, the tween didn't run.
+	await get_tree().create_timer(0.5).timeout
+	if visible:
+		var expected_end_y := _get_screen_size().y - (_sheet_container.size.y if _sheet_container else 0.0)
+		print("[DSDebug] sheet 0.5s after show: sheet_pos=", _sheet_container.position if _sheet_container else Vector2.ZERO, " expected_end_y=", expected_end_y, " state=", _debug_tree_state())
+
 func _format_release_date(epoch_ms: int) -> String:
 	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000))
 	var month: String = MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)]
@@ -307,6 +345,17 @@ func _format_release_date(epoch_ms: int) -> String:
 
 func show_for_game(game: GameResource) -> GameDetailsSheet:
 	clear_content()
+	# Re-resolve the overlay parent on every show: the sheet is persistent and
+	# M3Sheet.show_overlay() only parents it once, so without this it keeps
+	# whatever parent it first landed in - which goes stale across DS mode
+	# toggles (stranded in a disabled DualScreenSetup subtree, or left in the
+	# root viewport while the UI lives in a SubViewport).
+	var overlay_parent := M3Overlay.get_overlay_parent()
+	if overlay_parent and get_parent() != null and get_parent() != overlay_parent:
+		get_parent().remove_child(self)
+		overlay_parent.add_child(self)
+	_reconnect_viewport_signals()
+	print("[DSDebug] show_for_game: romm_id=", game.romm_id, " parent=", get_parent(), " overlay_parent=", overlay_parent, " viewport_size=", get_viewport().get_visible_rect().size if get_viewport() else Vector2.ZERO)
 	# Recompute height against the current viewport/scale: the sheet is
 	# persistent, so the one-shot _ready sizing goes stale after screen or
 	# scale changes (dual-screen swap, orientation, display-init ordering).

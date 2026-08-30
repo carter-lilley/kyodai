@@ -40,6 +40,8 @@ func _connect_signals() -> void:
 		DataManager.sync_completed.connect(_on_sync_completed)
 	if favorites_mode and DataManager.user_props and not DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
 		DataManager.user_props.game_props_updated.connect(_on_game_props_updated)
+	if not DataManager.collection_membership_changed.is_connected(_on_collection_membership_changed):
+		DataManager.collection_membership_changed.connect(_on_collection_membership_changed)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -58,6 +60,8 @@ func _disconnect_signals() -> void:
 		DataManager.sync_completed.disconnect(_on_sync_completed)
 	if DataManager.user_props and DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
 		DataManager.user_props.game_props_updated.disconnect(_on_game_props_updated)
+	if DataManager.collection_membership_changed.is_connected(_on_collection_membership_changed):
+		DataManager.collection_membership_changed.disconnect(_on_collection_membership_changed)
 	if UIManager and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 
@@ -106,6 +110,11 @@ func _refresh_favorites_collection_id() -> void:
 func _on_game_props_updated(game: GameResource) -> void:
 	# A favorite toggle adds/removes the game from this view.
 	if game:
+		_load_total_count(false)
+
+func _on_collection_membership_changed(changed_id: int, _romm_id: int) -> void:
+	# An add-to-collection changes this view's membership.
+	if changed_id == collection_id:
 		_load_total_count(false)
 
 func _get_empty_status_text() -> String:

@@ -69,14 +69,9 @@ func _ready():
 	_update_grid_orientation()
 	print("[HomeView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
-	# Connect to settings changes
-	if DataManager:
-		DataManager.setting_changed.connect(_on_setting_changed)
-	
-	# Connect to DataManager signals
-	DataManager.database_ready.connect(_on_database_ready)
-	DataManager.database_failed.connect(_on_database_failed)
-	print("[DEBUG] Connected to database_ready signal")
+	# Autoload signals are established via _connect_signals (also re-run on
+	# _enter_tree after DS-mode reparenting).
+	_connect_signals()
 	
 	# If database is already ready, trigger the callback manually (happens when DataManager loads first)
 	phase_start_us = Time.get_ticks_usec()
@@ -85,28 +80,44 @@ func _ready():
 		_on_database_ready()
 	print("[HomeView] _on_database_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
-	DataManager.game_updated.connect(_on_game_updated)
-	
-	# Connect to LaunchManager GameNative signal to refresh when games are added/removed
-	LaunchManager.gamenative_games_updated.connect(_on_gamenative_games_updated)
-	DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
-	DataManager.sync_completed.connect(_on_sync_completed)
-	
-	# Connect to download manager for download status updates
-	SystemManager.download.download_completed.connect(_on_download_completed)
-	
-	# Connect to LaunchManager for game launch events (to resort by last_played)
-	LaunchManager.game_launched.connect(_on_game_launched)
-	
-	# Connect to UIManager modal signals
-	UIManager.modal_item_selected.connect(_on_modal_item_selected)
-	
 	# Initial load is handled by _on_database_ready() when the DB is ready
 	
 	# Let the base View class own the focus signal connection.
 	reconnect_viewport()
 
 	print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
+
+func _enter_tree() -> void:
+	# DS-mode reparenting fires _exit_tree (which disconnects all autoload
+	# signals) and then _enter_tree - re-establish them, or modal actions like
+	# the details sheet summon silently die after any DS toggle.
+	_connect_signals()
+
+func _connect_signals() -> void:
+	# Guards: _enter_tree fires before _ready on the initial add, so both call
+	# this - every connect must be idempotent.
+	if DataManager:
+		if not DataManager.setting_changed.is_connected(_on_setting_changed):
+			DataManager.setting_changed.connect(_on_setting_changed)
+		if not DataManager.database_ready.is_connected(_on_database_ready):
+			DataManager.database_ready.connect(_on_database_ready)
+		if not DataManager.database_failed.is_connected(_on_database_failed):
+			DataManager.database_failed.connect(_on_database_failed)
+		if not DataManager.game_updated.is_connected(_on_game_updated):
+			DataManager.game_updated.connect(_on_game_updated)
+		if not DataManager.scan_for_downloaded_games_completed.is_connected(_on_scan_completed):
+			DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
+		if not DataManager.sync_completed.is_connected(_on_sync_completed):
+			DataManager.sync_completed.connect(_on_sync_completed)
+	if SystemManager and SystemManager.download and not SystemManager.download.download_completed.is_connected(_on_download_completed):
+		SystemManager.download.download_completed.connect(_on_download_completed)
+	if LaunchManager:
+		if not LaunchManager.gamenative_games_updated.is_connected(_on_gamenative_games_updated):
+			LaunchManager.gamenative_games_updated.connect(_on_gamenative_games_updated)
+		if not LaunchManager.game_launched.is_connected(_on_game_launched):
+			LaunchManager.game_launched.connect(_on_game_launched)
+	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
+		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
 func _exit_tree() -> void:
 	# Mirror the connect block in _ready so a torn-down Home tab can't

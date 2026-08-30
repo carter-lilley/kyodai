@@ -34,6 +34,8 @@ var _last_wheel_tick_msec: int = -10000
 			if is_inside_tree():
 				_reconnect_scrollbars()
 
+var _last_focus_viewport: Viewport = null
+
 var _target_scroll: float = 0.0
 var _scroll_tween: Tween
 var _is_smooth_scrolling: bool = false
@@ -117,23 +119,28 @@ func _ready():
 	_connect_focus_signal()
 
 func _exit_tree():
-	# Disconnect from viewport to prevent dangling signal connections
-	var viewport = get_viewport()
+	# Disconnect from viewport to prevent dangling signal connections.
+	# Track the LAST connected viewport: after a reparent, get_viewport() is the
+	# new viewport, which would leave the old viewport's connection behind.
+	var viewport = _last_focus_viewport if is_instance_valid(_last_focus_viewport) else get_viewport()
 	if is_instance_valid(viewport) and viewport.gui_focus_changed.is_connected(_on_focus_changed):
 		viewport.gui_focus_changed.disconnect(_on_focus_changed)
+	_last_focus_viewport = null
 
 func _connect_focus_signal() -> void:
 	"""Connect to the current viewport's gui_focus_changed signal."""
+	if _last_focus_viewport and is_instance_valid(_last_focus_viewport):
+		if _last_focus_viewport.gui_focus_changed.is_connected(_on_focus_changed):
+			_last_focus_viewport.gui_focus_changed.disconnect(_on_focus_changed)
+		_last_focus_viewport = null
+
 	var viewport = get_viewport()
 	if not is_instance_valid(viewport):
 		return
-	
-	# Try to disconnect first (in case already connected)
-	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	
+
 	# Connect to handle focus changes for smooth scrolling
 	viewport.gui_focus_changed.connect(_on_focus_changed)
+	_last_focus_viewport = viewport
 
 func _on_focus_changed(control: Control) -> void:
 	"""Handle focus changes to smoothly scroll focused items into view."""
@@ -184,12 +191,8 @@ func _on_focus_changed(control: Control) -> void:
 func reconnect_viewport() -> void:
 	"""Reconnect to the current viewport's gui_focus_changed signal.
 	Call this after reparenting into a SubViewport."""
-	# Disconnect from old viewport first
-	var old_viewport = get_viewport()
-	if is_instance_valid(old_viewport) and old_viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		old_viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	
-	# Connect to new viewport (may be same, but ensures we're connected to current)
+	# _connect_focus_signal disconnects from the LAST connected viewport
+	# (tracked in _last_focus_viewport), so the old viewport can't leak.
 	_connect_focus_signal()
 
 func _connect_scrollbar():

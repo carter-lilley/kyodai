@@ -166,6 +166,8 @@ func _enable_dual_screen_viewport_mode() -> void:
 	M3Overlay.dismiss_type("dialog")
 	M3Overlay.dismiss_type("tooltip")
 	M3Overlay.dismiss_type("sheet")
+	# GameDetailsSheet registers as "bottom_sheet" (M3BottomSheet default), not "sheet"
+	M3Overlay.dismiss_type("bottom_sheet")
 
 	# REPARENTING: Move main UI nodes into MainViewport
 	var main_viewport = _main_viewport

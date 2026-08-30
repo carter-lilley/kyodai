@@ -224,8 +224,10 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 	var start_us := Time.get_ticks_usec()
 
 	# Resolve the active viewport: SubViewport in dual-screen mode, root viewport otherwise.
+	# The active check matters: the sub-manager always exists, and after DS mode
+	# is disabled its cached viewport is a stale, hidden SubViewport.
 	var active_viewport: Viewport = get_viewport()
-	if dual_screen:
+	if dual_screen and dual_screen._dual_screen_active:
 		var sub: Viewport = dual_screen.get_main_viewport()
 		if sub:
 			active_viewport = sub
@@ -381,6 +383,7 @@ func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
 	return overlay.get_settings_dialog_platforms_view()
 
 func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
+	print("[DSDebug] show_game_context_menu: romm_id=", romm_id, " ds_active=", dual_screen._dual_screen_active if dual_screen else "n/a", " anchor=", anchor, " anchor_in_tree=", anchor.is_inside_tree() if anchor else false)
 	return overlay.show_game_context_menu(romm_id, anchor, show_delete)
 
 func show_add_to_collection_picker(romm_id: int) -> void:

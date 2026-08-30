@@ -6,6 +6,7 @@ class_name CollectionSubManager
 var data_manager: Node
 
 signal collections_synced(success: bool, message: String)
+signal collection_membership_changed(collection_id: int, romm_id: int)
 
 ## Pending-sync queue kind for collection membership adds; the collection id is
 ## embedded in the kind so one ROM can queue adds to multiple collections.
@@ -156,6 +157,7 @@ func add_rom_to_collection(romm_id: int, collection_id: int, callback: Callable 
 	var collection_name: String = get_collection(collection_id).get("name", "")
 
 	data_manager.database.add_collection_roms(collection_id, [romm_id])
+	collection_membership_changed.emit(collection_id, romm_id)
 
 	if not SystemManager.network.is_online():
 		_queue_collection_add(romm_id, collection_id)

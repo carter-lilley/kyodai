@@ -66,7 +66,7 @@ func _load_registry():
 					var platform = _platforms_data[platform_id]
 					var default_emulator = platform.get("default_emulator", "")
 					# default_emulator may be a plain id or a per-OS map
-					# ({ "_default": "xemu", "android": "hakux" })
+					# ({ "_default": "xemu", "android": "x1box" })
 					if default_emulator is Dictionary:
 						default_emulator = default_emulator.get(platform_name, default_emulator.get("_default", ""))
 					if default_emulator != "":

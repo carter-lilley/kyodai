@@ -112,6 +112,12 @@ func refresh_theme() -> void:
 	_apply_colors()
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED:
+		_update_clock()
+		_refresh_battery()
+
+
 func _on_poll() -> void:
 	_update_clock()
 	_poll_count += 1

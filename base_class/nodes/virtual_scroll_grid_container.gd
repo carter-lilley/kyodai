@@ -771,6 +771,11 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
+	# _exit_tree disconnects frame_pre_draw and _ready only connects it once,
+	# so re-establish it on every tree entry (DS reparents, nav rebuilds) -
+	# otherwise the visual-transform stamping loop dies for this grid instance.
+	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
+		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
 	# Connect to centralized card settings state (idempotent via is_connected guards)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state

@@ -1,8 +1,8 @@
 {
   "suspend_method": "tcp",
   "meta": {
-	"id": "hakux",
-	"name": "hakuX",
+	"id": "x1box",
+	"name": "X1Box",
 	"architecture": "xemu",
 	"platforms": [
       "xbox"
@@ -32,8 +32,8 @@
 	"platforms": {
 	  "android": {
 		"action": "android.intent.action.VIEW",
-		"package": "com.rfandango.haku_x",
-		"class": "com.rfandango.haku_x.LauncherActivity",
+		"package": "com.izzy2lost.x1box",
+		"class": "com.izzy2lost.x1box.LauncherActivity",
 		"rom_delivery": "intent_data"
 	  }
 	}
@@ -44,8 +44,8 @@
 	  "platforms": {
 		"android": {
 		  "action_type": "download_repo",
-		  "github_repo": "rfandango/hakuX",
-		  "asset_pattern": "app-.*\\.apk"
+		  "github_repo": "izzy2lost/xemu",
+		  "asset_pattern": "^app-release\\.apk$"
 		}
 	  }
 	},
@@ -54,11 +54,11 @@
 	  "platforms": {
 		"android": {
 		  "action_type": "apk_install",
-		  "package_name": "com.rfandango.haku_x",
+		  "package_name": "com.izzy2lost.x1box",
 		  "expected_file": "app-release.apk",
 		  "validate": {
 			"action_type": "package_installed",
-			"package": "com.rfandango.haku_x"
+			"package": "com.izzy2lost.x1box"
 		  }
 		}
 	  }
