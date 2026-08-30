@@ -66,6 +66,13 @@ func _escape_args_for_shell(args: Array) -> Array:
 func _escape_ps_arg(s: String) -> String:
 	return "'" + s.replace("'", "''") + "'"
 
+## Escapes a string for use inside Start-Process -ArgumentList.
+## PowerShell joins -ArgumentList entries with spaces WITHOUT re-quoting them,
+## so each entry is additionally wrapped in literal double quotes to keep
+## paths containing spaces intact on the target process command line.
+func _escape_ps_arg_quoted(s: String) -> String:
+	return "'\"" + s.replace("'", "''") + "\"'"
+
 # ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
 
 ## Returns true if currently in background state (emulator running)
@@ -317,7 +324,7 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		# child PID via -PassThru (a cmd /c wrapper would return cmd.exe's PID)
 		var ps_arg_list: Array[String] = []
 		for arg in arguments:
-			ps_arg_list.append(_escape_ps_arg(arg))
+			ps_arg_list.append(_escape_ps_arg_quoted(arg))
 		var ps_command = "Start-Process -FilePath %s -WorkingDirectory %s" % [_escape_ps_arg(exe_path), _escape_ps_arg(intent.working_directory)]
 		if not ps_arg_list.is_empty():
 			ps_command += " -ArgumentList " + ",".join(ps_arg_list)

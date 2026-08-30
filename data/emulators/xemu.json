@@ -11,7 +11,6 @@
       "linux"
 	]
   },
-  "requires_working_dir": true,
   "paths": {
 	"saves": {
 	  "_default": {

@@ -11,8 +11,7 @@ update notification all in one
 
 ui scale still
 filter chips in shuffler
-x xemu bios
-x xemu nightly
+x xemu launch broken
 x xemu on android (https://github.com/izzy2lost/xemu)
 
 submenus still suck
@@ -24,7 +23,6 @@ sync breaks on app resume during cover step (then, platform indicators broken un
 x cover step & eviction..?
 
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
-x cant touch checkbuttons or some? optionbutton submenus in settings menu
 download copying step
 
 ## saves

@@ -362,7 +362,11 @@ func match_var_type(settingsvar : SettingsVar):
 
 			var path_controls = HBoxContainer.new()
 			path_controls.add_theme_constant_override("separation", int(M3Units.dp(8)))
-			path_field.custom_minimum_size.x = _trailing_width(settingsvar, 240.0)
+			# Keep the trailing group compact (like other control types) so the
+			# label block isn't squeezed into word-per-line wrapping on
+			# high-dp screens; long paths elide inside the field instead.
+			path_controls.size_flags_horizontal = Control.SIZE_SHRINK_END
+			path_field.custom_minimum_size.x = _trailing_width(settingsvar, 140.0)
 			path_controls.add_child(path_field)
 			path_controls.add_child(browse_button)
 
