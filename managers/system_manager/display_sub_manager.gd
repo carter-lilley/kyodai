@@ -16,6 +16,7 @@ signal dual_screen_availability_changed(available: bool)
 signal initial_window_size_settled()
 
 const RESIZE_DEBOUNCE_SECONDS := 0.25
+const SCALE_DEBOUNCE_SECONDS := 0.2
 const BASE_HEIGHT := 1080.0
 const BASE_DPI := 160.0
 const DEFAULT_DPI := 96.0
@@ -26,8 +27,10 @@ const MAX_UI_SCALE := 4.0
 
 var _viewport_size: Vector2 = Vector2.ZERO
 var _ui_scale: float = -1.0
+var _user_scale_factor: float = 1.0
 var _current_screen: int = -1
 var _resize_debounce_timer: Timer = null
+var _scale_debounce_timer: Timer = null
 
 # Dual screen detection state
 var _dual_screen_enabled: bool = false
@@ -52,6 +55,17 @@ func _ready() -> void:
 	_resize_debounce_timer.timeout.connect(_on_resize_debounced)
 	add_child(_resize_debounce_timer)
 
+	# Debounce rapid ui_scale slider changes into a single scale recompute.
+	_scale_debounce_timer = Timer.new()
+	_scale_debounce_timer.one_shot = true
+	_scale_debounce_timer.wait_time = SCALE_DEBOUNCE_SECONDS
+	_scale_debounce_timer.timeout.connect(_on_scale_debounced)
+	add_child(_scale_debounce_timer)
+
+	# Load the persisted user scale multiplier once DataManager has loaded
+	# settings (SystemManager autoloads before DataManager, so defer).
+	call_deferred("_load_user_scale_factor")
+
 	# Connect to viewport size changes
 	var viewport = get_viewport()
 	if viewport:
@@ -67,9 +81,6 @@ func _ready() -> void:
 
 	# Apply the saved windowed size once the OS window is ready.
 	call_deferred("_apply_initial_window_size")
-
-	# UI scale setting disabled — now using DP-based scaling via M3Units
-	#_apply_ui_scale()
 
 	# Try to connect to AynThor screen swap signal (may not exist yet)
 	call_deferred("_connect_ayn_thor_signals")
@@ -163,7 +174,7 @@ func _calculate_ui_scale() -> float:
 		dpi = int(DEFAULT_DPI)
 	var dpi_scale := dpi / BASE_DPI
 
-	_ui_scale = clamp(max(os_scale, resolution_scale, dpi_scale), MIN_UI_SCALE, MAX_UI_SCALE)
+	_ui_scale = clamp(max(os_scale, resolution_scale, dpi_scale) * _user_scale_factor, MIN_UI_SCALE, MAX_UI_SCALE)
 	return _ui_scale
 
 func _apply_initial_window_size() -> void:
@@ -236,6 +247,34 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 		"dual_screen_mode":
 			# Trigger a display check when dual screen setting changes
 			_check_for_dual_screen()
+		"ui_scale":
+			# Debounce: the settings slider emits on every tick of a drag, so
+			# coalesce into a single scale recompute + UI refresh.
+			_user_scale_factor = float(value)
+			if _scale_debounce_timer:
+				_scale_debounce_timer.stop()
+				_scale_debounce_timer.start()
+
+func _on_scale_debounced() -> void:
+	"""Stable ui_scale change: recompute, invalidate the M3Units cache, notify."""
+	var old_scale := _ui_scale
+	_calculate_ui_scale()
+	if not is_equal_approx(_ui_scale, old_scale):
+		M3Units.invalidate_cache()
+		ui_scale_changed.emit(_ui_scale)
+
+func _load_user_scale_factor() -> void:
+	var ui_scale_setting = settings_man.get_setting("ui_scale")
+	if ui_scale_setting and ui_scale_setting.value is float:
+		_user_scale_factor = ui_scale_setting.value
+	# If the factor changes the scale vs. the initial _ready calculation, the
+	# M3Units cache may already hold the unscaled value — invalidate and notify
+	# so the UI refreshes with the persisted factor applied.
+	var old_scale := _ui_scale
+	_calculate_ui_scale()
+	if not is_equal_approx(_ui_scale, old_scale):
+		M3Units.invalidate_cache()
+		ui_scale_changed.emit(_ui_scale)
 
 func _connect_subviewport_signals() -> void:
 	var ds = get_node_or_null("/root/Main/DualScreenSetup")

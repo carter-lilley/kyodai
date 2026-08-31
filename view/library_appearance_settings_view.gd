@@ -7,6 +7,11 @@ extends Control
 
 var _library_general_menu: SettingsMenu = null
 
+var _margin: MarginContainer = null
+var _vbox: VBoxContainer = null
+var _bottom_buffer: Control = null
+var _preset_container: HBoxContainer = null
+
 # Theme preset UI
 var _preset_dropdown: M3OptionButton = null
 var _current_presets: Array[ThemePreset] = []
@@ -38,17 +43,14 @@ func _setup_ui() -> void:
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 	scroll.add_child(margin)
-	
+	_margin = margin
+
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	margin.add_child(vbox)
+	_vbox = vbox
 
 	# Theme Presets section
 	_create_preset_section(vbox)
@@ -59,16 +61,36 @@ func _setup_ui() -> void:
 
 	# Bottom buffer
 	var bottom_buffer = Control.new()
-	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
 	vbox.add_child(bottom_buffer)
+	_bottom_buffer = bottom_buffer
+
+	_apply_scale()
+
+func _apply_scale() -> void:
+	if is_instance_valid(_margin):
+		_margin.add_theme_constant_override("margin_left", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_top", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_right", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+	if is_instance_valid(_vbox):
+		_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
+	if is_instance_valid(_bottom_buffer):
+		_bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
+	if is_instance_valid(_preset_container):
+		_preset_container.custom_minimum_size = Vector2(0, M3Units.dp(30))
+
+func refresh_scale() -> void:
+	_apply_scale()
+	if has_method("refresh_theme"):
+		call("refresh_theme")
 
 func _create_preset_section(vbox: VBoxContainer) -> void:
 	var preset_section := SettingsSection.new("Theme Presets", "palette")
 	vbox.add_child(preset_section)
 
 	var preset_container = HBoxContainer.new()
-	preset_container.custom_minimum_size = Vector2(0, M3Units.dp(30))
 	preset_section.add_content(preset_container, false)
+	_preset_container = preset_container
 	
 	_preset_dropdown = M3OptionButton.new()
 	_preset_dropdown.label_text = "Theme Preset"

@@ -508,11 +508,6 @@ visible = false
 layout_mode = 2
 metadata/_tab_index = 1
 
-[node name="Downloads" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/TabContainer" unique_id=366562689]
-visible = false
-layout_mode = 2
-metadata/_tab_index = 2
-
 [node name="UILayer" type="CanvasLayer" parent="." unique_id=777777777]
 layer = 1000
 

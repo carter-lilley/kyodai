@@ -21,8 +21,16 @@ const LRU_FLUSH_INTERVAL_SECONDS := 5.0
 # Used to size the cover download budget when the cache has no files yet.
 const ESTIMATED_COVER_BYTES := 150 * 1024
 
-# Set while an eviction pass is in flight so sync-end triggers can't stack them.
+# Set while an eviction pass is in flight so concurrent triggers can't stack them.
 var _eviction_running: bool = false
+
+# Live cache byte accounting for evict-on-insert: each successful cover write
+# adds its size and kicks an eviction pass when the cap is exceeded, so the
+# cache never grows past the limit and no end-of-sync sweep is needed. Both
+# are built by the startup maintenance pass (-1/empty until then) and kept
+# authoritative by every eviction pass report. Main thread only.
+var _cache_bytes_total: int = -1
+var _cache_file_sizes: Dictionary = {}  # filename -> size in bytes
 
 # filename -> unix time of last access. Main thread only; the eviction worker
 # receives a duplicate snapshot instead of touching this map or the sidecar.
@@ -44,8 +52,6 @@ func _ready():
 	var cap := get_max_cache_bytes()
 	_eviction_running = true
 	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap, _lru_map.duplicate()))
-	if not data_manager.sync_completed.is_connected(_on_sync_completed):
-		data_manager.sync_completed.connect(_on_sync_completed)
 
 
 func _exit_tree() -> void:
@@ -93,11 +99,6 @@ func _flush_lru_sidecar() -> void:
 	DirAccess.rename_absolute(tmp_path, LRU_SIDECAR_PATH)
 
 
-func _on_sync_completed(success: bool, _message: String) -> void:
-	if success:
-		enforce_cache_limit_async()
-
-
 func _cache_maintenance(run_validation: bool, max_bytes: int, lru_snapshot: Dictionary) -> void:
 	if run_validation:
 		_scan_cover_cache()
@@ -121,7 +122,9 @@ func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary) -> void
 	"""Worker thread: evict least-recently-used covers until the cache folder
 	is under the configured byte cap. Recency comes from the LRU sidecar
 	snapshot, falling back to file mtime for files with no recorded access.
-	Uses raw DirAccess/FileAccess for the same reason as _scan_cover_cache:
+	Files younger than RECENT_FILE_GRACE_SECONDS count toward the total but
+	are never victims, so in-flight downloads are protected. Uses raw
+	DirAccess/FileAccess for the same reason as _scan_cover_cache:
 	FSM reaches autoloads unsafely from workers."""
 	var entries: Array = []
 	var total := 0
@@ -134,13 +137,12 @@ func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary) -> void
 			if not dir.current_is_dir():
 				var path := CACHE_FOLDER + file_name
 				var mtime := int(FileAccess.get_modified_time(path))
-				if now - mtime >= RECENT_FILE_GRACE_SECONDS:
-					var file := FileAccess.open(path, FileAccess.READ)
-					if file:
-						var size := file.get_length()
-						file.close()
-						entries.append({"path": path, "name": file_name, "size": size, "mtime": mtime})
-						total += size
+				var file := FileAccess.open(path, FileAccess.READ)
+				if file:
+					var size := file.get_length()
+					file.close()
+					entries.append({"path": path, "name": file_name, "size": size, "mtime": mtime})
+					total += size
 			file_name = dir.get_next()
 		dir.list_dir_end()
 
@@ -156,22 +158,49 @@ func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary) -> void
 		for e in entries:
 			if total <= max_bytes:
 				break
+			# Never evict a file an in-flight download may still be writing.
+			if now - e.mtime < RECENT_FILE_GRACE_SECONDS:
+				continue
 			if DirAccess.remove_absolute(e.path) == OK:
 				total -= e.size
 				freed += e.size
 				deleted_count += 1
 				deleted_names.append(e.name)
+
+	# Report the surviving name->size map so the main thread can keep live
+	# byte accounting for evict-on-insert without rescanning the directory.
+	var deleted_set := {}
+	for n in deleted_names:
+		deleted_set[n] = true
+	var remaining_sizes := {}
+	for e in entries:
+		if not deleted_set.has(e.name):
+			remaining_sizes[e.name] = e.size
 	# The manager may already be freed if the app quit mid-scan (benchmark).
 	if is_instance_valid(self):
-		call_deferred("_report_cache_eviction", deleted_count, freed, deleted_names)
+		call_deferred("_report_cache_eviction", deleted_count, freed, deleted_names, total, remaining_sizes)
 
 
-func _report_cache_eviction(deleted_count: int, freed_bytes: int, deleted_names: Array) -> void:
+func _report_cache_eviction(deleted_count: int, freed_bytes: int, deleted_names: Array, remaining_bytes: int, remaining_sizes: Dictionary) -> void:
 	_eviction_running = false
+	# The worker's snapshot is authoritative for files it saw; re-add covers
+	# written while the pass was running (absent from the snapshot but not
+	# evicted) so the live accounting doesn't lose them.
+	for file_name in _cache_file_sizes.keys():
+		if not remaining_sizes.has(file_name) and not file_name in deleted_names:
+			remaining_sizes[file_name] = _cache_file_sizes[file_name]
+			remaining_bytes += _cache_file_sizes[file_name]
+	_cache_file_sizes = remaining_sizes
+	_cache_bytes_total = remaining_bytes
 	for file_name in deleted_names:
 		_lru_dirty = _lru_map.erase(file_name) or _lru_dirty
 	if deleted_count > 0:
 		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, freed_bytes / (1024 * 1024)])
+		# More covers were written while the pass ran and we're still over:
+		# go again. Passes that deleted nothing don't retrigger - the overage
+		# is all grace-window files, which become evictable on the next write.
+		if remaining_bytes > get_max_cache_bytes():
+			enforce_cache_limit_async()
 
 
 func _ensure_cache_folder():
@@ -264,8 +293,29 @@ func _download_cover(url: String, callback: Callable, high_priority: bool = fals
 		callback.call(true)
 		return
 
-	# Direct download - SystemManager.download handles deduplication
-	SystemManager.download.download_image(url, cache_path, callback, high_priority)
+	# Direct download - SystemManager.download handles deduplication.
+	# The callback (and therefore _note_cover_write) runs on the main thread.
+	SystemManager.download.download_image(url, cache_path, func(ok):
+		if ok:
+			_note_cover_write(cache_path)
+		callback.call(ok)
+	, high_priority)
+
+
+## Account for a freshly written cover and evict oldest-first if the cache now
+## exceeds the cap (evict-on-insert). Main thread only. Deduplicated per file:
+## DownloadSubManager may invoke multiple callbacks for one downloaded file.
+func _note_cover_write(cache_path: String) -> void:
+	note_cover_access(cache_path)
+	var file_name := cache_path.get_file()
+	if not _cache_file_sizes.has(file_name):
+		var size := FSM.get_file_size(cache_path)
+		if size > 0:
+			_cache_file_sizes[file_name] = size
+			if _cache_bytes_total >= 0:
+				_cache_bytes_total += size
+	if _cache_bytes_total >= 0 and _cache_bytes_total > get_max_cache_bytes():
+		enforce_cache_limit_async()
 
 
 func download_cover(url: String, callback: Callable, high_priority: bool = false) -> void:
@@ -360,6 +410,8 @@ func clear_cache():
 		FSM.delete_file(FSM.join_paths(CACHE_FOLDER, file_name))
 	_lru_map.clear()
 	_lru_dirty = false
+	_cache_bytes_total = 0
+	_cache_file_sizes.clear()
 	DirAccess.remove_absolute(LRU_SIDECAR_PATH)
 	# Wipe the in-memory texture cache too, or stale textures survive the disk wipe
 	MemorySubManager.clear_texture_cache()

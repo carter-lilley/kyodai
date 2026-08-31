@@ -46,6 +46,11 @@ signal collection_membership_changed(collection_id: int, romm_id: int)
 var settings: SettingsSubManager
 var game_save: GameSaveSubManager
 
+## Bumped on every successful sync_completed. sync_completed is one-shot, so
+## views that were disconnected when it fired (DS-mode reparenting, tab
+## teardown) compare against their last-seen generation on show to catch up.
+var library_generation: int = 0
+
 func _enter_tree() -> void:
 	settings = $SettingsSubManager
 	game_save = $GameSaveSubManager
@@ -94,6 +99,13 @@ func _ready():
 
 	# Connect to setting changes for dynamic cover folding
 	settings.setting_changed.connect(_on_setting_changed)
+
+	# Single chokepoint for the generation bump: connected before any view, so
+	# it runs before view handlers regardless of who emitted sync_completed.
+	sync_completed.connect(func(success: bool, _message: String):
+		if success:
+			library_generation += 1
+	)
 
 
 func _ensure_memory_manager():
@@ -147,6 +159,16 @@ func is_database_ready() -> bool:
 
 func get_game_by_id(romm_id: int) -> GameResource:
 	return database.get_game_by_id(romm_id)
+
+
+## Map IGDB ids to library romm_ids: {igdb_id: romm_id} for owned matches.
+func get_games_by_igdb_ids(igdb_ids: Array) -> Dictionary:
+	return database.get_games_by_igdb_ids(igdb_ids)
+
+
+## Title fallback for related games: {lower_title: romm_id}.
+func get_games_by_titles(titles: Array) -> Dictionary:
+	return database.get_games_by_titles(titles)
 
 
 func get_all_games() -> Array[GameResource]:

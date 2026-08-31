@@ -6,6 +6,10 @@ var _app_id_input: M3TextField
 var _add_button: M3Button
 var _status_label: M3Label
 var _scroll_container: ScrollContainer
+var _margin: MarginContainer
+var _vbox: VBoxContainer
+var _add_row: HBoxContainer
+var _bottom_buffer: Control
 var _is_initializing: bool = false
 
 func _ready():
@@ -34,20 +38,17 @@ func _build_view():
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 	_scroll_container.add_child(margin)
-	
+	_margin = margin
+
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# KEY: Use SHRINK_BEGIN so the VBox reports its true content height
 	# to the ScrollContainer instead of trying to fill the viewport.
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	vbox.add_theme_constant_override("separation", M3Units.dp(16))
 	margin.add_child(vbox)
+	_vbox = vbox
 
 	# Add game section
 	var add_section := SettingsSection.new("Add Game", "plus")
@@ -69,13 +70,12 @@ func _build_view():
 		add_section.add_content(warning)
 
 	var add_row = HBoxContainer.new()
-	add_row.add_theme_constant_override("separation", M3Units.dp(10))
 	add_section.add_content(add_row)
+	_add_row = add_row
 
 	_app_id_input = M3TextField.new()
 	_app_id_input.label_text = "Steam App ID"
 	_app_id_input.placeholder_text = "e.g., 480"
-	_app_id_input.custom_minimum_size = Vector2(M3Units.dp(200), 0)
 	_app_id_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_app_id_input.text_submitted.connect(_on_add_submitted)
 	add_row.add_child(_app_id_input)
@@ -99,16 +99,43 @@ func _build_view():
 	vbox.add_child(games_section)
 
 	_games_container = VBoxContainer.new()
-	_games_container.add_theme_constant_override("separation", M3Units.dp(10))
 	games_section.add_content(_games_container, false)
 
 	# Bottom buffer so content isn't clipped by Android keyboard / nav bar
 	var bottom_buffer = Control.new()
-	bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
 	vbox.add_child(bottom_buffer)
+	_bottom_buffer = bottom_buffer
+
+	_apply_scale()
 
 	# Force recalculation now that all children are added
 	vbox.queue_sort()
+
+func _apply_scale() -> void:
+	if is_instance_valid(_margin):
+		_margin.add_theme_constant_override("margin_left", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_top", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_right", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+	if is_instance_valid(_vbox):
+		_vbox.add_theme_constant_override("separation", M3Units.dp(16))
+	if is_instance_valid(_add_row):
+		_add_row.add_theme_constant_override("separation", M3Units.dp(10))
+	if is_instance_valid(_app_id_input):
+		_app_id_input.custom_minimum_size = Vector2(M3Units.dp(200), 0)
+	if is_instance_valid(_games_container):
+		_games_container.add_theme_constant_override("separation", M3Units.dp(10))
+	if is_instance_valid(_bottom_buffer):
+		_bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
+
+func refresh_scale() -> void:
+	if not is_node_ready():
+		return
+	_apply_scale()
+	# Rebuild the games list so per-row cover sizes re-bake.
+	_refresh_games_list()
+	if has_method("refresh_theme"):
+		call("refresh_theme")
 
 func _on_add_pressed():
 	var text = _app_id_input.text.strip_edges()

@@ -64,6 +64,12 @@ var _lp_callback_head: int = 0  # Unconsumed items start here; avoids O(n) re-sl
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 
+# Thread-safe main-thread hops ({"callback": Callable, "args": Array}) from
+# workers that must reach the main thread reliably; call_deferred from threads
+# is unreliable on Android (silently dropped). Drained every frame in _process.
+var _mt_callbacks: Array = []
+var _mt_callback_mutex: Mutex
+
 const IMAGE_THREAD_COUNT: int = 6
 const MAX_IMAGE_QUEUE_SIZE = 600
 const MAX_DB_QUEUE_SIZE = 500
@@ -177,6 +183,7 @@ func _initialize_threads():
 	_sync_mutex = Mutex.new()
 	_texture_cache_mutex = Mutex.new()
 	_lp_callback_mutex = Mutex.new()
+	_mt_callback_mutex = Mutex.new()
 	_db_semaphore = Semaphore.new()
 	_image_semaphore = Semaphore.new()
 	_extraction_semaphore = Semaphore.new()
@@ -283,8 +290,27 @@ func _exit_tree():
 
 func _process(_delta):
 	WarmupBudget.begin_frame()
+	_drain_mt_callbacks()
 	_process_batches()
 	_drain_lp_callbacks()
+
+func _drain_mt_callbacks():
+	"""Run queued main-thread hops from worker threads. Drained before the
+	capped lp queue: these are rare, latency-critical completions (e.g. sync
+	finished) that must not wait behind batched image callbacks."""
+	_mt_callback_mutex.lock()
+	if _mt_callbacks.is_empty():
+		_mt_callback_mutex.unlock()
+		return
+	var batch := _mt_callbacks
+	_mt_callbacks = []
+	_mt_callback_mutex.unlock()
+
+	for item in batch:
+		if _callback_has_freed_capture(item.callback):
+			continue
+		if item.callback.is_valid():
+			item.callback.callv(item.args)
 
 func _drain_lp_callbacks():
 	_lp_callback_mutex.lock()
@@ -350,7 +376,11 @@ static func _db_worker():
 			var result = task.callable.call()
 
 			if task.callback.is_valid():
-				_instance.call_deferred("_execute_callback", task.callback, result)
+				# Use thread-safe callback queue instead of call_deferred
+				# (call_deferred from threads is unreliable on Android)
+				_instance._mt_callback_mutex.lock()
+				_instance._mt_callbacks.append({"callback": task.callback, "args": [result]})
+				_instance._mt_callback_mutex.unlock()
 
 static func _image_worker():
 	var high_count = 0
@@ -807,17 +837,19 @@ static func queue_extraction_task(callable: Callable, callback: Callable = Calla
 	_instance._extraction_semaphore.post()
 
 ## Queues a callback to run on the main thread during the next _process tick.
-## Safe to call from background threads when call_deferred is unreliable on Android.
-static func queue_main_thread_callback(callback: Callable):
+## Safe to call from background threads when call_deferred is unreliable on
+## Android. Drained via the uncapped _mt_callbacks queue ahead of the lp queue
+## so rare, latency-critical hops (e.g. sync completion) aren't held back.
+static func queue_main_thread_callback(callback: Callable, args: Array = []):
 	if _instance == null:
 		push_error("[SystemManager.memory] Not initialized - cannot queue main thread callback")
 		return
+	if _instance._exit_flag:
+		return
 
-	_instance._lp_callback_mutex.lock()
-	# Wrap so the existing _drain_lp_callbacks can pass its result argument
-	# without requiring the user callback to accept one.
-	_instance._lp_callbacks.append({"callback": func(_result): callback.call(), "result": null})
-	_instance._lp_callback_mutex.unlock()
+	_instance._mt_callback_mutex.lock()
+	_instance._mt_callbacks.append({"callback": callback, "args": args})
+	_instance._mt_callback_mutex.unlock()
 
 ## Queues an OS.execute() call to run on a dedicated background thread pool.
 ## Calls back on the main thread with {exit_code: int, output: Array[String]}.

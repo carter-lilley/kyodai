@@ -26,6 +26,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Raw IGDB metadata blob from RomM (includes multiplayer_modes, related games, etc.)
 @export var igdb_metadata: Dictionary = {}
 
+## IGDB game id from RomM (matches the `id` field of related-game entries).
+## 0 means unknown / not IGDB-matched.
+@export var igdb_id: int = 0
+
 ## Per-game emulator override (optional)
 @export var preferred_emulator_id: String = ""
 

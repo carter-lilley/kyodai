@@ -38,6 +38,8 @@ func _connect_signals() -> void:
 		DataManager.games_removed.connect(_on_games_removed)
 	if not DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.connect(_on_sync_completed)
+	if DataManager.collections and not DataManager.collections.collections_synced.is_connected(_on_collections_synced):
+		DataManager.collections.collections_synced.connect(_on_collections_synced)
 	if favorites_mode and DataManager.user_props and not DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
 		DataManager.user_props.game_props_updated.connect(_on_game_props_updated)
 	if not DataManager.collection_membership_changed.is_connected(_on_collection_membership_changed):
@@ -58,6 +60,8 @@ func _disconnect_signals() -> void:
 		DataManager.games_removed.disconnect(_on_games_removed)
 	if DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.disconnect(_on_sync_completed)
+	if DataManager.collections and DataManager.collections.collections_synced.is_connected(_on_collections_synced):
+		DataManager.collections.collections_synced.disconnect(_on_collections_synced)
 	if DataManager.user_props and DataManager.user_props.game_props_updated.is_connected(_on_game_props_updated):
 		DataManager.user_props.game_props_updated.disconnect(_on_game_props_updated)
 	if DataManager.collection_membership_changed.is_connected(_on_collection_membership_changed):
@@ -132,8 +136,24 @@ func _on_games_removed(_platform_slug: String) -> void:
 	_load_total_count()
 
 func _on_sync_completed(success: bool, _message: String) -> void:
-	if success:
-		_load_total_count(false)
+	_seen_library_generation = DataManager.library_generation
+	if not success:
+		return
+	if favorites_mode:
+		# The favorites collection id is resolved dynamically and can
+		# appear/change with a collections sync; re-resolve so a view stuck
+		# at id 0 recovers.
+		_refresh_favorites_collection_id()
+	_load_total_count(false)
+
+func _on_collections_synced(success: bool, _message: String) -> void:
+	# Collections re-sync after a library sync; membership and the favorites
+	# collection id may have changed.
+	if not success:
+		return
+	if favorites_mode:
+		_refresh_favorites_collection_id()
+	_load_total_count(false)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name in ["hide_games_without_covers", "fold_romm_siblings"]:
@@ -217,6 +237,7 @@ func _focus_random_card() -> void:
 
 func on_view_show() -> void:
 	super.on_view_show()
+	_catch_up_missed_sync()
 	if favorites_mode:
 		_refresh_favorites_collection_id()
 	if title_label:

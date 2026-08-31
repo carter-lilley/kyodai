@@ -415,6 +415,11 @@ func refresh_theme() -> void:
 	_apply_m3_theme()
 	_update_controlbar_mask_color()
 
+func refresh_scale() -> void:
+	# main.gd bakes no dp-derived sizes itself (the dp(16) margins around
+	# MainContentVBox are owned by UIManager); children re-bake their own.
+	refresh_theme()
+
 func _show_oobe_wizard_if_needed():
 	var first_run_setting = DataManager.get_setting("first_run_completed")
 	var is_first_run = true

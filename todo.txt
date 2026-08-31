@@ -1,29 +1,23 @@
 #TODO.TXT
 
 xemu raw hdd save sync
-tst emulator app update flow on android
 prewarm covers on random jump
 rework hero to also accept effect stacks
-add downloads screen
 ship w music
 
 update notification all in one 
+tst emulator app update flow on android
 
-ui scale still
+download copying step (for sd cards on android)
+
+filter chip negative state
 filter chips in shuffler
-x xemu launch broken
 x xemu on android (https://github.com/izzy2lost/xemu)
 
 submenus still suck
 small screen submenus not showing up
 
-x true LRU
-platform indiciator & favorites reload after sync finish
-sync breaks on app resume during cover step (then, platform indicators broken until restart)
-x cover step & eviction..?
-
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
-download copying step
 
 ## saves
 	check emulator config for save/user folder(s) at synctime

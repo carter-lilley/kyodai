@@ -149,6 +149,20 @@ func refresh_all_control_values() -> void:
 func refresh_theme() -> void:
 	_refresh_theme_recursive(self)
 
+func refresh_scale() -> void:
+	add_theme_constant_override("separation", int(M3Units.dp(16)))
+	for control in controls.values():
+		if not is_instance_valid(control):
+			continue
+		var trailing: Variant = control.get_meta("trailing_width", null)
+		if trailing:
+			control.custom_minimum_size.x = _trailing_width(trailing[0], trailing[1])
+		if control is AngleDial:
+			var spinbox: SpinBox = control.get_meta("spinbox", null)
+			if spinbox and spinbox.has_meta("width_dp"):
+				spinbox.custom_minimum_size.x = M3Units.dp(spinbox.get_meta("width_dp"))
+	refresh_theme()
+
 func _refresh_theme_recursive(node: Node) -> void:
 	if node.has_method("refresh_theme") and node != self:
 		node.refresh_theme()
@@ -228,6 +242,12 @@ func _apply_accent(control: Control) -> void:
 func _trailing_width(settingsvar: SettingsVar, default_dp: float) -> float:
 	return M3Units.dp(settingsvar.metadata.get("control_width", default_dp))
 
+## Sets the trailing width and records the inputs so refresh_scale() can
+## re-bake it without a full rebuild.
+func _set_trailing_width(control: Control, settingsvar: SettingsVar, default_dp: float) -> void:
+	control.custom_minimum_size.x = _trailing_width(settingsvar, default_dp)
+	control.set_meta("trailing_width", [settingsvar, default_dp])
+
 func match_var_type(settingsvar : SettingsVar):
 	_building_property = settingsvar.property_name
 	var rule = settingsvar.metadata.get("visible_if", {})
@@ -268,7 +288,7 @@ func match_var_type(settingsvar : SettingsVar):
 			# Row carries the label; keep the field's floating label empty.
 			option_button.label_text = ""
 			option_button.fit_to_longest_item = false
-			option_button.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			_set_trailing_width(option_button, settingsvar, 220.0)
 			option_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 			var id = 0
 			var matched_index = 0
@@ -302,7 +322,7 @@ func match_var_type(settingsvar : SettingsVar):
 			slider.step = settingsvar.step * display_scale
 			slider.show_stops = false
 			slider.set_meta("display_scale", display_scale)
-			slider.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			_set_trailing_width(slider, settingsvar, 220.0)
 			slider.size_flags_horizontal = Control.SIZE_SHRINK_END
 
 			if not display_unit.is_empty():
@@ -330,7 +350,7 @@ func match_var_type(settingsvar : SettingsVar):
 			text_field.text = settingsvar.value if settingsvar.value else ""
 			text_field.editable = settingsvar.state == 0
 			text_field.secret = settingsvar.encrypted
-			text_field.custom_minimum_size.x = _trailing_width(settingsvar, 240.0)
+			_set_trailing_width(text_field, settingsvar, 240.0)
 			text_field.size_flags_horizontal = Control.SIZE_SHRINK_END
 			_add_setting_row(_make_label_block(settingsvar), [text_field])
 			controls[settingsvar.property_name] = text_field
@@ -366,7 +386,7 @@ func match_var_type(settingsvar : SettingsVar):
 			# label block isn't squeezed into word-per-line wrapping on
 			# high-dp screens; long paths elide inside the field instead.
 			path_controls.size_flags_horizontal = Control.SIZE_SHRINK_END
-			path_field.custom_minimum_size.x = _trailing_width(settingsvar, 140.0)
+			_set_trailing_width(path_field, settingsvar, 140.0)
 			path_controls.add_child(path_field)
 			path_controls.add_child(browse_button)
 
@@ -416,7 +436,7 @@ func match_var_type(settingsvar : SettingsVar):
 		
 		Type.VECTOR2:
 			var rangeslider = RangeSlider.new(settingsvar.value.x, settingsvar.value.y, settingsvar.step, settingsvar.min_value, settingsvar.max_value)
-			rangeslider.custom_minimum_size.x = _trailing_width(settingsvar, 220.0)
+			_set_trailing_width(rangeslider, settingsvar, 220.0)
 			rangeslider.size_flags_horizontal = Control.SIZE_SHRINK_END
 			rangeslider.editable = settingsvar.state == 0
 			_add_setting_row(_make_label_block(settingsvar), [rangeslider])
@@ -440,7 +460,8 @@ func match_var_type(settingsvar : SettingsVar):
 			var gradient_edit = GradientEdit.new()
 			if settingsvar.value is Gradient:
 				gradient_edit.set_gradient(settingsvar.value)
-			gradient_edit.custom_minimum_size = Vector2(_trailing_width(settingsvar, 220.0), 24)
+			gradient_edit.custom_minimum_size.y = 24
+			_set_trailing_width(gradient_edit, settingsvar, 220.0)
 			gradient_edit.size_flags_horizontal = Control.SIZE_SHRINK_END
 			_add_setting_row(_make_label_block(settingsvar), [gradient_edit])
 			controls[settingsvar.property_name] = gradient_edit
@@ -465,6 +486,7 @@ func match_var_type(settingsvar : SettingsVar):
 			spinbox.editable = settingsvar.state == 0
 			spinbox.suffix = "°"
 			spinbox.custom_minimum_size.x = M3Units.dp(90.0)
+			spinbox.set_meta("width_dp", 90.0)
 			spinbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 			var angle_controls = HBoxContainer.new()

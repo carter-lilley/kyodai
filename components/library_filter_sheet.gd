@@ -22,6 +22,21 @@ func _ready():
 	super._ready()
 	_build_content()
 
+func refresh_theme():
+	super.refresh_theme()
+	if _scroll:
+		M3Theme.style_scrollbar(_scroll.get_v_scroll_bar())
+
+func refresh_scale() -> void:
+	if not is_node_ready():
+		return
+	if _sections_vbox:
+		_sections_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
+	# Rebuilding the chip rows re-bakes the section/flow separations; _selected
+	# survives, so checked states are preserved.
+	reload_options()
+	super.refresh_scale()
+
 func _build_content() -> void:
 	if not _content_slot:
 		return
@@ -32,6 +47,7 @@ func _build_content() -> void:
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	M3Theme.style_scrollbar(_scroll.get_v_scroll_bar())
 	_content_slot.add_child(_scroll)
 
 	_sections_vbox = VBoxContainer.new()

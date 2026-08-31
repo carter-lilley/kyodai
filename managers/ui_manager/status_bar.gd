@@ -30,6 +30,7 @@ enum PowerState { UNKNOWN, ON_BATTERY, NO_BATTERY, CHARGING, CHARGED }
 var _clock_label: Label = null
 var _battery_label: Label = null
 var _battery_icon: FontIcon = null
+var _hbox: HBoxContainer = null
 var _poll_timer: Timer = null
 var _poll_count: int = 0
 var _battery_query_running: bool = false
@@ -49,46 +50,42 @@ static func _create_clock_font() -> FontVariation:
 func _ready() -> void:
 	# Sit above the controlbar_mask vignette (z_index 5) like the toolbar does.
 	z_index = 10
-	custom_minimum_size = Vector2(0, M3Units.dp(BAR_HEIGHT_DP))
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	_background = StyleBoxFlat.new()
-	var h_padding := M3Units.dp(16)
-	_background.content_margin_left = h_padding
-	_background.content_margin_right = h_padding
 	add_theme_stylebox_override("panel", _background)
 
 	# PanelContainer fits each child into the same content rect, so the battery
 	# cluster (right-aligned via expanding spacer) and the clock (center-aligned
 	# over the full width) live in overlapping children. The clock stays dead
 	# center regardless of whether the battery cluster is visible.
-	var hbox := HBoxContainer.new()
-	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_theme_constant_override("separation", M3Units.dp(6))
-	add_child(hbox)
+	_hbox = HBoxContainer.new()
+	_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_hbox)
 
 	var right_spacer := Control.new()
 	right_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(right_spacer)
+	_hbox.add_child(right_spacer)
 
 	_battery_label = Label.new()
 	_battery_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_battery_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_battery_label.visible = false
-	hbox.add_child(_battery_label)
+	_hbox.add_child(_battery_label)
 
 	_battery_icon = FontIcon.new()
 	_battery_icon.icon_settings = FontIconSettings.new()
 	_battery_icon.icon_settings.icon_font = "MaterialIcons"
-	_battery_icon.icon_settings.icon_size = M3Units.dp(BATTERY_ICON_SIZE_DP)
 	_battery_icon.icon_settings.outline_color = Color.TRANSPARENT
 	_battery_icon.icon_settings.shadow_color = Color.TRANSPARENT
 	_battery_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_battery_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(_battery_icon)
+	_hbox.add_child(_battery_icon)
+
+	_apply_scale()
 
 	# Added after hbox so it draws on top if the window gets extremely narrow.
 	_clock_label = Label.new()
@@ -110,6 +107,23 @@ func _ready() -> void:
 
 func refresh_theme() -> void:
 	_apply_colors()
+
+
+func refresh_scale() -> void:
+	_apply_scale()
+	refresh_theme()
+
+
+func _apply_scale() -> void:
+	custom_minimum_size = Vector2(0, M3Units.dp(BAR_HEIGHT_DP))
+	if _background:
+		var h_padding := M3Units.dp(16)
+		_background.content_margin_left = h_padding
+		_background.content_margin_right = h_padding
+	if _hbox:
+		_hbox.add_theme_constant_override("separation", M3Units.dp(6))
+	if _battery_icon and _battery_icon.icon_settings:
+		_battery_icon.icon_settings.icon_size = M3Units.dp(BATTERY_ICON_SIZE_DP)
 
 
 func _notification(what: int) -> void:

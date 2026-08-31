@@ -610,6 +610,7 @@ func _on_sync_progress(percent: float, current: int, total: int):
 	_update_status("Syncing... %d/%d games (%.0f%%)" % [current, total, percent])
 
 func _on_sync_completed(success: bool, message: String):
+	_seen_library_generation = DataManager.library_generation
 	if success:
 		_update_status("Sync complete. Finalizing...")
 		
@@ -633,6 +634,8 @@ func _deferred_reload_after_sync():
 
 func on_view_show():
 	super.on_view_show()
+	# Catch up if sync_completed fired while this view was disconnected.
+	_catch_up_missed_sync()
 	# Ensure search overlay is hidden when returning to this view
 	if _search_overlay and _search_overlay.is_active():
 		_search_overlay.dismiss()

@@ -156,6 +156,7 @@ func _create_tables():
 		cover_group_id TEXT DEFAULT '',
 		cover_group_master INTEGER DEFAULT 1,
 		igdb_metadata TEXT DEFAULT '{}',
+		igdb_id INTEGER DEFAULT 0,
 		m3u_path TEXT DEFAULT '',
 		unwrapped INTEGER DEFAULT 0
 	)
@@ -442,6 +443,8 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	# "value or 0" evaluates to true and int(true) = 1 for any nonzero value.
 	var release_date_value = row.get("release_date", 0)
 	game.release_date = int(release_date_value) if release_date_value != null else 0
+	var igdb_id_value = row.get("igdb_id", 0)
+	game.igdb_id = int(igdb_id_value) if igdb_id_value != null else 0
 
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":
@@ -911,12 +914,13 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				title_id = ?,
 				save_id = ?,
 				save_usage = ?,
-			cover_group_id = ?,
-			cover_group_master = ?,
-			igdb_metadata = ?,
-			m3u_path = ?
-		WHERE romm_id = ?
-	"""
+		cover_group_id = ?,
+		cover_group_master = ?,
+		igdb_metadata = ?,
+		igdb_id = ?,
+		m3u_path = ?
+	WHERE romm_id = ?
+"""
 			var bindings = [
 				game.title,
 				game.platform,
@@ -941,12 +945,13 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 			game.title_id,
 			game.save_id,
 			game.save_usage,
-			game.cover_group_id,
-				1 if game.cover_group_master else 0,
-		JSON.stringify(game.igdb_metadata),
-		game.m3u_path,
-		game.romm_id
-	]
+		game.cover_group_id,
+			1 if game.cover_group_master else 0,
+	JSON.stringify(game.igdb_metadata),
+	game.igdb_id,
+	game.m3u_path,
+	game.romm_id
+]
 			var success = query_bool_unlocked(query, bindings)
 			if success:
 				replace_game_filter_values_unlocked(game)
@@ -1155,6 +1160,35 @@ func get_game_by_id(romm_id: int) -> GameResource:
 	if query_result.size() > 0:
 		return _row_to_game(query_result[0])
 	return null
+
+
+## Map IGDB ids to library games: {igdb_id: romm_id} for ids present in the
+## library. Used by the details sheet to link related games to owned entries.
+func get_games_by_igdb_ids(igdb_ids: Array) -> Dictionary:
+	var result: Dictionary = {}
+	if not _is_db_ready or igdb_ids.is_empty():
+		return result
+	var placeholders = ", ".join(igdb_ids.map(func(_id): return "?"))
+	var rows = query_array("SELECT igdb_id, romm_id FROM games WHERE igdb_id IN (%s)" % placeholders, igdb_ids)
+	for row in rows:
+		var igdb_id = row.get("igdb_id", 0)
+		if igdb_id != null and int(igdb_id) > 0:
+			result[int(igdb_id)] = int(row.get("romm_id", 0))
+	return result
+
+
+## Title fallback for related games whose library entry has no igdb_id.
+## Returns {lower_title: romm_id} for exact (case-insensitive) matches.
+func get_games_by_titles(titles: Array) -> Dictionary:
+	var result: Dictionary = {}
+	if not _is_db_ready or titles.is_empty():
+		return result
+	var placeholders = ", ".join(titles.map(func(_t): return "?"))
+	var bindings = titles.map(func(t): return str(t).to_lower())
+	var rows = query_array("SELECT LOWER(title) AS ltitle, romm_id FROM games WHERE LOWER(title) IN (%s)" % placeholders, bindings)
+	for row in rows:
+		result[str(row.get("ltitle", ""))] = int(row.get("romm_id", 0))
+	return result
 
 
 func get_all_games() -> Array[GameResource]:

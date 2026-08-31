@@ -11,6 +11,11 @@ func _init():
 	custom_minimum_size.x = M3Units.dp(400)
 
 
+func refresh_scale() -> void:
+	custom_minimum_size.x = M3Units.dp(400)
+	super.refresh_scale()
+
+
 func grab_focus_on_input():
 	grab_focus()
 

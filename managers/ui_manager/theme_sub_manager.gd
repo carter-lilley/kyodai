@@ -48,6 +48,22 @@ func _refresh_theme_on_all_nodes(node: Node) -> void:
 	for child in node.get_children():
 		_refresh_theme_on_all_nodes(child)
 
+func _do_refresh_scale() -> void:
+	var saved_focus: WeakRef = ui_manager.capture_focus() if ui_manager else null
+	_refresh_scale_on_all_nodes(get_tree().root)
+	if ui_manager:
+		ui_manager.restore_focus(saved_focus, ui_manager.get_focus_restore_fallback_to_home())
+
+func _refresh_scale_on_all_nodes(node: Node) -> void:
+	if node == self:
+		return
+	if node.has_method("refresh_scale"):
+		node.refresh_scale()
+	elif node.has_method("refresh_theme"):
+		node.refresh_theme()
+	for child in node.get_children():
+		_refresh_scale_on_all_nodes(child)
+
 func refresh_theme() -> void:
 	_do_refresh_theme()
 

@@ -24,6 +24,17 @@ var surface_tint: Color = Color.TRANSPARENT:
 		if _card:
 			refresh_theme()
 
+## Replaces the card background when set (e.g. M3Theme.get_surface() to read
+## darker than a surface_container_low parent, such as a bottom sheet).
+## A surface_tint, if also set, still overlays it.
+var bg_color_override: Color = Color.TRANSPARENT:
+	set(value):
+		if bg_color_override == value:
+			return
+		bg_color_override = value
+		if _card:
+			refresh_theme()
+
 func _init(title: String = "", icon_name: String = "") -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# PASS so touch/drag gestures bubble through to an ancestor ScrollContainer
@@ -106,7 +117,7 @@ func set_row_visible(row: Control, visible: bool) -> void:
 func refresh_theme() -> void:
 	var card_style := _card.get_theme_stylebox("panel") as StyleBoxFlat
 	if card_style:
-		var bg := M3Theme.get_surface_container_low()
+		var bg := bg_color_override if bg_color_override.a > 0.0 else M3Theme.get_surface_container_low()
 		if surface_tint != Color.TRANSPARENT:
 			bg = M3Theme.state_overlay(bg, surface_tint, 0.12)
 			var border := surface_tint

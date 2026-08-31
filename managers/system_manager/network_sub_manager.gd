@@ -598,10 +598,17 @@ func fetch_game_details(game_id: int, callback: Callable):
 
 # ==================== BASIC HTTP OPERATIONS ====================
 
+## Timeout for generic GETs (image downloads). Must not be 0: if the OS
+## suspends mid-transfer the socket dies silently and request_completed never
+## fires, wedging the image download queue and the sync cover drain until
+## restart. A timeout makes the request fail so callbacks fire.
+const HTTP_GET_TIMEOUT_SECONDS: float = 45.0
+
 ## Makes a generic HTTP GET request - returns body bytes and status via callback
 ## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
 	var http = _create_http_request()
+	http.timeout = HTTP_GET_TIMEOUT_SECONDS
 	_active_request_count += 1
 
 	# Raw spaces are never valid in a request line; tolerate unencoded URLs

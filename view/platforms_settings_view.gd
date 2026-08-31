@@ -71,6 +71,16 @@ func _ready():
 
 	super._ready()
 
+func refresh_scale() -> void:
+	if not is_node_ready():
+		return
+	_platforms_container.add_theme_constant_override("separation", int(M3Units.dp(16)))
+	# _cards_right's dp(300) width is re-baked by _update_column_visibility(),
+	# which also runs on viewport resize.
+	_update_column_visibility()
+	if has_method("refresh_theme"):
+		call("refresh_theme")
+
 func _build_sections() -> void:
 	"""Compose the page from SettingsSection cards: connection credentials,
 	library display switches, and the platforms grid with its action row."""
@@ -1135,6 +1145,11 @@ func on_view_show():
 	# Take snapshot of current enabled state before user makes changes
 	_sync_triggered = false
 
+	# Catch up if sync_completed fired while this view was disconnected;
+	# the handler marks data dirty and starts a fetch, so the block below
+	# skips its own load via the _is_fetching_platforms guard.
+	_catch_up_missed_sync()
+
 	if not _is_fetching_platforms:
 		if _platforms_data_loaded and not _platforms_data_dirty:
 			# Fast path: we already have fresh data, just render the cards again.
@@ -1151,6 +1166,7 @@ func on_view_hide():
 func _on_sync_completed(success: bool, _message: String) -> void:
 	"""When a library sync finishes, mark the cached platform list dirty so the
 	platforms settings screen refreshes the next time it is visible."""
+	_seen_library_generation = DataManager.library_generation
 	if not success:
 		return
 	_platforms_data_dirty = true

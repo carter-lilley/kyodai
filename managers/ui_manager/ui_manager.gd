@@ -31,6 +31,7 @@ var _root_control: Control = null  # Plain control, never replaced
 var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orientation change
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 var _content_wrapper: Control = null
+var _content_margin: MarginContainer = null
 var _status_bar: StatusBar = null
 
 # Cached on-screen keyboard reference (survives reparenting in dual-screen mode)
@@ -98,11 +99,8 @@ func initialize(
 	content_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	content_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var margin = int(M3Units.dp(16))
-	content_margin.add_theme_constant_override("margin_left", margin)
-	content_margin.add_theme_constant_override("margin_right", margin)
-	content_margin.add_theme_constant_override("margin_top", margin)
-	content_margin.add_theme_constant_override("margin_bottom", margin)
+	_apply_content_margin(content_margin)
+	_content_margin = content_margin
 
 	var mcv_index = _main_content_vbox.get_index()
 	_content_wrapper.remove_child(_main_content_vbox)
@@ -155,6 +153,7 @@ func initialize(
 	# Reconnect dual-screen detection signal and re-evaluate current state.
 	if SystemManager.display:
 		SystemManager.display.dual_screen_mode_changed.connect(dual_screen._on_dual_screen_mode_changed)
+		SystemManager.display.ui_scale_changed.connect(_on_ui_scale_changed)
 		if SystemManager.display.is_dual_screen_enabled():
 			dual_screen._on_dual_screen_mode_changed(true, SystemManager.display.get_second_screen_index())
 	print("[UIManager] initialize total elapsed_us=", Time.get_ticks_usec() - init_start_us)
@@ -200,6 +199,21 @@ func initialize(
 # ============================================================================
 # Layout helpers
 # ============================================================================
+
+func _apply_content_margin(margin_container: MarginContainer) -> void:
+	var margin := int(M3Units.dp(16))
+	margin_container.add_theme_constant_override("margin_left", margin)
+	margin_container.add_theme_constant_override("margin_right", margin)
+	margin_container.add_theme_constant_override("margin_top", margin)
+	margin_container.add_theme_constant_override("margin_bottom", margin)
+
+func _on_ui_scale_changed(_new_scale: float) -> void:
+	"""Live-apply a UI scale change: rescale baked sizes, rebuild nav + views."""
+	if _content_margin:
+		_apply_content_margin(_content_margin)
+	theme._do_refresh_scale()
+	navigation._rebuild_nav_and_layout()
+	view._rebuild_views("ui_scale")
 
 func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	var layout: BoxContainer

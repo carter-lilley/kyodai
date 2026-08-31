@@ -15,6 +15,7 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 var _left_pane: VBoxContainer
 var _left_scroll: ScrollContainer
 var _left_column: VBoxContainer
+var _left_margin: MarginContainer
 var _right_pane: MarginContainer
 var _right_scroll: ScrollContainer
 var _right_content: Control
@@ -111,8 +112,6 @@ func _build_two_pane_layout() -> void:
 	hbox.offset_bottom = 0
 	content_wrapper.add_child(hbox)
 
-	var compact := _is_compact_sidebar()
-
 	# Left sidebar. The category list lives in a ScrollContainer so its natural
 	# height can never inflate the dialog's minimum size (a Control's rect can
 	# never go below its minimum, which previously forced shrink-to-fit buttons).
@@ -121,7 +120,6 @@ func _build_two_pane_layout() -> void:
 	_left_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_left_pane.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_left_pane.alignment = BoxContainer.ALIGNMENT_BEGIN
-	_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 
 	_left_scroll = ScrollContainer.new()
 	_left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -132,18 +130,12 @@ func _build_two_pane_layout() -> void:
 	_left_scroll.add_child(_left_pane)
 
 	_left_column = VBoxContainer.new()
-	_left_column.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(200), 0)
 	_left_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_left_column.add_theme_constant_override("separation", int(M3Units.dp(4)))
 	_left_column.add_child(_left_scroll)
 
-	var left_margin = MarginContainer.new()
-	left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
-	left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(4) if compact else M3Units.dp(8)))
-	left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
-	left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
-	left_margin.add_child(_left_column)
-	hbox.add_child(left_margin)
+	_left_margin = MarginContainer.new()
+	_left_margin.add_child(_left_column)
+	hbox.add_child(_left_margin)
 
 	# Divider
 	var divider = VSeparator.new()
@@ -160,10 +152,6 @@ func _build_two_pane_layout() -> void:
 	_right_pane = MarginContainer.new()
 	_right_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
-	_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
-	_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
-	_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 
 	_right_scroll = ScrollContainer.new()
 	_right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -173,6 +161,8 @@ func _build_two_pane_layout() -> void:
 	_right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_right_pane.add_child(_right_scroll)
 	hbox.add_child(_right_pane)
+
+	_apply_scale()
 
 func _is_compact_sidebar() -> bool:
 	"""Use icon-only category buttons on small screens."""
@@ -295,6 +285,7 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array, i
 	provided by the shared pane-level ScrollContainer (_right_scroll)."""
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.set_meta("category_margin", true)
 	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
 	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
@@ -553,6 +544,37 @@ func refresh_theme() -> void:
 	for content in _category_contents.values():
 		if is_instance_valid(content):
 			_refresh_theme_recursive(content)
+
+func refresh_scale() -> void:
+	_apply_scale()
+	refresh_theme()
+
+func _apply_scale() -> void:
+	var compact := _is_compact_sidebar()
+	if is_instance_valid(_left_pane):
+		_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
+	if is_instance_valid(_left_column):
+		_left_column.custom_minimum_size = Vector2(M3Units.dp(64) if compact else M3Units.dp(200), 0)
+		_left_column.add_theme_constant_override("separation", int(M3Units.dp(4)))
+	if is_instance_valid(_left_margin):
+		_left_margin.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
+		_left_margin.add_theme_constant_override("margin_right", int(M3Units.dp(4) if compact else M3Units.dp(8)))
+		_left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
+		_left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
+	if is_instance_valid(_right_pane):
+		_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
+		_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
+		_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
+		_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
+	for btn in _category_buttons.values():
+		if is_instance_valid(btn):
+			btn.custom_minimum_size.y = M3Units.dp(48)
+	for content in _category_contents.values():
+		if content is MarginContainer and content.has_meta("category_margin"):
+			content.add_theme_constant_override("margin_left", M3Units.dp(20))
+			content.add_theme_constant_override("margin_top", M3Units.dp(20))
+			content.add_theme_constant_override("margin_right", M3Units.dp(20))
+			content.add_theme_constant_override("margin_bottom", M3Units.dp(20))
 
 func _refresh_theme_recursive(node: Node) -> void:
 	if node.has_method("refresh_theme"):

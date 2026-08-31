@@ -31,6 +31,28 @@ var _last_connected_viewport: Viewport = null
 # re-emit hero_game_changed once the data arrives.
 var _pending_hero_card: GameCard = null
 
+# Last DataManager.library_generation this view has refreshed against. -1 =
+# uninitialized (fresh instance; first show just adopts the current value).
+var _seen_library_generation: int = -1
+
+## sync_completed is one-shot: if it fired while this view was disconnected
+## (DS-mode reparenting, tab teardown), re-run the view's sync handler on
+## show. Handlers must set _seen_library_generation so signal-driven
+## refreshes aren't repeated here.
+func _catch_up_missed_sync() -> void:
+	if not DataManager or not DataManager.sync:
+		return
+	if DataManager.sync.is_sync_in_progress():
+		# Reconnected by now; the completion signal will reach this view.
+		return
+	var generation: int = DataManager.library_generation
+	if _seen_library_generation == -1 or generation == _seen_library_generation:
+		_seen_library_generation = generation
+		return
+	_seen_library_generation = generation
+	if has_method("_on_sync_completed"):
+		call("_on_sync_completed", true, "")
+
 func _ready():
 	view_ready.emit()
 

@@ -31,7 +31,7 @@ theme_override_constants/separation = 24
 [node name="CoverContainer" type="VBoxContainer" parent="MarginContainer/HBoxContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_vertical = 3
+size_flags_vertical = 0
 size_flags_stretch_ratio = 0.3
 theme_override_constants/separation = 0
 
@@ -51,36 +51,31 @@ grow_vertical = 2
 expand_mode = 1
 stretch_mode = 6
 
-[node name="ContentScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer"]
+[node name="ContentVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 size_flags_stretch_ratio = 0.7
-horizontal_scroll_mode = 0
-follow_focus = true
-
-[node name="ContentVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
 theme_override_constants/separation = 12
 
-[node name="TitleLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
+[node name="HeaderRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow"]
 script = ExtResource("2_m3label")
 layout_mode = 2
-label_style = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+label_style = 4
 autowrap_mode = 3
 
-[node name="MetadataRow" type="HFlowContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
+[node name="ButtonRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow"]
 layout_mode = 2
-theme_override_constants/h_separation = 8
-theme_override_constants/v_separation = 8
-
-[node name="ButtonRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
-layout_mode = 2
+size_flags_vertical = 4
 theme_override_constants/separation = 12
 
-[node name="ActionButton" type="Button" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow"]
+[node name="ActionButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow"]
 script = ExtResource("3_m3button")
 layout_mode = 2
 size_flags_horizontal = 0
@@ -89,7 +84,7 @@ button_size = 1
 button_shape = 0
 icon_name = "play"
 
-[node name="SyncButton" type="Button" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow"]
+[node name="SyncButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow"]
 script = ExtResource("3_m3button")
 layout_mode = 2
 button_variant = 3
@@ -97,81 +92,126 @@ button_size = 1
 button_shape = 0
 icon_name = "sync"
 
-[node name="FavoriteButton" type="Button" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow"]
+[node name="FavoriteButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow"]
 script = ExtResource("m3iconbutton")
 layout_mode = 2
 icon_name = "heart-outline"
 icon_button_size = 1
 icon_button_variant = 2
 
-[node name="ContentTabs" type="TabContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox"]
+[node name="MetadataRow" type="HFlowContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+
+[node name="ContentTabs" type="TabContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Overview" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs"]
+[node name="Overview" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs"]
 layout_mode = 2
 theme_override_constants/margin_top = 12
 
-[node name="OverviewScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Overview"]
+[node name="OverviewVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme_override_constants/separation = 8
 
-[node name="DescriptionLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Overview/OverviewScroll"]
+[node name="DescScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 0
+
+[node name="DescriptionLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 size_flags_horizontal = 3
 label_style = 9
+use_on_surface_variant = true
 autowrap_mode = 3
 
-[node name="Files" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs"]
+[node name="DescFoldButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
+visible = false
+script = ExtResource("3_m3button")
+layout_mode = 2
+button_variant = 4
+button_size = 0
+button_shape = 0
+text = "More"
+
+[node name="RelatedSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
 visible = false
 layout_mode = 2
-theme_override_constants/margin_top = 12
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
 
-[node name="FilesScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files"]
+[node name="RelatedHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection"]
+script = ExtResource("2_m3label")
+layout_mode = 2
+label_style = 7
+text = "Related Games"
+
+[node name="RelatedScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_vertical = 3
+vertical_scroll_mode = 0
 
-[node name="FilesVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll"]
+[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/margin_bottom = 8
+
+[node name="RelatedRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll/RowMargin"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 12
 
-[node name="FilesCard" type="PanelContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox"]
+[node name="Files" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_top = 12
+
+[node name="FilesVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="FilesCard" type="PanelContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox"]
 layout_mode = 2
 
-[node name="CardMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard"]
+[node name="CardMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard"]
 layout_mode = 2
 theme_override_constants/margin_left = 16
 theme_override_constants/margin_top = 16
 theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 16
 
-[node name="CardVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin"]
+[node name="CardVBox" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="FileInfoLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox"]
+[node name="FileInfoLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 10
 
-[node name="FileSizeLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox"]
+[node name="FileSizeLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 10
 
-[node name="TitleIdLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox"]
+[node name="TitleIdLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 10
 
-[node name="StatusChipRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox"]
+[node name="StatusChipRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox"]
 layout_mode = 2
 
-[node name="StatusChip" type="Button" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow"]
+[node name="StatusChip" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow"]
 script = ExtResource("4_m3chip")
 focus_mode = 0
 mouse_filter = 2
@@ -180,16 +220,16 @@ text = "Not downloaded"
 chip_variant = 3
 leading_icon = "download"
 
-[node name="SyncStatusLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox"]
+[node name="SyncStatusLabel" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 10
 
-[node name="SiblingDropdown" type="LineEdit" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox"]
+[node name="SiblingDropdown" type="LineEdit" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox"]
 script = ExtResource("m3optionbutton")
 layout_mode = 2
 
-[node name="StatusDropdown" type="LineEdit" parent="MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox"]
+[node name="StatusDropdown" type="LineEdit" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox"]
 script = ExtResource("m3optionbutton")
 layout_mode = 2
 label_text = "Status"

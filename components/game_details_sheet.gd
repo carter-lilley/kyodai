@@ -12,36 +12,45 @@ const HEIGHT_FRACTION := 0.85
 const WIDTH_FRACTION := 0.75
 const MAX_WIDTH_DP := 1200.0
 const H_MARGIN_DP := 32.0
-const DESCRIPTION_SIZE_DP := 20.0
 const MAX_DETAILS_TEXTURE_SIZE: int = 1024
 
 
 const TAB_MARGIN_TOP_DP := 12.0
 const CARD_PADDING_DP := 16.0
 const CARD_GAP_DP := 8.0
-const STAR_SIZE_DP := 20.0
+const STAR_SIZE_DP := 14.0
+const STAR_GAP_DP := 2.0
 
 
 # NOTE: The scene root is a CanvasLayer (M3BottomSheet base). The MarginContainer
 # and its children are direct children of the root in the .tscn file, then
 # _reparent_content() moves MarginContainer into the sheet's _content_slot.
 @onready var _content_root: Control = $MarginContainer
+@onready var _content_hbox: HBoxContainer = $MarginContainer/HBoxContainer
+@onready var cover_container: VBoxContainer = $MarginContainer/HBoxContainer/CoverContainer
 @onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
-@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/TitleLabel
-@onready var metadata_row: HFlowContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/MetadataRow
-@onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs
-@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Overview/OverviewScroll/DescriptionLabel
-@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard
-@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
-@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
-@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
-@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
-@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
-@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/SiblingDropdown
-@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/StatusDropdown
-@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/ActionButton
-@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/SyncButton
-@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentScroll/ContentVBox/ButtonRow/FavoriteButton
+@onready var title_label: Label = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/TitleLabel
+@onready var metadata_row: HFlowContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
+@onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs
+@onready var overview_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox
+@onready var desc_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll
+@onready var description_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll/DescriptionLabel
+@onready var desc_fold_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescFoldButton
+@onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection
+@onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedHeader
+@onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll
+@onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll/RowMargin/RelatedRow
+@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard
+@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
+@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
+@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
+@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
+@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
+@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/SiblingDropdown
+@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/StatusDropdown
+@onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/ActionButton
+@onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/SyncButton
+@onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/FavoriteButton
 
 ## RomM play-status options. The first five map to the mutually exclusive
 ## rom_user.status enum; the last three are independent boolean flags.
@@ -59,6 +68,8 @@ const STATUS_FLAG_KEYS := ["now_playing", "backlogged", "hidden"]
 
 var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
+var _desc_expanded: bool = false
+var _related_games_count: int = 0
 
 func _init():
 	super._init()
@@ -76,6 +87,7 @@ func _ready():
 		_sheet_container.clip_contents = true
 	_reparent_content()
 	_setup_tabs()
+	_setup_related_section_card()
 	_setup_focus_neighbors()
 	_connect_signals()
 	_set_sheet_height()
@@ -112,8 +124,17 @@ func refresh_theme():
 	super.refresh_theme()
 	if is_node_ready():
 		_apply_content_scaling()
+		_apply_m3_control_styling()
 		if _current_game:
 			_populate_metadata_chips(_current_game)
+
+func refresh_scale() -> void:
+	if not is_node_ready():
+		return
+	_setup_tabs()
+	_reduce_top_padding()
+	_set_sheet_height()
+	super.refresh_scale()
 
 func _setup_tabs() -> void:
 	if not content_tabs:
@@ -125,6 +146,30 @@ func _setup_tabs() -> void:
 		var tab := content_tabs.get_node_or_null(NodePath(tab_name)) as MarginContainer
 		if tab:
 			tab.add_theme_constant_override("margin_top", tab_margin)
+	_apply_m3_control_styling()
+
+func _apply_m3_control_styling() -> void:
+	"""M3-style the native TabContainer and the sheet's scrollbars."""
+	if content_tabs:
+		M3Theme.style_tab_container(content_tabs)
+	if is_instance_valid(related_scroll):
+		M3Theme.style_scrollbar(related_scroll.get_h_scroll_bar())
+	if is_instance_valid(desc_scroll):
+		M3Theme.style_scrollbar(desc_scroll.get_v_scroll_bar())
+
+## Group the related-games row in a rounded section card (SettingsSection's
+## surface language) sitting under the left-aligned header.
+func _setup_related_section_card() -> void:
+	if not is_instance_valid(related_section) or not is_instance_valid(related_scroll):
+		return
+	var section := SettingsSection.new()
+	# One elevation step darker than the sheet (surface_container_low) so the
+	# card reads as an inset group against it.
+	section.bg_color_override = M3Theme.get_surface()
+	related_section.add_child(section)
+	related_section.move_child(section, 1)  # below RelatedHeader
+	related_section.remove_child(related_scroll)
+	section.add_content(related_scroll, false)
 
 func _setup_focus_neighbors() -> void:
 	if not content_tabs or not action_button:
@@ -135,6 +180,8 @@ func _setup_focus_neighbors() -> void:
 	if favorite_button:
 		favorite_button.focus_neighbor_bottom = favorite_button.get_path_to(content_tabs)
 	content_tabs.focus_neighbor_top = content_tabs.get_path_to(action_button)
+	if desc_fold_button:
+		desc_fold_button.focus_neighbor_top = desc_fold_button.get_path_to(content_tabs)
 
 func _apply_content_scaling() -> void:
 	if not is_instance_valid(_content_root):
@@ -149,7 +196,7 @@ func _apply_content_scaling() -> void:
 	var hbox := _content_root.get_node_or_null(^"HBoxContainer") as HBoxContainer
 	if hbox:
 		hbox.add_theme_constant_override("separation", edge)
-	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentScroll/ContentVBox") as VBoxContainer
+	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentVBox") as VBoxContainer
 	if vbox:
 		vbox.add_theme_constant_override("separation", M3Units.dpi(12.0))
 	if is_instance_valid(metadata_row):
@@ -168,7 +215,8 @@ func _apply_content_scaling() -> void:
 		if card_vbox:
 			card_vbox.add_theme_constant_override("separation", M3Units.dpi(CARD_GAP_DP))
 	if is_instance_valid(description_label):
-		description_label.add_theme_font_size_override("font_size", M3Units.dpi(DESCRIPTION_SIZE_DP))
+		# Body text reads as secondary content; keep the style's 16dp size.
+		description_label.remove_theme_font_size_override("font_size")
 
 func _build_files_card_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -201,6 +249,8 @@ func _connect_signals() -> void:
 		status_dropdown.item_selected.connect(_on_status_item_selected)
 	if favorite_button:
 		favorite_button.pressed.connect(_on_favorite_button_pressed)
+	if desc_fold_button:
+		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
 	SystemManager.download.download_completed.connect(_on_download_completed)
 
 func _set_sheet_height() -> void:
@@ -260,6 +310,11 @@ func clear_content() -> void:
 	_set_cover_texture(null)
 	if is_instance_valid(content_tabs):
 		content_tabs.current_tab = 0
+	if is_instance_valid(related_section):
+		related_section.visible = false
+	if is_instance_valid(related_row):
+		for child in related_row.get_children():
+			child.queue_free()
 
 func _populate_basic_info(game: GameResource) -> void:
 	title_label.text = game.title if game.title else "Unknown Game"
@@ -271,16 +326,28 @@ func _populate_basic_info(game: GameResource) -> void:
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
+	_setup_description_fold(game)
+	_populate_related_games(game)
 
 func _populate_metadata_chips(game: GameResource) -> void:
 	if not is_instance_valid(metadata_row):
 		return
 	for child in metadata_row.get_children():
 		child.queue_free()
-	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true)
+	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true, true)
 	if game.release_date > 0:
-		_add_metadata_chip(_format_release_date(game.release_date), "calendar", false)
-	for genre in game.genres:
+		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000)).year)
+		if year > 1971:
+			_add_metadata_chip(_format_release_date(game.release_date), "calendar", false)
+	# Genres from the IGDB blob (clean canonical list); fall back to the
+	# merged genres column only when IGDB has none.
+	var genre_list: Array = []
+	var igdb_genres = game.igdb_metadata.get("genres", []) if game.igdb_metadata is Dictionary else []
+	if igdb_genres is Array and not igdb_genres.is_empty():
+		genre_list = igdb_genres
+	else:
+		genre_list = game.genres
+	for genre in genre_list:
 		_add_metadata_chip(str(genre), "", false)
 	_populate_rating_stars(game)
 
@@ -293,22 +360,35 @@ func _populate_rating_stars(game: GameResource) -> void:
 		metadata_row.add_child(label)
 		return
 
+	# Stars live in their own tight cluster, pushed to the row's right edge
+	# by an expanding spacer.
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	metadata_row.add_child(spacer)
+
+	var stars_box := HBoxContainer.new()
+	stars_box.add_theme_constant_override("separation", int(M3Units.dp(STAR_GAP_DP)))
+	stars_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	metadata_row.add_child(stars_box)
+
 	var stars := clampi(int(round(game.rating * 5.0)), 1, 5)
 	for i in range(5):
 		var star := FontIcon.new()
 		var settings := FontIconSettings.new()
 		settings.icon_name = "star" if i < stars else "star-outline"
-		settings.icon_size = clampi(M3Units.dpi(STAR_SIZE_DP), 16, 128)
+		settings.icon_size = clampi(M3Units.dpi(STAR_SIZE_DP), 12, 128)
 		settings.icon_color = M3Theme.get_primary() if i < stars else M3Theme.get_on_surface_variant()
 		star.icon_settings = settings
 		star.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		metadata_row.add_child(star)
+		stars_box.add_child(star)
 
-func _add_metadata_chip(text: String, icon: String, elevated: bool) -> void:
+func _add_metadata_chip(text: String, icon: String, elevated: bool, accent: bool = false) -> void:
 	var chip := M3Chip.new()
 	chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
 	chip.text = text
 	chip.elevated = elevated
+	chip.accent_colored = accent
 	chip.focus_mode = Control.FOCUS_NONE
 	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if icon != "":
@@ -316,6 +396,216 @@ func _add_metadata_chip(text: String, icon: String, elevated: bool) -> void:
 	metadata_row.add_child(chip)
 
 const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# ==================== DESCRIPTION FOLD ====================
+
+const DESC_COLLAPSED_LINES := 3
+
+## Pins the cover column height to the sheet's maximum Overview content:
+## title row + chips row + tabs + 3-line description + More button + related
+## row (when the game has related entries). Computed once per game; tab
+## switches and description folding never resize the cover.
+func _align_cover_height() -> void:
+	if not is_instance_valid(cover_container) or not is_instance_valid(content_tabs):
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_instance_valid(self) or _current_game == null or not visible:
+		return
+	var bottom := 0.0
+	for child in overview_vbox.get_children():
+		if child is Control and child.visible:
+			bottom = maxf(bottom, child.get_global_rect().end.y)
+	if bottom <= 0.0:
+		return
+	var target := bottom - cover_container.global_position.y
+	# Normalize up to the full budget: a short description still reserves
+	# 3 lines plus the (hidden) More button, so cover height is consistent
+	# across games regardless of actual text length.
+	var line_h := maxf(float(description_label.get_line_height()), 1.0)
+	var lines_now := mini(description_label.get_line_count(), DESC_COLLAPSED_LINES)
+	if lines_now < DESC_COLLAPSED_LINES:
+		target += (DESC_COLLAPSED_LINES - lines_now) * line_h
+	if not desc_fold_button.visible:
+		target += desc_fold_button.get_combined_minimum_size().y + float(overview_vbox.get_theme_constant("separation"))
+	cover_container.custom_minimum_size.y = clampf(target, 0.0, _content_hbox.size.y)
+
+func _setup_description_fold(game: GameResource) -> void:
+	if not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button):
+		return
+	_desc_expanded = false
+	desc_fold_button.text = "More"
+	desc_fold_button.visible = false
+	# Collapsed scroll state: no scrolling, container tracks the clamped label.
+	desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	desc_scroll.size_flags_vertical = Control.SIZE_FILL
+	desc_scroll.custom_minimum_size.y = 0
+	# Measure the full text first, then clamp if it exceeds the folded budget.
+	description_label.max_lines_visible = -1
+	description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	var for_romm_id := game.romm_id
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
+		return
+	if _desc_expanded:
+		return
+	if description_label.get_line_count() > DESC_COLLAPSED_LINES:
+		description_label.max_lines_visible = DESC_COLLAPSED_LINES
+		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		desc_fold_button.visible = true
+	# Measure the cover only after the description clamp has landed.
+	_align_cover_height()
+
+func _on_desc_fold_pressed() -> void:
+	_desc_expanded = not _desc_expanded
+	if _desc_expanded:
+		# Trade space with the related row: hide it and give the description's
+		# scroll area an explicit height — never more than the space above the
+		# cover column's bottom, so the Less button can't be pushed off-screen.
+		# Shorter texts get a snug area (button hugs the text); longer texts
+		# scroll inside the capped area.
+		if is_instance_valid(related_section):
+			related_section.visible = false
+		description_label.max_lines_visible = -1
+		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		desc_scroll.scroll_vertical = 0
+		desc_fold_button.text = "Less"
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if not is_instance_valid(self) or not _desc_expanded:
+			return
+		var separation := float(overview_vbox.get_theme_constant("separation"))
+		var cover_bottom := cover_container.global_position.y + cover_container.size.y
+		var budget := cover_bottom - desc_scroll.global_position.y - desc_fold_button.get_combined_minimum_size().y - separation
+		var text_h := description_label.get_combined_minimum_size().y
+		var min_h := float(description_label.get_line_height()) * DESC_COLLAPSED_LINES
+		desc_scroll.custom_minimum_size.y = clampf(minf(text_h, budget), min_h, maxf(budget, min_h))
+	else:
+		description_label.max_lines_visible = DESC_COLLAPSED_LINES
+		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		desc_scroll.custom_minimum_size.y = 0
+		desc_scroll.scroll_vertical = 0
+		desc_fold_button.text = "More"
+		if is_instance_valid(related_section) and _related_games_count > 0:
+			related_section.visible = true
+
+# ==================== RELATED GAMES ====================
+
+const RELATED_CARD_WIDTH_DP := 120.0
+# Media is 3:4 (160dp tall at 120dp wide) plus the ~36dp caption-only text area.
+const RELATED_CARD_HEIGHT_DP := 120.0 / 0.75 + 36.0
+const RELATED_TYPE_LABELS := {
+	"dlc": "DLC",
+	"expansion": "Expansion",
+	"remake": "Remake",
+	"remaster": "Remaster",
+	"port": "Port",
+	"expanded": "Expanded",
+	"similar": "Similar",
+}
+
+func _populate_related_games(game: GameResource) -> void:
+	if not is_instance_valid(related_section) or not is_instance_valid(related_row):
+		return
+	for child in related_row.get_children():
+		child.queue_free()
+	related_section.visible = false
+
+	var related := game.get_igdb_related_games()
+	_related_games_count = related.size()
+	if related.is_empty():
+		return
+	if is_instance_valid(related_header):
+		related_header.text = "Related Games (%d)" % related.size()
+	related_section.visible = true
+
+	var igdb_ids: Array = []
+	var titles: Array = []
+	for entry in related:
+		_add_related_card(entry)
+		var raw_id = entry.get("id", 0)
+		var igdb_id := int(raw_id) if raw_id != null else 0
+		if igdb_id > 0:
+			igdb_ids.append(igdb_id)
+		titles.append(str(entry.get("name", "")))
+
+	# Resolve which related games are owned on the DB thread, then badge and
+	# link their cards. Exact igdb_id match first, title fallback after.
+	var for_romm_id := game.romm_id
+	SystemManager.memory.queue_db_task(
+		func():
+			var by_igdb: Dictionary = DataManager.get_games_by_igdb_ids(igdb_ids)
+			var unmatched: Array = []
+			for i in range(related.size()):
+				var raw_id = related[i].get("id", 0)
+				var igdb_id := int(raw_id) if raw_id != null else 0
+				if igdb_id <= 0 or not by_igdb.has(igdb_id):
+					unmatched.append(titles[i])
+			var by_title: Dictionary = DataManager.get_games_by_titles(unmatched) if not unmatched.is_empty() else {}
+			return {"by_igdb": by_igdb, "by_title": by_title},
+		func(matches: Dictionary):
+			if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
+				return
+			if not is_instance_valid(related_row):
+				return
+			var by_igdb: Dictionary = matches.get("by_igdb", {})
+			var by_title: Dictionary = matches.get("by_title", {})
+			var cards := related_row.get_children()
+			var owned_pos := 0
+			for i in range(mini(cards.size(), related.size())):
+				var romm_id := 0
+				var raw_id = related[i].get("id", 0)
+				var igdb_id := int(raw_id) if raw_id != null else 0
+				if igdb_id > 0 and by_igdb.has(igdb_id):
+					romm_id = by_igdb[igdb_id]
+				elif by_title.has(titles[i].to_lower()):
+					romm_id = by_title[titles[i].to_lower()]
+				if romm_id > 0:
+					_mark_related_card_owned(cards[i], romm_id)
+					# Owned games surface to the front in stable relative order.
+					related_row.move_child(cards[i], owned_pos)
+					owned_pos += 1
+	)
+
+func _add_related_card(entry: Dictionary) -> void:
+	var card := M3Card.new()
+	card.card_variant = M3Card.Variant.FILLED
+	card.enforce_min_height = false
+	card.custom_minimum_size = Vector2(M3Units.dp(RELATED_CARD_WIDTH_DP), M3Units.dp(RELATED_CARD_HEIGHT_DP))
+	card.media_aspect_ratio = 0.75  # IGDB covers are 3:4
+	# Caption-only cards: the type label stands in for the title.
+	var type_label: String = RELATED_TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", "")).capitalize())
+	card.supporting_text = type_label
+	card.set_meta("type_label", type_label)
+	card.clickable = false
+	card.focus_mode = Control.FOCUS_NONE
+	related_row.add_child(card)
+
+	var cover_url := str(entry.get("cover_url", ""))
+	if cover_url != "":
+		# Public IGDB CDN; t_cover_small keeps thumbs light.
+		var thumb_url := cover_url.replace("t_1080p", "t_cover_small")
+		DataManager.load_image(thumb_url, func(texture):
+			if is_instance_valid(card) and texture:
+				card.media_texture = texture
+		)
+
+func _mark_related_card_owned(card: Control, romm_id: int) -> void:
+	if not card is M3Card:
+		return
+	var type_label := str(card.get_meta("type_label", ""))
+	card.supporting_text = (type_label + " · ") if type_label != "" else ""
+	card.supporting_text += "In Library"
+	card.bg_color_override = M3Theme.get_primary_container()
+	card.clickable = true
+	card.focus_mode = Control.FOCUS_ALL
+	card.pressed.connect(_on_related_card_pressed.bind(romm_id))
+
+func _on_related_card_pressed(romm_id: int) -> void:
+	UIManager.show_game_details(romm_id)
 
 func _debug_tree_state() -> String:
 	# CanvasLayer has no is_visible_in_tree(); walk ancestors for visibility

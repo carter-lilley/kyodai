@@ -338,6 +338,7 @@ func _on_scan_completed(found_count: int):
 
 func _on_sync_completed(success: bool, _message: String):
 	"""Called when library sync completes."""
+	_seen_library_generation = DataManager.library_generation
 	if success:
 		_scan_for_downloaded_games()
 		_merged_games_cache.clear()
@@ -610,6 +611,8 @@ func _focus_random_card() -> void:
 
 func on_view_show():
 	super.on_view_show()
+	# Catch up if sync_completed fired while this view was disconnected.
+	_catch_up_missed_sync()
 	# Refresh the view when shown (in case downloads happened while away)
 	# Skip if we haven't loaded data yet or a load is already pending.
 	if not _is_loading and not _total_count_load_pending and _total_games > 0:

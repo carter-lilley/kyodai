@@ -51,7 +51,6 @@ var _sync_covers_mutex: Mutex = Mutex.new()
 # until every deferred main-thread download call has finished scheduling.
 var _sync_covers_dispatched_count: int = 0
 var _sync_covers_processed_count: int = 0
-var _sync_covers_dispatch_semaphore: Semaphore = Semaphore.new()
 
 # Cover download outcome counters for end-of-phase diagnostics
 var _sync_covers_cached_count: int = 0
@@ -71,7 +70,7 @@ var _sync_covers_counted_set: Dictionary = {}
 var _sync_covers_seen_set: Dictionary = {}
 
 # Max new covers to download this sync, derived from the cache size cap so we
-# don't fetch covers the post-sync eviction pass would immediately delete.
+# don't fetch covers that evict-on-insert would immediately swap out.
 # Written on the main thread before the sync task starts; budget is only
 # touched on the sync thread, so no locking is needed for either.
 var _sync_cover_cap_bytes: int = 0
@@ -81,7 +80,6 @@ var _sync_covers_budget: int = 0
 # them before completing.
 var _sync_pending_downloads: int = 0
 var _sync_pending_downloads_mutex: Mutex = Mutex.new()
-var _sync_pending_downloads_semaphore: Semaphore = Semaphore.new()
 
 # Platform pre-calculation totals
 var _precalc_platform_totals: Dictionary = {}  # platform_id -> total count
@@ -98,7 +96,14 @@ func _ready():
 
 
 # ==================== SYNC THREAD SIGNAL WRAPPERS ====================
-# These are called via call_deferred from the sync thread to safely emit signals on the main thread
+# These are queued from the sync thread to safely emit signals on the main thread
+
+## Queue a main-thread hop from the sync thread. call_deferred from threads is
+## unreliable on Android (silently dropped, which previously wedged sync
+## completion), so route via the memory manager's mutex-protected callback
+## queue, drained every frame on the main thread.
+func _defer_on_main(method: StringName, args: Array = []) -> void:
+	MemorySubManager.queue_main_thread_callback(Callable(self, method), args)
 
 func _emit_sync_progress(percent: float, current: int, total: int):
 	data_manager.sync_progress.emit(percent, current, total)
@@ -108,7 +113,7 @@ func _emit_sync_completed(success: bool, message: String):
 	data_manager.sync_completed.emit(success, message)
 
 
-# Wrapper for calling _sync_final_callback via call_deferred
+# Wrapper for calling _sync_final_callback via _defer_on_main
 func _invoke_sync_callback(success: bool, message: String, count: int, error_code: int):
 	if _sync_final_callback.is_valid():
 		_sync_final_callback.call(success, message, count, error_code)
@@ -289,26 +294,26 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	# 1. Remove disabled platforms
 	if disabled_platforms.size() > 0:
 		print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
-		call_deferred("_show_removal_notification", disabled_platforms.size())
+		_defer_on_main("_show_removal_notification", [disabled_platforms.size()])
 		for i in range(disabled_platforms.size()):
 			var slug = disabled_platforms[i]
 			print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
-			call_deferred("_update_removal_notification", i + 1, disabled_platforms.size(), slug)
+			_defer_on_main("_update_removal_notification", [i + 1, disabled_platforms.size(), slug])
 			_remove_platform_sync_threaded(slug)
 			# Small yield to prevent blocking other sync thread tasks
 			OS.delay_usec(1000)
-		call_deferred("_dismiss_removal_notification")
+		_defer_on_main("_dismiss_removal_notification")
 
 	# 2. Check if there are platforms to sync
 	if enabled_platforms.size() == 0:
 		print("[SyncThread] No platforms enabled, completing immediately")
-		call_deferred("_emit_sync_completed", true, "No platforms enabled")
-		call_deferred("_invoke_sync_callback", true, "", 0, 0)
+		_defer_on_main("_emit_sync_completed", [true, "No platforms enabled"])
+		_defer_on_main("_invoke_sync_callback", [true, "", 0, 0])
 		return
 
 	# 3. Start batch mode and foreground service on main thread
-	call_deferred("_start_sync_batch_mode")
-	call_deferred("_start_sync_fg_service", "Game Library", 0, 0)
+	_defer_on_main("_start_sync_batch_mode")
+	_defer_on_main("_start_sync_fg_service", ["Game Library", 0, 0])
 
 	# 4. Start sync immediately - skip pre-calculation to save 20+ seconds
 	# We'll discover per-platform totals as we fetch the first batch of each
@@ -322,7 +327,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	_sync_total_synced = 0
 
 	# Start sync notification on main thread
-	call_deferred("_show_sync_notification")
+	_defer_on_main("_show_sync_notification")
 
 	# Pre-calculate totals in background without blocking
 	# Fire off all pre-calc requests but don't wait for them
@@ -341,9 +346,14 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
 
 	# Size the cover download budget from the cache cap before any covers are
-	# collected: downloading past the cap only feeds the post-sync eviction.
+	# collected: downloading past the cap only feeds evict-on-insert churn.
 	_sync_covers_budget = _compute_cover_download_budget(_sync_cover_cap_bytes)
 	print("[SyncThread] Cover download budget: %d new covers" % _sync_covers_budget)
+
+	# Queue backfill covers (library games whose image files were never
+	# cached) up front so they download through the same interleaved dispatch
+	# as per-batch covers instead of in a separate end-of-sync phase.
+	_queue_backfill_covers()
 
 	for platform_idx in range(enabled_platforms.size()):
 		_sync_current_platform_idx = platform_idx
@@ -367,7 +377,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		}
 
 		# Update foreground service
-		call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+		_defer_on_main("_update_sync_fg_service", [platform.name, _sync_current, _sync_total])
 
 		# Determine sync mode
 		_sync_current_updated_after = ""
@@ -442,7 +452,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 					# safe to advance the sync window.
 					if _sync_current_updated_after != "":
 						_sync_current += _sync_precalc_platform_total
-						call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+						_defer_on_main("_update_sync_fg_service", [platform.name, _sync_current, _sync_total])
 
 					var current_time = Time.get_datetime_string_from_system(true)
 					_set_last_sync_time_sync(platform.slug, current_time)
@@ -484,9 +494,9 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 			platform_batch_count += 1
 
 			# Update progress
-			call_deferred("_update_sync_fg_service", platform.name, _sync_current, _sync_total)
+			_defer_on_main("_update_sync_fg_service", [platform.name, _sync_current, _sync_total])
 			var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
-			call_deferred("_emit_sync_progress", progress_pct * 0.01, _sync_current, _sync_total)
+			_defer_on_main("_emit_sync_progress", [progress_pct * 0.01, _sync_current, _sync_total])
 
 			print("[SyncThread] Progress: %d/%d games (%d%%) | Platform %d/%d: %s | Batch %d: fetch=%dms process=%dms" % [
 				_sync_current, _sync_total, int(progress_pct),
@@ -509,10 +519,10 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
 
-	# 7. Download any remaining covers collected during sync (and backfill
-	#    existing uncached covers) as a visible sync phase with its own progress.
-	print("[SyncThread] All platforms processed, starting cover download phase...")
-	_process_cover_download_phase()
+	# 7. Drain any covers still queued or in flight from the interleaved
+	#    dispatch. Silent (no visible phase) and timeout-guarded so a stalled
+	#    download can never block sync completion.
+	_wait_for_all_cover_downloads()
 
 	# 8. Complete sync - defer ALL UI work to main thread
 	print("[SyncThread] All platforms complete, finishing...")
@@ -526,7 +536,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 	# Defer the entire completion sequence to main thread
 	# This avoids calling scene-tree methods from the sync thread
-	call_deferred("_complete_sync_on_main_thread", _sync_total_synced, games_from_cache)
+	_defer_on_main("_complete_sync_on_main_thread", [_sync_total_synced, games_from_cache])
 
 
 func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
@@ -556,6 +566,14 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 		_sync_state = SyncState.IDLE
 		data_manager.sync_completed.emit(true, completion_msg)
 		_invoke_sync_callback(true, completion_msg, total_synced, 0)
+
+		# Collections/favorites otherwise only sync at startup; mirror that
+		# here so favorites and collection membership stay current after a
+		# library sync. Views refresh via collections_synced when it lands.
+		if SystemManager.network and SystemManager.network.is_online():
+			data_manager.sync_collections(func(_ok: bool, _msg: String):
+				data_manager.user_props.sync_favourites()
+			)
 	)
 
 
@@ -585,21 +603,16 @@ func _compute_cover_download_budget(cap_bytes: int) -> int:
 	return maxi(0, int((cap_bytes - total_bytes) / avg_size))
 
 
-func _process_cover_download_phase() -> void:
-	"""Download all collected and backfill covers as a sync phase.
-
-	Runs on the sync thread. Downloads happen on the main thread and progress
-	is updated as each cover completes.
-	"""
+func _queue_backfill_covers() -> void:
+	"""Sync thread: queue covers for games already in the library whose image
+	files are not cached on disk (games this sync's batches may not touch).
+	Ranked by favorites, then recently played, then recently updated (ISO text
+	timestamps sort chronologically; empty strings sink under DESC) so a tight
+	budget goes to the covers the user is most likely to see. Flows through
+	the same interleaved dispatch as per-batch covers; gated on the budget."""
 	if not data_manager.database.is_database_ready():
 		return
 
-	# 1. Query distinct cover URLs already in the library whose image files are
-	#    not cached on disk. Covers collected during the sync were already
-	#    dispatched incrementally by _process_batch_sync.
-	#    Ranked by favorites, then recently played, then recently updated (ISO
-	#    text timestamps sort chronologically; empty strings sink under DESC)
-	#    so a tight budget goes to the covers the user is most likely to see.
 	var rows = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
@@ -617,12 +630,10 @@ func _process_cover_download_phase() -> void:
 	, 120000)
 
 	if rows == null:
-		rows = []
+		return
 
-	# Only count URLs not already collected during the sync toward the
-	# progress total, and only while the download budget lasts.
-	var backfill_urls: Array[String] = []
 	_sync_covers_mutex.lock()
+	var queued := 0
 	for row in rows:
 		if _sync_covers_budget <= 0:
 			break
@@ -637,42 +648,14 @@ func _process_cover_download_phase() -> void:
 		_sync_covers_seen_set[url] = true
 		_sync_covers_budget -= 1
 		_sync_total += 1  # Each unique backfill cover is also a work unit
-		backfill_urls.append(url)
+		_sync_covers_pending.append(url)
+		_sync_covers_pending_set[url] = true
+		queued += 1
 	_sync_covers_mutex.unlock()
 
-	var cover_total = backfill_urls.size()
-	print("[SyncThread] Cover download phase: %d backfill covers to process" % cover_total)
-
-	# Skip the Covers phase entirely rather than showing an empty progress
-	# step - but only when no interleaved covers from the platform loop are
-	# still waiting to be dispatched and drained below.
-	_sync_covers_mutex.lock()
-	var leftover_pending := _sync_covers_pending.size()
-	_sync_covers_mutex.unlock()
-	if cover_total == 0 and leftover_pending == 0:
-		return
-
-	_sync_platform = "Covers"
-	_sync_platform_index = _sync_platform_count + 1
-
-	# Emit progress so the total includes the new cover work.
-	var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
-	call_deferred("_update_sync_fg_service", _sync_platform, _sync_current, _sync_total)
-	call_deferred("_emit_sync_progress", progress_pct * 0.01, _sync_current, _sync_total)
-
-	# 2. Queue missing covers for download on the main thread.
-	_sync_covers_mutex.lock()
-	for url in backfill_urls:
-		if not _sync_covers_pending_set.has(url):
-			_sync_covers_pending.append(url)
-			_sync_covers_pending_set[url] = true
-	_sync_covers_mutex.unlock()
-
-	_dispatch_covers_to_main_thread()
-
-	# 3. Block the sync thread until all downloads complete.
-	#    The main thread handles the actual work.
-	_wait_for_all_cover_downloads()
+	if queued > 0:
+		print("[SyncThread] Queued %d backfill covers for interleaved download" % queued)
+		_dispatch_covers_to_main_thread()
 
 
 const COVER_PROGRESS_EVERY: int = 5
@@ -686,40 +669,50 @@ func _on_cover_processed() -> void:
 		_update_sync_fg_service(_sync_platform, _sync_current, _sync_total)
 
 
+# Upper bound on the end-of-sync cover drain: a download stalled by an OS
+# suspend must never wedge sync completion. Stragglers finish in the
+# background after sync_completed fires.
+const COVER_DRAIN_TIMEOUT_MS: int = 60000
+
 func _wait_for_all_cover_downloads() -> void:
-	"""Wait for all cover downloads to finish.
+	"""Block the sync thread until every queued cover download has settled.
 
-	Blocks the sync thread but leaves the main thread and UI responsive.
+	Silent safety net only: interleaved dispatch downloads covers during the
+	sync, so this just drains the in-flight tail. Polls with a timeout
+	(Semaphore has no timed wait) so a stalled download can't block forever.
 	"""
-	print("[SyncThread] Waiting for cover downloads to finish...")
-
-	# Wait for any remaining cover downloads to dispatch and complete.
-	while true:
+	print("[SyncThread] Draining remaining cover downloads...")
+	var start := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - start < COVER_DRAIN_TIMEOUT_MS:
+		if MemorySubManager.is_shutting_down():
+			return
 		_sync_covers_mutex.lock()
-		var still_pending = _sync_covers_pending.size() > 0
-		var dispatched = _sync_covers_dispatched_count
-		var processed = _sync_covers_processed_count
+		var still_pending := _sync_covers_pending.size() > 0
+		var dispatched := _sync_covers_dispatched_count
+		var processed := _sync_covers_processed_count
 		_sync_covers_mutex.unlock()
 		if still_pending:
 			# Self-throttled: no-op while the in-flight cap is reached.
 			_dispatch_covers_to_main_thread()
 			OS.delay_msec(50)
 			continue
-
-		# Wait until all deferred main-thread download calls have finished scheduling.
 		if processed < dispatched:
-			_sync_covers_dispatch_semaphore.wait()
+			# A deferred main-thread dispatch call hasn't finished scheduling.
+			OS.delay_msec(50)
 			continue
-
 		_sync_pending_downloads_mutex.lock()
-		var download_count = _sync_pending_downloads
+		var download_count := _sync_pending_downloads
 		_sync_pending_downloads_mutex.unlock()
 		if download_count == 0:
 			break
+		OS.delay_msec(50)
 
-		_sync_pending_downloads_semaphore.wait()
-
-	print("[SyncThread] Cover downloads complete: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
+	_sync_pending_downloads_mutex.lock()
+	var remaining := _sync_pending_downloads
+	_sync_pending_downloads_mutex.unlock()
+	if remaining > 0:
+		push_warning("[SyncThread] Cover drain timed out with %d downloads still in flight; they finish after sync completes" % remaining)
+	print("[SyncThread] Cover downloads: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
 
 
 func _dispatch_covers_to_main_thread():
@@ -752,14 +745,14 @@ func _dispatch_covers_to_main_thread():
 	_sync_last_cover_dispatch_ms = Time.get_ticks_msec()
 	_sync_covers_mutex.unlock()
 
-	call_deferred("_download_covers_on_main_thread", urls, _on_cover_processed)
+	_defer_on_main("_download_covers_on_main_thread", [urls, _on_cover_processed])
 	print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads])
 
 
 func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable = Callable()):
 	"""Download covers on main thread using existing async infrastructure.
 
-	Called via call_deferred from sync thread. Queues each cover to
+	Called via _defer_on_main from sync thread. Queues each cover to
 	SystemManager.download for parallel async download.
 	"""
 
@@ -790,29 +783,16 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 			counted_cb.call()
 
 			_sync_pending_downloads_mutex.lock()
-			_sync_pending_downloads -= 1
-			var download_batch_done = _sync_pending_downloads == 0
+			# Clamp: a straggler outliving a timed-out drain (or the whole
+			# sync) must not drive the next sync's counter negative.
+			_sync_pending_downloads = maxi(0, _sync_pending_downloads - 1)
 			_sync_pending_downloads_mutex.unlock()
-			if download_batch_done:
-				_sync_pending_downloads_semaphore.post()
-				# Also wake the dispatch wait path; without this a wait that
-				# started while downloads were in flight never gets re-signaled.
-				_sync_covers_dispatch_semaphore.post()
 		)
 
-	# Mark this dispatch batch as processed and signal waiters if everything is done.
+	# Mark this dispatch batch as processed.
 	_sync_covers_mutex.lock()
 	_sync_covers_processed_count += 1
-	var all_dispatched = _sync_covers_processed_count == _sync_covers_dispatched_count
 	_sync_covers_mutex.unlock()
-
-	_sync_pending_downloads_mutex.lock()
-	var downloads_done = _sync_pending_downloads == 0
-	_sync_pending_downloads_mutex.unlock()
-
-	if all_dispatched and downloads_done:
-		_sync_pending_downloads_semaphore.post()
-	_sync_covers_dispatch_semaphore.post()
 
 
 func _remove_platform_sync_threaded(platform_slug: String) -> bool:
@@ -924,7 +904,7 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 		if emit_incremental_progress and i > 0 and i % progress_chunk_size == 0:
 			var partial_current = base_count + i
 			var partial_pct = float(partial_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
-			call_deferred("_emit_sync_progress", partial_pct * 0.01, partial_current, _sync_total)
+			_defer_on_main("_emit_sync_progress", [partial_pct * 0.01, partial_current, _sync_total])
 
 	if games.is_empty():
 		return 0
@@ -935,18 +915,27 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var _db_time = Time.get_ticks_msec() - db_start
 
 	# Phase 3: Collect unique cover URLs and queue them for interleaved
-	# dispatch during the sync. Gated on the download budget so we never fetch
-	# covers that the post-sync eviction pass would immediately delete.
+	# dispatch during the sync. Gated on the download budget so we don't fetch
+	# covers that evict-on-insert would immediately swap out.
 	var cover_start = Time.get_ticks_msec()
 	var new_urls: Array[String] = []
 	_sync_covers_mutex.lock()
 	for game in games:
 		if game.has_cover_art and game.cover_url != "" and game.cover_url.begins_with("http"):
-			if not _sync_covers_seen_set.has(game.cover_url) and _sync_covers_budget > 0:
+			if _sync_covers_seen_set.has(game.cover_url):
+				continue
+			# Don't burn download budget (or inflate the progress total) on
+			# covers already on disk; mark seen so later batches don't re-stat.
+			var cache_path = data_manager.cover.get_cached_image_path(game.cover_url)
+			if FSM.file_exists(cache_path):
 				_sync_covers_seen_set[game.cover_url] = true
-				_sync_covers_budget -= 1
-				_sync_total += 1  # Each unique cover is a download work unit
-				new_urls.append(game.cover_url)
+				continue
+			if _sync_covers_budget <= 0:
+				continue
+			_sync_covers_seen_set[game.cover_url] = true
+			_sync_covers_budget -= 1
+			_sync_total += 1  # Each unique cover is a download work unit
+			new_urls.append(game.cover_url)
 	for url in new_urls:
 		if not _sync_covers_pending_set.has(url):
 			_sync_covers_pending.append(url)
@@ -1304,6 +1293,8 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		game.igdb_metadata = data["igdb_metadata"].duplicate()
 	else:
 		game.igdb_metadata = {}
+	var raw_igdb_id = data.get("igdb_id", 0)
+	game.igdb_id = int(raw_igdb_id) if raw_igdb_id != null else 0
 
 	# Release date: RomM exposes first_release_date as unix seconds; fall back
 	# to the IGDB blob (also unix seconds) when the top-level field is missing.
@@ -1434,8 +1425,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1465,6 +1456,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
+		game.igdb_id,
 		game.m3u_path,
 		game.status,
 		1 if game.now_playing else 0,
