@@ -19,6 +19,13 @@ var _bag_size_slider: M3Slider
 var _round_time_min_slider: M3Slider
 var _round_time_max_slider: M3Slider
 
+# Paging: 0 = Setup (platforms + controls), 1 = Filters
+var _page: int = 0
+var _setup_page: VBoxContainer
+var _filters_page: VBoxContainer
+var _filters_panel: FilterChipsPanel
+var _filters_loaded: bool = false
+
 func _init():
 	dialog_variant = Variant.FULL_SCREEN
 	title_text = "Shuffler"
@@ -47,6 +54,9 @@ func _ready():
 
 func show_overlay():
 	super.show_overlay()
+	# Always reopen on the Setup page.
+	if _page != 0 and is_instance_valid(_setup_page) and is_instance_valid(_filters_page):
+		_show_setup_page()
 	# Load platforms once the dialog is actually visible and laid out.
 	if _platform_cards.is_empty():
 		_load_platforms()
@@ -161,11 +171,63 @@ func _build_content() -> void:
 	_cards_right = right_column
 	
 	margin.add_child(vbox)
+	_setup_page = vbox
+
+	# Page 2: shuffle bag filters (same chips as the library filter sheet)
+	_filters_page = VBoxContainer.new()
+	_filters_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_filters_page.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_filters_page.add_theme_constant_override("separation", int(M3Units.dp(16)))
+	_filters_page.visible = false
+
+	var filters_label = _create_section_label("Filters")
+	_filters_page.add_child(filters_label)
+
+	var filters_hint = _create_sub_label("Refine the shuffle bag. Click a chip once to include, twice to exclude, three times to reset.")
+	filters_hint.use_on_surface_variant = true
+	filters_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_filters_page.add_child(filters_hint)
+
+	_filters_panel = FilterChipsPanel.new()
+	_filters_page.add_child(_filters_panel)
+
+	margin.add_child(_filters_page)
 	content_slot.add_child(margin)
 
 func _build_actions() -> void:
-	add_action("Start Session", _on_start_pressed, true)
-	add_action("Cancel", dismiss)
+	_rebuild_actions()
+
+func _rebuild_actions() -> void:
+	clear_actions()
+	if _page == 0:
+		add_action("Next: Filters", _on_next_pressed, true)
+		add_action("Cancel", dismiss)
+	else:
+		add_action("Back", _on_back_pressed)
+		add_action("Start Session", _on_start_pressed, true)
+		add_action("Cancel", dismiss)
+
+func _on_next_pressed() -> void:
+	_page = 1
+	_setup_page.visible = false
+	_filters_page.visible = true
+	if not _filters_loaded:
+		_filters_loaded = true
+		_filters_panel.load_options()
+	_rebuild_actions()
+	if _scroll:
+		_scroll.scroll_vertical = 0
+
+func _on_back_pressed() -> void:
+	_show_setup_page()
+
+func _show_setup_page() -> void:
+	_page = 0
+	_setup_page.visible = true
+	_filters_page.visible = false
+	_rebuild_actions()
+	if _scroll:
+		_scroll.scroll_vertical = 0
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
@@ -403,6 +465,7 @@ func _on_start_pressed() -> void:
 		"bag_size": int(_bag_size_slider.value),
 		"round_time_min": min_time,
 		"round_time_max": max_time,
+		"filters": _filters_panel.get_active_filters() if _filters_panel else {},
 	}
 	
 	dismiss()

@@ -4,18 +4,16 @@ xemu raw hdd save sync
 prewarm covers on random jump
 rework hero to also accept effect stacks
 ship w music
-
 update notification all in one 
 tst emulator app update flow on android
-
 download copying step (for sd cards on android)
 
-filter chip negative state
-filter chips in shuffler
-x xemu on android (https://github.com/izzy2lost/xemu)
+xtra romm metadata - HL2B, guides, logos..
+pin a platform
 
 submenus still suck
 small screen submenus not showing up
+no kb in ds mode....canvas manager
 
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
 

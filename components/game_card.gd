@@ -131,12 +131,15 @@ func _sync_focus_state_from_viewport() -> void:
 		_try_unwrap_present()
 
 # Android touch-and-hold
-const LONG_PRESS_DURATION: float = 0.6
-const LONG_PRESS_TOLERANCE_DP: float = 20.0
+const LONG_PRESS_DURATION: float = 0.45
+const LONG_PRESS_TOLERANCE_DP: float = 28.0
 var _touch_start_time: float = 0.0
 var _touch_start_pos: Vector2 = Vector2.ZERO
 var _touch_is_holding: bool = false
 var _suppress_next_press: bool = false
+# Fires the long-press while the finger is still down (standard UX) instead
+# of waiting for release.
+var _hold_timer: Timer = null
 
 # Cached on _enter_tree so _can_accept_focus() doesn't walk the parent chain
 # for every input event (hundreds of pooled cards x every event adds up).
@@ -669,6 +672,12 @@ func reset(for_pooling: bool = false) -> void:
 	_is_focused = false
 	_media_loading = false
 	set_placeholder(false)
+	# Clear hold state so a recycled card can't fire a stale long-press or
+	# carry the press-suppression into its next assignment.
+	if _hold_timer:
+		_hold_timer.stop()
+	_touch_is_holding = false
+	_suppress_next_press = false
 	# Reset the refresh gate so the next texture load always re-pushes crop UVs.
 	_last_refreshed_media_bounds = Rect2()
 	set_meta("_cached_show_delete", null)
@@ -1075,6 +1084,25 @@ func _has_point(point: Vector2) -> bool:
 	return _media_bounds.has_point(point)
 
 func _gui_input(event: InputEvent) -> void:
+	if _can_accept_focus():
+		# Dual-screen bottom touches arrive as emulated mouse events — treat them
+		# like touch so hold-for-context-menu works on the second screen too.
+		# These MUST run before super._gui_input(): M3Card emits `pressed`
+		# synchronously on release in SubViewports, and _end_hold() must trigger
+		# the long-press (suppressing the press) before that or the game launches.
+		if SystemManager.platform.is_android() and event is InputEventMouseButton \
+				and event.device == InputEvent.DEVICE_ID_EMULATION \
+				and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_try_begin_hold(event.position)
+			else:
+				_end_hold()
+
+		if SystemManager.platform.is_android() and event is InputEventMouseMotion \
+				and event.device == InputEvent.DEVICE_ID_EMULATION \
+				and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+			_update_hold_drag(event.position)
+
 	super._gui_input(event)
 
 	if not _can_accept_focus():
@@ -1097,21 +1125,6 @@ func _gui_input(event: InputEvent) -> void:
 	if SystemManager.platform.is_android() and event is InputEventScreenDrag:
 		_update_hold_drag(event.position)
 
-	# Dual-screen bottom touches arrive as emulated mouse events — treat them
-	# like touch so hold-for-context-menu works on the second screen too.
-	if SystemManager.platform.is_android() and event is InputEventMouseButton \
-			and event.device == InputEvent.DEVICE_ID_EMULATION \
-			and event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed:
-			_try_begin_hold(event.position)
-		else:
-			_end_hold()
-
-	if SystemManager.platform.is_android() and event is InputEventMouseMotion \
-			and event.device == InputEvent.DEVICE_ID_EMULATION \
-			and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-		_update_hold_drag(event.position)
-
 func _input(event: InputEvent) -> void:
 	# Releases outside the card never reach _gui_input, but a hold that began
 	# here must still end or the long-press state sticks. _touch_is_holding is
@@ -1125,21 +1138,34 @@ func _input(event: InputEvent) -> void:
 		_end_hold()
 
 func _try_begin_hold(pos: Vector2) -> void:
+	# gui_input event positions are control-local in Godot 4, and _media_bounds
+	# is local too (matching _has_point); the previous global-rect comparison
+	# only ever passed for cards near the screen's top-left origin.
 	var inside := false
 	if _display_mode == 1 or _display_mode == 2:
-		if _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
-			var local_pos: Vector2 = get_global_transform().affine_inverse() * pos
-			inside = _media_bounds.has_point(local_pos)
+		inside = _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0 and _media_bounds.has_point(pos)
 	else:
-		inside = get_global_rect().has_point(pos)
+		inside = Rect2(Vector2.ZERO, size).has_point(pos)
 	if inside:
 		_touch_start_time = Time.get_ticks_msec() / 1000.0
 		_touch_start_pos = pos
 		_touch_is_holding = true
+		if not _hold_timer:
+			_hold_timer = Timer.new()
+			_hold_timer.one_shot = true
+			_hold_timer.timeout.connect(_on_hold_timer_timeout)
+			add_child(_hold_timer)
+		_hold_timer.start(LONG_PRESS_DURATION)
+
+func _on_hold_timer_timeout() -> void:
+	if _touch_is_holding:
+		_trigger_long_press()
 
 func _end_hold() -> void:
+	if _hold_timer:
+		_hold_timer.stop()
 	if _touch_is_holding:
-		# Check if this release qualifies as a long press
+		# Fallback for a release after the duration without the timer firing.
 		if _is_long_press_elapsed():
 			_trigger_long_press()
 		_touch_is_holding = false
@@ -1149,6 +1175,8 @@ func _update_hold_drag(pos: Vector2) -> void:
 		return
 	if _touch_start_pos.distance_to(pos) > M3Units.dp(LONG_PRESS_TOLERANCE_DP):
 		_touch_is_holding = false
+		if _hold_timer:
+			_hold_timer.stop()
 	else:
 		# Check if we've held long enough during drag
 		if _is_long_press_elapsed():
@@ -1164,6 +1192,13 @@ func _trigger_long_press() -> void:
 	if not _touch_is_holding or not game or not UIManager:
 		return
 	_touch_is_holding = false
+	# Haptic tick on activation (same pattern as keyboard/focus feedback).
+	if SystemManager.platform.is_android():
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin:
+			plugin.call("vibrateDevice", 50)
+	elif Input.get_connected_joypads().size() > 0:
+		Input.start_joy_vibration(0, 0.1, 0.05, 0.08)
 	# M3Card emits `pressed` on the release that ends a hold; swallow it so the
 	# game doesn't launch while the context menu opens.
 	_suppress_next_press = true

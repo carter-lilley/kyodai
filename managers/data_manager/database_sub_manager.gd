@@ -352,32 +352,52 @@ func replace_game_filter_values_unlocked(game: GameResource) -> void:
 
 
 ## Builds [sql_clause, bindings] for active library filters.
-## OR within a kind, AND across kinds. Clauses reference the games table
-## unaliased, matching the library query functions below.
+## Filter shape: {kind: {"include": [...], "exclude": [...]}}.
+## Includes OR within a kind; excludes reject any match; kinds AND together.
+## Clauses reference the games table unaliased, matching the library query
+## functions below.
 func _get_filter_clause(filters: Dictionary) -> Array:
 	var clause := ""
 	var bindings: Array = []
 	for kind in FILTER_KINDS:
-		var values = filters.get(kind, [])
-		if not values is Array or values.is_empty():
+		var spec = filters.get(kind, {})
+		if not spec is Dictionary:
 			continue
+		var include: Array = spec.get("include", [])
+		var exclude: Array = spec.get("exclude", [])
 		if kind == "flag":
-			var flag_clauses: Array[String] = []
-			for value in values:
+			var inc_flags: Array[String] = []
+			var exc_flags: Array[String] = []
+			for value in include:
 				var column = FILTER_FLAG_COLUMNS.get(str(value), "")
 				if column != "":
-					flag_clauses.append("games.%s = 1" % column)
-			if not flag_clauses.is_empty():
-				clause += " AND (%s)" % " OR ".join(flag_clauses)
+					inc_flags.append("games.%s = 1" % column)
+			for value in exclude:
+				var column = FILTER_FLAG_COLUMNS.get(str(value), "")
+				if column != "":
+					exc_flags.append("games.%s = 0" % column)
+			if not inc_flags.is_empty():
+				clause += " AND (%s)" % " OR ".join(inc_flags)
+			if not exc_flags.is_empty():
+				clause += " AND (%s)" % " AND ".join(exc_flags)
 		elif kind == "status":
-			var status_placeholders = ", ".join(values.map(func(_v): return "?"))
-			clause += " AND games.status IN (%s)" % status_placeholders
-			bindings.append_array(values)
+			if not include.is_empty():
+				clause += " AND games.status IN (%s)" % ", ".join(include.map(func(_v): return "?"))
+				bindings.append_array(include)
+			if not exclude.is_empty():
+				clause += " AND games.status NOT IN (%s)" % ", ".join(exclude.map(func(_v): return "?"))
+				bindings.append_array(exclude)
 		else:
-			var placeholders = ", ".join(values.map(func(_v): return "?"))
-			clause += " AND EXISTS (SELECT 1 FROM game_filter_values gfv WHERE gfv.game_id = games.romm_id AND gfv.kind = ? AND gfv.value IN (%s))" % placeholders
-			bindings.append(kind)
-			bindings.append_array(values)
+			if not include.is_empty():
+				var placeholders = ", ".join(include.map(func(_v): return "?"))
+				clause += " AND EXISTS (SELECT 1 FROM game_filter_values gfv WHERE gfv.game_id = games.romm_id AND gfv.kind = ? AND gfv.value IN (%s))" % placeholders
+				bindings.append(kind)
+				bindings.append_array(include)
+			if not exclude.is_empty():
+				var ex_placeholders = ", ".join(exclude.map(func(_v): return "?"))
+				clause += " AND NOT EXISTS (SELECT 1 FROM game_filter_values gfv WHERE gfv.game_id = games.romm_id AND gfv.kind = ? AND gfv.value IN (%s))" % ex_placeholders
+				bindings.append(kind)
+				bindings.append_array(exclude)
 	return [clause, bindings]
 
 
@@ -1201,12 +1221,13 @@ func get_all_games() -> Array[GameResource]:
 	return games
 
 
-func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
+func get_games_by_platform(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
-	var query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 ORDER BY title"
-	var query_result = query_array(query, [platform_slug])
+	var filter_parts: Array = _get_filter_clause(filters)
+	var query = "SELECT * FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 ORDER BY title"
+	var query_result = query_array(query, [platform_slug] + filter_parts[1])
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games

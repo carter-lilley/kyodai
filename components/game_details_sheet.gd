@@ -28,9 +28,10 @@ const STAR_GAP_DP := 2.0
 @onready var _content_root: Control = $MarginContainer
 @onready var _content_hbox: HBoxContainer = $MarginContainer/HBoxContainer
 @onready var cover_container: VBoxContainer = $MarginContainer/HBoxContainer/CoverContainer
+@onready var content_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox
 @onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
 @onready var title_label: Label = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/TitleLabel
-@onready var metadata_row: HFlowContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
+@onready var metadata_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
 @onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs
 @onready var overview_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox
 @onready var desc_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll
@@ -39,6 +40,7 @@ const STAR_GAP_DP := 2.0
 @onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection
 @onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedHeader
 @onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll
+@onready var related_tab_content: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent
 @onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll/RowMargin/RelatedRow
 @onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard
 @onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
@@ -70,6 +72,10 @@ var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
 var _desc_expanded: bool = false
 var _related_games_count: int = 0
+var _metadata_chips: Array[M3Chip] = []
+var _overflow_chip: M3Chip = null
+var _stars_trailer: Control = null
+var _overflow_layout_seq: int = 0
 
 func _init():
 	super._init()
@@ -119,6 +125,7 @@ func _on_viewport_size_changed() -> void:
 	if not visible:
 		_set_sheet_height()
 		_position_sheet()
+		_apply_responsive_layout()
 
 func refresh_theme():
 	super.refresh_theme()
@@ -142,10 +149,12 @@ func _setup_tabs() -> void:
 	# Let the sheet background show through instead of the themed opaque panel.
 	content_tabs.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var tab_margin := M3Units.dpi(TAB_MARGIN_TOP_DP)
-	for tab_name in [&"Overview", &"Files"]:
+	for tab_name in [&"Overview", &"Files", &"Related"]:
 		var tab := content_tabs.get_node_or_null(NodePath(tab_name)) as MarginContainer
 		if tab:
 			tab.add_theme_constant_override("margin_top", tab_margin)
+	# The Related tab only exists in small mode (revealed on tier switch).
+	content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 	_apply_m3_control_styling()
 
 func _apply_m3_control_styling() -> void:
@@ -186,7 +195,7 @@ func _setup_focus_neighbors() -> void:
 func _apply_content_scaling() -> void:
 	if not is_instance_valid(_content_root):
 		return
-	var edge := M3Units.dpi(24.0)
+	var edge := M3Units.dpi(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
 	var margin := _content_root as MarginContainer
 	if margin:
 		margin.add_theme_constant_override("margin_left", edge)
@@ -195,13 +204,12 @@ func _apply_content_scaling() -> void:
 		margin.add_theme_constant_override("margin_bottom", edge)
 	var hbox := _content_root.get_node_or_null(^"HBoxContainer") as HBoxContainer
 	if hbox:
-		hbox.add_theme_constant_override("separation", edge)
+		hbox.add_theme_constant_override("separation", 0 if _small_layout else edge)
 	var vbox := _content_root.get_node_or_null(^"HBoxContainer/ContentVBox") as VBoxContainer
 	if vbox:
 		vbox.add_theme_constant_override("separation", M3Units.dpi(12.0))
 	if is_instance_valid(metadata_row):
-		metadata_row.add_theme_constant_override("h_separation", M3Units.dpi(8.0))
-		metadata_row.add_theme_constant_override("v_separation", M3Units.dpi(8.0))
+		metadata_row.add_theme_constant_override("separation", M3Units.dpi(8.0))
 	if is_instance_valid(files_card):
 		files_card.add_theme_stylebox_override("panel", _build_files_card_style())
 		var card_margin := files_card.get_node_or_null(^"CardMargin") as MarginContainer
@@ -214,6 +222,7 @@ func _apply_content_scaling() -> void:
 		var card_vbox := files_card.get_node_or_null(^"CardMargin/CardVBox") as VBoxContainer
 		if card_vbox:
 			card_vbox.add_theme_constant_override("separation", M3Units.dpi(CARD_GAP_DP))
+	_apply_chrome_tier()
 	if is_instance_valid(description_label):
 		# Body text reads as secondary content; keep the style's 16dp size.
 		description_label.remove_theme_font_size_override("font_size")
@@ -253,12 +262,84 @@ func _connect_signals() -> void:
 		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
 	SystemManager.download.download_completed.connect(_on_download_completed)
 
+const RELATED_TAB_INDEX := 2
+var _compact_layout := false
+var _small_layout := false
+
+## Viewport-dp breakpoint check (DS-aware: display tracks the active
+## SubViewport size across swaps).
+func _is_viewport_narrow(breakpoint_dp: float) -> bool:
+	if SystemManager.display:
+		return SystemManager.display.is_narrow_viewport(breakpoint_dp)
+	var viewport = get_viewport()
+	if viewport == null:
+		return true
+	return viewport.get_visible_rect().size.x < M3Units.dp(breakpoint_dp)
+
+## Tiered layout (shared breakpoints live on DisplaySubManager):
+## - expanded: full margins
+## - compact (<700dp viewport): tighter margins
+## - small (<600dp viewport): compact + cover hidden + dense chips + Related
+##   becomes its own tab instead of living under the description
+## The title truncates with an ellipsis so the actions always share its row.
+func _apply_responsive_layout() -> void:
+	if not is_node_ready():
+		return
+	var small := _is_viewport_narrow(DisplaySubManager.SMALL_VIEWPORT_DP)
+	var compact := small or _is_viewport_narrow(DisplaySubManager.COMPACT_VIEWPORT_DP)
+	var changed := false
+	if compact != _compact_layout:
+		_compact_layout = compact
+		changed = true
+	if small != _small_layout:
+		_small_layout = small
+		changed = true
+		cover_container.visible = not small
+		_apply_related_placement()
+		# Rebuild metadata chips with/without dense sizing.
+		if _current_game:
+			_populate_metadata_chips(_current_game)
+	if changed:
+		_apply_content_scaling()
+
+## Move the related section between the Overview tab (expanded/compact) and
+## its own Related tab (small mode); the tab only exists in small mode and
+## only when the current game has related entries.
+func _apply_related_placement() -> void:
+	if not is_instance_valid(related_section) or not is_instance_valid(related_tab_content):
+		return
+	var target: Node = related_tab_content if _small_layout else overview_vbox
+	if related_section.get_parent() != target:
+		if related_section.get_parent():
+			related_section.get_parent().remove_child(related_section)
+		target.add_child(related_section)
+	if content_tabs:
+		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not _small_layout or _related_games_count == 0)
+		# Never leave the current tab pointing at a hidden page.
+		if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
+			content_tabs.current_tab = 0
+
 func _set_sheet_height() -> void:
 	var viewport := get_viewport()
 	if not viewport:
 		return
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
 	peek_height = screen_dp * HEIGHT_FRACTION
+
+func _log_metrics(tag: String) -> void:
+	"""Temporary diagnostics for DP/DS sizing (grep logcat for [Metrics])."""
+	var viewport := get_viewport()
+	var vp_size := viewport.get_visible_rect().size if viewport else Vector2.ZERO
+	print("[Metrics] details_sheet %s: viewport=%s m3_scale=%.3f peek_height_dp=%.1f sheet_px=%s parent=%s" % [
+		tag, vp_size, M3Units.get_scale(), peek_height,
+		_sheet_container.size if _sheet_container else Vector2.ZERO,
+		get_parent().get_path() if get_parent() else "none"])
+
+## Override purely for diagnostics: catches every resize, including hidden-time
+## refresh_scale passes from tree-wide theme/scale refreshes.
+func _position_sheet():
+	super._position_sheet()
+	_log_metrics("position")
 
 func _reduce_top_padding() -> void:
 	# Tighten the default M3BottomSheet top padding.
@@ -268,6 +349,24 @@ func _reduce_top_padding() -> void:
 	var margin := _sheet_container.get_child(0) as MarginContainer
 	if margin:
 		margin.add_theme_constant_override("margin_top", int(M3Units.dp(4.0)))
+
+## Reclaim vertical chrome in small mode: kill the (hidden) drag handle's
+## spacer and shrink the header pad so content gets the room.
+func _apply_chrome_tier() -> void:
+	if not _sheet_container:
+		return
+	var margin := _sheet_container.get_child(0) as MarginContainer
+	if not margin:
+		return
+	var root := margin.get_child(0) if margin.get_child_count() > 0 else null
+	if not root:
+		return
+	var drag_margin := root.get_node_or_null("DragMargin")
+	if drag_margin:
+		drag_margin.custom_minimum_size = Vector2(0, M3Units.dp(0.0 if _small_layout else 16.0))
+	var header_pad := root.get_node_or_null("HeaderPad")
+	if header_pad:
+		header_pad.custom_minimum_size = Vector2(0, M3Units.dp(4.0 if _small_layout else 8.0))
 
 func _get_sheet_width(screen_width: float) -> float:
 	var ui_scale := M3Units.get_scale()
@@ -310,6 +409,7 @@ func clear_content() -> void:
 	_set_cover_texture(null)
 	if is_instance_valid(content_tabs):
 		content_tabs.current_tab = 0
+		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 	if is_instance_valid(related_section):
 		related_section.visible = false
 	if is_instance_valid(related_row):
@@ -334,6 +434,9 @@ func _populate_metadata_chips(game: GameResource) -> void:
 		return
 	for child in metadata_row.get_children():
 		child.queue_free()
+	_metadata_chips.clear()
+	_overflow_chip = null
+	_stars_trailer = null
 	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true, true)
 	if game.release_date > 0:
 		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000)).year)
@@ -349,7 +452,57 @@ func _populate_metadata_chips(game: GameResource) -> void:
 		genre_list = game.genres
 	for genre in genre_list:
 		_add_metadata_chip(str(genre), "", false)
+	# Non-interactive "+N" overflow indicator; revealed by the overflow pass.
+	_overflow_chip = M3Chip.new()
+	_overflow_chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
+	_overflow_chip.elevated = true
+	_overflow_chip.dense = _small_layout
+	_overflow_chip.focus_mode = Control.FOCUS_NONE
+	_overflow_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overflow_chip.visible = false
+	metadata_row.add_child(_overflow_chip)
 	_populate_rating_stars(game)
+	_layout_metadata_row_overflow()
+
+## The chips row is a clipped single-line HBox: show as many chips as fit and
+## collapse the rest into a "+N" chip so the row never wraps.
+func _layout_metadata_row_overflow() -> void:
+	_overflow_layout_seq += 1
+	var seq := _overflow_layout_seq
+	await get_tree().process_frame
+	if seq != _overflow_layout_seq:
+		return
+	if not is_instance_valid(metadata_row) or metadata_row.size.x <= 0:
+		return
+	var n := _metadata_chips.size()
+	if n == 0:
+		return
+	var sep := float(metadata_row.get_theme_constant("separation"))
+	var avail := metadata_row.size.x
+	var trailer_w := (_stars_trailer.get_combined_minimum_size().x if is_instance_valid(_stars_trailer) else 0.0) + sep * 2.0
+	var overflow_w := (_overflow_chip.get_combined_minimum_size().x + sep) if is_instance_valid(_overflow_chip) else 0.0
+	var used := 0.0
+	var fit := 0
+	for i in range(n):
+		if not is_instance_valid(_metadata_chips[i]):
+			break
+		var w := _metadata_chips[i].get_combined_minimum_size().x + sep
+		var rest := n - i - 1
+		var reserve := trailer_w + (overflow_w if rest > 0 else 0.0)
+		if fit == 0 or used + w + reserve <= avail:
+			# Always show at least the platform chip.
+			used += w
+			fit += 1
+		else:
+			break
+	for i in range(n):
+		if is_instance_valid(_metadata_chips[i]):
+			_metadata_chips[i].visible = i < fit
+	var hidden := n - fit
+	if is_instance_valid(_overflow_chip):
+		_overflow_chip.visible = hidden > 0
+		if hidden > 0:
+			_overflow_chip.text = "+%d" % hidden
 
 func _populate_rating_stars(game: GameResource) -> void:
 	if game.rating <= 0:
@@ -358,6 +511,7 @@ func _populate_rating_stars(game: GameResource) -> void:
 		label.use_on_surface_variant = true
 		label.text = "No rating"
 		metadata_row.add_child(label)
+		_stars_trailer = label
 		return
 
 	# Stars live in their own tight cluster, pushed to the row's right edge
@@ -371,6 +525,7 @@ func _populate_rating_stars(game: GameResource) -> void:
 	stars_box.add_theme_constant_override("separation", int(M3Units.dp(STAR_GAP_DP)))
 	stars_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	metadata_row.add_child(stars_box)
+	_stars_trailer = stars_box
 
 	var stars := clampi(int(round(game.rating * 5.0)), 1, 5)
 	for i in range(5):
@@ -389,11 +544,13 @@ func _add_metadata_chip(text: String, icon: String, elevated: bool, accent: bool
 	chip.text = text
 	chip.elevated = elevated
 	chip.accent_colored = accent
+	chip.dense = _small_layout
 	chip.focus_mode = Control.FOCUS_NONE
 	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if icon != "":
 		chip.leading_icon = icon
 	metadata_row.add_child(chip)
+	_metadata_chips.append(chip)
 
 const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -406,6 +563,8 @@ const DESC_COLLAPSED_LINES := 3
 ## row (when the game has related entries). Computed once per game; tab
 ## switches and description folding never resize the cover.
 func _align_cover_height() -> void:
+	if _small_layout:
+		return  # No cover column in small mode.
 	if not is_instance_valid(cover_container) or not is_instance_valid(content_tabs):
 		return
 	await get_tree().process_frame
@@ -460,12 +619,13 @@ func _setup_description_fold(game: GameResource) -> void:
 func _on_desc_fold_pressed() -> void:
 	_desc_expanded = not _desc_expanded
 	if _desc_expanded:
-		# Trade space with the related row: hide it and give the description's
-		# scroll area an explicit height — never more than the space above the
-		# cover column's bottom, so the Less button can't be pushed off-screen.
-		# Shorter texts get a snug area (button hugs the text); longer texts
-		# scroll inside the capped area.
-		if is_instance_valid(related_section):
+		# Trade space with the related row (not needed in small mode, where
+		# Related is its own tab): hide it and give the description's scroll
+		# area an explicit height — never more than the space above the cover
+		# column's bottom (expanded/compact) or the tab area bottom (small),
+		# so the Less button can't be pushed off-screen. Shorter texts get a
+		# snug area (button hugs the text); longer texts scroll inside the cap.
+		if not _small_layout and is_instance_valid(related_section):
 			related_section.visible = false
 		description_label.max_lines_visible = -1
 		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
@@ -477,8 +637,8 @@ func _on_desc_fold_pressed() -> void:
 		if not is_instance_valid(self) or not _desc_expanded:
 			return
 		var separation := float(overview_vbox.get_theme_constant("separation"))
-		var cover_bottom := cover_container.global_position.y + cover_container.size.y
-		var budget := cover_bottom - desc_scroll.global_position.y - desc_fold_button.get_combined_minimum_size().y - separation
+		var boundary_y := overview_vbox.get_global_rect().end.y if _small_layout else cover_container.global_position.y + cover_container.size.y
+		var budget := boundary_y - desc_scroll.global_position.y - desc_fold_button.get_combined_minimum_size().y - separation
 		var text_h := description_label.get_combined_minimum_size().y
 		var min_h := float(description_label.get_line_height()) * DESC_COLLAPSED_LINES
 		desc_scroll.custom_minimum_size.y = clampf(minf(text_h, budget), min_h, maxf(budget, min_h))
@@ -489,7 +649,7 @@ func _on_desc_fold_pressed() -> void:
 		desc_scroll.custom_minimum_size.y = 0
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "More"
-		if is_instance_valid(related_section) and _related_games_count > 0:
+		if not _small_layout and is_instance_valid(related_section) and _related_games_count > 0:
 			related_section.visible = true
 
 # ==================== RELATED GAMES ====================
@@ -517,10 +677,14 @@ func _populate_related_games(game: GameResource) -> void:
 	var related := game.get_igdb_related_games()
 	_related_games_count = related.size()
 	if related.is_empty():
+		if _small_layout and content_tabs:
+			content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 		return
 	if is_instance_valid(related_header):
 		related_header.text = "Related Games (%d)" % related.size()
 	related_section.visible = true
+	if content_tabs:
+		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not _small_layout)
 
 	var igdb_ids: Array = []
 	var titles: Array = []
@@ -607,27 +771,6 @@ func _mark_related_card_owned(card: Control, romm_id: int) -> void:
 func _on_related_card_pressed(romm_id: int) -> void:
 	UIManager.show_game_details(romm_id)
 
-func _debug_tree_state() -> String:
-	# CanvasLayer has no is_visible_in_tree(); walk ancestors for visibility
-	# instead (a stranded sheet in DS mode sits under an invisible/disabled one).
-	var state := "inside_tree=" + str(is_inside_tree()) + " can_process=" + str(can_process())
-	var ancestor := get_parent()
-	while ancestor:
-		if ancestor is CanvasItem or ancestor is Window:
-			state += " | " + str(ancestor.name) + ".visible=" + str(ancestor.visible)
-		ancestor = ancestor.get_parent()
-	return state
-
-func show_overlay():
-	super.show_overlay()
-	print("[DSDebug] sheet show_overlay: visible=", visible, " screen=", _get_screen_size(), " sheet_pos=", _sheet_container.position if _sheet_container else Vector2.ZERO, " state=", _debug_tree_state())
-	# Detect a dead slide-in tween (e.g. a process-disabled ancestor in DS mode):
-	# if the sheet never leaves the off-screen start position, the tween didn't run.
-	await get_tree().create_timer(0.5).timeout
-	if visible:
-		var expected_end_y := _get_screen_size().y - (_sheet_container.size.y if _sheet_container else 0.0)
-		print("[DSDebug] sheet 0.5s after show: sheet_pos=", _sheet_container.position if _sheet_container else Vector2.ZERO, " expected_end_y=", expected_end_y, " state=", _debug_tree_state())
-
 func _format_release_date(epoch_ms: int) -> String:
 	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000))
 	var month: String = MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)]
@@ -641,11 +784,13 @@ func show_for_game(game: GameResource) -> GameDetailsSheet:
 	# toggles (stranded in a disabled DualScreenSetup subtree, or left in the
 	# root viewport while the UI lives in a SubViewport).
 	var overlay_parent := M3Overlay.get_overlay_parent()
-	if overlay_parent and get_parent() != null and get_parent() != overlay_parent:
-		get_parent().remove_child(self)
+	if overlay_parent and get_parent() != overlay_parent:
+		# Also handle parent == null (first show): sizing below needs a viewport,
+		# which only exists once the sheet is inside the tree.
+		if get_parent() != null:
+			get_parent().remove_child(self)
 		overlay_parent.add_child(self)
 	_reconnect_viewport_signals()
-	print("[DSDebug] show_for_game: romm_id=", game.romm_id, " parent=", get_parent(), " overlay_parent=", overlay_parent, " viewport_size=", get_viewport().get_visible_rect().size if get_viewport() else Vector2.ZERO)
 	# Recompute height against the current viewport/scale: the sheet is
 	# persistent, so the one-shot _ready sizing goes stale after screen or
 	# scale changes (dual-screen swap, orientation, display-init ordering).
@@ -653,6 +798,8 @@ func show_for_game(game: GameResource) -> GameDetailsSheet:
 	# recomputes position, never width.
 	_set_sheet_height()
 	_position_sheet()
+	_apply_responsive_layout()
+	_log_metrics("show")
 	show_overlay()
 	# Let the slide-in animation start on a clean frame before populating content.
 	await Engine.get_main_loop().process_frame

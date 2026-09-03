@@ -8,12 +8,12 @@ enum EntryStatus { QUEUED, DOWNLOADING, PREPARING, READY, FAILED }
 var entries: Array[Dictionary] = []
 var candidates: Array[GameResource] = []
 
-func build(platforms: Array[String], bag_size: int) -> void:
+func build(platforms: Array[String], bag_size: int, filters: Dictionary = {}) -> void:
 	entries.clear()
 
 	var all_candidates: Array[GameResource] = []
 	for platform_slug in platforms:
-		all_candidates.append_array(DataManager.get_games_by_platform(platform_slug))
+		all_candidates.append_array(DataManager.get_games_by_platform(platform_slug, filters))
 
 	if all_candidates.is_empty():
 		return
@@ -30,11 +30,11 @@ func build(platforms: Array[String], bag_size: int) -> void:
 			break
 
 
-func build_candidates(platforms: Array[String]) -> void:
+func build_candidates(platforms: Array[String], filters: Dictionary = {}) -> void:
 	candidates.clear()
 	var all: Array[GameResource] = []
 	for platform_slug in platforms:
-		all.append_array(DataManager.get_games_by_platform(platform_slug))
+		all.append_array(DataManager.get_games_by_platform(platform_slug, filters))
 
 	var bag_ids := get_bag_ids()
 	var seen_ids: Array[int] = []

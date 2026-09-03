@@ -175,8 +175,8 @@ func get_all_games() -> Array[GameResource]:
 	return database.get_all_games()
 
 
-func get_games_by_platform(platform_slug: String) -> Array[GameResource]:
-	return database.get_games_by_platform(platform_slug)
+func get_games_by_platform(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
+	return database.get_games_by_platform(platform_slug, filters)
 
 
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:

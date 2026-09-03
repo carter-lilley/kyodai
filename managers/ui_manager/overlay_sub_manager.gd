@@ -394,7 +394,6 @@ func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dicti
 		var item_disabled = item.get("disabled", false)
 
 		var callback = func():
-			print("[DSDebug] modal item selected: ", item_id)
 			ui_manager.modal_item_selected.emit(item_id, _modal_context.duplicate())
 			dismiss_modal()
 
@@ -430,7 +429,6 @@ func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dicti
 
 	_active_menu = menu
 	menu.popup(anchor)
-	print("[DSDebug] context menu popped: is_open=", menu.is_open(), " menu_parent=", menu.get_parent())
 
 	ui_manager.modal_shown.emit(modal_id)
 	return modal_id
@@ -486,7 +484,6 @@ func is_modal_open() -> bool:
 func show_game_details(romm_id: int) -> void:
 	"""Show the game details bottom sheet for a specific game."""
 	var game = DataManager.get_game_by_id(romm_id)
-	print("[DSDebug] show_game_details: romm_id=", romm_id, " game_found=", game != null)
 	if not game:
 		push_warning("[OverlayManager] Cannot show details - game not found: ", romm_id)
 		return

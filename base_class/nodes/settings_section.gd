@@ -35,6 +35,16 @@ var bg_color_override: Color = Color.TRANSPARENT:
 		if _card:
 			refresh_theme()
 
+## Compact mode (small viewports): tighter card padding and shorter rows.
+var compact: bool = false:
+	set(value):
+		if compact == value:
+			return
+		compact = value
+		_apply_compact_metrics()
+
+var _row_controls: Array[Control] = []
+
 func _init(title: String = "", icon_name: String = "") -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# PASS so touch/drag gestures bubble through to an ancestor ScrollContainer
@@ -74,7 +84,7 @@ func add_row(content: Control, trailing: Array[Control] = []) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.custom_minimum_size = Vector2(0, M3Units.dp(64))
+	row.custom_minimum_size = Vector2(0, M3Units.dp(48.0 if compact else 64.0))
 	row.add_theme_constant_override("separation", int(M3Units.dp(12)))
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -89,7 +99,15 @@ func add_row(content: Control, trailing: Array[Control] = []) -> HBoxContainer:
 		control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(control)
 	_rows.add_child(row)
+	_row_controls.append(row)
 	return row
+
+func _apply_compact_metrics() -> void:
+	add_theme_constant_override("separation", int(M3Units.dp(6.0 if compact else 8.0)))
+	for row in _row_controls:
+		if is_instance_valid(row):
+			row.custom_minimum_size = Vector2(0, M3Units.dp(48.0 if compact else 64.0))
+	refresh_theme()
 
 ## Add arbitrary content (grids, panels, stacked controls) to the card body
 ## without row height/alignment constraints.
@@ -117,6 +135,12 @@ func set_row_visible(row: Control, visible: bool) -> void:
 func refresh_theme() -> void:
 	var card_style := _card.get_theme_stylebox("panel") as StyleBoxFlat
 	if card_style:
+		var pad_h := M3Units.dp(10.0) if compact else M3Units.dp(16.0)
+		var pad_v := M3Units.dp(8.0) if compact else M3Units.dp(12.0)
+		card_style.content_margin_left = pad_h
+		card_style.content_margin_right = pad_h
+		card_style.content_margin_top = pad_v
+		card_style.content_margin_bottom = pad_v
 		var bg := bg_color_override if bg_color_override.a > 0.0 else M3Theme.get_surface_container_low()
 		if surface_tint != Color.TRANSPARENT:
 			bg = M3Theme.state_overlay(bg, surface_tint, 0.12)

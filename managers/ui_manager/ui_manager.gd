@@ -397,7 +397,6 @@ func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
 	return overlay.get_settings_dialog_platforms_view()
 
 func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
-	print("[DSDebug] show_game_context_menu: romm_id=", romm_id, " ds_active=", dual_screen._dual_screen_active if dual_screen else "n/a", " anchor=", anchor, " anchor_in_tree=", anchor.is_inside_tree() if anchor else false)
 	return overlay.show_game_context_menu(romm_id, anchor, show_delete)
 
 func show_add_to_collection_picker(romm_id: int) -> void:

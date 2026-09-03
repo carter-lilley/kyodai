@@ -96,6 +96,8 @@ func _apply_screen_geometry() -> void:
 	is_swapped was true, desyncing rendering from touch coordinate mapping."""
 	if original_main_size.x <= 0 or original_second_size.x <= 0:
 		return
+	print("[Metrics] AynThor apply_screen_geometry: swapped=%s original_main=%s original_second=%s" % [
+		is_swapped, original_main_size, original_second_size])
 	if is_swapped:
 		if _main_container:
 			_main_container.position = Vector2(-10000, 0)
@@ -179,6 +181,7 @@ func _process(_delta):
 func _try_update_second_screen_size():
 	if renderer and renderer.is_window_available():
 		var size = renderer.get_second_screen_size()
+		print("[Metrics] AynThor second_screen_size from renderer: %s (confirmed=%s)" % [size, second_size_confirmed])
 		if size != Vector2i.ZERO:
 			original_second_size = size
 			second_size_confirmed = true
@@ -235,6 +238,8 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		target_vp.handle_input_locally = true
 	
 	if action == 0 or action == 5:
+		var vt := get_tree().get_first_node_in_group("view_transition_overlay")
+		print("[DSDebug] bottom-screen tap: target_vp=", target_vp.name, " vt(active=", ViewTransitionOverlay.is_transition_active, " animating=", vt.is_animating() if vt else "n/a", " visible=", vt.visible if vt else "n/a", ") lt_active=", LaunchTransitionOverlay.is_transition_active)
 		last_touch_positions[pid] = current_pos
 		touch_down_positions[pid] = current_pos
 		var mouse_event = InputEventMouseButton.new()

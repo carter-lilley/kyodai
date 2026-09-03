@@ -272,7 +272,9 @@ func _animate_transition():
 		is_transition_active = false
 		return
 
-	var tween = create_tween()
+	# Scene-tree tween so the sequence (including the phase1_completed signal
+	# LaunchManager waits on) survives DS-mode reparenting of the UI subtree.
+	var tween = get_tree().create_tween()
 	if not tween:
 		push_error("[LaunchTransitionOverlay] Failed to create tween")
 		return
@@ -401,11 +403,24 @@ func _notification(what: int) -> void:
 				LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
 
 func _exit_tree() -> void:
-	if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-		LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
-	if _effect_stack:
-		_effect_stack.free_rids()
-		_effect_stack = null
+	if is_queued_for_deletion():
+		if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+		if _effect_stack:
+			_effect_stack.free_rids()
+			_effect_stack = null
+		return
+	# Reparent (e.g. DS toggle), not deletion: settle any in-flight animation
+	# so is_transition_active can't stick (cards gate input on it), and keep
+	# the effect stack + game-exit listener alive for the running game.
+	if _is_animating:
+		_on_animation_complete()
+
+func _enter_tree() -> void:
+	# Re-establish the game-exit listener after reparenting while the overlay
+	# is still covering during gameplay (it hides when the game exits).
+	if visible and LaunchManager and not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+		LaunchManager.background_state_exited.connect(_on_background_state_exited)
 
 func is_animating() -> bool:
 	return _is_animating

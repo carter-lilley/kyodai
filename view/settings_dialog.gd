@@ -50,6 +50,11 @@ func _init():
 func _ready():
 	super._ready()
 	var phase_start_us := Time.get_ticks_usec()
+	# Re-tier sidebar/pane spacing when the viewport crosses the small
+	# breakpoint (M3Dialog._ready already handles the fullscreen chrome).
+	var viewport := get_viewport()
+	if viewport and not viewport.size_changed.is_connected(_apply_scale):
+		viewport.size_changed.connect(_apply_scale)
 	# Fullscreen variant has an outer scroll; BASIC does not. Each category page
 	# already scrolls independently, so only touch fullscreen-specific nodes.
 	if dialog_variant == Variant.FULL_SCREEN:
@@ -562,19 +567,20 @@ func _apply_scale() -> void:
 		_left_margin.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
 		_left_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
 	if is_instance_valid(_right_pane):
-		_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(8)))
-		_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(8)))
-		_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(12)))
-		_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(12)))
+		_right_pane.add_theme_constant_override("margin_left", int(M3Units.dp(4) if compact else M3Units.dp(8)))
+		_right_pane.add_theme_constant_override("margin_right", int(M3Units.dp(4) if compact else M3Units.dp(8)))
+		_right_pane.add_theme_constant_override("margin_top", int(M3Units.dp(8) if compact else M3Units.dp(12)))
+		_right_pane.add_theme_constant_override("margin_bottom", int(M3Units.dp(8) if compact else M3Units.dp(12)))
 	for btn in _category_buttons.values():
 		if is_instance_valid(btn):
 			btn.custom_minimum_size.y = M3Units.dp(48)
 	for content in _category_contents.values():
 		if content is MarginContainer and content.has_meta("category_margin"):
-			content.add_theme_constant_override("margin_left", M3Units.dp(20))
-			content.add_theme_constant_override("margin_top", M3Units.dp(20))
-			content.add_theme_constant_override("margin_right", M3Units.dp(20))
-			content.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+			var content_margin := 10 if compact else 20
+			content.add_theme_constant_override("margin_left", M3Units.dp(content_margin))
+			content.add_theme_constant_override("margin_top", M3Units.dp(content_margin))
+			content.add_theme_constant_override("margin_right", M3Units.dp(content_margin))
+			content.add_theme_constant_override("margin_bottom", M3Units.dp(content_margin))
 
 func _refresh_theme_recursive(node: Node) -> void:
 	if node.has_method("refresh_theme"):

@@ -68,7 +68,8 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 4
 label_style = 4
-autowrap_mode = 3
+clip_text = true
+text_overrun_behavior = 4
 
 [node name="ButtonRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow"]
 layout_mode = 2
@@ -99,10 +100,10 @@ icon_name = "heart-outline"
 icon_button_size = 1
 icon_button_variant = 2
 
-[node name="MetadataRow" type="HFlowContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
+[node name="MetadataRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
+clip_contents = true
 layout_mode = 2
-theme_override_constants/h_separation = 8
-theme_override_constants/v_separation = 8
+theme_override_constants/separation = 8
 
 [node name="ContentTabs" type="TabContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
 layout_mode = 2
@@ -234,3 +235,14 @@ script = ExtResource("m3optionbutton")
 layout_mode = 2
 label_text = "Status"
 multi_select = true
+
+[node name="Related" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_top = 12
+
+[node name="RelatedTabContent" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+

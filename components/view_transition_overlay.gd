@@ -24,6 +24,8 @@ const SNAP_SFX: AudioStream = preload("res://assets/audio/sfx/snap.wav")
 var _panel: ColorRect = null
 var _icon: FontIcon = null
 var _is_animating: bool = false
+var _midpoint: Callable = Callable()
+var _midpoint_called: bool = false
 
 func _ready() -> void:
 	visible = false
@@ -79,6 +81,8 @@ func play_extended(icon_name: String, midpoint: Callable, readiness: Callable = 
 
 	_is_animating = true
 	is_transition_active = true
+	_midpoint = midpoint
+	_midpoint_called = false
 
 	# Refresh colors at play time so theme changes are picked up automatically.
 	# Container colors are the muted M3 tonal pair: a colored dim in dark mode
@@ -123,16 +127,21 @@ func _travel_duration_scale() -> float:
 
 func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_rest_y: float, travel_scale: float = 1.0, readiness: Callable = Callable(), max_hold_ms: int = 0) -> void:
 	# Phase 1: panel sweeps up and covers the screen.
-	var cover := create_tween()
+	# Tweens are scene-tree-bound so they keep running through DS-mode
+	# reparenting; if the overlay is permanently removed mid-transition the
+	# is_inside_tree guards route to _cancel_transition so state always resets.
+	var cover := get_tree().create_tween()
 	cover.set_trans(Tween.TRANS_CUBIC)
 	cover.set_ease(Tween.EASE_OUT)
 	cover.tween_property(_panel, "position:y", 0.0, COVER_DURATION * travel_scale)
 	await cover.finished
 	if not is_inside_tree():
+		_cancel_transition()
 		return
 
 	# Midpoint: the actual tab switch happens under cover.
 	midpoint.call()
+	_midpoint_called = true
 
 	# Hold the cover until the new view reports ready. No tweens are running
 	# yet, so a wait here cannot break animation timing.
@@ -141,11 +150,12 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 		while not readiness.call() and Time.get_ticks_msec() - hold_start < max_hold_ms:
 			await get_tree().process_frame
 		if not is_inside_tree():
+			_cancel_transition()
 			return
 
 	# Phase 2: icon slides in from the bottom with a springy bounce, gently
 	# straightening from its initial tilt as it lands.
-	var entrance := create_tween()
+	var entrance := get_tree().create_tween()
 	entrance.set_parallel(true)
 	entrance.set_trans(Tween.TRANS_BACK)
 	entrance.set_ease(Tween.EASE_OUT)
@@ -159,17 +169,19 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 	# stays in motion; the reveal takes over from the icon's current position.
 	await get_tree().create_timer(ICON_DURATION * 0.8).timeout
 	if not is_inside_tree():
+		_cancel_transition()
 		return
 	entrance.kill()
 
 	# Barely a beat at the top of the bounce.
 	await get_tree().create_timer(HOLD_DURATION).timeout
 	if not is_inside_tree():
+		_cancel_transition()
 		return
 
 	# Phase 3: panel and icon accelerate off the top together, revealing the
 	# new view underneath.
-	var reveal := create_tween()
+	var reveal := get_tree().create_tween()
 	reveal.set_parallel(true)
 	reveal.set_trans(Tween.TRANS_CUBIC)
 	reveal.set_ease(Tween.EASE_IN)
@@ -180,7 +192,28 @@ func _animate(midpoint: Callable, viewport_size: Vector2, icon_px: float, icon_r
 
 	_on_transition_finished()
 
+## Aborts a transition whose coroutine was interrupted (tree exit, reparent).
+## Runs the midpoint if it never ran so the pending tab switch isn't lost,
+## then always resets state - a stranded overlay eats all view-layer input.
+func _cancel_transition() -> void:
+	if not _is_animating:
+		return
+	if not _midpoint_called and _midpoint.is_valid():
+		_midpoint.call()
+		_midpoint_called = true
+	_on_transition_finished()
+
+func _exit_tree() -> void:
+	# DS-mode reparenting removes the UI subtree mid-transition; make sure a
+	# transition in flight always settles instead of stranding input.
+	if _is_animating:
+		_cancel_transition()
+
 func _on_transition_finished() -> void:
+	if not _is_animating:
+		return
+	_midpoint = Callable()
+	_midpoint_called = false
 	visible = false
 	_is_animating = false
 	is_transition_active = false

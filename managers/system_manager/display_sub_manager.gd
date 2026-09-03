@@ -23,6 +23,13 @@ const DEFAULT_DPI := 96.0
 const MIN_UI_SCALE := 1.0
 const MAX_UI_SCALE := 4.0
 
+## Shared layout tier breakpoints (viewport width in dp). Compact tightens
+## margins; small additionally collapses secondary content (covers, setting
+## descriptions, related rows). M3Dialog's 600dp small-screen rule matches
+## SMALL_VIEWPORT_DP.
+const COMPACT_VIEWPORT_DP := 700.0
+const SMALL_VIEWPORT_DP := 600.0
+
 @onready var settings_man = $"/root/DataManager"
 
 var _viewport_size: Vector2 = Vector2.ZERO
@@ -38,7 +45,12 @@ var _dual_screen_available: bool = false
 var _second_screen_index: int = -1
 var _android_plugin = null
 
-# UI scale state for SubViewport dual screen mode
+# UI scale state for SubViewport dual screen mode.
+# NOTE: _saved_ui_scale is intentionally 1.0. DP scaling is already applied
+# inside the viewports via M3Units (see _calculate_ui_scale); if this were the
+# real scale, size_2d_override would shrink the logical viewport AND magnify it
+# back, double-scaling every element. Both Thor screens are ~same density
+# (369dpi top, ~350 bottom), so per-viewport density correction is unneeded.
 var _subviewport_dual_screen_active: bool = false
 var _saved_ui_scale: float = 1.0
 var _last_main_viewport_size: Vector2i = Vector2i.ZERO
@@ -75,6 +87,9 @@ func _ready() -> void:
 	# Calculate initial UI scale and emit it so consumers can initialize.
 	_calculate_ui_scale()
 	ui_scale_changed.emit(_ui_scale)
+
+	# Diagnostic metrics for density/scaling issues (grep logcat for [Metrics]).
+	call_deferred("dump_display_metrics", "startup")
 
 	# Initialize display detection
 	_initialize_display_detection()
@@ -147,12 +162,53 @@ func get_ui_scale() -> float:
 		_calculate_ui_scale()
 	return _ui_scale
 
+
+## Temporary diagnostics: dump everything that feeds DP scaling and DS sizing.
+## Grep logcat for "[Metrics]". Remove once density scaling is fixed.
+func dump_display_metrics(tag: String) -> void:
+	var screen := DisplayServer.window_get_current_screen()
+	print("[Metrics] ---- %s ----" % tag)
+	print("[Metrics] os=%s screen_count=%d window_screen=%d window_size=%s window_mode=%d" % [
+		OS.get_name(), DisplayServer.get_screen_count(), screen,
+		DisplayServer.window_get_size(), DisplayServer.window_get_mode()])
+	for i in range(DisplayServer.get_screen_count()):
+		print("[Metrics] screen[%d]: size=%s dpi=%d scale=%.2f position=%s" % [
+			i, DisplayServer.screen_get_size(i), DisplayServer.screen_get_dpi(i),
+			DisplayServer.screen_get_scale(i), DisplayServer.screen_get_position(i)])
+	var os_scale := DisplayServer.screen_get_scale(screen)
+	var screen_size := DisplayServer.screen_get_size(screen)
+	var resolution_scale := pow(screen_size.y / BASE_HEIGHT, 0.85)
+	var dpi := DisplayServer.screen_get_dpi()
+	print("[Metrics] scale inputs: os_scale=%.2f resolution_scale=%.3f (screen_y=%d) dpi=%d dpi_scale=%.3f user_factor=%.2f -> ui_scale=%.3f m3units=%.3f" % [
+		os_scale, resolution_scale, screen_size.y, dpi, dpi / BASE_DPI if dpi > 0 else -1.0,
+		_user_scale_factor, _ui_scale, M3Units.get_scale()])
+	print("[Metrics] viewport_size=%s ds_enabled=%s ds_subviewport_active=%s saved_ui_scale=%.2f" % [
+		_viewport_size, _dual_screen_enabled, _subviewport_dual_screen_active, _saved_ui_scale])
+	if _subviewport_dual_screen_active:
+		var ds = get_node_or_null("/root/Main/DualScreenSetup")
+		var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
+		var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
+		if main_viewport:
+			print("[Metrics] main_viewport: size=%s override=%s stretch=%s" % [
+				main_viewport.size, main_viewport.size_2d_override, main_viewport.size_2d_override_stretch])
+		if second_viewport:
+			print("[Metrics] second_viewport: size=%s override=%s stretch=%s" % [
+				second_viewport.size, second_viewport.size_2d_override, second_viewport.size_2d_override_stretch])
+
 func get_screen_size() -> Vector2i:
 	var screen := DisplayServer.window_get_current_screen()
 	return DisplayServer.screen_get_size(screen)
 
 func is_narrow_viewport(breakpoint_dp := 850.0) -> bool:
 	return get_viewport_size().x < M3Units.dp(breakpoint_dp)
+
+## Compact tier: tighten margins/spacing.
+func is_compact_viewport() -> bool:
+	return is_narrow_viewport(COMPACT_VIEWPORT_DP)
+
+## Small tier: additionally collapse secondary content (covers, descriptions).
+func is_small_viewport() -> bool:
+	return is_narrow_viewport(SMALL_VIEWPORT_DP)
 
 func _calculate_ui_scale() -> float:
 	"""Compute the DP scale from the current monitor/OS settings.
@@ -275,6 +331,8 @@ func _load_user_scale_factor() -> void:
 	if not is_equal_approx(_ui_scale, old_scale):
 		M3Units.invalidate_cache()
 		ui_scale_changed.emit(_ui_scale)
+	print("[Metrics] user scale factor applied: factor=%.2f ui_scale=%.3f m3units=%.3f" % [
+		_user_scale_factor, _ui_scale, M3Units.get_scale()])
 
 func _connect_subviewport_signals() -> void:
 	var ds = get_node_or_null("/root/Main/DualScreenSetup")
@@ -306,6 +364,10 @@ func _apply_subviewport_scale(scale: float) -> void:
 	var ds = get_node_or_null("/root/Main/DualScreenSetup")
 	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
 	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
+
+	print("[Metrics] _apply_subviewport_scale: scale=%.3f main_size=%s second_size=%s" % [
+		scale, main_viewport.size if main_viewport else Vector2i.ZERO,
+		second_viewport.size if second_viewport else Vector2i.ZERO])
 
 	if main_viewport:
 		var original_size = main_viewport.size
@@ -362,6 +424,7 @@ func enter_subviewport_dual_screen_mode() -> void:
 	_subviewport_dual_screen_active = true
 	_connect_subviewport_signals()
 	_apply_subviewport_scale(_saved_ui_scale)
+	dump_display_metrics("enter_ds_subviewport")
 
 func exit_subviewport_dual_screen_mode() -> void:
 	if not _subviewport_dual_screen_active:
@@ -369,6 +432,7 @@ func exit_subviewport_dual_screen_mode() -> void:
 	_subviewport_dual_screen_active = false
 	_disconnect_subviewport_signals()
 	_clear_subviewport_scale()
+	dump_display_metrics("exit_ds_subviewport")
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]

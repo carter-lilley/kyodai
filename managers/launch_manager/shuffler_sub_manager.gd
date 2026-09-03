@@ -209,14 +209,15 @@ func start_session(config: Dictionary) -> void:
 
 	var platforms = config.get("platforms", [])
 	var bag_size = config.get("bag_size", 4)
+	var filters: Dictionary = config.get("filters", {})
 
 	if platforms.is_empty():
 		push_error("[ShufflerSubManager] No platforms selected for shuffler")
 		return
 
 	_bag = ShufflerBag.new()
-	_bag.build(platforms, bag_size)
-	_bag.build_candidates(platforms)
+	_bag.build(platforms, bag_size, filters)
+	_bag.build_candidates(platforms, filters)
 
 	if _bag.is_empty():
 		push_error("[ShufflerSubManager] No games found for selected platforms")

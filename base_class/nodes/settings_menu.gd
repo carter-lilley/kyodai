@@ -11,6 +11,15 @@ var accent_color: Color = Color.TRANSPARENT
 # with separators). Reused when no new title is given.
 var _current_section: SettingsSection = null
 
+# Small-viewport (compact) state: descriptions hidden, titles single-line,
+# trailing controls width-capped.
+var _compact: bool = false
+var _label_blocks: Array[Dictionary] = []  # [{title, description}]
+var _trailing_controls: Array[Control] = []
+var _sections: Array[SettingsSection] = []
+
+const COMPACT_TRAILING_MAX_WIDTH_DP := 200.0
+
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
@@ -20,14 +29,65 @@ func _init() -> void:
 	add_theme_constant_override("separation", int(M3Units.dp(16)))
 	setting_changed.connect(func(_value, _setting): _update_visibility())
 
+func _ready() -> void:
+	# Live re-tier when the viewport crosses the small breakpoint (incl. DS
+	# swaps while a settings page is open).
+	if SystemManager.display and not SystemManager.display.viewport_size_changed.is_connected(_reevaluate_compact):
+		SystemManager.display.viewport_size_changed.connect(_reevaluate_compact)
+	call_deferred("_reevaluate_compact")
+
+func _exit_tree() -> void:
+	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_reevaluate_compact):
+		SystemManager.display.viewport_size_changed.disconnect(_reevaluate_compact)
+
+func _reevaluate_compact(_new_size: Vector2 = Vector2.ZERO) -> void:
+	var small := true
+	if SystemManager.display:
+		small = SystemManager.display.is_small_viewport()
+	else:
+		var viewport := get_viewport()
+		if viewport:
+			small = viewport.get_visible_rect().size.x < M3Units.dp(DisplaySubManager.SMALL_VIEWPORT_DP)
+	set_compact(small)
+
+func set_compact(small: bool) -> void:
+	if _compact == small:
+		return
+	_compact = small
+	add_theme_constant_override("separation", int(M3Units.dp(10.0 if small else 16.0)))
+	for block in _label_blocks:
+		var title: M3Label = block.get("title")
+		var description: M3Label = block.get("description")
+		if is_instance_valid(description):
+			description.visible = not small
+		if is_instance_valid(title):
+			if small:
+				title.autowrap_mode = TextServer.AUTOWRAP_OFF
+				title.clip_text = true
+				title.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+				title.max_lines_visible = 1
+			else:
+				title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				title.clip_text = false
+				title.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+				title.max_lines_visible = -1
+	for control in _trailing_controls:
+		if is_instance_valid(control):
+			control.custom_maximum_size = Vector2(M3Units.dp(COMPACT_TRAILING_MAX_WIDTH_DP), -1) if small else Vector2(-1, -1)
+	for section in _sections:
+		if is_instance_valid(section):
+			section.compact = small
+
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar], icon : String = ""):
 	_current_section = SettingsSection.new(subgroup, icon)
+	_sections.append(_current_section)
 	add_child(_current_section)
 	build_controls_from_settingsvars(settingsvars)
 
 func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: String = "", icon: String = "") -> void:
 	if not title.is_empty() or _current_section == null:
 		_current_section = SettingsSection.new(title, icon)
+		_sections.append(_current_section)
 		add_child(_current_section)
 
 	for settingsvar in settingsvars:
@@ -37,6 +97,11 @@ func build_controls_from_settingsvars(settingsvars: Array[SettingsVar], title: S
 
 func _add_setting_row(content: Control, trailing: Array[Control] = []) -> void:
 	var row = _current_section.add_row(content, trailing)
+	for control in trailing:
+		if control != null:
+			_trailing_controls.append(control)
+			if _compact:
+				control.custom_maximum_size = Vector2(M3Units.dp(COMPACT_TRAILING_MAX_WIDTH_DP), -1)
 	if not _building_property.is_empty():
 		_rows_by_property[_building_property] = {"section": _current_section, "row": row}
 
@@ -56,10 +121,16 @@ func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
 	title.text = settingsvar.display_name
 	title.label_style = M3Label.Style.BODY_LARGE
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if _compact:
+		title.autowrap_mode = TextServer.AUTOWRAP_OFF
+		title.clip_text = true
+		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+		title.max_lines_visible = 1
 	block.add_child(title)
 
+	var description: M3Label = null
 	if not settingsvar.description.is_empty():
-		var description := M3Label.new()
+		description = M3Label.new()
 		description.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		description.text = settingsvar.description
 		description.label_style = M3Label.Style.BODY_SMALL
@@ -67,8 +138,10 @@ func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
 		# M3Label owns font_color; use its variant-color switch rather than an
 		# override (which _apply_style would clobber).
 		description.use_on_surface_variant = true
+		description.visible = not _compact
 		block.add_child(description)
 
+	_label_blocks.append({"title": title, "description": description})
 	return block
 
 func update_control_value(property_name: String, value: Variant) -> void:
