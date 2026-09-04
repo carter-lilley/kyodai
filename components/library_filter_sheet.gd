@@ -158,8 +158,8 @@ static func show_sheet() -> LibraryFilterSheet:
 	_instance.headline_text = "Filters"
 	_instance.sheet_variant = Variant.MODAL
 	_instance.set_focus_restore_fallback(Callable(_instance, "_focus_restore_to_grid_or_home"))
-	_instance.show_overlay()
-	_instance.reload_options()
+	# Two-phase show: load filter options before presenting.
+	_instance.show_prepared(_instance.reload_options)
 	_instance._focus_first_chip()
 	return _instance
 

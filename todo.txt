@@ -8,21 +8,22 @@ update notification all in one
 tst emulator app update flow on android
 download copying step (for sd cards on android)
 
-xtra romm metadata - HL2B, guides, logos..
-pin a platform
-
-submenus still suck
-small screen submenus not showing up
-no kb in ds mode....canvas manager
-
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
 
+x small screen submenus not showing up
 ## saves
-	check emulator config for save/user folder(s) at synctime
-	https://github.com/danielcopper/emu-atlas
+	x Pcsx2 and other emus lose config when update
+	x check emulator config for save/user folder(s) at synctime
+	x https://github.com/danielcopper/emu-atlas
+	
+## romm
+ - dev studio?
+ - xtra romm metadata - HL2B, guides, logos..
+ - pin a platform
+ - user profile? name & icon?
+ - submenus still suck
 
 ## general UI
-	user profile? name & icon?
 	widgets (snap to screen regions? snap to grid?)
 		- wifi, game title, etc
 	focus color (glow, mirror)
@@ -55,7 +56,6 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	dolphin: controller inis
 	all: optional hotkeys, graphics settings, confirm on exit, etc?
 	linux
-	
 	
 	auto m3us
 	emulator repo downloads & updates

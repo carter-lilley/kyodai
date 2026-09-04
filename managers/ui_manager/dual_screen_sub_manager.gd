@@ -10,7 +10,6 @@ var _dual_screen_viewport_mode: bool = false
 var _main_ui_original_parent: Node = null
 var _ui_layer: CanvasLayer = null
 var _ui_layer_original_parent: Node = null
-var _settings_dialog_original_parent: Node = null
 var _is_nodes_reparented: bool = false
 var _viewport_layout: Node = null
 
@@ -161,13 +160,7 @@ func _enable_dual_screen_viewport_mode() -> void:
 		ayn.acquire_second_screen()
 
 	# Dismiss any active M3 overlays before reparenting so they don't get stranded
-	M3Overlay.dismiss_type("menu")
-	M3Overlay.dismiss_type("snackbar")
-	M3Overlay.dismiss_type("dialog")
-	M3Overlay.dismiss_type("tooltip")
-	M3Overlay.dismiss_type("sheet")
-	# GameDetailsSheet registers as "bottom_sheet" (M3BottomSheet default), not "sheet"
-	M3Overlay.dismiss_type("bottom_sheet")
+	ui_manager.overlay.apply_ds_dismiss_policies()
 
 	# REPARENTING: Move main UI nodes into MainViewport
 	var main_viewport = _main_viewport
@@ -177,6 +170,10 @@ func _enable_dual_screen_viewport_mode() -> void:
 		# Enable local input handling so touch/mouse events are processed inside the viewport
 		main_viewport.handle_input_locally = true
 		_reparent_ui_to_main_viewport(main_viewport)
+
+	# Move hidden persistent overlays (settings dialog, details sheet, search)
+	# into the new overlay parent.
+	ui_manager.overlay.reparent_persistent_overlays()
 
 	# Enable local input handling on second viewport as well
 	if second_viewport:
@@ -202,13 +199,13 @@ func _enable_dual_screen_viewport_mode() -> void:
 	_dual_screen_active = true
 	_dual_screen_viewport_mode = true
 
-	# Apply SubViewport-based UI scaling (disables Window scaling, scales inside SubViewports)
-	SystemManager.display.enter_subviewport_dual_screen_mode()
-
 func _disable_dual_screen_mode() -> void:
 	"""Disable dual screen mode - restore HeroImage to main layout."""
 	if not _dual_screen_active:
 		return
+
+	# Dismiss overlays still parented to MainViewport before it is disabled
+	ui_manager.overlay.apply_ds_dismiss_policies()
 
 	# Restore keyboard to original parent before restoring other UI
 	_restore_keyboard_to_original_parent()
@@ -222,6 +219,9 @@ func _disable_dual_screen_mode() -> void:
 
 	# Restore UI nodes to original parents first
 	_restore_ui_to_original_parents()
+
+	# Move hidden persistent overlays back to the root viewport's overlay parent
+	ui_manager.overlay.reparent_persistent_overlays()
 
 	if _dual_screen_viewport_mode:
 		# Restore input handling to default (forward to parent viewport)
@@ -243,9 +243,6 @@ func _disable_dual_screen_mode() -> void:
 	else:
 		# Desktop: close secondary window
 		_disable_dual_screen_mode_desktop()
-
-	# Clear SubViewport-based UI scaling and restore Window scaling
-	SystemManager.display.exit_subviewport_dual_screen_mode()
 
 	_dual_screen_active = false
 
@@ -357,7 +354,6 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	"""
 	if _is_nodes_reparented:
 		return
-
 	# Store original parent
 	if _root_control:
 		_main_ui_original_parent = _root_control.get_parent()
@@ -372,13 +368,6 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 		_ui_layer = ui_layer
 	if ui_layer:
 		_ui_layer_original_parent = ui_layer.get_parent()
-
-	# Store SettingsDialog original parent and remove it from _root_control
-	# CanvasLayers must not be nested inside VBoxContainer inside SubViewport
-	var settings_dialog = ui_manager.overlay._settings_dialog
-	if settings_dialog and settings_dialog.get_parent():
-		_settings_dialog_original_parent = settings_dialog.get_parent()
-		settings_dialog.get_parent().remove_child(settings_dialog)
 
 	# Remove RootLayout from current parent (this includes M3 nav via InnerLayout)
 	if _root_control and _root_control.get_parent():
@@ -401,10 +390,6 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	# Add UILayer directly to MainViewport (CanvasLayer can't go in VBoxContainer)
 	if ui_layer:
 		main_viewport.add_child(ui_layer)
-
-	# Add SettingsDialog directly to MainViewport (same reason as UILayer)
-	if settings_dialog:
-		main_viewport.add_child(settings_dialog)
 
 	_is_nodes_reparented = true
 
@@ -460,25 +445,9 @@ func _restore_ui_to_original_parents() -> void:
 			ui_layer.get_parent().remove_child(ui_layer)
 		_ui_layer_original_parent.add_child(ui_layer)
 
-	# Restore SettingsDialog to its original parent (or the DS-aware overlay
-	# parent as fallback — resolves to root now that the group is cleared)
-	var settings_dialog = ui_manager.overlay._settings_dialog
-	if settings_dialog:
-		if settings_dialog.get_parent():
-			settings_dialog.get_parent().remove_child(settings_dialog)
-		if _settings_dialog_original_parent:
-			_settings_dialog_original_parent.add_child(settings_dialog)
-		else:
-			# Created after reparenting — resolve via the overlay parent resolver
-			var fallback_parent := M3Overlay.get_overlay_parent()
-			if fallback_parent == null:
-				fallback_parent = _root_control
-			fallback_parent.add_child(settings_dialog)
-
 	_is_nodes_reparented = false
 	_main_ui_original_parent = null
 	_ui_layer_original_parent = null
-	_settings_dialog_original_parent = null
 
 	# Reconnect OnscreenKeyboard to original viewport after restoring.
 	# find_child: the absolute path is stale while UILayer sits inside MainViewport.

@@ -38,6 +38,10 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Internal DS screen swap state (managed by AynThorManager)
 @export var dual_screen_swapped := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Dual Screen Swapped")
 
+# Internal debug toggle: enables [Geom] overlay/layout geometry logging
+# (M3Debug.geom). Set via console or config; not shown in the settings UI.
+@export var debug_geometry_logging := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Debug Geometry Logging")
+
 # Internal last windowed size (managed by SystemManager.display). 200x150 min, 16K max.
 @export var last_window_size := SettingsVar.new(Type.VECTOR2I, Vector2i.ZERO, State.INTERNAL, "Last Window Size", "", 200.0, 16384.0, 1.0, [], false, {})
 

@@ -245,7 +245,7 @@ func ensure_android_data_access(on_ready: Callable, path: String = "") -> void:
 		func():
 			_resolve_saf_grant(false),
 		Callable(),
-		{"overlay_layer": 1101}  # above UILayer (1000) so it stays visible over the launch transition overlay
+		{"overlay_layer": OverlayLayers.LAUNCH_CRITICAL}  # above UILayer so it stays visible over the launch transition overlay
 	)
 
 func _on_saf_grant_result(granted: bool) -> void:

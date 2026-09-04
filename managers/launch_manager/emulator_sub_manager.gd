@@ -4,6 +4,7 @@ class_name EmulatorSubManager
 ## Emulator install/update/download management
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 
 # Track installation progress for UI display only
 var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text for UI
@@ -24,9 +25,6 @@ var _force_install_step: Dictionary = {}
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
 var _validation_cache: Dictionary = {}
 var _cache_ttl_ms: int = 5000  # 5 second cache TTL
-
-# Config backups for shuffler/session-specific edits.
-var _emulator_file_backups: Dictionary = {}  # resolved_path -> original_content
 
 var launch_manager: Node
 
@@ -1120,7 +1118,7 @@ func _handle_create_files_step(emulator_id: String, _step_name: String, step_ind
 		# are applied. Otherwise we only create missing files to preserve user edits.
 		var should_write = _force_install_step.get(emulator_id, false) or not FSM.file_exists(full_path)
 		if should_write:
-			if not FSM.write_file(full_path, file_content):
+			if not CSM.write_config(full_path, file_content):
 				push_error("[EmulatorManager] Failed to create file: " + full_path)
 				return false
 	
@@ -1173,62 +1171,8 @@ func edit_emulator_file(
 	if full_path == "":
 		push_error("[EmulatorManager] Could not resolve emulator path: " + file_path)
 		return false
-	
-	if not FSM.file_exists(full_path):
-		if create_if_missing:
-			if not FSM.write_file(full_path, ""):
-				push_error("[EmulatorManager] Failed to create file: " + full_path)
-				return false
-		else:
-			push_error("[EmulatorManager] File not found for editing: " + full_path)
-			return false
-	
-	var content := FSM.read_file(full_path)
-	# Empty content is allowed so missing keys can be appended later.
-	
-	for edit in edits:
-		var old_text: String = edit.get("old", "")
-		var new_text: String = edit.get("new", "")
-		
-		if old_text == "":
-			continue
-		
-		if edit.get("regex", false):
-			var regex := RegEx.new()
-			var err := regex.compile(old_text)
-			if err != OK:
-				push_error("[EmulatorManager] Invalid regex in edit: " + old_text)
-				continue
-			content = regex.sub(content, new_text, true)
-		else:
-			content = content.replace(old_text, new_text)
-	
-	# Append any missing keys so the caller doesn't have to do it manually.
-	if not append_if_missing.is_empty():
-		var has_section := true
-		if section_name != "":
-			var section_regex := RegEx.new()
-			section_regex.compile(r"\[%s\]" % section_name)
-			has_section = section_regex.search(content) != null
-		
-		if not has_section:
-			if not content.is_empty() and not content.ends_with("\n"):
-				content += "\n"
-			content += "[%s]\n" % section_name
-		
-		for key in append_if_missing:
-			var key_regex := RegEx.new()
-			key_regex.compile(r'(?m)^%s\s*=' % key)
-			if key_regex.search(content) == null:
-				if not content.is_empty() and not content.ends_with("\n"):
-					content += "\n"
-				content += '%s = %s\n' % [key, append_if_missing[key]]
-	
-	if not FSM.write_file(full_path, content):
-		push_error("[EmulatorManager] Failed to write edited file: " + full_path)
-		return false
-	
-	return true
+
+	return CSM.edit_text(full_path, edits, create_if_missing, append_if_missing, section_name)
 
 
 ## Same as edit_emulator_file, but stores the original file content first so it can be restored later.
@@ -1244,13 +1188,9 @@ func edit_emulator_file_with_backup(
 	if full_path == "":
 		push_error("[EmulatorManager] Could not resolve emulator path for backup: " + file_path)
 		return false
-	
-	if not _emulator_file_backups.has(full_path):
-		var original := ""
-		if FSM.file_exists(full_path):
-			original = FSM.read_file(full_path)
-		_emulator_file_backups[full_path] = original
-	
+
+	CSM.begin_backup(full_path)
+
 	return edit_emulator_file(emulator_id, file_path, edits, create_if_missing, append_if_missing, section_name)
 
 ## Restores a file to the content captured by edit_emulator_file_with_backup().
@@ -1259,24 +1199,15 @@ func restore_emulator_file(emulator_id: String, file_path: String) -> bool:
 	if full_path == "":
 		push_error("[EmulatorManager] Could not resolve emulator path for restore: " + file_path)
 		return false
-	
-	if not _emulator_file_backups.has(full_path):
-		return false
-	
-	var success := FSM.write_file(full_path, _emulator_file_backups[full_path])
-	if success:
-		_emulator_file_backups.erase(full_path)
-	else:
-		push_error("[EmulatorManager] Failed to restore emulator file: " + full_path)
-	
-	return success
+
+	return CSM.restore_backup(full_path)
 
 ## Returns true if a backup exists for the given emulator file.
 func has_emulator_file_backup(emulator_id: String, file_path: String) -> bool:
 	var full_path := FSM.resolve_emulator_path(file_path, emulator_id)
 	if full_path == "":
 		return false
-	return _emulator_file_backups.has(full_path)
+	return CSM.has_backup(full_path)
 
 ## Helper function for edit_file action
 func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:

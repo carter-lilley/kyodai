@@ -95,7 +95,7 @@ func _ready():
 	# overflow render behind sibling UI; toolbar must sit above that).
 	toolbar = main_content_vbox.get_node_or_null("controlbar_background")
 	if toolbar:
-		toolbar.z_index = 10
+		toolbar.z_index = OverlayLayers.TOOLBAR_Z
 
 	# Get UI references early so we can connect signals and block the slider during startup settle.
 	var zoom_slider = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")

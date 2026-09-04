@@ -16,7 +16,7 @@ var _is_active: bool = false
 func _init():
 	super._init()
 	overlay_type = "search"
-	overlay_layer = 85
+	overlay_layer = OverlayLayers.SEARCH
 	persistent = true
 	_build_ui()
 
@@ -72,6 +72,10 @@ func _build_ui():
 
 func _ready():
 	super._ready()
+	# Register as a persistent overlay so DS-mode shifts can reparent it even
+	# while hidden.
+	if UIManager and UIManager.overlay:
+		UIManager.overlay.register_persistent_overlay(self)
 	# Set up focus neighbors once nodes are in the scene tree
 	var line_edit = search_bar.get_line_edit()
 	if line_edit and last_search_button:
@@ -87,6 +91,12 @@ func show_overlay():
 	set_last_search(_last_search_text)
 	super.show_overlay()
 	search_bar.grab_focus_on_input()
+	# Focus/tap detection cannot see across the DS-mode SubViewport boundary,
+	# so open the keyboard explicitly for the search field.
+	if UIManager:
+		var keyboard = UIManager.get_onscreen_keyboard()
+		if keyboard and not keyboard.visible and keyboard.wants_auto_open():
+			keyboard.show_for(search_bar.get_line_edit())
 
 func dismiss():
 	_is_active = false

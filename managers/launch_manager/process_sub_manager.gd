@@ -484,7 +484,7 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	UIManager.show_alert("Installation Reminder", "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games.",
 		Callable(),
 		Callable(),
-		{"ok_text": "Got it", "overlay_type": "alert", "overlay_layer": 95, "dismissible": false}
+		{"ok_text": "Got it", "overlay_type": "alert", "overlay_layer": OverlayLayers.MENU, "dismissible": false}
 	)
 
 	print("[ProcessManager] Shown Android permissions reminder for: " + emulator_name)

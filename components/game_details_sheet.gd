@@ -26,7 +26,6 @@ const STAR_GAP_DP := 2.0
 # and its children are direct children of the root in the .tscn file, then
 # _reparent_content() moves MarginContainer into the sheet's _content_slot.
 @onready var _content_root: Control = $MarginContainer
-@onready var _content_hbox: HBoxContainer = $MarginContainer/HBoxContainer
 @onready var cover_container: VBoxContainer = $MarginContainer/HBoxContainer/CoverContainer
 @onready var content_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox
 @onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
@@ -75,7 +74,6 @@ var _related_games_count: int = 0
 var _metadata_chips: Array[M3Chip] = []
 var _overflow_chip: M3Chip = null
 var _stars_trailer: Control = null
-var _overflow_layout_seq: int = 0
 
 func _init():
 	super._init()
@@ -99,33 +97,53 @@ func _ready():
 	_set_sheet_height()
 	_reduce_top_padding()
 	_apply_content_scaling()
-	_reconnect_viewport_signals()
 
-var _size_changed_viewport: Viewport = null
-
-func _reconnect_viewport_signals() -> void:
-	"""Keep the size_changed connection on the sheet's CURRENT viewport;
-	DS-mode reparenting moves the sheet between the root window and the
-	MainViewport SubViewport."""
-	var viewport := get_viewport()
-	if viewport == _size_changed_viewport:
+## Settled-geometry hook (broadcast by OverlaySubManager on debounced viewport
+## changes — resizes and DS swaps alike). Re-stamps geometry against the
+## settled viewport so no stale stamp can survive a configuration change.
+func on_viewport_settled() -> void:
+	if not is_node_ready() or not is_inside_tree():
 		return
-	if _size_changed_viewport and is_instance_valid(_size_changed_viewport):
-		if _size_changed_viewport.size_changed.is_connected(_on_viewport_size_changed):
-			_size_changed_viewport.size_changed.disconnect(_on_viewport_size_changed)
-	_size_changed_viewport = null
-	if viewport:
-		viewport.size_changed.connect(_on_viewport_size_changed)
-		_size_changed_viewport = viewport
-
-func _on_viewport_size_changed() -> void:
-	# Only recompute while hidden; a visible sheet keeps its current geometry
-	# until the next show. _position_sheet() refreshes width/height/position
-	# even when the peek_height setter no-ops on an unchanged value.
-	if not visible:
+	M3Debug.geom("details_sheet", "on_viewport_settled: visible=%s peek=%.1f sheet_size=%s" % [visible, peek_height, _sheet_container.size if _sheet_container else Vector2.ZERO])
+	if visible:
+		# Re-stamp final geometry against the settled viewport; re-tier and
+		# re-fit related placement (unless the user has the description
+		# expanded, which intentionally hides inline related).
+		_set_sheet_height()
+		_reposition_open()
+		_apply_responsive_layout()
+		_refit_metadata_row()
+		_log_sheet_clamp_check_deferred("settled-visible")
+		if _current_game and not _desc_expanded:
+			_decide_related_placement()
+	else:
 		_set_sheet_height()
 		_position_sheet()
 		_apply_responsive_layout()
+		_refit_metadata_row()
+		_log_sheet_clamp_check_deferred("settled-hidden")
+
+## Recomputes chip overflow against the current sheet width so a re-stamp
+## (screen swap, settle) can't leave a stale fit whose minimum size forces
+## the sheet wider than its stamp.
+func _refit_metadata_row() -> void:
+	if _metadata_chips.size() > 0:
+		_layout_metadata_row_overflow()
+
+## Deferred actual-vs-stamped size check: Control.set_size clamps up to the
+## content minimum, so a wide content tree can silently outgrow the stamp.
+func _log_sheet_clamp_check_deferred(context: String) -> void:
+	if not _sheet_container:
+		return
+	var stamped := _sheet_container.size
+	call_deferred("_log_sheet_clamp_check", context, stamped)
+
+func _log_sheet_clamp_check(context: String, stamped: Vector2) -> void:
+	if not is_instance_valid(_sheet_container):
+		return
+	var actual := _sheet_container.size
+	if not actual.is_equal_approx(stamped):
+		M3Debug.geom("details_sheet", "CLAMP (%s): stamped=%s actual=%s (content min outgrew the stamp)" % [context, stamped, actual])
 
 func refresh_theme():
 	super.refresh_theme()
@@ -265,6 +283,7 @@ func _connect_signals() -> void:
 const RELATED_TAB_INDEX := 2
 var _compact_layout := false
 var _small_layout := false
+var _related_fits_inline := true
 
 ## Viewport-dp breakpoint check (DS-aware: display tracks the active
 ## SubViewport size across swaps).
@@ -302,44 +321,63 @@ func _apply_responsive_layout() -> void:
 	if changed:
 		_apply_content_scaling()
 
-## Move the related section between the Overview tab (expanded/compact) and
-## its own Related tab (small mode); the tab only exists in small mode and
-## only when the current game has related entries.
+## Move the related section between the Overview tab and its own Related tab.
+## Placement is tab when small mode is active or when the Overview stack
+## wouldn't fit the sheet height with Related inline (see _decide_related_placement).
 func _apply_related_placement() -> void:
 	if not is_instance_valid(related_section) or not is_instance_valid(related_tab_content):
 		return
-	var target: Node = related_tab_content if _small_layout else overview_vbox
+	var use_tab := _small_layout or not _related_fits_inline
+	var target: Node = related_tab_content if use_tab else overview_vbox
 	if related_section.get_parent() != target:
 		if related_section.get_parent():
 			related_section.get_parent().remove_child(related_section)
 		target.add_child(related_section)
 	if content_tabs:
-		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not _small_layout or _related_games_count == 0)
+		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not use_tab or _related_games_count == 0)
 		# Never leave the current tab pointing at a hidden page.
 		if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
 			content_tabs.current_tab = 0
 
+## Decides whether Related fits inline under the Overview content by measuring
+## the stack's remaining space after layout settles. The section stays hidden
+## until this runs, so its minimum size never inflates the content column
+## (Control.set_size clamps up to the content minimum — that's what made the
+## sheet grow past the screen).
+func _decide_related_placement() -> void:
+	if _related_games_count == 0 or not is_instance_valid(related_section):
+		return
+	var inline_ok := false
+	var content_bottom := 0.0
+	var related_min_h := 0.0
+	var available := 0.0
+	if not _small_layout and is_instance_valid(overview_vbox):
+		for child in overview_vbox.get_children():
+			if child is Control and child != related_section and child.visible:
+				content_bottom = maxf(content_bottom, child.get_global_rect().end.y)
+		if content_bottom > 0.0:
+			var separation := float(overview_vbox.get_theme_constant("separation"))
+			related_min_h = related_section.get_combined_minimum_size().y
+			available = overview_vbox.get_global_rect().end.y
+			inline_ok = content_bottom + separation + related_min_h <= available
+	M3Debug.geom("details_sheet", "related placement: small=%s content_bottom=%.1f related_min_h=%.1f available=%.1f inline_ok=%s" % [_small_layout, content_bottom, related_min_h, available, inline_ok])
+	_related_fits_inline = inline_ok
+	_apply_related_placement()
+	related_section.visible = true
+
 func _set_sheet_height() -> void:
-	var viewport := get_viewport()
+	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
 	if not viewport:
 		return
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
-	peek_height = screen_dp * HEIGHT_FRACTION
+	var new_peek := screen_dp * HEIGHT_FRACTION
+	if not is_equal_approx(new_peek, peek_height):
+		M3Debug.geom("details_sheet", "set_height: viewport_y=%.1f scale=%.3f peek %.1f -> %.1f" % [
+			viewport.get_visible_rect().size.y, M3Units.get_scale(), peek_height, new_peek])
+	peek_height = new_peek
 
-func _log_metrics(tag: String) -> void:
-	"""Temporary diagnostics for DP/DS sizing (grep logcat for [Metrics])."""
-	var viewport := get_viewport()
-	var vp_size := viewport.get_visible_rect().size if viewport else Vector2.ZERO
-	print("[Metrics] details_sheet %s: viewport=%s m3_scale=%.3f peek_height_dp=%.1f sheet_px=%s parent=%s" % [
-		tag, vp_size, M3Units.get_scale(), peek_height,
-		_sheet_container.size if _sheet_container else Vector2.ZERO,
-		get_parent().get_path() if get_parent() else "none"])
-
-## Override purely for diagnostics: catches every resize, including hidden-time
-## refresh_scale passes from tree-wide theme/scale refreshes.
 func _position_sheet():
 	super._position_sheet()
-	_log_metrics("position")
 
 func _reduce_top_padding() -> void:
 	# Tighten the default M3BottomSheet top padding.
@@ -384,13 +422,9 @@ func set_game(game: GameResource) -> void:
 	if not is_instance_valid(self) or _current_game == null:
 		return
 
-	_populate_basic_info(game)
+	await _populate_basic_info(game)
 	if is_instance_valid(_content_root):
 		_content_root.visible = true
-	if action_button:
-		if UIManager:
-			UIManager.suppress_next_focus_sound()
-		action_button.grab_focus.call_deferred()
 
 	await Engine.get_main_loop().process_frame
 	if not is_instance_valid(self) or _current_game == null:
@@ -426,8 +460,8 @@ func _populate_basic_info(game: GameResource) -> void:
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
-	_setup_description_fold(game)
-	_populate_related_games(game)
+	await _setup_description_fold(game)
+	await _populate_related_games(game)
 
 func _populate_metadata_chips(game: GameResource) -> void:
 	if not is_instance_valid(metadata_row):
@@ -465,20 +499,29 @@ func _populate_metadata_chips(game: GameResource) -> void:
 	_layout_metadata_row_overflow()
 
 ## The chips row is a clipped single-line HBox: show as many chips as fit and
-## collapse the rest into a "+N" chip so the row never wraps.
+## collapse the rest into a "+N" chip so the row never wraps. Runs
+## SYNCHRONOUSLY at populate: chip minimum sizes are valid at creation, and
+## the row width is derived deterministically from the sheet width, so
+## overflow chips are hidden before any minimum-size propagation can inflate
+## the sheet (Control.set_size clamps up to the content minimum).
 func _layout_metadata_row_overflow() -> void:
-	_overflow_layout_seq += 1
-	var seq := _overflow_layout_seq
-	await get_tree().process_frame
-	if seq != _overflow_layout_seq:
-		return
-	if not is_instance_valid(metadata_row) or metadata_row.size.x <= 0:
+	if not is_instance_valid(metadata_row):
 		return
 	var n := _metadata_chips.size()
 	if n == 0:
 		return
 	var sep := float(metadata_row.get_theme_constant("separation"))
 	var avail := metadata_row.size.x
+	var avail_src := "live"
+	var estimate := _estimate_metadata_row_width()
+	if avail <= 0.0 or (estimate > 0.0 and avail > estimate + 1.0):
+		# A live width wider than the sheet's content area is stale (carried
+		# across a screen swap or a re-stamp): the row can never legitimately
+		# be wider than the sheet.
+		avail = estimate
+		avail_src = "estimate"
+	if avail <= 0.0:
+		return
 	var trailer_w := (_stars_trailer.get_combined_minimum_size().x if is_instance_valid(_stars_trailer) else 0.0) + sep * 2.0
 	var overflow_w := (_overflow_chip.get_combined_minimum_size().x + sep) if is_instance_valid(_overflow_chip) else 0.0
 	var used := 0.0
@@ -498,11 +541,27 @@ func _layout_metadata_row_overflow() -> void:
 	for i in range(n):
 		if is_instance_valid(_metadata_chips[i]):
 			_metadata_chips[i].visible = i < fit
+	M3Debug.geom("details_sheet", "chip overflow: avail=%.1f (%s) fit=%d/%d trailer_w=%.1f" % [avail, avail_src, fit, n, trailer_w])
 	var hidden := n - fit
 	if is_instance_valid(_overflow_chip):
 		_overflow_chip.visible = hidden > 0
 		if hidden > 0:
 			_overflow_chip.text = "+%d" % hidden
+
+## Deterministic width of the metadata row for the synchronous overflow pass,
+## used before the row has been laid out (e.g. first summon).
+func _estimate_metadata_row_width() -> float:
+	if not _sheet_container or _sheet_container.size.x <= 0.0:
+		return 0.0
+	var edge := M3Units.dp(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
+	var content_w := _sheet_container.size.x - edge * 2.0
+	if not _small_layout and is_instance_valid(cover_container) and cover_container.visible:
+		# Cover column takes ~0.3 of the HBox (stretch ratio 0.3/0.7) plus the gap.
+		content_w = (content_w - edge) * 0.7
+	# Slight under-reservation is safer than spilling.
+	var estimate := content_w - M3Units.dp(8.0)
+	M3Debug.geom("details_sheet", "row width estimate: sheet_w=%.1f small=%s -> %.1f" % [_sheet_container.size.x, _small_layout, estimate])
+	return estimate
 
 func _populate_rating_stars(game: GameResource) -> void:
 	if game.rating <= 0:
@@ -558,47 +617,20 @@ const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 const DESC_COLLAPSED_LINES := 3
 
-## Pins the cover column height to the sheet's maximum Overview content:
-## title row + chips row + tabs + 3-line description + More button + related
-## row (when the game has related entries). Computed once per game; tab
-## switches and description folding never resize the cover.
-func _align_cover_height() -> void:
-	if _small_layout:
-		return  # No cover column in small mode.
-	if not is_instance_valid(cover_container) or not is_instance_valid(content_tabs):
-		return
-	await get_tree().process_frame
-	await get_tree().process_frame
-	if not is_instance_valid(self) or _current_game == null or not visible:
-		return
-	var bottom := 0.0
-	for child in overview_vbox.get_children():
-		if child is Control and child.visible:
-			bottom = maxf(bottom, child.get_global_rect().end.y)
-	if bottom <= 0.0:
-		return
-	var target := bottom - cover_container.global_position.y
-	# Normalize up to the full budget: a short description still reserves
-	# 3 lines plus the (hidden) More button, so cover height is consistent
-	# across games regardless of actual text length.
-	var line_h := maxf(float(description_label.get_line_height()), 1.0)
-	var lines_now := mini(description_label.get_line_count(), DESC_COLLAPSED_LINES)
-	if lines_now < DESC_COLLAPSED_LINES:
-		target += (DESC_COLLAPSED_LINES - lines_now) * line_h
-	if not desc_fold_button.visible:
-		target += desc_fold_button.get_combined_minimum_size().y + float(overview_vbox.get_theme_constant("separation"))
-	cover_container.custom_minimum_size.y = clampf(target, 0.0, _content_hbox.size.y)
-
 func _setup_description_fold(game: GameResource) -> void:
 	if not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button):
 		return
 	_desc_expanded = false
 	desc_fold_button.text = "More"
 	desc_fold_button.visible = false
-	# Collapsed scroll state: no scrolling, container tracks the clamped label.
-	desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# The scroll container is a min-size boundary: AUTO never propagates the
+	# label's intrinsic height upward, and the pinned custom minimum is the
+	# only height the content column ever reports for the description —
+	# collapsed or mid-measurement alike.
+	desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	desc_scroll.size_flags_vertical = Control.SIZE_FILL
-	desc_scroll.custom_minimum_size.y = 0
+	desc_scroll.scroll_vertical = 0
+	desc_scroll.custom_minimum_size.y = description_label.get_line_height() * DESC_COLLAPSED_LINES
 	# Measure the full text first, then clamp if it exceeds the folded budget.
 	description_label.max_lines_visible = -1
 	description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
@@ -613,23 +645,21 @@ func _setup_description_fold(game: GameResource) -> void:
 		description_label.max_lines_visible = DESC_COLLAPSED_LINES
 		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		desc_fold_button.visible = true
-	# Measure the cover only after the description clamp has landed.
-	_align_cover_height()
 
 func _on_desc_fold_pressed() -> void:
 	_desc_expanded = not _desc_expanded
 	if _desc_expanded:
-		# Trade space with the related row (not needed in small mode, where
-		# Related is its own tab): hide it and give the description's scroll
-		# area an explicit height — never more than the space above the cover
-		# column's bottom (expanded/compact) or the tab area bottom (small),
-		# so the Less button can't be pushed off-screen. Shorter texts get a
-		# snug area (button hugs the text); longer texts scroll inside the cap.
-		if not _small_layout and is_instance_valid(related_section):
+		# Trade space with the related row when it is inline (in small mode or
+		# when Related lives in its own tab there is nothing to hide): give the
+		# description's scroll area an explicit height — never more than the
+		# space above the cover column's bottom (expanded/compact) or the tab
+		# area bottom (small/tab), so the Less button can't be pushed off-screen.
+		# Shorter texts get a snug area (button hugs the text); longer texts
+		# scroll inside the cap.
+		if not _small_layout and is_instance_valid(related_section) and related_section.get_parent() == overview_vbox:
 			related_section.visible = false
 		description_label.max_lines_visible = -1
 		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-		desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "Less"
 		await get_tree().process_frame
@@ -645,8 +675,7 @@ func _on_desc_fold_pressed() -> void:
 	else:
 		description_label.max_lines_visible = DESC_COLLAPSED_LINES
 		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		desc_scroll.custom_minimum_size.y = 0
+		desc_scroll.custom_minimum_size.y = description_label.get_line_height() * DESC_COLLAPSED_LINES
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "More"
 		if not _small_layout and is_instance_valid(related_section) and _related_games_count > 0:
@@ -677,14 +706,11 @@ func _populate_related_games(game: GameResource) -> void:
 	var related := game.get_igdb_related_games()
 	_related_games_count = related.size()
 	if related.is_empty():
-		if _small_layout and content_tabs:
+		if content_tabs:
 			content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 		return
 	if is_instance_valid(related_header):
 		related_header.text = "Related Games (%d)" % related.size()
-	related_section.visible = true
-	if content_tabs:
-		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not _small_layout)
 
 	var igdb_ids: Array = []
 	var titles: Array = []
@@ -696,9 +722,18 @@ func _populate_related_games(game: GameResource) -> void:
 			igdb_ids.append(igdb_id)
 		titles.append(str(entry.get("name", "")))
 
+	# Placement (inline vs tab) is decided on vertical fit once layout settles.
+	# The section stays hidden until then so its minimum size never propagates
+	# upward and grows the sheet.
+	var for_romm_id := game.romm_id
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
+		return
+	_decide_related_placement()
+
 	# Resolve which related games are owned on the DB thread, then badge and
 	# link their cards. Exact igdb_id match first, title fallback after.
-	var for_romm_id := game.romm_id
 	SystemManager.memory.queue_db_task(
 		func():
 			var by_igdb: Dictionary = DataManager.get_games_by_igdb_ids(igdb_ids)
@@ -739,6 +774,7 @@ func _add_related_card(entry: Dictionary) -> void:
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
 	card.custom_minimum_size = Vector2(M3Units.dp(RELATED_CARD_WIDTH_DP), M3Units.dp(RELATED_CARD_HEIGHT_DP))
+	M3Debug.geom("details_sheet", "related card spawn: dp=%.1fx%.1f scale=%.3f min_px=%s" % [RELATED_CARD_WIDTH_DP, RELATED_CARD_HEIGHT_DP, M3Units.get_scale(), card.custom_minimum_size])
 	card.media_aspect_ratio = 0.75  # IGDB covers are 3:4
 	# Caption-only cards: the type label stands in for the title.
 	var type_label: String = RELATED_TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", "")).capitalize())
@@ -777,35 +813,34 @@ func _format_release_date(epoch_ms: int) -> String:
 	return "%s %d, %d" % [month, dict.day, dict.year]
 
 func show_for_game(game: GameResource) -> GameDetailsSheet:
+	await show_prepared(_prepare_for_show.bind(game))
+	return self
+
+## Grab initial in-sheet focus only once visible: grabbing during the hidden
+## prep phase focuses an invisible control and pollutes the summoner's focus
+## capture in show_overlay().
+func show_overlay() -> void:
+	super.show_overlay()
+	if action_button:
+		if UIManager:
+			UIManager.suppress_next_focus_sound()
+		action_button.grab_focus.call_deferred()
+
+## Hidden prep phase of the two-phase show: parent, size, tier, and populate
+## fully before the first visible frame.
+func _prepare_for_show(game: GameResource) -> void:
 	clear_content()
-	# Re-resolve the overlay parent on every show: the sheet is persistent and
-	# M3Sheet.show_overlay() only parents it once, so without this it keeps
-	# whatever parent it first landed in - which goes stale across DS mode
-	# toggles (stranded in a disabled DualScreenSetup subtree, or left in the
-	# root viewport while the UI lives in a SubViewport).
-	var overlay_parent := M3Overlay.get_overlay_parent()
-	if overlay_parent and get_parent() != overlay_parent:
-		# Also handle parent == null (first show): sizing below needs a viewport,
-		# which only exists once the sheet is inside the tree.
-		if get_parent() != null:
-			get_parent().remove_child(self)
-		overlay_parent.add_child(self)
-	_reconnect_viewport_signals()
+	# Parent first (also fixes stale parents across DS mode toggles): the
+	# sizing below needs a viewport, which only exists once inside the tree.
+	ensure_overlay_parent()
 	# Recompute height against the current viewport/scale: the sheet is
 	# persistent, so the one-shot _ready sizing goes stale after screen or
 	# scale changes (dual-screen swap, orientation, display-init ordering).
-	# _position_sheet() refreshes size.x as well — _animate_in() only ever
-	# recomputes position, never width.
 	_set_sheet_height()
 	_position_sheet()
+	_log_sheet_clamp_check_deferred("prepare")
 	_apply_responsive_layout()
-	_log_metrics("show")
-	show_overlay()
-	# Let the slide-in animation start on a clean frame before populating content.
-	await Engine.get_main_loop().process_frame
-	if is_instance_valid(self):
-		set_game(game)
-	return self
+	await set_game(game)
 
 func prepare_for_game(romm_id: int) -> void:
 	"""Preload heavy details while the context menu is open."""

@@ -45,16 +45,11 @@ var _dual_screen_available: bool = false
 var _second_screen_index: int = -1
 var _android_plugin = null
 
-# UI scale state for SubViewport dual screen mode.
-# NOTE: _saved_ui_scale is intentionally 1.0. DP scaling is already applied
-# inside the viewports via M3Units (see _calculate_ui_scale); if this were the
-# real scale, size_2d_override would shrink the logical viewport AND magnify it
-# back, double-scaling every element. Both Thor screens are ~same density
-# (369dpi top, ~350 bottom), so per-viewport density correction is unneeded.
-var _subviewport_dual_screen_active: bool = false
-var _saved_ui_scale: float = 1.0
-var _last_main_viewport_size: Vector2i = Vector2i.ZERO
-var _last_second_viewport_size: Vector2i = Vector2i.ZERO
+# Dual-screen SubViewports are always 1:1 (no size_2d_override): dp scaling is
+# applied inside them via M3Units (see _calculate_ui_scale). Never reintroduce
+# viewport-level scaling here without disabling M3Units first, or every element
+# would be scaled twice. Both Thor screens are ~same density (369dpi top,
+# ~350dpi bottom), so per-viewport density correction is unneeded.
 var _ayn_thor_manager: Node = null
 
 func _ready() -> void:
@@ -163,36 +158,36 @@ func get_ui_scale() -> float:
 	return _ui_scale
 
 
-## Temporary diagnostics: dump everything that feeds DP scaling and DS sizing.
-## Grep logcat for "[Metrics]". Remove once density scaling is fixed.
+## Diagnostic dump of everything that feeds DP scaling and DS sizing.
+## Gated on the internal debug_geometry_logging setting (M3Debug.geom), except
+## the startup call, which always logs once since it's the most useful block.
 func dump_display_metrics(tag: String) -> void:
 	var screen := DisplayServer.window_get_current_screen()
-	print("[Metrics] ---- %s ----" % tag)
-	print("[Metrics] os=%s screen_count=%d window_screen=%d window_size=%s window_mode=%d" % [
+	M3Debug.geom("display", "---- %s ----" % tag)
+	M3Debug.geom("display", "os=%s screen_count=%d window_screen=%d window_size=%s window_mode=%d" % [
 		OS.get_name(), DisplayServer.get_screen_count(), screen,
 		DisplayServer.window_get_size(), DisplayServer.window_get_mode()])
 	for i in range(DisplayServer.get_screen_count()):
-		print("[Metrics] screen[%d]: size=%s dpi=%d scale=%.2f position=%s" % [
+		M3Debug.geom("display", "screen[%d]: size=%s dpi=%d scale=%.2f position=%s" % [
 			i, DisplayServer.screen_get_size(i), DisplayServer.screen_get_dpi(i),
 			DisplayServer.screen_get_scale(i), DisplayServer.screen_get_position(i)])
 	var os_scale := DisplayServer.screen_get_scale(screen)
 	var screen_size := DisplayServer.screen_get_size(screen)
 	var resolution_scale := pow(screen_size.y / BASE_HEIGHT, 0.85)
 	var dpi := DisplayServer.screen_get_dpi()
-	print("[Metrics] scale inputs: os_scale=%.2f resolution_scale=%.3f (screen_y=%d) dpi=%d dpi_scale=%.3f user_factor=%.2f -> ui_scale=%.3f m3units=%.3f" % [
+	M3Debug.geom("display", "scale inputs: os_scale=%.2f resolution_scale=%.3f (screen_y=%d) dpi=%d dpi_scale=%.3f user_factor=%.2f -> ui_scale=%.3f m3units=%.3f" % [
 		os_scale, resolution_scale, screen_size.y, dpi, dpi / BASE_DPI if dpi > 0 else -1.0,
 		_user_scale_factor, _ui_scale, M3Units.get_scale()])
-	print("[Metrics] viewport_size=%s ds_enabled=%s ds_subviewport_active=%s saved_ui_scale=%.2f" % [
-		_viewport_size, _dual_screen_enabled, _subviewport_dual_screen_active, _saved_ui_scale])
-	if _subviewport_dual_screen_active:
+	M3Debug.geom("display", "viewport_size=%s ds_enabled=%s" % [_viewport_size, _dual_screen_enabled])
+	if _dual_screen_enabled:
 		var ds = get_node_or_null("/root/Main/DualScreenSetup")
 		var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
 		var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
 		if main_viewport:
-			print("[Metrics] main_viewport: size=%s override=%s stretch=%s" % [
+			M3Debug.geom("display", "main_viewport: size=%s override=%s stretch=%s" % [
 				main_viewport.size, main_viewport.size_2d_override, main_viewport.size_2d_override_stretch])
 		if second_viewport:
-			print("[Metrics] second_viewport: size=%s override=%s stretch=%s" % [
+			M3Debug.geom("display", "second_viewport: size=%s override=%s stretch=%s" % [
 				second_viewport.size, second_viewport.size_2d_override, second_viewport.size_2d_override_stretch])
 
 func get_screen_size() -> Vector2i:
@@ -331,79 +326,13 @@ func _load_user_scale_factor() -> void:
 	if not is_equal_approx(_ui_scale, old_scale):
 		M3Units.invalidate_cache()
 		ui_scale_changed.emit(_ui_scale)
-	print("[Metrics] user scale factor applied: factor=%.2f ui_scale=%.3f m3units=%.3f" % [
+	M3Debug.geom("display", "user scale factor applied: factor=%.2f ui_scale=%.3f m3units=%.3f" % [
 		_user_scale_factor, _ui_scale, M3Units.get_scale()])
 
-func _connect_subviewport_signals() -> void:
-	var ds = get_node_or_null("/root/Main/DualScreenSetup")
-	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
-	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
-
-	if main_viewport and not main_viewport.size_changed.is_connected(_on_subviewport_size_changed):
-		main_viewport.size_changed.connect(_on_subviewport_size_changed)
-	if second_viewport and not second_viewport.size_changed.is_connected(_on_subviewport_size_changed):
-		second_viewport.size_changed.connect(_on_subviewport_size_changed)
-
-func _disconnect_subviewport_signals() -> void:
-	var ds = get_node_or_null("/root/Main/DualScreenSetup")
-	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
-	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
-
-	if main_viewport and main_viewport.size_changed.is_connected(_on_subviewport_size_changed):
-		main_viewport.size_changed.disconnect(_on_subviewport_size_changed)
-	if second_viewport and second_viewport.size_changed.is_connected(_on_subviewport_size_changed):
-		second_viewport.size_changed.disconnect(_on_subviewport_size_changed)
-
-func _on_subviewport_size_changed() -> void:
-	_apply_subviewport_scale(_saved_ui_scale)
-
-func _apply_subviewport_scale(scale: float) -> void:
-	if scale <= 0:
-		scale = 1.0
-
-	var ds = get_node_or_null("/root/Main/DualScreenSetup")
-	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
-	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
-
-	print("[Metrics] _apply_subviewport_scale: scale=%.3f main_size=%s second_size=%s" % [
-		scale, main_viewport.size if main_viewport else Vector2i.ZERO,
-		second_viewport.size if second_viewport else Vector2i.ZERO])
-
-	if main_viewport:
-		var original_size = main_viewport.size
-		main_viewport.size_2d_override = Vector2i(int(original_size.x / scale), int(original_size.y / scale))
-		main_viewport.size_2d_override_stretch = true
-		_last_main_viewport_size = original_size
-
-	if second_viewport:
-		var original_size = second_viewport.size
-		second_viewport.size_2d_override = Vector2i(int(original_size.x / scale), int(original_size.y / scale))
-		second_viewport.size_2d_override_stretch = true
-		_last_second_viewport_size = original_size
-
-func _clear_subviewport_scale() -> void:
-	var ds = get_node_or_null("/root/Main/DualScreenSetup")
-	var main_viewport = ds.get_node_or_null("MainViewportContainer/MainViewport") if ds else null
-	var second_viewport = ds.get_node_or_null("SecondViewportContainer/SecondViewport") if ds else null
-
-	if main_viewport:
-		main_viewport.size_2d_override = Vector2i.ZERO
-		main_viewport.size_2d_override_stretch = false
-
-	if second_viewport:
-		second_viewport.size_2d_override = Vector2i.ZERO
-		second_viewport.size_2d_override_stretch = false
-
-	_last_main_viewport_size = Vector2i.ZERO
-	_last_second_viewport_size = Vector2i.ZERO
-
 func _on_screens_swapped(_swapped: bool) -> void:
-	if _subviewport_dual_screen_active:
-		# Re-apply scale after screen swap since viewport sizes change
-		_apply_subviewport_scale(_saved_ui_scale)
-		# Defer resize notification so SubViewport size changes propagate to
-		# controls (e.g. VirtualScrollGridContainer) before they recalculate.
-		call_deferred("_emit_swap_resize_notification")
+	# Defer resize notification so SubViewport size changes propagate to
+	# controls (e.g. VirtualScrollGridContainer) before they recalculate.
+	call_deferred("_emit_swap_resize_notification")
 
 func _emit_swap_resize_notification() -> void:
 	# In dual-screen SubViewport mode, emit the active MainViewport size, not the
@@ -417,22 +346,6 @@ func _emit_swap_resize_notification() -> void:
 	if viewport:
 		_viewport_size = viewport.size
 		viewport_size_changed.emit(_viewport_size)
-
-func enter_subviewport_dual_screen_mode() -> void:
-	if _subviewport_dual_screen_active:
-		return
-	_subviewport_dual_screen_active = true
-	_connect_subviewport_signals()
-	_apply_subviewport_scale(_saved_ui_scale)
-	dump_display_metrics("enter_ds_subviewport")
-
-func exit_subviewport_dual_screen_mode() -> void:
-	if not _subviewport_dual_screen_active:
-		return
-	_subviewport_dual_screen_active = false
-	_disconnect_subviewport_signals()
-	_clear_subviewport_scale()
-	dump_display_metrics("exit_ds_subviewport")
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]

@@ -41,10 +41,39 @@ func _ready():
 
 func setup(root_control: Control) -> void:
 	_root_control = root_control
+	# The single frame of reference for overlay sizing: DS-aware resolution of
+	# the viewport overlays render in (MainViewport in dual-screen mode, root
+	# otherwise). Registered once for all M3 overlays.
+	M3Overlay.sizing_viewport_resolver = _resolve_sizing_viewport
+	# Settled-geometry hook: forward debounced viewport changes (resizes and DS
+	# swaps alike) to persistent overlays that opt in via on_viewport_settled().
+	SystemManager.display.viewport_size_changed.connect(_broadcast_viewport_settled)
 	# The settings dialog script drags ~300ms of preload dependencies onto
 	# whichever thread loads it first; warm it on the loader thread so the
 	# pre-create (and first open) never pay it on the main thread.
 	ResourceLoader.load_threaded_request(SETTINGS_DIALOG_SCRIPT_PATH)
+
+## DS-aware sizing viewport for M3 overlays: the active overlay parent when it
+## is a Viewport (dual-screen SubViewport), the root window otherwise.
+func _resolve_sizing_viewport() -> Viewport:
+	var parent := M3Overlay.get_overlay_parent()
+	if parent is Viewport:
+		return parent
+	return get_tree().root
+
+## Forward a settled viewport change to every persistent overlay implementing
+## on_viewport_settled(). display.viewport_size_changed is already debounced
+## (0.25s) for resizes and deferred-post-geometry for DS swaps, so both arrive
+## here as one settled event.
+func _broadcast_viewport_settled(_new_size: Vector2) -> void:
+	var live: Array[WeakRef] = []
+	for ref in _persistent_overlays:
+		var overlay = ref.get_ref()
+		if overlay is M3Overlay and is_instance_valid(overlay):
+			if overlay.has_method("on_viewport_settled"):
+				overlay.on_viewport_settled()
+			live.append(ref)
+	_persistent_overlays = live
 
 func pre_create_settings_dialog(force: bool = false) -> void:
 	"""Eagerly build the settings dialog in the background.
@@ -78,6 +107,7 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 		push_error("[OverlayManager] SettingsDialog instance missing 'dismissed' signal — script failed to attach. Class: " + _settings_dialog.get_class())
 		return
 	_settings_dialog.dismissed.connect(_on_settings_dialog_dismissed)
+	register_persistent_overlay(_settings_dialog)
 
 	if not _settings_dialog.is_inside_tree():
 		phase_start_us = Time.get_ticks_usec()
@@ -202,6 +232,54 @@ func _add_overlay_to_root(overlay: Node) -> void:
 			_root_control.add_child(overlay)
 		else:
 			get_tree().root.add_child(overlay)
+
+# ==================== DS TRANSITION POLICIES ====================
+
+## What happens to each overlay type when dual-screen mode shifts.
+enum DSPolicy { DISMISS, REPARENT, LEAVE }
+
+const DS_POLICIES := {
+	"menu": DSPolicy.DISMISS,
+	"snackbar": DSPolicy.DISMISS,
+	"dialog": DSPolicy.DISMISS,
+	"tooltip": DSPolicy.DISMISS,
+	"sheet": DSPolicy.DISMISS,
+	"bottom_sheet": DSPolicy.DISMISS,
+	"search": DSPolicy.DISMISS,
+}
+
+## Hidden persistent overlays (settings dialog, details sheet, search) tracked
+## via WeakRefs so they can be reparented on DS shifts even while not shown.
+var _persistent_overlays: Array[WeakRef] = []
+
+func register_persistent_overlay(overlay: M3Overlay) -> void:
+	for ref in _persistent_overlays:
+		if ref.get_ref() == overlay:
+			return
+	_persistent_overlays.append(weakref(overlay))
+
+## Dismiss active overlays per DS_POLICIES. Call before the overlay parent
+## changes so nothing is stranded in a viewport that is going away.
+func apply_ds_dismiss_policies() -> void:
+	for overlay in M3Overlay.get_active_overlays():
+		match DS_POLICIES.get(overlay.overlay_type, DSPolicy.DISMISS):
+			DSPolicy.DISMISS:
+				overlay.dismiss()
+			DSPolicy.REPARENT:
+				overlay.ensure_overlay_parent()
+			DSPolicy.LEAVE:
+				pass
+
+## Reparent hidden persistent overlays to the current overlay parent. Call
+## after the "m3_overlay_parent" group has been updated for the new mode.
+func reparent_persistent_overlays() -> void:
+	var live: Array[WeakRef] = []
+	for ref in _persistent_overlays:
+		var overlay = ref.get_ref()
+		if overlay is M3Overlay and is_instance_valid(overlay):
+			overlay.ensure_overlay_parent()
+			live.append(ref)
+	_persistent_overlays = live
 
 # ==================== FILE DIALOGS ====================
 
@@ -358,7 +436,7 @@ func show_shuffler_dialog() -> void:
 				_shuffler_dialog.start_session_requested.connect(_on_shuffler_start_requested)
 
 	if _shuffler_dialog and not _shuffler_dialog.is_inside_tree():
-		get_tree().root.add_child(_shuffler_dialog)
+		_add_overlay_to_root(_shuffler_dialog)
 
 	if _shuffler_dialog:
 		_shuffler_dialog.show_overlay()
@@ -490,14 +568,24 @@ func show_game_details(romm_id: int) -> void:
 
 	_ensure_game_details_sheet()
 	_game_details_sheet.show_for_game(game)
-	# show_overlay() captured focus while the context menu was still open, so
-	# the auto-captured owner is a menu item that gets freed on menu dismissal.
-	# Override it with the menu's anchor (the summoning card) so ui_cancel
-	# returns focus to the card.
+	# Pin the restore target to the context menu's anchor (the summoning card)
+	# so ui_cancel returns focus to the card. The explicit target survives
+	# show_overlay()'s auto-capture (M3Overlay._explicit_restore_target).
 	var anchor: Control = _last_menu_anchor.get_ref() if _last_menu_anchor != null else null
 	if anchor != null and is_instance_valid(anchor):
 		_game_details_sheet.set_focus_restore_target(anchor)
-	_game_details_sheet.set_focus_restore_fallback(ui_manager.get_focus_restore_fallback_to_home())
+	_game_details_sheet.set_focus_restore_fallback(_focus_restore_to_current_grid)
+
+## Fallback when the summoning card is gone (recycled by the virtual grid,
+## e.g. after a related-card navigation): focus the current view's grid
+## instead of Home chrome.
+func _focus_restore_to_current_grid() -> void:
+	var view = ui_manager.get_current_view()
+	var grid = view.get("games_grid") if view else null
+	if grid is VirtualScrollGridContainer and grid.is_visible_in_tree():
+		grid.focus_last_or_first_card()
+		return
+	ui_manager.get_focus_restore_fallback_to_home().call()
 
 func _ensure_game_details_sheet() -> void:
 	if _game_details_sheet and is_instance_valid(_game_details_sheet):
@@ -510,6 +598,7 @@ func _ensure_game_details_sheet() -> void:
 		# Fallback to script instantiation if the scene is missing
 		_game_details_sheet = GameDetailsSheet.new()
 		_game_details_sheet.visible = false
+	register_persistent_overlay(_game_details_sheet)
 	# Don't add to the tree here; M3Sheet.show_overlay() adds the sheet on its
 	# first show, so we avoid "busy setting up children" errors during initialization.
 
@@ -534,4 +623,7 @@ func _release_overlays() -> void:
 	_modal_context.clear()
 
 func _exit_tree() -> void:
+	M3Overlay.sizing_viewport_resolver = Callable()
+	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_broadcast_viewport_settled):
+		SystemManager.display.viewport_size_changed.disconnect(_broadcast_viewport_settled)
 	_release_overlays()

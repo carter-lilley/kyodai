@@ -1574,7 +1574,7 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 		content.add_child(dlg_cancel_btn)
 
 		conflict_dialog.content_slot.add_child(content)
-	, Callable(), {"overlay_layer": 1101})  # above UILayer (1000) so it stays visible and clickable over the launch transition overlay
+	, Callable(), {"overlay_layer": OverlayLayers.LAUNCH_CRITICAL})  # above UILayer so it stays visible and clickable over the launch transition overlay
 
 	# Wait for the dialog to be laid out and then focus the first choice.
 	await get_tree().process_frame

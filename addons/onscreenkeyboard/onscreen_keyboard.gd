@@ -92,14 +92,10 @@ func _enter_tree():
 		Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	
 	# Connect to viewport focus changes to catch deferred focus (e.g. TabContainer -> LineEdit)
-	var viewport = get_viewport()
-	if viewport != null:
-		if viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
-			viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
-		viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
+	_connect_focus_signals()
 	
 	# Ensure keyboard always renders on top of other UI elements
-	z_index = 4096
+	z_index = OverlayLayers.KEYBOARD_Z
 	
 	_init_keyboard()
 	_apply_keyboard_size()
@@ -165,28 +161,57 @@ func _on_viewport_focus_changed(control: Control) -> void:
 	if visible and control != null and not is_focus_within_keyboard(control) and not is_keyboard_focus_object(control):
 		call_deferred("_pull_focus_back_to_keyboard")
 
+var _connected_focus_viewports: Array[Viewport] = []
+
+func _get_focus_source_viewports() -> Array[Viewport]:
+	"""Viewports whose focus signals can drive the keyboard: the keyboard's own
+	viewport, plus the content viewport (MainViewport in DS mode) where the
+	text fields actually live."""
+	var result: Array[Viewport] = []
+	var own := get_viewport()
+	if own != null:
+		result.append(own)
+	var overlay_parent = M3Overlay.get_overlay_parent()
+	if overlay_parent is Viewport and overlay_parent != own:
+		result.append(overlay_parent)
+	return result
+
+func _connect_focus_signals() -> void:
+	for vp in _get_focus_source_viewports():
+		if not vp.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+			vp.gui_focus_changed.connect(_on_viewport_focus_changed)
+		if not _connected_focus_viewports.has(vp):
+			_connected_focus_viewports.append(vp)
+
+func _disconnect_focus_signals() -> void:
+	for vp in _connected_focus_viewports:
+		if is_instance_valid(vp) and vp.gui_focus_changed.is_connected(_on_viewport_focus_changed):
+			vp.gui_focus_changed.disconnect(_on_viewport_focus_changed)
+	_connected_focus_viewports.clear()
+
+func _get_text_field_focus_owner() -> Control:
+	"""Return the focused text field across all viewports the keyboard tracks
+	(its own viewport plus the DS-mode content viewport)."""
+	for vp in _get_focus_source_viewports():
+		var owner = vp.gui_get_focus_owner()
+		if owner != null and is_keyboard_focus_object(owner):
+			return owner
+	return null
+
 func reconnect_viewport() -> void:
 	"""Reconnect the keyboard to the current viewport's focus system.
 	Call this after reparenting the keyboard to a different viewport."""
-	# Disconnect from old viewport's focus signal
-	var old_viewport = get_viewport()
-	if old_viewport != null and old_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
-		old_viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
-	
+	_disconnect_focus_signals()
+
 	# Reset focus tracking to ensure keyboard detects focus in new viewport
 	reset_focus_tracking()
 	# Force a re-check of current focus owner in case something is already focused
 	if auto_show:
-		var viewport = get_viewport()
-		if viewport != null:
-			var current_focus = viewport.gui_get_focus_owner()
-			if current_focus != null and is_keyboard_focus_object(current_focus):
-				_previous_focus_object = current_focus
-	
-	# Connect to new viewport's focus signal
-	var new_viewport = get_viewport()
-	if new_viewport != null and not new_viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
-		new_viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
+		var current_focus = _get_text_field_focus_owner()
+		if current_focus != null:
+			_previous_focus_object = current_focus
+
+	_connect_focus_signals()
 
 
 func _input(event):
@@ -214,8 +239,8 @@ func _input(event):
 	# open_on_accept: ui_accept on a focused text field is the explicit "click"
 	# that opens the keyboard for controller users.
 	if open_on_accept and not visible and _controller_connected and event.is_action_pressed("ui_accept"):
-		var accept_focus = get_viewport().gui_get_focus_owner()
-		if accept_focus != null and is_keyboard_focus_object(accept_focus):
+		var accept_focus = _get_text_field_focus_owner()
+		if accept_focus != null:
 			_active_line_edit = accept_focus
 			_previous_focus_object = accept_focus
 			_passthrough_caret_column = accept_focus.caret_column
@@ -334,6 +359,25 @@ func show():
 func hide():
 	_hide_keyboard()
 
+## Whether the keyboard should open for text input right now (controller
+## connected, or a touch-first platform where tapping is the norm).
+func wants_auto_open() -> bool:
+	if not auto_show:
+		return false
+	return _controller_connected or SystemManager.platform.is_android()
+
+## Explicitly open the keyboard for the given text field, bypassing the
+## focus/tap detection paths (which cannot see across the DS-mode SubViewport
+## boundary).
+func show_for(text_field: Control) -> void:
+	if text_field == null or not is_keyboard_focus_object(text_field):
+		return
+	_active_line_edit = text_field
+	_previous_focus_object = text_field
+	_passthrough_caret_column = text_field.caret_column
+	_dismissed_line_edit = null
+	_show_keyboard()
+
 func reset_focus_tracking():
 	"""Reset focus tracking so keyboard will reopen on next LineEdit focus."""
 	_previous_focus_object = null
@@ -364,7 +408,7 @@ func _update_auto_display_on_input(event):
 
 	# Only open keyboard when LineEdit/TextEdit gets focused
 	# Keyboard stays open until manually dismissed
-	var focus_object = get_viewport().gui_get_focus_owner()
+	var focus_object = _get_text_field_focus_owner()
 	if focus_object != _previous_focus_object:
 		_previous_focus_object = focus_object
 		
@@ -515,8 +559,8 @@ func _pull_focus_back_to_keyboard() -> void:
 func _deferred_show_keyboard_check():
 	"""Check if a LineEdit has focus after a touch/click event and open keyboard.
 	Called deferred so LineEdit's _gui_input() has already grabbed focus."""
-	var focus_object = get_viewport().gui_get_focus_owner()
-	if focus_object != null and is_keyboard_focus_object(focus_object):
+	var focus_object = _get_text_field_focus_owner()
+	if focus_object != null:
 		_active_line_edit = focus_object
 		_passthrough_caret_column = _active_line_edit.caret_column
 		_show_keyboard()
@@ -964,7 +1008,14 @@ func _find_line_edit_recursive(node: Node, pos: Vector2) -> LineEdit:
 	# Check if this node is a LineEdit and contains the point
 	if node is LineEdit:
 		var control = node as Control
-		if control.get_global_rect().has_point(pos) and control.visible:
+		var rect := control.get_global_rect()
+		# LineEdits inside a SubViewport (DS-mode MainViewport) report rects in
+		# that viewport's canvas coordinates; convert to root coordinates so
+		# they match the incoming event position.
+		var vp := control.get_viewport()
+		if vp != null and vp != get_tree().root:
+			rect = vp.get_final_transform() * rect
+		if rect.has_point(pos) and control.visible:
 			if not node.has_method("is_virtual_keyboard_enabled") or node.is_virtual_keyboard_enabled():
 				return control
 	

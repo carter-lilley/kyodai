@@ -50,11 +50,6 @@ func _init():
 func _ready():
 	super._ready()
 	var phase_start_us := Time.get_ticks_usec()
-	# Re-tier sidebar/pane spacing when the viewport crosses the small
-	# breakpoint (M3Dialog._ready already handles the fullscreen chrome).
-	var viewport := get_viewport()
-	if viewport and not viewport.size_changed.is_connected(_apply_scale):
-		viewport.size_changed.connect(_apply_scale)
 	# Fullscreen variant has an outer scroll; BASIC does not. Each category page
 	# already scrolls independently, so only touch fullscreen-specific nodes.
 	if dialog_variant == Variant.FULL_SCREEN:
@@ -553,6 +548,12 @@ func refresh_theme() -> void:
 func refresh_scale() -> void:
 	_apply_scale()
 	refresh_theme()
+
+## Settled-geometry hook (broadcast by OverlaySubManager): re-tier
+## sidebar/pane spacing when the viewport crosses the small breakpoint.
+## M3Dialog._ready's own connection still handles the fullscreen chrome.
+func on_viewport_settled() -> void:
+	_apply_scale()
 
 func _apply_scale() -> void:
 	var compact := _is_compact_sidebar()

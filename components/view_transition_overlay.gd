@@ -31,7 +31,7 @@ func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_preset(Control.PRESET_FULL_RECT)
-	z_index = 900
+	z_index = OverlayLayers.VIEW_TRANSITION_Z
 	add_to_group("view_transition_overlay")
 
 	# Warm the icon font so the first transition doesn't hitch on the load.

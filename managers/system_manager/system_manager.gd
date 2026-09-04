@@ -8,6 +8,7 @@ extends Manager
 @onready var display: DisplaySubManager = $DisplaySubManager
 @onready var audio: AudioSubManager = $AudioSubManager
 @onready var platform: PlatformSubManager = $PlatformSubManager
+@onready var config: ConfigSubManager = $ConfigSubManager
 
 func _ready():
 	download._update_concurrency_from_settings()
