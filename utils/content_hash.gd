@@ -88,6 +88,21 @@ static func compute_folder_zip_hash(dir_path: String, root_name: String = "") ->
 	lines.sort()
 	return _md5_bytes("\n".join(lines).to_utf8_buffer())
 
+## Simulates the zip hash of a multi-root archive: each component is
+## {"src": dir, "root": zip_root} packed as zip_components would pack it
+## (3DS data+extdata save units). Components with missing dirs are skipped.
+static func compute_components_zip_hash(components: Array) -> String:
+	var lines: Array[String] = []
+	for comp in components:
+		var src: String = comp.get("src", "")
+		if src == "" or not FSM.dir_exists(src):
+			continue
+		var root: String = comp.get("root", "")
+		var prefix = (root + "/") if root != "" else ""
+		_collect_folder_hash_lines(src, prefix, lines)
+	lines.sort()
+	return _md5_bytes("\n".join(lines).to_utf8_buffer())
+
 static func _collect_folder_hash_lines(dir_path: String, zip_prefix: String, lines: Array[String]) -> void:
 	if not FSM.dir_exists(dir_path):
 		return

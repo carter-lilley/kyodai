@@ -13,7 +13,7 @@
   },
   "requires_working_dir": true,
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/user/savedata/1",
@@ -25,7 +25,7 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {}
 	  }

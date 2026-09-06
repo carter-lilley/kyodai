@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "android": "{app_data}/memcards/main.ps2"
@@ -23,10 +23,10 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
-		  "android": "{app_data}"
+		  "android": "{app_data}/bios"
 		}
 	  }
 	}

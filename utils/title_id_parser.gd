@@ -127,6 +127,75 @@ static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -
 						return result
 	return ""
 
+# ==================== Wii WAD (WiiWare/VC, Dolphin) ====================
+
+const _WAD_TYPES = [0x4973, 0x6962, 0x426B]  # "Is", "ib", "Bk"
+const _WAD_TICKET_TITLE_ID_OFFSET = 0x1DC
+const _WAD_TMD_TITLE_ID_OFFSETS = [0x18C, 0x190]
+
+static func _wad_align64(value: int) -> int:
+	return (value + 63) & ~63
+
+## Returns true if the 4 bytes are all [A-Z0-9] (the low half of a title id
+## is the ASCII game code, same rule sigil uses for disc IDs).
+static func _wad_ascii4_valid(bytes: PackedByteArray, offset: int) -> bool:
+	if bytes.size() < offset + 4:
+		return false
+	for i in range(offset, offset + 4):
+		var b = bytes[i]
+		if not ((b >= 0x41 and b <= 0x5A) or (b >= 0x30 and b <= 0x39)):
+			return false
+	return true
+
+## Reads the 8-byte big-endian title id at offset + id_offset; returns
+## 16 lowercase hex chars, or "" if out of bounds or invalid.
+static func _wad_title_id_at(file: FileAccess, offset: int, id_offset: int) -> String:
+	if offset < 0 or offset + id_offset + 8 > file.get_length():
+		return ""
+	file.seek(offset + id_offset)
+	var id_bytes = file.get_buffer(8)
+	if id_bytes.size() < 8 or not _wad_ascii4_valid(id_bytes, 4):
+		return ""
+	var title_id = ""
+	for b in id_bytes:
+		title_id += "%02x" % b
+	return title_id
+
+## Extracts the full 16-char title ID from a Wii WAD package (WiiWare/VC).
+## Primary: ticket title_id; fallback: TMD title_id (ticketless/fakesigned
+## WADs). The category half is kept so save restore picks the correct NAND
+## root (00010001/00010004 for WiiWare). Returns "" on any parse failure.
+static func extract_wii_wad_title_id(wad_path: String) -> String:
+	return _with_open_file(wad_path, func(file: FileAccess) -> String:
+		if file.get_length() < 0x18:
+			return ""
+		var header = file.get_buffer(0x18)
+		if header.size() < 0x18:
+			return ""
+		var header_len = _read_be32(header, 0x00)
+		var wad_type = (header[0x04] << 8) | header[0x05]
+		if not (wad_type in _WAD_TYPES):
+			return ""
+		var cert_size = _read_be32(header, 0x08)
+		var ticket_size = _read_be32(header, 0x10)
+		var tmd_size = _read_be32(header, 0x14)
+		var ticket_off = _wad_align64(header_len) + _wad_align64(cert_size)
+		if ticket_size > 0:
+			var title_id = _wad_title_id_at(file, ticket_off, _WAD_TICKET_TITLE_ID_OFFSET)
+			if title_id != "":
+				print("[TitleIDParser] Wii WAD title id from ticket: " + title_id)
+				return title_id
+		if tmd_size > 0:
+			var tmd_off = _wad_align64(ticket_off + ticket_size)
+			for id_offset in _WAD_TMD_TITLE_ID_OFFSETS:
+				var title_id = _wad_title_id_at(file, tmd_off, id_offset)
+				if title_id != "":
+					print("[TitleIDParser] Wii WAD title id from TMD: " + title_id)
+					return title_id
+		push_error("[TitleIDParser] Failed to extract title id from Wii WAD: " + wad_path)
+		return ""
+	)
+
 # ==================== Vita (Vita3K) ====================
 
 static func extract_vita_title_id(zip_path: String) -> String:

@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "android": "{app_data}/content"
@@ -23,7 +23,7 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {}
 	  }

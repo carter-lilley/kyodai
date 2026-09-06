@@ -12,10 +12,10 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
-		  "android": "{app_data}/dev_hdd0/home/00000001/savedata"
+		  "android": "{app_data}/config/dev_hdd0/home/00000001/savedata"
 		},
 		"extensions": [
           "*"
@@ -23,12 +23,19 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
-		  "android": "{app_data}"
+		  "android": "{app_data}/config"
 		}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "rpcs3_vfs",
+	"anchor": "{app_data}/config",
+	"config_candidates": {
+	  "android": ["{app_data}/config/vfs.yml", "{app_data}/config/config.yml"]
 	}
   },
   "launch": {
@@ -37,8 +44,14 @@
 		"action": "android.intent.action.VIEW",
 		"package": "com.armsx3",
 		"class": "com.armsx2.BootSplashActivity",
-		"rom_delivery": "intent_data",
-		"mime_type": "application/octet-stream"
+		"rom_delivery": "none",
+		"extras": [
+		  {
+			"key": "path",
+			"value": "{rom}",
+			"type": "file_path"
+		  }
+		]
 	  }
 	}
   },

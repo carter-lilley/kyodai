@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "windows": "{games_dir}/nds",
@@ -24,13 +24,21 @@
 		"uses_folder_saves": false
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}",
 		  "linux": "{emulator_dir}"
 		}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "melonds_toml",
+	"anchor": "{emulator_dir}",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/melonDS.toml"],
+	  "linux": ["{emulator_dir}/melonDS.toml"]
 	}
   },
   "launch": {
@@ -101,7 +109,7 @@
 		  "files": [
 			{
 			  "name": "melonDS.toml",
-			  "content": "[Emu]\nConsoleType = 1\nDirectBoot = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/dsi/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/dsi/bios9.bin\"\nBIOS7Path = \"{emulator_dir}/dsi/bios7.bin\"\nNANDPath = \"{emulator_dir}/dsi/nand.bin\""
+			  "content": "[Emu]\nConsoleType = 1\nDirectBoot = true\nExternalBIOSEnable = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nExternalBIOSEnable = true\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/dsi/firmware.bin\"\nBIOS9Path = \"{emulator_dir}/dsi/bios9.bin\"\nBIOS7Path = \"{emulator_dir}/dsi/bios7.bin\"\nNANDPath = \"{emulator_dir}/dsi/nand.bin\""
 			}
 		  ],
 		  "validate": {

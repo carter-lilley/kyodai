@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "android": "{app_data}/mlc01/usr/save/00050000"
@@ -23,10 +23,18 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "cemu_xml",
+	"config_candidates": {
+	  "android": [
+		"{app_data}/settings.xml"
+	  ]
 	}
   },
   "launch": {

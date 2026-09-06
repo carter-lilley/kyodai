@@ -12,10 +12,10 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
-		  "android": "{app_data}/config/dev_hdd0/home/00000001/savedata"
+		  "android": "{app_data}/aps3e/config/dev_hdd0/home/00000001/savedata"
 		},
 		"extensions": [
           "*"
@@ -23,12 +23,19 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
-		  "android": "{emulator_dir}"
+		  "android": "{app_data}/aps3e/config"
 		}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "rpcs3_vfs",
+	"anchor": "{app_data}/aps3e/config",
+	"config_candidates": {
+	  "android": ["{app_data}/aps3e/config/vfs.yml", "{app_data}/aps3e/config/config.yml"]
 	}
   },
   "launch": {

@@ -172,7 +172,10 @@
 		"name": "3Ds",
 		"default_emulator": "azahar",
 		"firmware": {
-
+			"expected_files": [
+				"private/movable.sed"
+			],
+			"force_pull": true
 		}
 	},
 	"n64": {
@@ -250,9 +253,9 @@
 		},
 		"firmware": {
 			"expected_files": [
-				"bios/ps2-0200a-20040614.bin",
-				"bios/ps2-0200e-20040614.bin",
-				"bios/ps2-0200j-20040614.bin"
+				"ps2-0200a-20040614.bin",
+				"ps2-0200e-20040614.bin",
+				"ps2-0200j-20040614.bin"
 			]
 		}
 	},

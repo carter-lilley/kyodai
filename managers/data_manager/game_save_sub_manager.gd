@@ -6,6 +6,7 @@ class_name GameSaveSubManager
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 const _ContentHash = preload("res://utils/content_hash.gd")
 const Gavel = preload("res://utils/gavel.gd")
 const SLOT_DEFAULT := ""
@@ -95,14 +96,14 @@ func _init_strategies() -> void:
 				if game.platform_slug == "wii":
 					return discover_local_dolphin_wii_save(dir, _get_save_identity(game).id)
 				return discover_local_dolphin_gc_save(dir, _get_save_identity(game).id),
-			"resolve_path": func(dir: String, game: GameResource) -> String:
-				if game.platform_slug == "wii":
-					return FSM.join_paths(dir, _get_save_identity(game).id)
-				return dir,
-			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, _zip: String) -> String:
-				if game.platform_slug == "wii":
-					return FSM.join_paths(save_dir, _get_save_identity(game).id)
-				return save_dir,
+		"resolve_path": func(dir: String, game: GameResource) -> String:
+			if game.platform_slug == "wii":
+				return FSM.join_paths(_wii_title_root(dir, game), _get_save_identity(game).id)
+			return FSM.join_paths(dir, _gc_region_dir(_get_save_identity(game).id), "Card A"),
+		"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, _zip: String) -> String:
+			if game.platform_slug == "wii":
+				return FSM.join_paths(_wii_title_root(save_dir, game), _get_save_identity(game).id)
+			return FSM.join_paths(save_dir, _gc_region_dir(_get_save_identity(game).id), "Card A"),
 			"save_name": func(game: GameResource, _path: String) -> String:
 				if game.platform_slug == "wii":
 					return _get_save_identity(game).id
@@ -237,14 +238,25 @@ func _init_strategies() -> void:
 				return FSM.zip_directory(src, dst, -1, folder_name),
 		},
 		"azahar": {
+			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
+				return _discover_3ds_unit(dir, game),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
 				var save_id = _get_save_identity(game).id
+				var category = save_id.get_slice("/", 0) if "/" in save_id else "00040000"
 				var short_title_id = save_id.get_slice("/", save_id.get_slice_count("/") - 1) if "/" in save_id else save_id
-				return FSM.join_paths(dir, short_title_id),
+				return FSM.join_paths(dir, "title", category, short_title_id),
 			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
 				return record_path,
+			"zip": func(src: String, dst: String, game: GameResource) -> bool:
+				return _zip_3ds_save(src, dst, game),
+			"unpack": func(zip_path: String, record_path: String, _game: GameResource):
+				return _unpack_3ds_save(zip_path, record_path),
 		},
 		"retroarch": {
+			"validate": func(tid: String) -> String:
+				# RetroArch platforms use several ID shapes (PSP 9-char, GC/Wii
+				# 6-char, 3DS 16-char); the discover branches handle specifics.
+				return "" if tid != "" else "No title ID available for this game. Launch it once to extract the ID.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
 				return _discover_retroarch_save(dir, game),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
@@ -255,6 +267,12 @@ func _init_strategies() -> void:
 				return _get_retroarch_save_name(game, local_file_path),
 			"zip": func(src: String, dst: String, game: GameResource) -> bool:
 				return _zip_retroarch_save(src, dst, game),
+			# Only 3DS units need routed unpacking; other platforms return null
+			# so the caller falls through to generic archive extraction.
+			"unpack": func(zip_path: String, record_path: String, game: GameResource):
+				if game.platform_slug == "3ds" and _is_3ds_tree_path(record_path):
+					return _unpack_3ds_save(zip_path, record_path)
+				return null,
 		},
 	}
 
@@ -300,7 +318,7 @@ func resolve_default_save_directory(emulator_id: String, platform_slug: String =
 		return ""
 	
 	var paths = emulator.get("paths", {})
-	var _saves = paths.get("saves", {})
+	var _saves = paths.get("default_saves", {})
 	
 	# Check core-specific config first (for RetroArch multi-core saves)
 	var config: Dictionary = _get_save_config(emulator_id, platform_slug, core_id)
@@ -315,6 +333,9 @@ func resolve_default_save_directory(emulator_id: String, platform_slug: String =
 	if dir == "":
 		return ""
 	
+	if dir.contains("{save_root}") or dir.contains("{system_root}"):
+		return RSM.compose_template(dir, emulator_id, platform_slug, core_id).get("path", "")
+	
 	# Use the full emulator path resolver with all wildcards
 	dir = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
 	
@@ -328,13 +349,13 @@ func _get_save_config(emulator_id: String, platform_slug: String, core_id: Strin
 		return {}
 	
 	var paths = emulator.get("paths", {})
-	var saves = paths.get("saves", {})
+	var saves = paths.get("default_saves", {})
 	
 	# For RetroArch, check core-specific config first
 	if emulator_id == "retroarch" and core_id != "":
 		var core_config = LaunchManager.registry.get_core_config(emulator_id, platform_slug, core_id)
 		var core_paths = core_config.get("paths", {})
-		var core_saves = core_paths.get("saves", {})
+		var core_saves = core_paths.get("default_saves", {})
 		if not core_saves.is_empty():
 			return core_saves
 	
@@ -366,26 +387,44 @@ func resolve_save_directories(emulator_id: String, platform_slug: String = "", c
 	if dir == "":
 		return candidates
 	
-	# Default candidate using the platform's normal resolver
-	var default_path = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
-	candidates.append(default_path.rstrip("/") + "/")
+	if dir.contains("{save_root}") or dir.contains("{system_root}"):
+		# Root-anchored template: the resolver composes the complete directory
+		# config-first.
+		var composed: Dictionary = RSM.compose_template(dir, emulator_id, platform_slug, core_id)
+		if composed.get("path", "") != "":
+			candidates.append(composed.path)
+	else:
+		# Config-first: what the machine's own config states is authoritative;
+		# the JSON default only applies when the config said nothing.
+		var resolution: Dictionary = RSM.resolve_save_dir(emulator_id, platform_slug, core_id)
+		if resolution.get("source", "") == "config" and resolution.get("path", "") != "":
+			candidates.append(resolution.path)
+		
+		if candidates.is_empty():
+			var default_path = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
+			candidates.append(default_path.rstrip("/") + "/")
 	
 	# On Android, always generate both {app_data} and {emulator_dir} variants
 	# so the active-directory picker can choose whichever one has saves.
 	if SystemManager.platform.is_android():
-		var app_data_variant = dir.replace("{emulator_dir}", "{app_data}")
-		var emulator_dir_variant = dir.replace("{app_data}", "{emulator_dir}")
-		
-		if app_data_variant != dir:
-			var app_data_path = FSM.resolve_emulator_path(app_data_variant, emulator_id, platform_slug).rstrip("/") + "/"
-			if not app_data_path in candidates:
-				candidates.append(app_data_path)
-		
-		if emulator_dir_variant != dir:
-			var emulator_dir_path = FSM.resolve_emulator_path(emulator_dir_variant, emulator_id, platform_slug).rstrip("/") + "/"
-			if not emulator_dir_path in candidates:
-				candidates.append(emulator_dir_path)
-	
+		var emu_base := FSM.resolve_emulator_path("{emulator_dir}", emulator_id, platform_slug).rstrip("/")
+		var app_base := FSM.resolve_emulator_path("{app_data}", emulator_id, platform_slug).rstrip("/")
+		if emu_base != "" and app_base != "" and emu_base != app_base:
+			for existing in candidates.duplicate():
+				var variant := ""
+				if existing.begins_with(emu_base):
+					variant = app_base + existing.substr(emu_base.length())
+				elif existing.begins_with(app_base):
+					variant = emu_base + existing.substr(app_base.length())
+				if variant != "" and not variant in candidates:
+					candidates.append(variant)
+
+	# 3DS console-identity completion: save templates carry all-zeros id0/id1
+	# dirs; substitute the real pair the SD card tree shows (never invented).
+	if platform_slug == "3ds":
+		for i in range(candidates.size()):
+			candidates[i] = _complete_3ds_identity(candidates[i])
+
 	return candidates
 
 ## Resolves the actively-used save directory for an emulator.
@@ -593,17 +632,8 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 
 	game_id = _gc_ascii_id(game_id)
 
-	if not FSM.dir_exists(directory):
-		return results
-	
-	# Find all matching GCI files
-	var gci_files: Array[String] = []
-	var items = FSM.list_dir(directory)
-	for item in items:
-		if item == "." or item == "..":
-			continue
-		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-			gci_files.append(FSM.join_paths(directory, item))
+	# directory is the GC base; saves live under <region>/Card <slot>
+	var gci_files := _find_gc_gci_files(directory, game_id)
 	
 	if gci_files.is_empty():
 		return results
@@ -630,8 +660,12 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 ## Creates a zip archive containing specific GCI files
 ## Used for bundling multiple GameCube saves for the same game
 func _zip_gci_files(gci_files: Array[String], zip_path: String) -> bool:
+	# The bundle path is stable per game; delete first so a partial zip from
+	# a failed pass can't leak duplicate entries into the retry.
+	if FSM.file_exists(zip_path):
+		FSM.delete_file(zip_path)
 	var writer = ZIPPacker.new()
-	var err = writer.open(zip_path, ZIPPacker.ZipAppend.APPEND_CREATE)
+	var err = writer.open(zip_path, ZIPPacker.APPEND_CREATE)
 	if err != OK:
 		push_error("[GameSaveSubManager] Failed to create GCI zip: " + zip_path)
 		return false
@@ -659,20 +693,95 @@ func _short_title_id(title_id: String) -> String:
 	return title_id.substr(8, 8) if title_id.length() == 16 else title_id
 
 ## Returns the Dolphin NAND hex form of a Wii/GC game ID. Legacy stored IDs
-## are 4-char ASCII (converted); sigil-stored IDs are already 8-char hex.
+## are 4-char ASCII (converted); sigil-stored IDs are already 8-char hex;
+## full 16-char title IDs (wii, incl. WAD) reduce to their 8-char code half.
 func _wii_hex_id(game_id: String) -> String:
+	if game_id.length() == 16 and game_id.is_valid_hex_number(false):
+		return game_id.substr(8, 8)
 	if game_id.length() == 8 and game_id.is_valid_hex_number(false):
 		return game_id
 	return _game_id_to_hex(game_id)
 
 ## Returns the 4-char ASCII form of a GC/Wii game ID (GCI naming form).
 func _gc_ascii_id(game_id: String) -> String:
+	if game_id.length() == 16 and game_id.is_valid_hex_number(false):
+		game_id = game_id.substr(8, 8)
 	if game_id.length() == 8 and game_id.is_valid_hex_number(false):
 		var bytes := PackedByteArray()
 		for i in range(0, 8, 2):
 			bytes.append(game_id.substr(i, 2).hex_to_int())
 		return bytes.get_string_from_ascii()
 	return game_id
+
+## Maps a GC game id's region character to Dolphin's modern GC region dir
+## (argosy convention: last char of the 4-char ASCII game code; Korean
+## GameCube maps to JPN per Dolphin's ToGameCubeRegion).
+func _gc_region_dir(game_id: String) -> String:
+	var ascii_id := _gc_ascii_id(game_id)
+	if ascii_id == "":
+		return "USA"
+	match ascii_id[ascii_id.length() - 1]:
+		"P":
+			return "EUR"
+		"J", "K":
+			return "JPN"
+		_:
+			return "USA"
+
+## Region dirs scanned when collecting GCI saves: modern Dolphin dirs plus
+## the legacy JAP/KOR spellings older builds and argosy wrote.
+const GC_SCAN_REGIONS := ["USA", "EUR", "JPN", "JAP", "KOR"]
+
+## Collects .gci files matching a game id under a Dolphin GC base dir:
+## every known region dir and any "Card *" slot inside it (plus loose files
+## in the region dir), then the base dir itself as a flat fallback.
+func _find_gc_gci_files(base_dir: String, game_id: String) -> Array[String]:
+	var results: Array[String] = []
+	if base_dir == "" or game_id == "" or not FSM.dir_exists(base_dir):
+		return results
+	var needle := game_id.to_lower()
+	for region in GC_SCAN_REGIONS:
+		var region_path := FSM.join_paths(base_dir, region)
+		if not FSM.dir_exists(region_path):
+			continue
+		_collect_gci_matches(region_path, needle, results)
+		for item in FSM.list_dir(region_path):
+			if item == "." or item == "..":
+				continue
+			var item_path := FSM.join_paths(region_path, item)
+			if FSM.dir_exists(item_path) and item.to_lower().begins_with("card"):
+				_collect_gci_matches(item_path, needle, results)
+	if results.is_empty():
+		_collect_gci_matches(base_dir, needle, results)
+	return results
+
+func _collect_gci_matches(dir_path: String, needle: String, results: Array[String]) -> void:
+	for item in FSM.list_dir(dir_path):
+		if item == "." or item == "..":
+			continue
+		var full := FSM.join_paths(dir_path, item)
+		if not FSM.dir_exists(full) and item.to_lower().ends_with(".gci") and needle in item.to_lower():
+			results.append(full)
+
+## Returns the Dolphin NAND title root for a Wii game: save_dir is the
+## 00010000 root; WiiWare/VC titles live in the 00010001/00010004 siblings.
+## An existing on-disk folder wins, then the 16-char title id's category,
+## else 00010000.
+func _wii_title_root(save_dir: String, game: GameResource) -> String:
+	var base := save_dir.rstrip("/")
+	var parent := base.get_base_dir()
+	var hex_id := _wii_hex_id(_get_save_identity(game).id)
+	if hex_id != "":
+		if FSM.dir_exists(FSM.join_paths(base, hex_id)):
+			return base
+		for category in WII_WARE_CATEGORIES:
+			var ware: String = parent + "/" + category
+			if FSM.dir_exists(FSM.join_paths(ware, hex_id)):
+				return ware
+	var tid := game.get_active_title_id()
+	if tid.length() == 16:
+		return parent + "/" + tid.substr(0, 8)
+	return base
 
 ## Returns the on-disk save identity for a game: {"id": ..., "usage": ...}.
 ## Prefers the sigil-persisted save_id/save_usage; falls back to deriving
@@ -705,6 +814,8 @@ func _compute_local_save_hash(emulator_id: String, game: GameResource, local_sav
 	var path: String = local_save.get("file_path", "")
 	if path == "":
 		return {"hash": "", "size": 0}
+	if _is_3ds_tree_path(path):
+		return _compute_3ds_unit_hash(path)
 	if FSM.dir_exists(path):
 		var root_name = _get_upload_zip_root_name(emulator_id, game, path)
 		return {"hash": _ContentHash.compute_folder_zip_hash(path, root_name), "size": _folder_content_size(path)}
@@ -784,24 +895,38 @@ func discover_local_dolphin_wii_save(directory: String, game_id: String) -> Arra
 	var results: Array[Dictionary] = []
 	if directory == "" or game_id == "":
 		return results
-	
+
 	if not FSM.dir_exists(directory):
 		return results
-	
-	var hex_id = _wii_hex_id(game_id)
-	var game_path = FSM.join_paths(directory, hex_id)
 
-	if FSM.dir_exists(game_path):
-		var mtime = _get_folder_mtime(game_path)
-		results.append({
-			"file_name": hex_id + ".zip",
-			"file_path": game_path,
-			"modified_time": mtime,
-			"extension": ".zip"
-		})
-		return results
+	var hex_id = _wii_hex_id(game_id)
+	for root in _wii_title_root_candidates(directory):
+		var game_path = FSM.join_paths(root, hex_id)
+		if FSM.dir_exists(game_path):
+			var mtime = _get_folder_mtime(game_path)
+			results.append({
+				"file_name": hex_id + ".zip",
+				"file_path": game_path,
+				"modified_time": mtime,
+				"extension": ".zip"
+			})
+			return results
 
 	return results
+
+## WiiWare/VC title categories: 00010004 is the common one, early titles
+## (and VC arcade) use 00010001.
+const WII_WARE_CATEGORIES := ["00010001", "00010004"]
+
+## The title roots a Wii save may live under: the given 00010000 root plus
+## the WiiWare/VC category siblings when the layout is a Dolphin NAND tree.
+func _wii_title_root_candidates(directory: String) -> Array[String]:
+	var roots: Array[String] = [directory]
+	var parent := directory.rstrip("/").get_base_dir()
+	if parent.get_file() == "title":
+		for category in WII_WARE_CATEGORIES:
+			roots.append(parent + "/" + category)
+	return roots
 
 ## Discovers the Eden profile ID from profiles.dat
 ## Reads the UUID from offset 0x10, reverses byte order, returns hex string
@@ -1224,26 +1349,25 @@ func _resolve_retroarch_save_path(save_dir: String, game: GameResource) -> Strin
 				return ""
 			return FSM.join_paths(save_dir, title_id)
 		"ngc":
-			return save_dir
+			var ascii_id := _gc_ascii_id(title_id)
+			if ascii_id == "":
+				return ""
+			return FSM.join_paths(save_dir, _gc_region_dir(ascii_id), "Card A")
 		"wii":
 			if title_id == "":
 				return ""
-			return FSM.join_paths(save_dir, _wii_hex_id(title_id))
+			return FSM.join_paths(_wii_title_root(save_dir, game), _wii_hex_id(title_id))
 		"3ds":
-			if title_id == "":
+			if title_id.length() != 16:
 				return ""
-			var short_title_id = _short_title_id(title_id)
-			return FSM.join_paths(save_dir, short_title_id)
+			# save_dir is the console-identity root (<id1>); the per-title
+			# unit hangs under title/<category>/<low>.
+			return FSM.join_paths(save_dir, "title", title_id.substr(0, 8), title_id.substr(8, 8))
 		_:
-			var core_id = LaunchManager.resolve_core_for_game(game)
-			var core_config = LaunchManager.registry.get_core_config("retroarch", platform_slug, core_id)
-			var core_save_name = core_config.get("save_name", "")
-			if core_save_name == "":
-				push_error("[GameSaveSubManager] No save_name for platform: " + platform_slug)
-				return ""
-			
+			# save_dir is already the complete per-core directory (the resolver
+			# composes root + sorted subdir); only the file name is appended.
 			var rom_name_no_ext = _get_save_base_name(game)
-			return FSM.join_paths(save_dir, core_save_name, rom_name_no_ext + ".srm")
+			return FSM.join_paths(save_dir, rom_name_no_ext + ".srm")
 
 ## Discovers local saves for a RetroArch core, dispatching by platform.
 func _discover_retroarch_save(dir: String, game: GameResource) -> Array[Dictionary]:
@@ -1262,43 +1386,42 @@ func _discover_retroarch_save(dir: String, game: GameResource) -> Array[Dictiona
 		"wii":
 			return _discover_retroarch_wii_save(dir, title_id)
 		"3ds":
-			if title_id.length() == 16:
-				var short_title_id = title_id.substr(8, 8)
-				return discover_local_fuzzy_folder_save(dir, short_title_id, true, false)
-			return discover_local_fuzzy_folder_save(dir, title_id, true, false)
+			# dir is the console-identity root (<id1>); citra cores share the
+			# azahar two-tree unit layout.
+			return _discover_3ds_unit(dir, game)
 		_:
 			var core_id = LaunchManager.resolve_core_for_game(game)
 			var extensions = get_save_extensions("retroarch", platform_slug, core_id)
 			return _discover_game_saves(dir, game, extensions)
 
 ## Discovers GameCube saves for the RetroArch Dolphin core.
-## Returns the Card A directory as a single folder save (GCI files are bundled on upload).
+## directory is the GC base; the matched region/Card folder is returned as a
+## single folder save (its GCI files are bundled on upload).
 func _discover_retroarch_ngc_save(directory: String, game_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or game_id == "":
 		return results
-	
+
 	if not FSM.dir_exists(directory):
 		return results
-	
-	# Check for any matching GCI files
-	var items = FSM.list_dir(directory)
-	var has_gci = false
-	for item in items:
-		if item == "." or item == "..":
-			continue
-		if item.to_lower().ends_with(".gci") and game_id.to_lower() in item.to_lower():
-			has_gci = true
-			break
-	
-	if not has_gci:
+
+	var ascii_id := _gc_ascii_id(game_id)
+	var gci_files := _find_gc_gci_files(directory, ascii_id)
+	if gci_files.is_empty():
 		return results
-	
-	var mtime = _get_folder_mtime(directory)
+
+	# Prefer the game's own region/Card A folder when matches span slots.
+	var folder := gci_files[0].get_base_dir()
+	var preferred := FSM.join_paths(directory, _gc_region_dir(ascii_id), "Card A").to_lower()
+	for gci in gci_files:
+		if gci.get_base_dir().to_lower() == preferred:
+			folder = gci.get_base_dir()
+			break
+
 	results.append({
 		"file_name": game_id + ".zip",
-		"file_path": directory,
-		"modified_time": mtime,
+		"file_path": folder,
+		"modified_time": _get_folder_mtime(folder),
 		"extension": ".zip"
 	})
 	return results
@@ -1308,23 +1431,23 @@ func _discover_retroarch_wii_save(directory: String, game_id: String) -> Array[D
 	var results: Array[Dictionary] = []
 	if directory == "" or game_id == "":
 		return results
-	
+
 	if not FSM.dir_exists(directory):
 		return results
-	
-	var hex_id = _wii_hex_id(game_id)
-	var game_path = FSM.join_paths(directory, hex_id)
 
-	if FSM.dir_exists(game_path):
-		var mtime = _get_folder_mtime(game_path)
-		results.append({
-			"file_name": hex_id + ".zip",
-			"file_path": game_path,
-			"modified_time": mtime,
-			"extension": ".zip"
-		})
-		return results
-	
+	var hex_id = _wii_hex_id(game_id)
+	for root in _wii_title_root_candidates(directory):
+		var game_path = FSM.join_paths(root, hex_id)
+		if FSM.dir_exists(game_path):
+			var mtime = _get_folder_mtime(game_path)
+			results.append({
+				"file_name": hex_id + ".zip",
+				"file_path": game_path,
+				"modified_time": mtime,
+				"extension": ".zip"
+			})
+			return results
+
 	return results
 
 ## Helper for RetroArch PS2 when the configured save path is a single memcard file.
@@ -1351,7 +1474,9 @@ func _get_retroarch_extract_dest(save_dir: String, record_path: String, game: Ga
 				return save_dir.get_base_dir()
 			return save_dir
 		"ngc", "wii", "3ds":
-			return record_path.get_base_dir()
+			# record_path IS the per-game/card dir; the zips kyodai produces
+			# hold bare contents (no wrapping folder), so extract into it.
+			return record_path
 		_:
 			return record_path.get_base_dir()
 
@@ -1366,7 +1491,9 @@ func _zip_retroarch_save(src: String, dst: String, game: GameResource) -> bool:
 	match game.platform_slug:
 		"psp":
 			return _zip_psp_save(src, _get_save_identity(game).id, dst, MAX_FILE_SIZE)
-		"ps2", "ngc", "wii", "3ds":
+		"3ds":
+			return _zip_3ds_save(src, dst, game)
+		"ps2", "ngc", "wii":
 			return FSM.zip_directory(src, dst)
 		_:
 			var folder_name = src.get_file()
@@ -1457,6 +1584,217 @@ func _find_first_subdir(dir_path: String) -> String:
 		if item != "." and item != ".." and FSM.dir_exists(FSM.join_paths(dir_path, item)):
 			return item
 	return ""
+
+## Substitutes the real 3DS console-identity dirs (<id0>/<id1>) for the
+## all-zeros placeholders baked into save templates. The pair is discovered
+## on disk, never constructed: a single candidate wins; when several exist
+## the all-zeros placeholder yields to a real pair; anything still
+## ambiguous keeps the template with a warning.
+func _complete_3ds_identity(path: String) -> String:
+	const MARKER := "Nintendo 3DS/"
+	const ZEROS := "00000000000000000000000000000000"
+	var idx := path.find(MARKER)
+	if idx < 0:
+		return path
+	var base := path.substr(0, idx + MARKER.length())
+	var rest := path.substr(idx + MARKER.length())
+	var segs := rest.split("/", false)
+	if segs.size() < 2 or not (_is_hex32(segs[0]) and _is_hex32(segs[1])):
+		return path
+
+	var id0 := _pick_identity_dir(base, ZEROS, path)
+	if id0 == "":
+		return path
+	var id1 := _pick_identity_dir(base + id0 + "/", ZEROS, path)
+	if id1 == "":
+		return path
+
+	var tail := rest.substr(segs[0].length() + 1 + segs[1].length())
+	var completed := base + id0 + "/" + id1 + tail
+	if completed != path:
+		print("[GameSaveSubManager] 3DS identity: " + id0 + "/" + id1 + " for " + base)
+	return completed
+
+## Picks the single identity dir under parent. "" when none exist or the
+## choice stays ambiguous after preferring a real pair over the all-zeros
+## placeholder.
+func _pick_identity_dir(parent: String, zeros: String, context_path: String) -> String:
+	var found: Array[String] = []
+	for item in FSM.list_dir(parent):
+		if item != "." and item != ".." and _is_hex32(item) and FSM.dir_exists(FSM.join_paths(parent, item)):
+			found.append(item)
+	if found.is_empty():
+		return ""
+	if found.size() > 1:
+		var real: Array[String] = []
+		for d in found:
+			if d.to_lower() != zeros:
+				real.append(d)
+		if not real.is_empty():
+			found = real
+	if found.size() != 1:
+		push_warning("[GameSaveSubManager] 3DS identity ambiguous under " + parent + "; keeping template path " + context_path)
+		return ""
+	return found[0]
+
+func _is_hex32(value: String) -> bool:
+	if value.length() != 32:
+		return false
+	for i in range(value.length()):
+		var c := value.unicode_at(i)
+		var ok := (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+		if not ok:
+			return false
+	return true
+
+## A 3DS save unit spans two SD-card trees: title data at
+## <id1>/title/<category>/<low>/data and extdata at
+## <id1>/extdata/00000000/<extid>. Both azahar and the RetroArch citra
+## cores share this layout, so the unit helpers below are emulator-neutral.
+## Archives are two-root zips (data/ + extdata/ at the root), matching
+## argosy; legacy rootless kyodai archives (data/... at root) route through
+## the same unpack as data-only units.
+
+## True when a resolved path points at a per-title dir inside a 3DS title
+## tree (<id1>/title/00040000/<low>). Retail saves always use 00040000.
+func _is_3ds_tree_path(path: String) -> bool:
+	return path.replace("\\", "/").to_lower().contains("/title/00040000/")
+
+## Walks <id1>/title/<category>/<low> back up to the console-identity root.
+func _3ds_id1_root(title_dir: String) -> String:
+	return title_dir.rstrip("/").get_base_dir().get_base_dir().get_base_dir()
+
+## extdata id = (title_low >> 8) as 8 lowercase hex (retail rule).
+func _3ds_extdata_id(short_title_id: String) -> String:
+	return "%08x" % (short_title_id.hex_to_int() >> 8)
+
+func _3ds_extdata_dir(title_dir: String) -> String:
+	return FSM.join_paths(_3ds_id1_root(title_dir), "extdata", "00000000", _3ds_extdata_id(title_dir.rstrip("/").get_file()))
+
+## Builds the unit's component list from a title dir: data + extdata roots,
+## skipping components that do not exist on disk.
+func _3ds_unit_components(title_dir: String) -> Array:
+	title_dir = title_dir.rstrip("/")
+	var components: Array = []
+	if FSM.dir_exists(title_dir + "/data"):
+		components.append({"src": title_dir + "/data", "root": "data"})
+	var extdata_dir := _3ds_extdata_dir(title_dir)
+	if FSM.dir_exists(extdata_dir):
+		components.append({"src": extdata_dir, "root": "extdata"})
+	return components
+
+## Discovers a 3DS save unit under a console-identity root (<id1>). The
+## save exists when EITHER component exists (extdata-only titles are real).
+func _discover_3ds_unit(dir: String, game: GameResource) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	var title_id = game.get_active_title_id()
+	if dir == "" or title_id.length() != 16:
+		return results
+	var category := title_id.substr(0, 8)
+	var short_title_id := title_id.substr(8, 8)
+	var title_dir := FSM.join_paths(dir, "title", category, short_title_id)
+	var extdata_dir := _3ds_extdata_dir(title_dir)
+	var has_data := FSM.dir_exists(title_dir + "/data")
+	var has_extdata := FSM.dir_exists(extdata_dir)
+	if not has_data and not has_extdata:
+		return results
+	var mtime := 0
+	if has_data:
+		mtime = maxi(mtime, _get_folder_mtime(title_dir + "/data"))
+	if has_extdata:
+		mtime = maxi(mtime, _get_folder_mtime(extdata_dir))
+	results.append({
+		"file_name": short_title_id + ".zip",
+		"file_path": title_dir,
+		"modified_time": mtime,
+		"extension": ".zip"
+	})
+	return results
+
+## RomM-parity hash for a 3DS save unit: the zip the upload lambda would
+## produce, simulated over both components. Identical to the legacy
+## single-root hash when no extdata exists (old archives stay in sync).
+func _compute_3ds_unit_hash(title_dir: String) -> Dictionary:
+	var components := _3ds_unit_components(title_dir)
+	if components.is_empty():
+		return {"hash": "", "size": 0}
+	var total := 0
+	for comp in components:
+		total += _folder_content_size(comp.src)
+	return {"hash": _ContentHash.compute_components_zip_hash(components), "size": total}
+
+## Zips a 3DS save unit as a two-root archive (data/ + extdata/).
+func _zip_3ds_save(src: String, dst: String, _game: GameResource = null) -> bool:
+	var components := _3ds_unit_components(src)
+	if components.is_empty():
+		push_error("[GameSaveSubManager] 3DS save unit has no data/extdata components: " + src)
+		return false
+	return FSM.zip_components(components, dst)
+
+## Unpacks a 3DS save archive into the live tree. Entries route by first
+## path segment: data/ -> <title>/data, extdata/ -> <id1>/extdata/00000000/
+## <extid>. Only archive-present components are replaced; the other side of
+## the unit is never touched. Unknown roots fail loudly (no silent merges).
+## Directory entries are recreated too: games probe for empty dirs (e.g.
+## MK7's replay_), and dropping them makes the save read as corrupt.
+func _unpack_3ds_save(zip_path: String, record_path: String) -> bool:
+	var title_dir := record_path.rstrip("/")
+	var data_dest := title_dir + "/data"
+	var extdata_dest := _3ds_extdata_dir(title_dir)
+	var zr := ZIPReader.new()
+	if zr.open(zip_path) != OK:
+		push_error("[GameSaveSubManager] Failed to open downloaded save zip: " + zip_path)
+		return false
+	var ops: Array = []
+	var has_data := false
+	var has_extdata := false
+	var valid := true
+	for entry in zr.get_files():
+		var is_dir := entry.ends_with("/")
+		var rel := entry.rstrip("/")
+		var root := rel.get_slice("/", 0)
+		var base := ""
+		match root:
+			"data":
+				base = data_dest
+				has_data = true
+			"extdata":
+				base = extdata_dest
+				has_extdata = true
+			_:
+				push_error("[GameSaveSubManager] 3DS save zip has unknown root '" + root + "': " + zip_path)
+				valid = false
+				break
+		var sub := rel.substr(root.length() + 1)
+		ops.append({"entry": entry, "dest": base if sub == "" else base + "/" + sub, "is_dir": is_dir})
+	if not valid:
+		zr.close()
+		return false
+	if has_data and FSM.dir_exists(data_dest):
+		FSM.delete_dir_recursive(data_dest)
+	if has_extdata and FSM.dir_exists(extdata_dest):
+		FSM.delete_dir_recursive(extdata_dest)
+	var ok := true
+	for op in ops:
+		if op["is_dir"]:
+			if not FSM.make_dir_recursive(op["dest"]):
+				push_error("[GameSaveSubManager] Failed to create save directory: " + op["dest"])
+				ok = false
+				break
+		elif not _write_zip_entry(zr, op["entry"], op["dest"]):
+			ok = false
+			break
+	zr.close()
+	return ok
+
+func _write_zip_entry(zr: ZIPReader, entry: String, dest_path: String) -> bool:
+	if not FSM.make_dir_recursive(dest_path.get_base_dir()):
+		push_error("[GameSaveSubManager] Failed to create directory for: " + dest_path)
+		return false
+	if not FSM.write_file_bytes(dest_path, zr.read_file(entry)):
+		push_error("[GameSaveSubManager] Failed to write save file: " + dest_path)
+		return false
+	return true
 
 func _ensure_device_registered(callback: Callable) -> void:
 	var device_id = DataManager.get_romm_device_id()
@@ -1823,7 +2161,9 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 ## remote_hash is stored verbatim (the server-stamped content_hash).
 func _record_sync_boundary(game: GameResource, emulator_id: String, file_name: String, record_path: String, timestamp: String, remote_id: int, remote_hash: String) -> void:
 	var hash_info := {"hash": "", "size": 0}
-	if FSM.dir_exists(record_path):
+	if _is_3ds_tree_path(record_path):
+		hash_info = _compute_3ds_unit_hash(record_path)
+	elif FSM.dir_exists(record_path):
 		var root_name = _get_upload_zip_root_name(emulator_id, game, record_path)
 		hash_info = {"hash": _ContentHash.compute_folder_zip_hash(record_path, root_name), "size": _folder_content_size(record_path)}
 	elif FSM.file_exists(record_path):
@@ -2017,6 +2357,19 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 				on_done.call(true)
 
 			if is_folder_save:
+				# Routed-unpack hook: strategies that need per-entry routing
+				# (3DS data+extdata units) handle the zip themselves and
+				# return a bool; null falls through to generic extraction.
+				var unpack = _get_strategy(emulator_id, "unpack")
+				var unpacked = null
+				if unpack.is_valid():
+					unpacked = unpack.call(zip_path, record_path, game)
+				if unpacked != null:
+					if not unpacked:
+						push_error("[GameSaveSubManager] Failed to unpack downloaded zip: " + zip_path)
+					_cleanup_temp_dir(zip_path)
+					post_extraction.call(unpacked)
+					return
 				var extract_dest = _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
 				# Some strategies resolve record_path to a parent dir (pcsx2's
 				# resolve_path returns the memcard root); when the extract dest
@@ -2344,11 +2697,13 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			var local_saves: Array[Dictionary]
 			if is_folder_save:
 				if game.get_active_title_id() == "":
+					print("[GameSaveSubManager] auto_download: ABORT - folder save but no active title ID for " + game.get_display_name())
 					if on_complete.is_valid():
 						on_complete.call()
 					return
 				var validation_error = _validate_emulator_title_id(emulator_id, game.get_active_title_id())
 				if validation_error != "":
+					print("[GameSaveSubManager] auto_download: ABORT - title ID '" + game.get_active_title_id() + "' rejected: " + validation_error)
 					if on_complete.is_valid():
 						on_complete.call()
 					return
@@ -2422,6 +2777,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 									parity_local = l
 									break
 						if parity_local != null:
+							print("[GameSaveSubManager] auto_download: parity match for '" + file_name + "' - identical content already local as '" + parity_local.file_name + "', adopting baseline (download skipped)")
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, parity_local.file_name, parity_local.file_path, current_timestamp, save_id, SLOT_DEFAULT, ch, ch, parity_local._hash_info.size)
 						else:
 							state.pending += 1
@@ -2586,5 +2942,3 @@ func get_save_sync_status_text(game: GameResource, emulator_id: String) -> Strin
 			return "Synced %d days ago" % (diff / 86400.0)
 	
 	return "Synced"
-
-

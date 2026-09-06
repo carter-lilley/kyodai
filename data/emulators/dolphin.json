@@ -14,11 +14,11 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "ngc": {
 		"directories": {
-		  "windows": "{emulator_dir}/User/GC/USA/Card A",
-		  "android": "{app_data}/GC/USA/Card A"
+		  "windows": "{emulator_dir}/User/GC",
+		  "android": "{app_data}/GC"
 		},
 		"extensions": [
           "gci"
@@ -36,10 +36,17 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "dolphin_ini",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/User/Config/Dolphin.ini"],
+	  "linux": ["{emulator_dir}/User/Config/Dolphin.ini"]
 	}
   },
   "launch": {

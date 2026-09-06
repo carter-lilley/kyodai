@@ -4,6 +4,23 @@ class_name FirmwareSubManager
 ## Firmware readiness and download management
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
+const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
+
+## TEMPORARY (pending a proper identity manager): azahar [System] keys forced
+## after a force_pull identity install — online LLE modules on, region USA.
+const AZAHAR_IDENTITY_CONFIG_EDITS: Array = [
+	{"old": "(?m)^enable_required_online_lle_modules\\s*=.*$", "new": "enable_required_online_lle_modules = true", "regex": true},
+	{"old": "(?m)^enable_required_online_lle_modules\\\\default\\s*=.*$", "new": "enable_required_online_lle_modules\\default = false", "regex": true},
+	{"old": "(?m)^region_value\\s*=.*$", "new": "region_value = 1", "regex": true},
+	{"old": "(?m)^region_value\\\\default\\s*=.*$", "new": "region_value\\default = false", "regex": true},
+]
+const AZAHAR_IDENTITY_CONFIG_APPENDS: Dictionary = {
+	"enable_required_online_lle_modules\\default": "false",
+	"enable_required_online_lle_modules": "true",
+	"region_value\\default": "false",
+	"region_value": "1",
+}
 
 ## Firmware readiness cache to avoid repeated recursive directory scans
 # key: "platform_slug:emulator_id", value: bool
@@ -41,14 +58,14 @@ func get_firmware_directory(emulator_id: String, platform_slug: String = "", cor
 		return ""
 	
 	var paths = emulator.get("paths", {})
-	var firmware = paths.get("firmware", {})
+	var firmware = paths.get("default_firmware", {})
 	var config: Dictionary = firmware.get("_default", {})
 	
 	# For RetroArch, check core-specific firmware config first
 	if emulator_id == "retroarch" and core_id != "" and platform_slug != "":
 		var core_config = launch_manager.registry.get_core_config(emulator_id, platform_slug, core_id)
 		var core_paths = core_config.get("paths", {})
-		var core_firmware = core_paths.get("firmware", {})
+		var core_firmware = core_paths.get("default_firmware", {})
 		if not core_firmware.is_empty():
 			config = core_firmware
 	
@@ -61,6 +78,15 @@ func get_firmware_directory(emulator_id: String, platform_slug: String = "", cor
 	
 	if dir == "":
 		return ""
+	
+	if dir.contains("{save_root}") or dir.contains("{system_root}"):
+		# Root-anchored template: the resolver composes root + subtree.
+		return RSM.compose_template(dir, emulator_id, platform_slug, core_id).get("path", "")
+	
+	# Config-first: a stated system_directory beats the JSON default.
+	var resolution: Dictionary = RSM.resolve_firmware_dir(emulator_id, platform_slug, core_id)
+	if resolution.get("source", "") == "config" and resolution.get("path", "") != "":
+		return resolution.path
 	
 	# Resolve wildcards
 	dir = FSM.resolve_emulator_path(dir, emulator_id, platform_slug)
@@ -86,7 +112,15 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 	if core_id != "":
 		cache_key += ":" + core_id
 	if _firmware_ready_cache.has(cache_key):
-		return _firmware_ready_cache[cache_key]
+		if not _is_force_pull_firmware(platform_slug):
+			return _firmware_ready_cache[cache_key]
+		# force_pull: the install marker is the cheap authoritative gate. A
+		# cached hit must not survive its removal (e.g. azahar reinstall/OOBE
+		# wiping the pulled identity), so re-verify before trusting the cache.
+		var cached_dir := get_firmware_directory(emulator_id, platform_slug, core_id)
+		if cached_dir != "" and FSM.file_exists(_marker_path(cached_dir)):
+			return true
+		_firmware_ready_cache.erase(cache_key)
 	
 	var firmware_dir = get_firmware_directory(emulator_id, platform_slug, core_id)
 	if firmware_dir == "":
@@ -111,6 +145,9 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 	# Check if any expected file exists (searching recursively)
 	for expected_file in expected_files:
 		if _find_file_recursive(firmware_dir, expected_file):
+			if _is_force_pull_firmware(platform_slug) \
+					and not FSM.file_exists(_marker_path(firmware_dir)):
+				break
 			_firmware_ready_cache[cache_key] = true
 			return true
 	
@@ -166,11 +203,11 @@ func _on_firmware_download_complete(success: bool, download_error: String, _noti
 			if not extract_success:
 				_retry_or_fail_firmware_extract(temp_path, firmware_dir, platform_slug, emulator_id, callback, error_msg)
 			else:
-				_finish_firmware_extract(true, error_msg, firmware_dir, platform_slug, emulator_id, callback)
+				_finish_firmware_extract(true, error_msg, firmware_dir, platform_slug, emulator_id, callback, temp_path.get_file())
 	)
 
 ## Finishes the firmware extraction flow (shared by initial attempt and SAF retry)
-func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable) -> void:
+func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable, artifact_name: String = "") -> void:
 	if not extract_success:
 		push_error("[FirmwareManager] Failed to extract firmware to: " + firmware_dir + ": " + error_msg)
 		launch_manager.firmware_download_completed.emit(platform_slug, false)
@@ -179,6 +216,25 @@ func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware
 		return
 
 	print("[FirmwareManager] Firmware successfully installed for " + platform_slug)
+
+	# Server zips sometimes wrap the payload in a folder (e.g. bios/); hoist it
+	# so the expected files sit directly under the resolved firmware dir.
+	var expected := get_platform_firmware_expected_files(platform_slug)
+	if not expected.is_empty():
+		var norm: Dictionary = FSM.normalize_extraction_root(firmware_dir, expected)
+		if norm.get("moved", false):
+			print("[FirmwareManager] Hoisted firmware payload " + str(norm.get("depth", 0)) + " level(s) up to " + firmware_dir)
+
+	if _is_force_pull_firmware(platform_slug):
+		var marker := {
+			"artifact": artifact_name,
+			"applied_at": int(Time.get_unix_time_from_system()),
+		}
+		if not FSM.write_file(_marker_path(firmware_dir), JSON.stringify(marker)):
+			push_warning("[FirmwareManager] Could not write install marker to " + _marker_path(firmware_dir))
+		if emulator_id == "azahar":
+			_apply_identity_config(firmware_dir)
+
 	clear_firmware_cache(platform_slug, emulator_id)
 	launch_manager.firmware_download_completed.emit(platform_slug, true)
 	if callback.is_valid():
@@ -191,7 +247,7 @@ func _retry_or_fail_firmware_extract(temp_path: String, firmware_dir: String, pl
 	var is_restricted = normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
 	if not SystemManager.platform.is_android() or not is_restricted \
 			or SystemManager.platform.has_android_data_access(firmware_dir):
-		_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback)
+		_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback, temp_path.get_file())
 		return
 
 	print("[FirmwareManager] Extraction into restricted path needs folder access grant, prompting...")
@@ -204,10 +260,10 @@ func _retry_or_fail_firmware_extract(temp_path: String, firmware_dir: String, pl
 				true,
 				func(_info: Dictionary): pass,
 				func(retry_success: bool, retry_error: String):
-					_finish_firmware_extract(retry_success, retry_error, firmware_dir, platform_slug, emulator_id, callback)
+					_finish_firmware_extract(retry_success, retry_error, firmware_dir, platform_slug, emulator_id, callback, temp_path.get_file())
 			)
 		else:
-			_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback)
+			_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback, temp_path.get_file())
 	, firmware_dir)
 
 ## Returns the list of expected firmware files for a platform (empty if none).
@@ -215,6 +271,46 @@ func get_platform_firmware_expected_files(platform_slug: String) -> Array:
 	var platform_config = launch_manager.registry._platforms_data.get(platform_slug, {})
 	var firmware_config = platform_config.get("firmware", {})
 	return firmware_config.get("expected_files", [])
+
+## Returns true when the platform's firmware entry is flagged force_pull:
+## readiness then also requires kyodai's own install marker, so content the
+## emulator generated itself (e.g. azahar OOBE identity) cannot satisfy it.
+func _is_force_pull_firmware(platform_slug: String) -> bool:
+	var platform_config = launch_manager.registry._platforms_data.get(platform_slug, {})
+	var firmware_config = platform_config.get("firmware", {})
+	return bool(firmware_config.get("force_pull", false))
+
+## Re-forces post-install config for force_pull platforms whose firmware is
+## already installed. Idempotent: the emulator can regenerate its config at
+## any time (e.g. azahar OOBE after a reinstall), so applying only after
+## extraction is not enough.
+func apply_force_pull_config(platform_slug: String, emulator_id: String) -> void:
+	if emulator_id != "azahar" or not _is_force_pull_firmware(platform_slug):
+		return
+	var firmware_dir := get_firmware_directory(emulator_id, platform_slug)
+	if firmware_dir == "":
+		return
+	_apply_identity_config(firmware_dir)
+
+## Marker kyodai stamps after installing force_pull firmware. Lives at the
+## firmware dir root so it dies with the directory it describes.
+func _marker_path(firmware_dir: String) -> String:
+	return firmware_dir.rstrip("/") + "/.kyodai-identity"
+
+## TEMPORARY (pending a proper identity manager): forces the azahar settings
+## Pretendo needs into the azahar config under the firmware dir. Prefers an
+## existing config.ini (newer azahar / Android), otherwise qt-config.ini,
+## creating it if azahar has never run.
+func _apply_identity_config(firmware_dir: String) -> void:
+	var config_dir := firmware_dir.rstrip("/") + "/config/"
+	var config_path := config_dir + "qt-config.ini"
+	var alt_path := config_dir + "config.ini"
+	if not FSM.file_exists(config_path) and FSM.file_exists(alt_path):
+		config_path = alt_path
+	if CSM.edit_text(config_path, AZAHAR_IDENTITY_CONFIG_EDITS, true, AZAHAR_IDENTITY_CONFIG_APPENDS, "System"):
+		print("[FirmwareManager] Applied azahar identity config to " + config_path)
+	else:
+		push_warning("[FirmwareManager] Failed to apply azahar identity config to " + config_path)
 
 ## Sets up firmware for a platform by downloading from RomM
 ## This should be called during platform sync
@@ -225,6 +321,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 	# Check if firmware is already ready
 	if is_platform_firmware_ready(platform_slug, emulator_id, core_id):
 		print("[FirmwareManager] Firmware already ready for " + platform_slug)
+		apply_force_pull_config(platform_slug, emulator_id)
 		if callback.is_valid():
 			callback.call(true, "Firmware already installed")
 		return

@@ -56,7 +56,7 @@ static func read_config(path: String, format := -1) -> Dictionary:
 	result.text = content
 	match fmt:
 		Format.CFG_KV:
-			result.sections = {"": _parse_kv_lines(content, false, false)}
+			result.sections = _parse_kv_lines(content, false, false)
 		Format.INI:
 			result.sections = _parse_kv_lines(content, true, false)
 		Format.TOML:
@@ -134,6 +134,7 @@ static func edit_text(path: String, edits: Array, create_if_missing := false, ap
 
 	if not FSM.file_exists(path):
 		if create_if_missing:
+			FSM.make_dir_recursive(path.get_base_dir())
 			if not FSM.write_file(path, ""):
 				push_error("[ConfigManager] Failed to create file: " + path)
 				return false
@@ -163,24 +164,45 @@ static func edit_text(path: String, edits: Array, create_if_missing := false, ap
 
 	# Append any missing keys so the caller doesn't have to do it manually.
 	if not append_if_missing.is_empty():
-		var has_section := true
-		if section_name != "":
-			var section_regex := RegEx.new()
-			section_regex.compile(r"\[%s\]" % section_name)
-			has_section = section_regex.search(content) != null
-
-		if not has_section:
-			if not content.is_empty() and not content.ends_with("\n"):
-				content += "\n"
-			content += "[%s]\n" % section_name
-
+		var missing: Array[String] = []
 		for key in append_if_missing:
 			var key_regex := RegEx.new()
 			key_regex.compile(r'(?m)^%s\s*=' % _regex_escape(key))
 			if key_regex.search(content) == null:
+				missing.append(key)
+
+		if not missing.is_empty():
+			var has_section := true
+			if section_name != "":
+				var section_regex := RegEx.new()
+				section_regex.compile(r"(?m)^\[%s\]\s*$" % _regex_escape(section_name))
+				has_section = section_regex.search(content) != null
+
+			if has_section:
+				var lines := content.split("\n")
+				var insert_at := lines.size()
+				if section_name != "":
+					var in_section := false
+					for i in lines.size():
+						var stripped := lines[i].strip_edges()
+						if stripped == "[%s]" % section_name:
+							in_section = true
+							insert_at = i + 1
+						elif in_section and stripped.begins_with("[") and stripped.ends_with("]"):
+							insert_at = i
+							break
+						elif in_section:
+							insert_at = i + 1
+				for key in missing:
+					lines.insert(insert_at, "%s = %s" % [key, append_if_missing[key]])
+					insert_at += 1
+				content = "\n".join(lines)
+			else:
 				if not content.is_empty() and not content.ends_with("\n"):
 					content += "\n"
-				content += '%s = %s\n' % [key, append_if_missing[key]]
+				content += "[%s]\n" % section_name
+				for key in missing:
+					content += '%s = %s\n' % [key, append_if_missing[key]]
 
 	if not FSM.write_file(path, content):
 		push_error("[ConfigManager] Failed to write edited file: " + path)

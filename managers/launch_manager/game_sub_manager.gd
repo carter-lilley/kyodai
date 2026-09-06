@@ -4,6 +4,7 @@ class_name GameSubManager
 ## Per-emulator/per-platform game preparation
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const _SigilRunner = preload("res://utils/sigil_runner.gd")
 
 var launch_manager: Node
@@ -51,6 +52,53 @@ func _store_title_id(game: GameResource, title_id: String, sigil_result: Diction
 			# Persist the updated siblings array to DB
 			DataManager.update_game_siblings(game.romm_id, game.siblings)
 
+## Wii save restore needs the category half of the title id (WiiWare lives
+## under 00010004, discs under 00010000). Normalizes a wii game id to its
+## full 16-char form: 8-hex disc codes get the disc category, longer ids
+## (WAD ticket ids) pass through unchanged.
+func _full_wii_title_id(game_id: String) -> String:
+	if game_id.length() == 8 and game_id.is_valid_hex_number(false):
+		return "00010000" + game_id
+	return game_id
+
+## Legacy wii records stored only the 8-hex disc code; they need a one-time
+## rewrite to the full 16-char id so save restore picks the right title root.
+func _needs_wii_id_upgrade(game: GameResource, title_id: String) -> bool:
+	return game.platform_slug == "wii" and title_id.length() == 8 and title_id.is_valid_hex_number(false)
+
+## Best-effort title-ID fill for any launch: when the platform's save flow
+## keys on the title ID (folder saves) and none is stored, extract it with
+## sigil once here so save sync has it. Runs before the per-family prep flows;
+## failure only skips save sync, never the launch.
+func _ensure_save_identity(game: GameResource, rom_path: String, emulator_id: String) -> void:
+	if game.get_active_title_id() != "":
+		return
+	var core_id := ""
+	if launch_manager.registry.get_emulator_architecture(emulator_id) == "retroarch":
+		core_id = LaunchManager.resolve_core_for_game(game)
+	if not DataManager.game_save.uses_folder_saves(emulator_id, game.platform_slug, core_id):
+		return
+	if not _SigilRunner.is_supported(game.platform_slug):
+		return
+	if rom_path == "" or not FSM.file_exists(rom_path):
+		return
+
+	print("[GameManager] ID pass: extracting title id from " + rom_path)
+	var sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
+	var title_id = sigil_result.get("title_id", "")
+	if title_id == "" and game.platform_slug == "wii" and rom_path.get_extension().to_lower() == "wad":
+		# Sigil only reads Wii discs; WAD packages carry the id in their ticket
+		title_id = TitleIDParser.extract_wii_wad_title_id(rom_path)
+		if title_id != "":
+			sigil_result = {}
+	if title_id == "":
+		push_warning("[GameManager] ID pass: no title id found in " + rom_path + " (save sync will skip)")
+		return
+	if game.platform_slug == "wii":
+		title_id = _full_wii_title_id(title_id)
+	_store_title_id(game, title_id, sigil_result)
+	print("[GameManager] ID pass: stored title id " + title_id + " for " + game.get_display_name())
+
 ## Prepares a game for launch by extracting title IDs and game files
 ## This must be called BEFORE save sync so that the title_id is available
 ## Returns true if preparation succeeded (or no prep needed), false on error
@@ -72,6 +120,13 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 		print("[GameManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
 	
 	temp_intent.emulator_id = emulator_id
+
+	# Generic ID pass: any launch whose save flow keys on the title ID gets one
+	# extraction attempt, regardless of emulator family. Per-family prep flows
+	# below keep their own semantics; this fills the gap for families without
+	# one (RetroArch, ...). Uses the pre-m3u ROM path — sigil reads discs, not
+	# playlists. Best-effort: failure never blocks the launch.
+	_ensure_save_identity(game, temp_intent.rom_path, emulator_id)
 
 	# Multi-disc games on m3u-capable platforms launch through a generated
 	# playlist so the emulator can swap discs. A specific disc sibling selected
@@ -101,6 +156,10 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 			print("[GameManager] _prepare_game_for_launch: Preparing Eden game...")
 			result = _prepare_eden_game(game, temp_intent)
 			print("[GameManager] _prepare_game_for_launch: Eden prep result = " + str(result))
+		"melonds":
+			print("[GameManager] _prepare_game_for_launch: Preparing melonDS game...")
+			result = _prepare_melonds_game(game, temp_intent)
+			print("[GameManager] _prepare_game_for_launch: melonDS prep result = " + str(result))
 		"dolphin":
 			print("[GameManager] _prepare_game_for_launch: Preparing Dolphin game...")
 			result = _prepare_dolphin_game(game, temp_intent)
@@ -326,35 +385,98 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	return true
 
 func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
-	if game.get_active_title_id() != "":
+	var existing_id = game.get_active_title_id()
+	var is_upgrade_pass = _needs_wii_id_upgrade(game, existing_id)
+	if existing_id != "" and not is_upgrade_pass:
 		return true
 	print("[GameManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
-	
+
 	var rom_path = intent.rom_path
-	var sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
-	var game_id = sigil_result.get("title_id", "")
-	
-	if game_id == "":
+	var game_id = ""
+	var sigil_result := {}
+	if FSM.file_exists(rom_path):
+		sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
+		game_id = sigil_result.get("title_id", "")
+		if game_id == "" and game.platform_slug == "wii" and rom_path.get_extension().to_lower() == "wad":
+			# Sigil only reads Wii discs; WAD packages carry the id in their ticket
+			game_id = TitleIDParser.extract_wii_wad_title_id(rom_path)
+			if game_id != "":
+				sigil_result = {}
+	if game.platform_slug == "wii":
+		game_id = _full_wii_title_id(game_id)
+
+	if game_id == "" and existing_id == "":
 		print("[GameManager] Dolphin: Could not extract Game ID from ROM, trying existing saves...")
 		var emulator_dir = launch_manager.registry._get_emulator_directory("dolphin")
 		game_id = TitleIDParser.extract_gamecube_game_id_from_existing_saves(emulator_dir)
-	
+
 	if game_id == "":
+		if is_upgrade_pass:
+			# Best-effort upgrade only; keep the legacy id and never block launch
+			push_warning("[GameManager] Dolphin: title id upgrade extraction failed for " + rom_path + ", keeping legacy id " + existing_id)
+			return true
 		push_error("[GameManager] Dolphin: Failed to extract Game ID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract GameCube/Wii game ID", SystemManager.notifications.Type.ERROR)
 		return false
-	
+
 	print("[GameManager] Dolphin: Game ID: " + game_id)
-	
+
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != game_id:
 		print("[GameManager] Dolphin: WARNING - Stored Game ID " + active_title_id + " doesn't match detected Game ID " + game_id)
 		print("[GameManager] Dolphin: Updating to correct Game ID")
-	
+
 	if active_title_id != game_id:
 		_store_title_id(game, game_id, sigil_result)
 		print("[GameManager] Dolphin: Updated database with Game ID: " + game_id)
-	
+
+	return true
+
+## Ensures melonDS actually uses the BIOS/firmware files kyodai manages:
+## melonDS defaults Emu.ExternalBIOSEnable to false (built-in FreeBIOS +
+## generated firmware), so seeded or drag-dropped files sit unused until the
+## flag is on. Each flag is flipped only when every file its section points at
+## exists, so setups without real dumps keep the built-in path working.
+## Desktop only: the Android port keeps its settings in SharedPreferences.
+## Idempotent; never blocks the launch.
+func _prepare_melonds_game(game: GameResource, intent: LaunchIntent) -> bool:
+	if SystemManager.platform.is_android():
+		return true
+	var toml_path = FSM.resolve_emulator_path("{emulator_dir}/melonDS.toml", "melonds")
+	if toml_path == "" or not FSM.file_exists(toml_path):
+		return true
+	var parsed = CSM.read_config(toml_path, CSM.Format.TOML)
+	if parsed.get("status", CSM.Status.MISSING) != CSM.Status.OK:
+		return true
+	var sections: Dictionary = parsed.sections
+	var base_dir := toml_path.get_base_dir()
+
+	var emu: Dictionary = sections.get("Emu", {})
+	if emu.get("ExternalBIOSEnable", false) != true:
+		var ds: Dictionary = sections.get("DS", {})
+		if _melonds_paths_exist(ds, ["FirmwarePath", "BIOS7Path", "BIOS9Path"], base_dir):
+			if CSM.set_value(toml_path, "ExternalBIOSEnable", true, "Emu"):
+				print("[GameManager] melonDS: enabled Emu.ExternalBIOSEnable (DS BIOS/firmware files present)")
+
+	var dsi: Dictionary = sections.get("DSi", {})
+	if dsi.get("ExternalBIOSEnable", false) != true:
+		if _melonds_paths_exist(dsi, ["FirmwarePath", "BIOS7Path", "BIOS9Path", "NANDPath"], base_dir):
+			if CSM.set_value(toml_path, "ExternalBIOSEnable", true, "DSi"):
+				print("[GameManager] melonDS: enabled DSi.ExternalBIOSEnable (DSi BIOS/firmware/NAND files present)")
+
+	return true
+
+## True when every named key in the section holds a path that exists on disk
+## (relative values resolve against the config file's dir).
+func _melonds_paths_exist(section: Dictionary, keys: Array, base_dir: String) -> bool:
+	for key in keys:
+		var value := str(section.get(key, "")).strip_edges().replace("\\", "/")
+		if value == "":
+			return false
+		if not value.is_absolute_path():
+			value = base_dir + "/" + value
+		if not FSM.file_exists(value.simplify_path()):
+			return false
 	return true
 
 func _prepare_xenia_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:

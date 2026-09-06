@@ -13,14 +13,14 @@
   },
   "requires_working_dir": true,
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {},
 		"extensions": [],
 		"uses_folder_saves": false
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
 		  "android": "{emulator_dir}"

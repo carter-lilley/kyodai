@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "android": "{app_data}/saves"
@@ -23,7 +23,7 @@
 		"uses_folder_saves": false
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
 		  "android": "{emulator_dir}"

@@ -104,7 +104,6 @@ func _ready():
 func on_viewport_settled() -> void:
 	if not is_node_ready() or not is_inside_tree():
 		return
-	M3Debug.geom("details_sheet", "on_viewport_settled: visible=%s peek=%.1f sheet_size=%s" % [visible, peek_height, _sheet_container.size if _sheet_container else Vector2.ZERO])
 	if visible:
 		# Re-stamp final geometry against the settled viewport; re-tier and
 		# re-fit related placement (unless the user has the description
@@ -113,7 +112,6 @@ func on_viewport_settled() -> void:
 		_reposition_open()
 		_apply_responsive_layout()
 		_refit_metadata_row()
-		_log_sheet_clamp_check_deferred("settled-visible")
 		if _current_game and not _desc_expanded:
 			_decide_related_placement()
 	else:
@@ -121,7 +119,6 @@ func on_viewport_settled() -> void:
 		_position_sheet()
 		_apply_responsive_layout()
 		_refit_metadata_row()
-		_log_sheet_clamp_check_deferred("settled-hidden")
 
 ## Recomputes chip overflow against the current sheet width so a re-stamp
 ## (screen swap, settle) can't leave a stale fit whose minimum size forces
@@ -129,21 +126,6 @@ func on_viewport_settled() -> void:
 func _refit_metadata_row() -> void:
 	if _metadata_chips.size() > 0:
 		_layout_metadata_row_overflow()
-
-## Deferred actual-vs-stamped size check: Control.set_size clamps up to the
-## content minimum, so a wide content tree can silently outgrow the stamp.
-func _log_sheet_clamp_check_deferred(context: String) -> void:
-	if not _sheet_container:
-		return
-	var stamped := _sheet_container.size
-	call_deferred("_log_sheet_clamp_check", context, stamped)
-
-func _log_sheet_clamp_check(context: String, stamped: Vector2) -> void:
-	if not is_instance_valid(_sheet_container):
-		return
-	var actual := _sheet_container.size
-	if not actual.is_equal_approx(stamped):
-		M3Debug.geom("details_sheet", "CLAMP (%s): stamped=%s actual=%s (content min outgrew the stamp)" % [context, stamped, actual])
 
 func refresh_theme():
 	super.refresh_theme()
@@ -360,7 +342,6 @@ func _decide_related_placement() -> void:
 			related_min_h = related_section.get_combined_minimum_size().y
 			available = overview_vbox.get_global_rect().end.y
 			inline_ok = content_bottom + separation + related_min_h <= available
-	M3Debug.geom("details_sheet", "related placement: small=%s content_bottom=%.1f related_min_h=%.1f available=%.1f inline_ok=%s" % [_small_layout, content_bottom, related_min_h, available, inline_ok])
 	_related_fits_inline = inline_ok
 	_apply_related_placement()
 	related_section.visible = true
@@ -371,9 +352,6 @@ func _set_sheet_height() -> void:
 		return
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
 	var new_peek := screen_dp * HEIGHT_FRACTION
-	if not is_equal_approx(new_peek, peek_height):
-		M3Debug.geom("details_sheet", "set_height: viewport_y=%.1f scale=%.3f peek %.1f -> %.1f" % [
-			viewport.get_visible_rect().size.y, M3Units.get_scale(), peek_height, new_peek])
 	peek_height = new_peek
 
 func _position_sheet():
@@ -512,14 +490,12 @@ func _layout_metadata_row_overflow() -> void:
 		return
 	var sep := float(metadata_row.get_theme_constant("separation"))
 	var avail := metadata_row.size.x
-	var avail_src := "live"
 	var estimate := _estimate_metadata_row_width()
 	if avail <= 0.0 or (estimate > 0.0 and avail > estimate + 1.0):
 		# A live width wider than the sheet's content area is stale (carried
 		# across a screen swap or a re-stamp): the row can never legitimately
 		# be wider than the sheet.
 		avail = estimate
-		avail_src = "estimate"
 	if avail <= 0.0:
 		return
 	var trailer_w := (_stars_trailer.get_combined_minimum_size().x if is_instance_valid(_stars_trailer) else 0.0) + sep * 2.0
@@ -541,7 +517,6 @@ func _layout_metadata_row_overflow() -> void:
 	for i in range(n):
 		if is_instance_valid(_metadata_chips[i]):
 			_metadata_chips[i].visible = i < fit
-	M3Debug.geom("details_sheet", "chip overflow: avail=%.1f (%s) fit=%d/%d trailer_w=%.1f" % [avail, avail_src, fit, n, trailer_w])
 	var hidden := n - fit
 	if is_instance_valid(_overflow_chip):
 		_overflow_chip.visible = hidden > 0
@@ -560,7 +535,6 @@ func _estimate_metadata_row_width() -> float:
 		content_w = (content_w - edge) * 0.7
 	# Slight under-reservation is safer than spilling.
 	var estimate := content_w - M3Units.dp(8.0)
-	M3Debug.geom("details_sheet", "row width estimate: sheet_w=%.1f small=%s -> %.1f" % [_sheet_container.size.x, _small_layout, estimate])
 	return estimate
 
 func _populate_rating_stars(game: GameResource) -> void:
@@ -774,7 +748,6 @@ func _add_related_card(entry: Dictionary) -> void:
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
 	card.custom_minimum_size = Vector2(M3Units.dp(RELATED_CARD_WIDTH_DP), M3Units.dp(RELATED_CARD_HEIGHT_DP))
-	M3Debug.geom("details_sheet", "related card spawn: dp=%.1fx%.1f scale=%.3f min_px=%s" % [RELATED_CARD_WIDTH_DP, RELATED_CARD_HEIGHT_DP, M3Units.get_scale(), card.custom_minimum_size])
 	card.media_aspect_ratio = 0.75  # IGDB covers are 3:4
 	# Caption-only cards: the type label stands in for the title.
 	var type_label: String = RELATED_TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", "")).capitalize())
@@ -838,7 +811,6 @@ func _prepare_for_show(game: GameResource) -> void:
 	# scale changes (dual-screen swap, orientation, display-init ordering).
 	_set_sheet_height()
 	_position_sheet()
-	_log_sheet_clamp_check_deferred("prepare")
 	_apply_responsive_layout()
 	await set_game(game)
 

@@ -7,17 +7,17 @@
       "3ds"
 	],
 	"os": [
-      "windows",
-      "linux",
+	  "windows",
+	  "linux",
       "android"
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
-		  "windows": "{emulator_dir}/user/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-		  "android": "{emulator_dir}/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+		  "windows": "{emulator_dir}/user/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+		  "android": "{emulator_dir}/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000"
 		},
 		"extensions": [
           "*"
@@ -25,10 +25,25 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
-		"directories": {}
+		"directories": {
+		  "windows": "{emulator_dir}/user",
+		  "linux": "{emulator_dir}/user",
+		  "android": "{emulator_dir}"
+		}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "azahar_ini",
+	"config_candidates": {
+	  "windows": [
+		"{emulator_dir}/user/config/qt-config.ini"
+	  ],
+	  "linux": [
+		"{emulator_dir}/user/config/qt-config.ini"
+	  ]
 	}
   },
   "launch": {

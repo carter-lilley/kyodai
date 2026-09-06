@@ -21,6 +21,11 @@ var _pending_emulator_version: Dictionary = {}
 ## Set for updates/reinstalls; cleared on completion or failure.
 var _force_install_step: Dictionary = {}
 
+## Config guard state: emulator_id -> Array of {original, backup}. Populated
+## by _begin_config_guard() when an update/reinstall starts, consumed by
+## _restore_config_guard() at every terminal point.
+var _config_guard: Dictionary = {}
+
 ## Validation cache to avoid redundant file system operations
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
 var _validation_cache: Dictionary = {}
@@ -254,6 +259,8 @@ func download_emulator(emulator_id: String) -> bool:
 ## Re-runs all non-download install steps to repair/refresh config files.
 ## Skips step 0 (download) since the emulator binary is already present.
 ## Forces re-creation of portable.txt, INIs, superblocks, etc.
+## User-invoked repair intentionally overwrites configs; the config guard
+## does not apply here.
 func repair_emulator_config(emulator_id: String) -> bool:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
 	if emulator.is_empty():
@@ -271,6 +278,87 @@ func repair_emulator_config(emulator_id: String) -> bool:
 	# Start from step 1 (skip download)
 	print("[EmulatorManager] Repairing config for " + emulator_id + " from step 1")
 	return _execute_install_step(emulator_id, 1)
+
+## Returns the on-disk backup directory for an in-progress update guard.
+func _config_guard_dir(emulator_id: String) -> String:
+	return "user://update_backups/" + emulator_id
+
+## Snapshots user config files before an update/reinstall overwrites them.
+## The preserve-list is built from the emulator's resolution config candidates
+## and its create_files install seeds; every existing file is copied to
+## user://update_backups/<emulator_id>/. The update then overwrites everything
+## and _restore_config_guard() puts the configs back afterwards.
+## No-op on Android: APK updates go through the package manager and preserve
+## app-private data, so there is nothing to guard.
+func _begin_config_guard(emulator_id: String) -> void:
+	if SystemManager.platform.is_android():
+		return
+	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return
+	var platform_name: String = SystemManager.platform.get_platform_name().to_lower()
+
+	var candidates: Array = []
+	for candidate in emulator.get("resolution", {}).get("config_candidates", {}).get(platform_name, []):
+		candidates.append(str(candidate))
+	for step in emulator.get("install", []):
+		var platform_config = launch_manager.registry._get_step_platform_config(step)
+		if platform_config.get("action_type", "") != "create_files":
+			continue
+		for file_entry in platform_config.get("files", []):
+			if typeof(file_entry) == TYPE_STRING:
+				candidates.append(file_entry)
+			elif typeof(file_entry) == TYPE_DICTIONARY:
+				candidates.append(str(file_entry.get("name", "")))
+
+	var backup_root := _config_guard_dir(emulator_id)
+	if FSM.dir_exists(backup_root):
+		FSM.delete_dir_recursive(backup_root)
+
+	var preserved: Array = []
+	var seen := {}
+	var index := 0
+	for candidate in candidates:
+		if candidate == "":
+			continue
+		var original := FSM.resolve_emulator_path(candidate, emulator_id)
+		if original == "" or seen.has(original) or not FSM.file_exists(original):
+			continue
+		seen[original] = true
+		var backup := backup_root + "/" + str(index) + "_" + original.get_file()
+		index += 1
+		if FSM.copy_file(original, backup):
+			preserved.append({"original": original, "backup": backup})
+		else:
+			push_warning("[EmulatorManager] Config guard: failed to back up " + original)
+
+	if preserved.is_empty():
+		return
+	_config_guard[emulator_id] = preserved
+	print("[EmulatorManager] Config guard: preserved %d config file(s) for %s" % [preserved.size(), emulator_id])
+
+## Restores the configs preserved by _begin_config_guard() over whatever the
+## update/reinstall wrote, then drops the backup dir. No-op without a guard
+## (and never runs on Android, where _begin_config_guard is a no-op).
+func _restore_config_guard(emulator_id: String) -> void:
+	if not _config_guard.has(emulator_id):
+		return
+	var preserved: Array = _config_guard[emulator_id]
+	_config_guard.erase(emulator_id)
+	var restored := 0
+	for entry in preserved:
+		if FSM.copy_file(entry.backup, entry.original):
+			restored += 1
+		else:
+			push_warning("[EmulatorManager] Config guard: failed to restore " + entry.original)
+	FSM.delete_dir_recursive(_config_guard_dir(emulator_id))
+	print("[EmulatorManager] Config guard: restored %d/%d config file(s) for %s" % [restored, preserved.size(), emulator_id])
+
+## Clears the force-install flag at a terminal point, restoring any configs
+## preserved by _begin_config_guard() first (update/reinstall flows only).
+func _end_force_install(emulator_id: String) -> void:
+	_restore_config_guard(emulator_id)
+	_force_install_step.erase(emulator_id)
 
 ## Executes a single install step by index
 func _execute_install_step(emulator_id: String, step_index: int) -> bool:
@@ -293,7 +381,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 		if _pending_emulator_version.has(emulator_id):
 			_save_emulator_version(emulator_id, _pending_emulator_version[emulator_id])
 			_pending_emulator_version.erase(emulator_id)
-		_force_install_step.erase(emulator_id)
+		_end_force_install(emulator_id)
 		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
 		return true
 	
@@ -303,7 +391,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	if platform_config.is_empty():
 		push_error("[EmulatorManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
-		_force_install_step.erase(emulator_id)
+		_end_force_install(emulator_id)
 		return false
 	
 	var action_type = platform_config.get("action_type", "")
@@ -338,8 +426,8 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 			step_success = false
 	
 	if not step_success:
-		_force_install_step.erase(emulator_id)
-	
+		_end_force_install(emulator_id)
+
 	return step_success
 
 ## Re-runs a previous install step when current step needs it
@@ -692,7 +780,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	var extraction_callback = func(success: bool, _message: String):
 		if not success:
 			_emulator_install_progress[emulator_id] = "Extraction failed"
-			_force_install_step.erase(emulator_id)
+			_end_force_install(emulator_id)
 			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			return
 		
@@ -1288,8 +1376,10 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 		_pending_emulator_version.erase(emulator_id)
 		# If the emulator was already fully installed, this is a reinstall/update:
 		# force all steps to re-run instead of short-circuiting on existing files.
+		# Preserve user config files across the overwrite.
 		if progress["status"] == "complete":
 			_force_install_step[emulator_id] = true
+			_begin_config_guard(emulator_id)
 		else:
 			_force_install_step.erase(emulator_id)
 	
@@ -1546,7 +1636,7 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 		if not success:
 			_emulator_install_progress[emulator_id] = "Download failed: " + message
 			_pending_emulator_version.erase(emulator_id)
-			_force_install_step.erase(emulator_id)
+			_end_force_install(emulator_id)
 			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, message)
 			return
@@ -1557,7 +1647,7 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			push_error("[EmulatorManager] Download validation failed for: " + emulator_id)
 			_emulator_install_progress[emulator_id] = "Download validation failed"
 			_pending_emulator_version.erase(emulator_id)
-			_force_install_step.erase(emulator_id)
+			_end_force_install(emulator_id)
 			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, "Validation failed")
 			return

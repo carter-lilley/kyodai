@@ -799,7 +799,8 @@ func _get_enabled_platforms() -> Dictionary:
 	return {}
 
 func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
-	var enabled_platforms = _get_enabled_platforms()
+	# Duplicate before mutating; see _set_platform_emulator for why.
+	var enabled_platforms = _get_enabled_platforms().duplicate(true)
 
 	# Look up the actual platform ID from our data if not provided or is 0
 	var actual_platform_id = platform_id
@@ -838,7 +839,11 @@ func _set_platform_enabled(slug: String, platform_id: int, enabled: bool):
 		DataManager.set_setting(enabled_platforms, setting)
 
 func _set_platform_emulator(slug: String, emulator_id: String, core_id: String = ""):
-	var enabled_platforms = _get_enabled_platforms()
+	# Duplicate before mutating: _get_enabled_platforms() returns the live
+	# setting.value reference, and in-place mutation would make set_setting's
+	# change detection compare the dict to itself — never marking it dirty,
+	# so save_settings() would silently skip the write.
+	var enabled_platforms = _get_enabled_platforms().duplicate(true)
 
 	# Get existing config or create new
 	var config = enabled_platforms.get(slug, {})

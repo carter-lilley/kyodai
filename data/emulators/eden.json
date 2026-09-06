@@ -13,7 +13,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/user/nand/user/save",
@@ -26,7 +26,7 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/user",

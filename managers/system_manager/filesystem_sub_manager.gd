@@ -758,6 +758,10 @@ static func zip_directory(source_dir: String, dest_zip: String, max_file_size: i
 				delete_dir_recursive(stage_dir)
 			return false
 	
+	# Staging paths are reused across attempts; a partial zip from a failed
+	# pass must not leak duplicate entries into the retry (open() appends).
+	if file_exists(dest_zip):
+		delete_file(dest_zip)
 	var packer = ZIPPacker.new()
 	var err = packer.open(dest_zip)
 	if err != OK:
@@ -773,6 +777,39 @@ static func zip_directory(source_dir: String, dest_zip: String, max_file_size: i
 	if not stage_dir.is_empty():
 		delete_dir_recursive(stage_dir)
 	
+	return success
+
+## Creates a ZIP archive from several source directories, each packed under
+## its own root folder (e.g. a 3DS save unit: data + extdata roots).
+## components: Array of {"src": dir_path, "root": zip_root_name}; sources
+## that do not exist are skipped. Returns true on success.
+static func zip_components(components: Array, dest_zip: String) -> bool:
+	# Ensure parent directory exists
+	var parent_dir = dest_zip.get_base_dir()
+	if not parent_dir.is_empty() and not dir_exists(parent_dir):
+		if not make_dir_recursive(parent_dir):
+			return false
+
+	# Staging paths are reused across attempts; a partial zip from a failed
+	# pass must not leak duplicate entries into the retry (open() appends).
+	if file_exists(dest_zip):
+		delete_file(dest_zip)
+	var packer = ZIPPacker.new()
+	var err = packer.open(dest_zip)
+	if err != OK:
+		push_error("[SystemManager.filesystem] Failed to open ZIPPacker for: " + dest_zip)
+		return false
+
+	var success = true
+	for comp in components:
+		var src: String = comp.get("src", "")
+		if src == "" or not dir_exists(src):
+			continue
+		var root: String = comp.get("root", "")
+		var prefix = (root + "/") if root != "" else ""
+		if not _zip_directory_recursive(packer, src, prefix, -1):
+			success = false
+	packer.close()
 	return success
 
 ## Internal: Recursively adds directory contents to a ZIPPacker
@@ -1579,3 +1616,69 @@ static func move_dir_contents(source_dir: String, dest_dir: String) -> bool:
 	
 	print("[SystemManager.filesystem] Moved " + str(moved_count) + " items from " + source_dir + " to " + dest_dir)
 	return true
+
+## Post-extraction normalization for archives that wrapped their payload in
+## folder(s): hoists the payload up to target_dir. expected_names anchors the
+## search - files or dirs (subpaths like "dc/dc_boot.bin" allowed) that
+## describe the payload's true placement directly under target_dir. Descends
+## only through single-subdirectory chains, at most max_depth levels; any
+## ambiguity (2+ subdirs at a level) or a missing payload leaves the tree
+## untouched. Returns {moved, depth, path}.
+static func normalize_extraction_root(target_dir: String, expected_names: Array, max_depth: int = 3) -> Dictionary:
+	var result := {"moved": false, "depth": 0, "path": target_dir}
+	if target_dir.is_empty() or expected_names.is_empty() or not dir_exists(target_dir):
+		return result
+
+	if _contains_any_expected(target_dir, expected_names):
+		return result
+
+	var chain: Array[String] = []
+	var current := target_dir
+	var found := ""
+	for depth in range(1, max_depth + 1):
+		var subdirs: Array[String] = []
+		for entry in list_dir(current):
+			if entry == "." or entry == "..":
+				continue
+			if is_dir(join_paths(current, entry)):
+				subdirs.append(entry)
+		if subdirs.size() != 1:
+			break
+		current = join_paths(current, subdirs[0])
+		chain.append(current)
+		if _contains_any_expected(current, expected_names):
+			found = current
+			result.depth = depth
+			break
+
+	if found == "":
+		print("[SystemManager.filesystem] normalize_extraction_root: expected content not found within " + str(max_depth) + " level(s) under " + target_dir)
+		return result
+
+	if not move_dir_contents(found, target_dir):
+		push_error("[SystemManager.filesystem] normalize_extraction_root: failed to hoist " + found + " -> " + target_dir)
+		return result
+
+	# Remove the emptied wrapper chain, deepest first; a wrapper that still
+	# holds other entries is left in place.
+	for i in range(chain.size() - 1, -1, -1):
+		var remaining := list_dir(chain[i])
+		if remaining.is_empty():
+			delete_dir_recursive(chain[i])
+
+	result.moved = true
+	result.path = found
+	print("[SystemManager.filesystem] normalize_extraction_root: hoisted payload from " + found + " to " + target_dir)
+	return result
+
+## Returns true when any expected name (file, dir, or subpath) exists directly
+## under dir.
+static func _contains_any_expected(dir: String, expected_names: Array) -> bool:
+	for name in expected_names:
+		var n := str(name).strip_edges()
+		if n == "":
+			continue
+		var full := join_paths(dir, n)
+		if file_exists(full) or is_dir(full):
+			return true
+	return false

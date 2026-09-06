@@ -52,7 +52,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/saves",
@@ -65,7 +65,7 @@
 		"uses_folder_saves": false
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/system",
@@ -73,6 +73,14 @@
 		  "android": "/storage/emulated/0/RetroArch/system"
 		}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "retroarch_cfg",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/retroarch.cfg"],
+	  "linux": ["{emulator_dir}/retroarch.cfg"],
+	  "android": ["/storage/emulated/0/RetroArch/retroarch.cfg"]
 	}
   },
   "launch": {
@@ -625,24 +633,31 @@
 		"name": "Dolphin",
 		"mapping": "dolphin",
 		"android_mapping": "dolphin",
-		"save_name": "Dolphin",
+		"save_name": "dolphin-emu",
 		"default": true,
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/dolphin-emu/User/GC/USA/Card A",
-			  "linux": "{emulator_dir}/saves/dolphin-emu/User/GC/USA/Card A",
-			  "android": "/storage/emulated/0/RetroArch/saves/dolphin-emu/User/GC/USA/Card A"
+			  "windows": "{save_root}/User/GC",
+			  "linux": "{save_root}/User/GC",
+			  "android": "{save_root}/User/GC"
 			},
 			"extensions": ["gci"],
 			"uses_folder_saves": true
 		  },
-		  "firmware": {
+		  "default_firmware": {
 			"directories": {
-			  "windows": "{emulator_dir}/system",
-			  "linux": "{emulator_dir}/system",
-			  "android": "/storage/emulated/0/RetroArch/system"
+			  "windows": "{system_root}",
+			  "linux": "{system_root}",
+			  "android": "{system_root}"
 			}
+		  }
+		},
+		"resolution": {
+		  "strategy": "dolphin_ini",
+		  "config_candidates": {
+			"windows": ["{save_root}/User/Config/Dolphin.ini"],
+			"linux": ["{save_root}/User/Config/Dolphin.ini"]
 		  }
 		}
 	  }
@@ -703,22 +718,22 @@
 		"id": "pcsx2",
 		"name": "PCSX2",
 		"mapping": "pcsx2",
-		"save_name": "PCSX2",
+		"save_name": "LRPS2",
 		"default": true,
 		"desktop_only": true,
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/system/pcsx2/memcards/main.ps2",
-			  "linux": "{emulator_dir}/system/pcsx2/memcards/main.ps2"
+			  "windows": "{system_root}/pcsx2/memcards/main.ps2",
+			  "linux": "{system_root}/pcsx2/memcards/main.ps2"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true
 		  },
-		  "firmware": {
+		  "default_firmware": {
 			"directories": {
-			  "windows": "{emulator_dir}/system/pcsx2",
-			  "linux": "{emulator_dir}/system/pcsx2"
+			  "windows": "{system_root}/pcsx2/bios",
+			  "linux": "{system_root}/pcsx2/bios"
 			}
 		  }
 		}
@@ -733,11 +748,11 @@
 		"save_name": "PPSSPP",
 		"default": true,
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/PPSSPP/PSP/SAVEDATA",
-			  "linux": "{emulator_dir}/saves/PPSSPP/PSP/SAVEDATA",
-			  "android": "/storage/emulated/0/RetroArch/saves/PPSSPP/PSP/SAVEDATA"
+			  "windows": "{save_root}/PSP/SAVEDATA",
+			  "linux": "{save_root}/PSP/SAVEDATA",
+			  "android": "{save_root}/PSP/SAVEDATA"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true
@@ -931,24 +946,31 @@
 		"name": "Dolphin",
 		"mapping": "dolphin",
 		"android_mapping": "dolphin",
-		"save_name": "Dolphin",
+		"save_name": "dolphin-emu",
 		"default": true,
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/dolphin-emu/User/Wii/title/00010000",
-			  "linux": "{emulator_dir}/saves/dolphin-emu/User/Wii/title/00010000",
-			  "android": "/storage/emulated/0/RetroArch/saves/dolphin-emu/User/Wii/title/00010000"
+			  "windows": "{save_root}/User/Wii/title/00010000",
+			  "linux": "{save_root}/User/Wii/title/00010000",
+			  "android": "{save_root}/User/Wii/title/00010000"
 			},
 			"extensions": ["zip"],
 			"uses_folder_saves": true
 		  },
-		  "firmware": {
+		  "default_firmware": {
 			"directories": {
-			  "windows": "{emulator_dir}/system",
-			  "linux": "{emulator_dir}/system",
-			  "android": "/storage/emulated/0/RetroArch/system"
+			  "windows": "{system_root}",
+			  "linux": "{system_root}",
+			  "android": "{system_root}"
 			}
+		  }
+		},
+		"resolution": {
+		  "strategy": "dolphin_ini",
+		  "config_candidates": {
+			"windows": ["{save_root}/User/Config/Dolphin.ini"],
+			"linux": ["{save_root}/User/Config/Dolphin.ini"]
 		  }
 		}
 	  }
@@ -962,11 +984,11 @@
 		"save_name": "Citra",
 		"default": true,
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "linux": "{emulator_dir}/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "android": "/storage/emulated/0/RetroArch/saves/Citra/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			  "windows": "{save_root}/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "linux": "{save_root}/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "android": "{save_root}/Citra/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true
@@ -980,11 +1002,11 @@
 		"android_mapping": "citra2018",
 		"save_name": "Citra-2018",
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "linux": "{emulator_dir}/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "android": "/storage/emulated/0/RetroArch/saves/Citra 2018/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			  "windows": "{save_root}/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "linux": "{save_root}/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "android": "{save_root}/Citra 2018/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true
@@ -998,11 +1020,11 @@
 		"android_mapping": "panda3ds",
 		"save_name": "Panda3DS",
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "linux": "{emulator_dir}/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "android": "/storage/emulated/0/RetroArch/saves/Panda3DS/Panda3DS/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			  "windows": "{save_root}/Emulator Files",
+			  "linux": "{save_root}/Emulator Files",
+			  "android": "{save_root}/Emulator Files"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true
@@ -1017,11 +1039,11 @@
 		"android_only": true,
 		"save_name": "Azahar",
 		"paths": {
-		  "saves": {
+		  "default_saves": {
 			"directories": {
-			  "windows": "{emulator_dir}/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "linux": "{emulator_dir}/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000",
-			  "android": "/storage/emulated/0/RetroArch/saves/Azahar/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/title/00040000"
+			  "windows": "{save_root}/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "linux": "{save_root}/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000",
+			  "android": "{save_root}/Azahar/sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000"
 			},
 			"extensions": ["*"],
 			"uses_folder_saves": true

@@ -576,7 +576,9 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	if emulator_id == "retroarch":
 		core_id_for_firmware = intent_manager.resolve_core_for_game(game)
 	
-	if not firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
+	if firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
+		firmware.apply_force_pull_config(game.platform_slug, emulator_id)
+	else:
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
 			SystemManager.notifications.show_notification("Firmware download in progress for " + game.platform_slug + "...", SystemManager.notifications.Type.INFO)

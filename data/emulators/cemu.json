@@ -12,7 +12,7 @@
 	]
   },
   "paths": {
-	"saves": {
+	"default_saves": {
 	  "_default": {
 		"directories": {
 		  "windows": "{emulator_dir}/portable/mlc01/usr/save/00050000"
@@ -23,10 +23,22 @@
 		"uses_folder_saves": true
 	  }
 	},
-	"firmware": {
+	"default_firmware": {
 	  "_default": {
 		"directories": {}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "cemu_xml",
+	"config_candidates": {
+	  "windows": [
+		"{emulator_dir}/portable/settings.xml",
+		"{emulator_dir}/settings.xml"
+	  ],
+	  "linux": [
+		"{emulator_dir}/portable/settings.xml"
+	  ]
 	}
   },
   "launch": {
