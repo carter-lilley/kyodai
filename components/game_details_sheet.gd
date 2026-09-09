@@ -1222,18 +1222,24 @@ func _on_action_button_pressed() -> void:
 		return
 
 	if _current_game.is_active_variant_downloaded():
-		# Check if the file actually exists before launching
-		var root_folder = DataManager.get_setting("games_root_folder")
-		if root_folder and root_folder.value != "":
-			# Construct the full file path from known components (don't rely on file_path which may be relative)
-			var active_file_name = _current_game.get_active_file_name()
-			var file_path = FSM.join_paths(root_folder.value, _current_game.platform_slug, active_file_name)
+		# Accept the stored path whether it points at the archive or at an
+		# extracted folder (ps3/vita/xbox360 games live in directories after
+		# launch-time extraction); only fall back to reconstructing the archive
+		# path when the stored path is gone.
+		var present := false
+		if _current_game.file_path != "" and (FSM.dir_exists(_current_game.file_path) or FSM.file_exists(_current_game.file_path)):
+			present = true
+		else:
+			var root_folder = DataManager.get_setting("games_root_folder")
+			if root_folder and root_folder.value != "":
+				var active_file_name = _current_game.get_active_file_name()
+				present = FSM.file_exists(FSM.join_paths(root_folder.value, _current_game.platform_slug, active_file_name))
 
-			if not FSM.file_exists(file_path):
-				# File is marked as downloaded but doesn't exist - redownload
-				SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
-				_queue_download()
-				return
+		if not present:
+			# File is marked as downloaded but doesn't exist - redownload
+			SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
+			_queue_download()
+			return
 
 		# Launch the game
 		_setup_launch_transition_source()

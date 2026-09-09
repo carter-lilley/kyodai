@@ -221,6 +221,20 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 			callback.call(false, err_msg, 0, 0)
 		return
 
+	# Repair any schema drift before syncing. A stale DB schema makes every
+	# batched insert fail and roll back silently (missing-column writes).
+	data_manager.database.ensure_schema_alignment()
+
+	# Re-entrancy guard: a duplicated confirm/input event (or a second caller)
+	# must not queue another full sync on top of a running one. _sync_state is
+	# set synchronously below, so back-to-back calls in adjacent frames are safe.
+	if _sync_state != SyncState.IDLE:
+		print("[Sync] Sync already in progress (state=%s) - ignoring duplicate call" % get_sync_state_name())
+		SystemManager.notifications.show_notification("Sync already in progress", SystemManager.notifications.Type.INFO)
+		if callback.is_valid():
+			callback.call(false, "Sync already in progress", 0, 0)
+		return
+
 	# Reset sync state
 	_sync_current = 0
 	_sync_total = 0
@@ -307,6 +321,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	# 2. Check if there are platforms to sync
 	if enabled_platforms.size() == 0:
 		print("[SyncThread] No platforms enabled, completing immediately")
+		_sync_state = SyncState.IDLE  # Entry guard keys on this; must reset on every exit
 		_defer_on_main("_emit_sync_completed", [true, "No platforms enabled"])
 		_defer_on_main("_invoke_sync_callback", [true, "", 0, 0])
 		return

@@ -198,6 +198,12 @@ static func extract_wii_wad_title_id(wad_path: String) -> String:
 
 # ==================== Vita (Vita3K) ====================
 
+## Extracts a Vita TitleID (e.g. "PCSE00965") from a game ZIP.
+## Waterfall: sce_sys/param.sfo TITLE_ID (ground truth, works for flat PSN
+## dumps and folder layouts), then any path segment shaped like a Vita
+## TitleID (shallowest wins). Archive entries may use backslash separators;
+## matching normalizes them while read_file keeps the stored name. Returns
+## "" when nothing valid is found rather than an unvalidated string.
 static func extract_vita_title_id(zip_path: String) -> String:
 	# Resolve ZIP path with fallbacks for Godot virtual paths and Windows backslashes
 	var resolved_path = _resolve_zip_path(zip_path)
@@ -205,27 +211,72 @@ static func extract_vita_title_id(zip_path: String) -> String:
 		push_error("[TitleIDParser] Cannot extract TitleID - file not found: " + zip_path)
 		return ""
 	zip_path = resolved_path
-	
+
 	var reader = ZIPReader.new()
 	var err = reader.open(zip_path)
 	if err != OK:
 		push_error("[TitleIDParser] Failed to open ZIP for TitleID extraction: " + zip_path + " (error: " + str(err) + ")")
 		return ""
-	
+
 	var files = reader.get_files()
-	reader.close()
-	
 	if files.is_empty():
+		reader.close()
 		push_error("[TitleIDParser] ZIP is empty: " + zip_path)
 		return ""
-	
-	var first_file = files[0]
-	var parts = first_file.split("/")
-	if parts.is_empty():
-		push_error("[TitleIDParser] Invalid ZIP structure: " + zip_path)
-		return ""
-	
-	return parts[0]
+
+	# Tier 1: param.sfo ground truth (prefer the shallowest occurrence).
+	var sfo_entry := ""
+	var sfo_depth := 999
+	for entry in files:
+		var norm: String = entry.replace("\\", "/")
+		if norm.to_lower().ends_with("sce_sys/param.sfo"):
+			var depth := norm.get_slice_count("/")
+			if depth < sfo_depth:
+				sfo_depth = depth
+				sfo_entry = entry
+	if sfo_entry != "":
+		var sfo_bytes := reader.read_file(sfo_entry)
+		if not sfo_bytes.is_empty():
+			var title_id := get_title_id_from_sfo_bytes(sfo_bytes)
+			if _is_vita_title_id(title_id):
+				reader.close()
+				print("[TitleIDParser] Vita TitleID from param.sfo: " + title_id.to_upper())
+				return title_id.to_upper()
+		push_warning("[TitleIDParser] param.sfo present but no valid TITLE_ID in: " + zip_path)
+
+	# Tier 2: folder layout — any path segment shaped like a Vita TitleID,
+	# shallowest across all entries wins.
+	var best := ""
+	var best_depth := 999
+	for entry in files:
+		var parts := entry.replace("\\", "/").split("/", false)
+		for i in range(parts.size()):
+			if _is_vita_title_id(parts[i]):
+				if i < best_depth:
+					best_depth = i
+					best = parts[i].to_upper()
+				break
+	reader.close()
+	if best != "":
+		print("[TitleIDParser] Vita TitleID from folder layout: " + best)
+		return best
+
+	push_error("[TitleIDParser] No Vita TitleID (param.sfo or folder layout) found in: " + zip_path)
+	return ""
+
+## Vita TitleIDs are 4 letters + 5 digits (PCSE/PCSA/PCSB/PCSF/...).
+static func _is_vita_title_id(value: String) -> bool:
+	if value.length() != 9:
+		return false
+	for i in range(4):
+		var c := value.unicode_at(i)
+		if not ((c >= 65 and c <= 90) or (c >= 97 and c <= 122)):
+			return false
+	for i in range(4, 9):
+		var c := value.unicode_at(i)
+		if c < 48 or c > 57:
+			return false
+	return true
 
 # ==================== Xbox 360 (Xenia) ====================
 

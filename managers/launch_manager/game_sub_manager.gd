@@ -21,7 +21,10 @@ func _store_file_path(game: GameResource, file_path: String) -> void:
 	print("[GameManager] _store_file_path: current=" + game.file_path + " new=" + file_path)
 	if game.file_path != file_path:
 		game.file_path = file_path
-		DataManager.update_game(game)
+		DataManager.update_game(game, func(ok: bool):
+			if not ok:
+				push_error("[GameManager] _store_file_path: DB persist FAILED for " + game.title + " (path=" + file_path + ")")
+		)
 		print("[GameManager] _store_file_path: UPDATED and persisted to DB")
 	else:
 		print("[GameManager] _store_file_path: path already correct, no update needed")
@@ -746,8 +749,8 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 	# Always extract TitleID from ZIP to ensure we have the correct one for this ROM
 	print("[GameManager] Vita3K: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_vita_title_id(rom_path)
-	if zip_title_id == "":
-		push_error("[GameManager] Vita3K: Failed to extract TitleID from: " + rom_path)
+	if zip_title_id == "" or not TitleIDParser._is_vita_title_id(zip_title_id):
+		push_error("[GameManager] Vita3K: Failed to extract a valid TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract Vita game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
 	print("[GameManager] Vita3K: TitleID from ZIP: " + zip_title_id)
@@ -782,6 +785,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 	var is_extracted = _vita_app_has_game_files(vita_app_path)
 	print("[GameManager] Vita3K: has_game_files = " + str(is_extracted))
 	if is_extracted:
+		_ensure_vita3k_license(rom_path, emulator_dir, title_id)
 		return true
 	
 	# Extract ZIP to Vita3K ux0/app directory (ZIP contains the TitleID folder)
@@ -811,6 +815,8 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		return false
 	
 	print("[GameManager] Vita3K: Extraction successful")
+
+	_ensure_vita3k_license(rom_path, emulator_dir, title_id)
 	
 	# Mark shuffler-managed app folders so they can be safely cleaned up later.
 	if is_shuffler:
@@ -885,6 +891,56 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	
 	print("[GameManager] _extract_vita_zip: EXIT " + str(future.success))
 	return future.success
+
+
+## Ensures Vita3K has a license rif for the given title under ux0/license/<title_id>.
+## Converted game zips carry the rif inside the title folder (<title_id>/<content_id>.rif);
+## after extraction it sits in ux0/app/<title_id>/, so move it where Vita3K looks for it.
+## If no rif is found on disk (game extracted before license injection), pull just the
+## rif entries from the source zip via ZIPReader without re-extracting the whole archive.
+func _ensure_vita3k_license(rom_path: String, emulator_dir: String, title_id: String) -> void:
+	var license_dir = emulator_dir + "/ux0/license/" + title_id
+
+	if FSM.dir_exists(license_dir):
+		for f in FSM.list_dir(license_dir):
+			if f.to_lower().ends_with(".rif"):
+				return
+
+	var vita_app_path = emulator_dir + "/ux0/app/" + title_id
+
+	var moved := false
+	if FSM.dir_exists(vita_app_path):
+		for f in FSM.list_dir(vita_app_path):
+			if f != "." and f != ".." and f.to_lower().ends_with(".rif"):
+				var src = vita_app_path + "/" + f
+				var dst = license_dir + "/" + f
+				if FSM.move(src, dst):
+					print("[GameManager] Vita3K: Installed license " + f + " -> " + license_dir)
+					moved = true
+				else:
+					push_warning("[GameManager] Vita3K: Failed to move license file: " + src)
+
+	if moved:
+		return
+
+	var zip_path = TitleIDParser._resolve_zip_path(rom_path)
+	if zip_path == "":
+		return
+
+	var zr := ZIPReader.new()
+	if zr.open(zip_path) != OK:
+		return
+
+	for entry in zr.get_files():
+		var parts = entry.rstrip("/").split("/")
+		if parts.size() == 2 and parts[0] == title_id and entry.to_lower().ends_with(".rif"):
+			var dst = license_dir + "/" + parts[1]
+			if FSM.make_dir_recursive(license_dir) and FSM.write_file_bytes(dst, zr.read_file(entry)):
+				print("[GameManager] Vita3K: Installed license from zip: " + dst)
+			else:
+				push_warning("[GameManager] Vita3K: Failed to write license file: " + dst)
+
+	zr.close()
 
 
 ## Recursively searches for PARAM.SFO file in a directory

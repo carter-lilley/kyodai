@@ -36,6 +36,14 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "vita3k_yml",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/config.yml"],
+	  "linux": ["{emulator_dir}/config.yml"],
+	  "android": ["{app_data}/config.yml"]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "windows": {

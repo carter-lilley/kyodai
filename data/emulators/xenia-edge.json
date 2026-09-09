@@ -31,6 +31,19 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "xenia_toml",
+	"config_candidates": {
+	  "windows": [
+		"{emulator_dir}/xenia-edge.config.toml",
+		"{emulator_dir}/xenia.config.toml"
+	  ],
+	  "linux": [
+		"{emulator_dir}/xenia-edge.config.toml",
+		"{emulator_dir}/xenia.config.toml"
+	  ]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "windows": {

@@ -747,6 +747,21 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable) -> void:
 	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
 	var destination_path = dest_dir + "/" + file_name
+	# Never blindly redownload: a complete archive already on disk only needs its
+	# DB state restored. A leftover state file marks an incomplete download, in
+	# which case fall through and let the chunked downloader resume it.
+	if update_game_resource and FSM.file_exists(destination_path) and not FSM.file_exists(_get_state_file_path(destination_path)):
+		var on_disk_size := FSM.get_file_size(destination_path)
+		if file_size <= 0 or on_disk_size == file_size:
+			print("[SystemManager.download] File already on disk, marking downloaded instead of redownloading: " + destination_path)
+			game.mark_sibling_downloaded(disc_id)
+			if disc_id == game.romm_id:
+				game.file_path = destination_path
+			DataManager.update_game(game)
+			if not suppress_notification:
+				SystemManager.notifications.show_notification(game.get_display_name() + " is already downloaded", SystemManager.notifications.Type.INFO)
+			on_done.call(true)
+			return
 	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource)
 	if item_id == "":
 		if not suppress_notification:
@@ -3038,7 +3053,12 @@ func _finish_download_completion(item: QueueItem):
 		# Only the main rom owns file_path; sibling discs resolve via get_disc_entries()
 		if downloaded_id == item.game_resource.romm_id:
 			item.game_resource.file_path = item.destination_path
-		DataManager.update_game(item.game_resource)
+		DataManager.update_game(item.game_resource, func(persist_ok: bool):
+			if not persist_ok:
+				push_error("[SystemManager.download] Failed to persist download state for " + item.game_resource.title + " - game will appear undownloaded on next launch")
+				if SystemManager.notifications:
+					SystemManager.notifications.show_notification("Failed to record download for " + item.game_resource.get_display_name() + " - run a full sync", SystemManager.notifications.Type.ERROR)
+		)
 
 		# Generate an m3u playlist once every disc of a multi-disc game is present
 		if M3USubManager.supports_m3u(item.game_resource.platform_slug) and item.game_resource.is_multi_disc():

@@ -15,7 +15,7 @@
 	"default_saves": {
 	  "_default": {
 		"directories": {
-		  "android": "{app_data}/content"
+		  "android": "{app_data}/compose/content"
 		},
 		"extensions": [
           ".zip"
@@ -27,6 +27,12 @@
 	  "_default": {
 		"directories": {}
 	  }
+	}
+  },
+  "resolution": {
+	"strategy": "xenia_toml",
+	"config_candidates": {
+	  "android": ["{app_data}/compose/xenia-canary.config.toml"]
 	}
   },
   "launch": {

@@ -30,6 +30,18 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "ppsspp_ini",
+	"anchor": "{emulator_dir}",
+	"candidate_selection": "newest_mtime",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/memstick/PSP/SYSTEM/ppsspp.ini"],
+	  "android": [
+		"{emulator_dir}/PSP/SYSTEM/ppsspp.ini",
+		"{app_data}/PSP/SYSTEM/ppsspp.ini"
+	  ]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "windows": {

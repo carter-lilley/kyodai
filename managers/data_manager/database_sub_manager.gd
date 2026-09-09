@@ -6,6 +6,52 @@ var data_manager: Node
 const DB_PATH = "user://database/kyodai.db"
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
+## Expected schema (table -> column -> DDL fragment). Single source of truth for
+## ensure_schema_alignment(), which ALTERs in missing columns at full-sync start.
+## A stale DB schema otherwise fails every affected statement silently.
+const _EXPECTED_SCHEMA := {
+	"games": {
+		"id": "TEXT PRIMARY KEY", "romm_id": "INTEGER UNIQUE NOT NULL", "title": "TEXT NOT NULL",
+		"platform": "TEXT", "platform_slug": "TEXT", "cover_url": "TEXT", "cover_path": "TEXT",
+		"file_name": "TEXT", "file_path": "TEXT", "file_size": "INTEGER DEFAULT 0",
+		"has_local_copy": "INTEGER DEFAULT 0", "last_updated": "TEXT", "description": "TEXT",
+		"genres": "TEXT", "rating": "REAL DEFAULT 0.0", "release_date": "INTEGER DEFAULT 0",
+		"siblings": "TEXT DEFAULT '[]'", "selected_sibling_id": "INTEGER DEFAULT 0",
+		"is_master_entry": "INTEGER DEFAULT 1", "downloaded_sibling_ids": "TEXT DEFAULT '[]'",
+		"has_cover_art": "INTEGER DEFAULT 1", "last_played": "TEXT DEFAULT ''",
+		"status": "TEXT DEFAULT ''", "now_playing": "INTEGER DEFAULT 0",
+		"backlogged": "INTEGER DEFAULT 0", "hidden": "INTEGER DEFAULT 0",
+		"is_favorite": "INTEGER DEFAULT 0", "title_id": "TEXT DEFAULT ''",
+		"save_id": "TEXT DEFAULT ''", "save_usage": "TEXT DEFAULT ''",
+		"cover_group_id": "TEXT DEFAULT ''", "cover_group_master": "INTEGER DEFAULT 1",
+		"igdb_metadata": "TEXT DEFAULT '{}'", "igdb_id": "INTEGER DEFAULT 0",
+		"m3u_path": "TEXT DEFAULT ''", "unwrapped": "INTEGER DEFAULT 0",
+	},
+	"platforms": {
+		"id": "TEXT PRIMARY KEY", "romm_id": "INTEGER UNIQUE NOT NULL", "name": "TEXT NOT NULL",
+		"slug": "TEXT UNIQUE NOT NULL", "icon_url": "TEXT", "icon_path": "TEXT",
+		"emulator_path": "TEXT", "extensions": "TEXT",
+	},
+	"game_filter_values": {"game_id": "INTEGER NOT NULL", "kind": "TEXT NOT NULL", "value": "TEXT NOT NULL"},
+	"cache_metadata": {"key": "TEXT PRIMARY KEY", "value": "TEXT"},
+	"save_sync": {
+		"id": "INTEGER PRIMARY KEY", "romm_id": "INTEGER NOT NULL", "emulator_id": "TEXT NOT NULL",
+		"file_name": "TEXT NOT NULL", "file_path": "TEXT NOT NULL", "last_synced_at": "TEXT DEFAULT ''",
+		"remote_save_id": "INTEGER DEFAULT 0", "slot": "TEXT", "local_hash": "TEXT DEFAULT ''",
+		"server_hash": "TEXT DEFAULT ''", "local_size": "INTEGER DEFAULT 0",
+	},
+	"collections": {
+		"romm_id": "INTEGER PRIMARY KEY", "name": "TEXT NOT NULL", "description": "TEXT DEFAULT ''",
+		"is_public": "INTEGER DEFAULT 0", "is_favorite": "INTEGER DEFAULT 0",
+		"rom_count": "INTEGER DEFAULT 0", "updated_at": "TEXT DEFAULT ''",
+	},
+	"collection_roms": {"collection_id": "INTEGER NOT NULL", "romm_id": "INTEGER NOT NULL"},
+	"pending_props_sync": {
+		"romm_id": "INTEGER NOT NULL", "kind": "TEXT NOT NULL",
+		"payload": "TEXT DEFAULT '{}'", "queued_at": "TEXT DEFAULT ''",
+	},
+}
+
 var _db: SQLite = null
 var _is_db_ready: bool = false
 var _db_init_failed: bool = false
@@ -48,15 +94,29 @@ func unlock() -> void:
 	_db_unlock()
 
 
+## Logs failed SQL statements even when SQLite verbosity is QUIET. Silent
+## statement failures (e.g. a column missing from a stale schema) have caused
+## data-loss class bugs where writes simply never landed.
+func _log_query_failure(query: String) -> void:
+	var detail := ""
+	if _db:
+		var msg = _db.get("error_message")
+		if msg != null and str(msg) != "":
+			detail = " | error: " + str(msg)
+	push_error("[DatabaseManager] SQL FAILED: " + query.strip_edges().substr(0, 120).replace("\n", " ") + detail)
+
+
 func query_array(query: String, bindings: Array = []) -> Array:
 	_db_lock()
 	var result: Array
+	var success: bool
 	if bindings.is_empty():
-		var success = _db.query(query)
-		result = _db.query_result.duplicate() if success else []
+		success = _db.query(query)
 	else:
-		var success = _db.query_with_bindings(query, bindings)
-		result = _db.query_result.duplicate() if success else []
+		success = _db.query_with_bindings(query, bindings)
+	result = _db.query_result.duplicate() if success else []
+	if not success:
+		_log_query_failure(query)
 	_db_unlock()
 	return result
 
@@ -68,6 +128,8 @@ func query_bool(query: String, bindings: Array = []) -> bool:
 		success = _db.query(query)
 	else:
 		success = _db.query_with_bindings(query, bindings)
+	if not success:
+		_log_query_failure(query)
 	_db_unlock()
 	return success
 
@@ -76,12 +138,14 @@ func query_bool(query: String, bindings: Array = []) -> bool:
 ## Prevents deadlock on platforms with non-reentrant mutexes (Linux/Android).
 func query_array_unlocked(query: String, bindings: Array = []) -> Array:
 	var result: Array
+	var success: bool
 	if bindings.is_empty():
-		var success = _db.query(query)
-		result = _db.query_result.duplicate() if success else []
+		success = _db.query(query)
 	else:
-		var success = _db.query_with_bindings(query, bindings)
-		result = _db.query_result.duplicate() if success else []
+		success = _db.query_with_bindings(query, bindings)
+	result = _db.query_result.duplicate() if success else []
+	if not success:
+		_log_query_failure(query)
 	return result
 
 
@@ -91,6 +155,8 @@ func query_bool_unlocked(query: String, bindings: Array = []) -> bool:
 		success = _db.query(query)
 	else:
 		success = _db.query_with_bindings(query, bindings)
+	if not success:
+		_log_query_failure(query)
 	return success
 
 
@@ -261,6 +327,32 @@ func is_database_ready() -> bool:
 
 func is_database_init_failed() -> bool:
 	return _db_init_failed
+
+
+## Verifies every expected column exists and ALTERs in any that are missing.
+## Called at full-sync start (nowhere else): the DB is a cache, and a stale
+## schema (e.g. from an older app version) makes every affected statement fail.
+func ensure_schema_alignment() -> bool:
+	if not _is_db_ready:
+		return false
+	var repaired: Array[String] = []
+	_db_lock()
+	for table in _EXPECTED_SCHEMA:
+		var existing := {}
+		for row in query_array_unlocked("PRAGMA table_info(" + table + ")"):
+			existing[str(row.get("name", ""))] = true
+		if existing.is_empty():
+			continue  # Table absent entirely; CREATE TABLE IF NOT EXISTS covers fresh DBs
+		for col in _EXPECTED_SCHEMA[table]:
+			if not existing.has(col):
+				if query_bool_unlocked("ALTER TABLE " + table + " ADD COLUMN " + col + " " + _EXPECTED_SCHEMA[table][col]):
+					repaired.append(table + "." + col)
+	_db_unlock()
+	if not repaired.is_empty():
+		push_warning("[DatabaseManager] Schema drift repaired - added missing columns: " + ", ".join(repaired))
+		if SystemManager and SystemManager.notifications:
+			SystemManager.notifications.show_notification("Database schema updated (" + str(repaired.size()) + " missing columns added)", SystemManager.notifications.Type.WARNING)
+	return true
 
 
 func _escape_sql(text: String) -> String:
@@ -674,11 +766,21 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 	var found_files: Array[String] = []
 	_scan_games_directory(root_folder, "", found_files)
 
+	# Files with a sibling download-state file are interrupted/incomplete
+	# downloads (possibly sparse pre-allocated) - never match them as present.
+	var in_progress := {}
+	for f in found_files:
+		if f.ends_with(".kyodai_download"):
+			in_progress[f.trim_suffix(".kyodai_download")] = true
+
 	# Match files to games
 	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
 	var _matched_count: int = 0
 
 	for file_path in found_files:
+		if in_progress.has(file_path):
+			continue
+
 		var parts = file_path.split("/", false, 1)
 		if parts.size() < 2:
 			continue

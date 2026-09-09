@@ -27,6 +27,10 @@ const CemuXml = preload("res://utils/config_resolvers/cemu_xml.gd")
 const AzaharIni = preload("res://utils/config_resolvers/azahar_ini.gd")
 const DolphinIni = preload("res://utils/config_resolvers/dolphin_ini.gd")
 const MelondsToml = preload("res://utils/config_resolvers/melonds_toml.gd")
+const PpssppIni = preload("res://utils/config_resolvers/ppsspp_ini.gd")
+const EdenIni = preload("res://utils/config_resolvers/eden_ini.gd")
+const XeniaToml = preload("res://utils/config_resolvers/xenia_toml.gd")
+const Vita3kYml = preload("res://utils/config_resolvers/vita3k_yml.gd")
 
 ## Resolution cache: cache key -> {mtime, result}. Entries are only stored
 ## when a config file was actually read; a missing config is re-probed.
@@ -149,8 +153,13 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 	# First existing config candidate wins; candidates may carry wildcards,
 	# including {save_root}/{system_root} (composed config-first via the
 	# emulator-level resolution so a core-level block cannot recurse).
+	# candidate_selection="newest_mtime" instead picks the existing candidate
+	# with the newest mtime (android PPSSPP: live ini follows the memstick,
+	# stale copies may linger at prior locations).
 	var config_path := ""
 	var config_status := CSM.Status.MISSING
+	var select_newest := str(block.get("candidate_selection", "")) == "newest_mtime"
+	var best_mtime := -1
 	for candidate in block.get("config_candidates", {}).get(platform_name, []):
 		var candidate_str := str(candidate)
 		var resolved := ""
@@ -158,7 +167,15 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 			resolved = compose_template(candidate_str, emulator_id, platform_slug, core_id, false).get("path", "")
 		else:
 			resolved = FSM.resolve_emulator_path(candidate_str, emulator_id, platform_slug)
-		if resolved != "" and FSM.file_exists(resolved):
+		if resolved == "" or not FSM.file_exists(resolved):
+			continue
+		if select_newest:
+			var candidate_mtime := int(FileAccess.get_modified_time(resolved))
+			if candidate_mtime > best_mtime:
+				best_mtime = candidate_mtime
+				config_path = resolved
+				config_status = CSM.Status.OK
+		else:
 			config_path = resolved
 			config_status = CSM.Status.OK
 			break
@@ -208,6 +225,14 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 			result = DolphinIni.resolve(kind, context)
 		"melonds_toml":
 			result = MelondsToml.resolve(kind, context)
+		"ppsspp_ini":
+			result = PpssppIni.resolve(kind, context)
+		"eden_ini":
+			result = EdenIni.resolve(kind, context)
+		"xenia_toml":
+			result = XeniaToml.resolve(kind, context)
+		"vita3k_yml":
+			result = Vita3kYml.resolve(kind, context)
 		_:
 			result.caveat = "unknown-strategy"
 

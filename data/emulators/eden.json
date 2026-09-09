@@ -36,6 +36,14 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "eden_ini",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/user/config/qt-config.ini"],
+	  "linux": ["{emulator_dir}/user/config/qt-config.ini"],
+	  "android": ["{app_data}/config/config.ini"]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "windows": {
@@ -114,6 +122,40 @@
 			"action_type": "package_installed",
 			"package": "dev.eden.eden_emulator"
 		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_portable_file",
+	  "platforms": {
+		"windows": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "user/.keep",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "user/.keep"
+		  }
+		},
+		"linux": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "user/.keep",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "user/.keep"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
 		}
 	  }
 	}

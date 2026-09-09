@@ -8,28 +8,32 @@ update notification all in one
 tst emulator app update flow on android
 download copying step (for sd cards on android)
 
+user-added emu jsons, resolvers(?) and shader layers. 
+
 filter by letter/recent
 pause when window not active
-- bug: when returning from app install to 'remmber to launch' warning on android in a game launch context
+- bug: when returning from app install to 'remmber to launch app first' warning on android in a game launch context
 the overlay is lost and an 'already launching' error remains 
 
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs
-	- user/identity profile resolver for emulator installs and saves (3ds, wiiu, xenia, etc)
+	- user/identity profile resolver for emulator installs and saves
+		- 3ds, xenia, eden, vita, (cemu & ps2?)
 		- metadata tags for saves w/ emu user?
 		- identity packages in bios optional during install steps
 		- identity manager?
 		- leaving 3ds in a weird spot. force pull user identity as bios
-		- cemu, ps2 network identity?
 	- online compat database scan perhaps?
 	- dolphin: controller inis
 	- all: optional hotkeys, graphics settings, confirm on exit, etc?
 	- resolver: android - no way to resolve nethersx2 based configs (no/inaccessible inis)
 	- installer: android - armsx2 & 3 unskippable OOBE & bios selection (no drop bios)
 	- installer: android - azahar requires unskippable OOBE to select user folder
+	- resolver: android - ppsspp no editable paths in ini, go by last updated ini
+	- resolver: android - melonds private path, uneditable/readable pref file
 	- to test: ps3 psn games
-	- x dolphin, x melonds, eden, ppsspp, shadps4, vita3k, xemu, xenia
+	- shadps4
 	
 ## romm
  - dev studio?

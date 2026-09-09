@@ -259,9 +259,36 @@ static func _parse_kv_lines(content: String, use_sections: bool, typed_values: b
 			continue
 		var key := m.get_string(1).strip_edges()
 		var raw := m.get_string(2).strip_edges()
-		sections[current][key] = _parse_toml_value(raw) if typed_values else _unquote(raw)
+		sections[current][key] = _parse_toml_value(_strip_toml_comment(raw)) if typed_values else _unquote(raw)
 
 	return sections
+
+## Cuts a TOML value at the first '#' outside a quoted string; per the
+## TOML spec a comment runs to end of line. Double-quoted strings honor
+## backslash escapes; single-quoted literal strings do not. Configs like
+## xenia's annotate every line with a trailing comment; without this the
+## comment text poisons the parsed value.
+static func _strip_toml_comment(raw: String) -> String:
+	var quote := ""
+	var i := 0
+	while i < raw.length():
+		var c := raw[i]
+		if quote == '"':
+			if c == "\\":
+				i += 2
+				continue
+			if c == '"':
+				quote = ""
+		elif quote == "'":
+			if c == "'":
+				quote = ""
+		else:
+			if c == '"' or c == "'":
+				quote = c
+			elif c == "#":
+				return raw.substr(0, i).strip_edges()
+		i += 1
+	return raw.strip_edges()
 
 ## Strips one layer of surrounding double quotes from a value.
 static func _unquote(value: String) -> String:
@@ -270,10 +297,13 @@ static func _unquote(value: String) -> String:
 		return value.substr(1, value.length() - 2)
 	return value
 
-## Parses a TOML subset value: quoted string, bool, int, float, or array.
+## Parses a TOML subset value: quoted string (double-quoted basic or
+## single-quoted literal), bool, int, float, or array.
 static func _parse_toml_value(raw: String) -> Variant:
 	raw = raw.strip_edges()
 	if raw.length() >= 2 and raw.begins_with('"') and raw.ends_with('"'):
+		return raw.substr(1, raw.length() - 2)
+	if raw.length() >= 2 and raw.begins_with("'") and raw.ends_with("'"):
 		return raw.substr(1, raw.length() - 2)
 	if raw == "true":
 		return true

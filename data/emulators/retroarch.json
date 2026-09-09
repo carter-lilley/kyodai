@@ -80,7 +80,11 @@
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/retroarch.cfg"],
 	  "linux": ["{emulator_dir}/retroarch.cfg"],
-	  "android": ["/storage/emulated/0/RetroArch/retroarch.cfg"]
+	  "android": [
+		"{app_data}/retroarch.cfg",
+		"/storage/emulated/0/Android/data/com.retroarch.aarch64/files/retroarch.cfg",
+		"/storage/emulated/0/RetroArch/retroarch.cfg"
+	  ]
 	}
   },
   "launch": {

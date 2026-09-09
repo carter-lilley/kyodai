@@ -8,8 +8,8 @@
       "wii"
 	],
 	"os": [
-      "windows",
-      "linux",
+	  "windows",
+	  "linux",
       "android"
 	]
   },
@@ -42,11 +42,12 @@
 	  }
 	}
   },
-  "resolution": {
+	"resolution": {
 	"strategy": "dolphin_ini",
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/User/Config/Dolphin.ini"],
-	  "linux": ["{emulator_dir}/User/Config/Dolphin.ini"]
+	  "linux": ["{emulator_dir}/User/Config/Dolphin.ini"],
+	  "android": ["{app_data}/Config/Dolphin.ini"]
 	}
   },
   "launch": {

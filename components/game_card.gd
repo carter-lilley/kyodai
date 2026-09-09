@@ -1030,15 +1030,23 @@ func _on_card_pressed():
 		return
 
 	if game.is_active_variant_downloaded():
-		var root_folder = DataManager.get_setting("games_root_folder") if DataManager else null
-		if root_folder and root_folder.value != "":
-			var active_file_name = game.get_active_file_name()
-			var file_path = FSM.join_paths(root_folder.value, game.platform_slug, active_file_name)
-			if not FSM.file_exists(file_path):
-				if SystemManager.notifications:
-					SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
-				download_requested.emit(game)
-				return
+		# Accept the stored path whether it points at the archive or at an
+		# extracted folder (ps3/vita/xbox360 games live in directories after
+		# launch-time extraction); only fall back to reconstructing the archive
+		# path when the stored path is gone.
+		var present := false
+		if game.file_path != "" and (FSM.dir_exists(game.file_path) or FSM.file_exists(game.file_path)):
+			present = true
+		else:
+			var root_folder = DataManager.get_setting("games_root_folder") if DataManager else null
+			if root_folder and root_folder.value != "":
+				var active_file_name = game.get_active_file_name()
+				present = FSM.file_exists(FSM.join_paths(root_folder.value, game.platform_slug, active_file_name))
+		if not present:
+			if SystemManager.notifications:
+				SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)
+			download_requested.emit(game)
+			return
 
 		if LaunchManager:
 			LaunchManager.launch_game(game, focus_index)

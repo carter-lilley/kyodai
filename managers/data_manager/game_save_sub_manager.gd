@@ -6,14 +6,12 @@ class_name GameSaveSubManager
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 const _ContentHash = preload("res://utils/content_hash.gd")
 const Gavel = preload("res://utils/gavel.gd")
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
-
-# In-memory cache for discovered emulator profiles
-var _emulator_profile_cache: Dictionary = {}
 
 # Strategy pattern lookup table for emulator-specific save operations
 var _emulator_strategies: Dictionary = {}
@@ -115,12 +113,9 @@ func _init_strategies() -> void:
 			"validate": func(tid: String) -> String:
 				return "" if tid.length() == 16 else "Invalid Title ID for Eden game.",
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
-				var emu_dir = LaunchManager._get_emulator_directory("eden")
-				return discover_local_eden_save(dir, _get_save_identity(game).id, emu_dir),
+				return discover_local_eden_save(dir, _get_save_identity(game).id),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
-				var emu_dir = LaunchManager._get_emulator_directory("eden")
-				var profile_result = _discover_eden_profile(emu_dir)
-				return FSM.join_paths(dir, "0000000000000000", profile_result.profile_id, _get_save_identity(game).id),
+				return _eden_save_target(dir, _get_save_identity(game).id),
 			"extract_dest": func(_save_dir: String, record_path: String, _game: GameResource, _zip: String) -> String:
 				return record_path,
 			"save_name": func(game: GameResource, _path: String) -> String:
@@ -225,12 +220,11 @@ func _init_strategies() -> void:
 			"discover": func(dir: String, game: GameResource) -> Array[Dictionary]:
 				return discover_local_xenia_save(dir, game.get_active_title_id()),
 			"resolve_path": func(dir: String, game: GameResource) -> String:
-				var profile = _find_first_subdir(dir)
-				if profile == "":
-					profile = "0000000000000000"
-				return FSM.join_paths(dir, profile, game.get_active_title_id()),
-			"extract_dest": func(_save_dir: String, _record_path: String, _game: GameResource, _zip: String) -> String:
-				return _save_dir,
+				return FSM.join_paths(dir, _xenia_active_profile(dir, game.get_active_title_id()).profile_id, game.get_active_title_id()),
+			"extract_dest": func(save_dir: String, _record_path: String, game: GameResource, _zip: String) -> String:
+				return FSM.join_paths(save_dir, _xenia_active_profile(save_dir, game.get_active_title_id()).profile_id),
+			"prepare": func(save_dir: String, game: GameResource) -> void:
+				_xenia_rehome_to_active_profile(save_dir, game.get_active_title_id()),
 			"save_name": func(game: GameResource, _path: String) -> String:
 				return game.get_active_title_id(),
 			"zip": func(src: String, dst: String, _game: GameResource) -> bool:
@@ -928,101 +922,224 @@ func _wii_title_root_candidates(directory: String) -> Array[String]:
 			roots.append(parent + "/" + category)
 	return roots
 
-## Discovers the Eden profile ID from profiles.dat
-## Reads the UUID from offset 0x10, reverses byte order, returns hex string
-## Returns Dictionary with "profile_id" (String) and "is_fallback" (bool)
-## Caches result in memory for subsequent calls
-func _discover_eden_profile(emulator_dir: String) -> Dictionary:
-	var cache_key = "eden_" + emulator_dir
-	if _emulator_profile_cache.has(cache_key):
-		return _emulator_profile_cache[cache_key]
-	
-	# On Android, Eden's data is in the app directory, not the download directory
-	var profiles_path = ""
-	if SystemManager.platform.is_android():
-		profiles_path = "/storage/emulated/0/Android/data/dev.eden.eden_emulator/files/nand/system/save/8000000000000010/su/avators/profiles.dat"
-	else:
-		profiles_path = emulator_dir.rstrip("/") + "/user/nand/system/save/8000000000000010/su/avators/profiles.dat"
-	
-	print("[GameSaveSubManager] _discover_eden_profile: reading " + profiles_path)
-	
-	var result = {"profile_id": "0000000000000000", "is_fallback": true}
-	
-	if not FSM.file_exists(profiles_path):
-		print("[GameSaveSubManager] _discover_eden_profile: profiles.dat not found, using zero profile")
-		_emulator_profile_cache[cache_key] = result
-		return result
-	
-	var data = FSM.read_file_bytes(profiles_path)
-	if data.size() < 0x20:
-		print("[GameSaveSubManager] _discover_eden_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
-		_emulator_profile_cache[cache_key] = result
-		return result
-	
-	# Extract 16 bytes from offset 0x10 and reverse byte order
-	var uuid_bytes = data.slice(0x10, 0x20)
-	var reversed = PackedByteArray()
-	reversed.resize(16)
+const SWITCH_ZERO_USER := "0000000000000000"
+const SWITCH_ZERO_PROFILE := "00000000000000000000000000000000"
+
+## Switch titles that save to the console rather than a profile (ported from
+## argosy's SwitchSaveHandler.DEVICE_SAVE_TITLE_IDS): they live under the
+## zero user/profile regardless of the active profile, in both directions.
+const EDEN_DEVICE_SAVE_TITLE_IDS := [
+	"01006F8002326000", # Animal Crossing: New Horizons
+	"0100D2F00D5C0000", # Nintendo Switch Sports
+	"01000320000CC000", # 1-2-Switch
+	"01002FF008C24000", # Ring Fit Adventure
+	"0100C4B0034B2000", # Nintendo Labo Toy-Con 01: Variety Kit
+	"01009AB0034E0000", # Nintendo Labo Toy-Con 02: Robot Kit
+	"01001E9003502000", # Nintendo Labo Toy-Con 03: Vehicle Kit
+	"0100165003504000", # Nintendo Labo Toy-Con 04: VR Kit
+	"0100C1800A9B6000", # Go Vacation
+]
+
+func _eden_is_device_save(title_id: String) -> bool:
+	return title_id.to_upper() in EDEN_DEVICE_SAVE_TITLE_IDS
+
+func _is_hex_folder_name(folder_name: String) -> bool:
+	for i in range(folder_name.length()):
+		var c := folder_name.unicode_at(i)
+		var is_hex := (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+		if not is_hex:
+			return false
+	return true
+
+func _is_valid_switch_user_folder(folder_name: String) -> bool:
+	if folder_name.length() != 16:
+		return false
+	return _is_hex_folder_name(folder_name)
+
+func _is_valid_switch_profile_folder(folder_name: String) -> bool:
+	if folder_name.length() != 16 and folder_name.length() != 32:
+		return false
+	return _is_hex_folder_name(folder_name)
+
+## NAND root above a resolved save root ("<...>/user/save" -> "<...>").
+## "" when the root is not a NAND save dir (unexpected layout).
+func _eden_nand_root(save_root: String) -> String:
+	var root := save_root.rstrip("/")
+	if root.ends_with("/user/save"):
+		return root.substr(0, root.length() - "/user/save".length())
+	return ""
+
+func _eden_profiles_dat_path(save_root: String) -> String:
+	var nand := _eden_nand_root(save_root)
+	if nand == "":
+		return ""
+	return nand + "/system/save/8000000000000010/su/avators/profiles.dat"
+
+## UUID at offset 0x10, 16 bytes; full byte reversal == argosy's
+## little-endian uint64 pair formatting.
+func _eden_parse_profile_uuid(data: PackedByteArray) -> String:
+	var uuid_bytes := data.slice(0x10, 0x20)
+	var profile_id := ""
 	for i in range(16):
-		reversed[i] = uuid_bytes[15 - i]
-	
-	# Convert to hex string
-	var profile_id = ""
-	for b in reversed:
-		profile_id += "%02x" % b
-	profile_id = profile_id.to_upper()
-	
-	print("[GameSaveSubManager] _discover_eden_profile: discovered profile " + profile_id)
-	result = {"profile_id": profile_id, "is_fallback": false}
-	_emulator_profile_cache[cache_key] = result
+		profile_id += "%02X" % uuid_bytes[15 - i]
+	return profile_id
+
+## The active profile folder for a save root: the profiles.dat selection,
+## then the newest-mtime non-zero profile folder on disk, then the first
+## non-zero one, then the zero profile (the default for profile-less users
+## and pre-first-run restores). Read fresh on every call: profiles.dat
+## changes when the user switches profiles.
+## Returns {profile_path, profile_id, source}.
+func _eden_active_profile(save_root: String) -> Dictionary:
+	var root := save_root.rstrip("/")
+
+	var result := {}
+	var profiles_path := _eden_profiles_dat_path(root)
+	if profiles_path != "" and FSM.file_exists(profiles_path):
+		var data: PackedByteArray = FSM.read_file_bytes(profiles_path)
+		if data.size() >= 0x20:
+			var profile_id := _eden_parse_profile_uuid(data)
+			var profile_path := FSM.join_paths(root, SWITCH_ZERO_USER, profile_id)
+			if profile_id != "" and FSM.dir_exists(profile_path):
+				result = {"profile_path": profile_path, "profile_id": profile_id, "source": "profiles.dat"}
+			else:
+				print("[GameSaveSubManager] _eden_active_profile: parsed profile missing on disk: " + profile_path)
+		else:
+			print("[GameSaveSubManager] _eden_active_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
+
+	if result.is_empty():
+		result = _eden_scan_active_profile(root)
+
+	print("[GameSaveSubManager] _eden_active_profile: " + result.profile_path + " (source=" + result.source + ")")
 	return result
 
-func discover_local_eden_save(directory: String, title_id: String, emulator_dir: String = "") -> Array[Dictionary]:
+## Fallback when profiles.dat is absent/stale: newest-mtime non-zero profile
+## folder across all user folders, then first non-zero, then zero profile.
+func _eden_scan_active_profile(save_root: String) -> Dictionary:
+	var best_path := ""
+	var best_time := 0
+	var first_non_zero := ""
+	for user_name in FSM.list_dir(save_root):
+		if user_name == "." or user_name == ".." or not _is_valid_switch_user_folder(user_name):
+			continue
+		var user_path := FSM.join_paths(save_root, user_name)
+		if not FSM.dir_exists(user_path):
+			continue
+		for profile_name in FSM.list_dir(user_path):
+			if profile_name == "." or profile_name == ".." or not _is_valid_switch_profile_folder(profile_name):
+				continue
+			if profile_name.count("0") == profile_name.length():
+				continue
+			var profile_path := FSM.join_paths(user_path, profile_name)
+			if not FSM.dir_exists(profile_path):
+				continue
+			if first_non_zero == "":
+				first_non_zero = profile_path
+			var mtime := _get_folder_mtime(profile_path)
+			if mtime > best_time:
+				best_time = mtime
+				best_path = profile_path
+
+	if best_path != "":
+		return {"profile_path": best_path, "profile_id": best_path.get_file(), "source": "scan"}
+	if first_non_zero != "":
+		return {"profile_path": first_non_zero, "profile_id": first_non_zero.get_file(), "source": "scan"}
+	return {
+		"profile_path": FSM.join_paths(save_root, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE),
+		"profile_id": SWITCH_ZERO_PROFILE,
+		"source": "fallback",
+	}
+
+## Best-mtime title folder across all user/profile folders, or "" — catches
+## saves stranded in a non-active profile (profile switch, legacy placement).
+func _eden_find_title_in_profiles(save_root: String, title_id: String) -> String:
+	var best_path := ""
+	var best_time := 0
+	for user_name in FSM.list_dir(save_root):
+		if user_name == "." or user_name == ".." or not _is_valid_switch_user_folder(user_name):
+			continue
+		var user_path := FSM.join_paths(save_root, user_name)
+		if not FSM.dir_exists(user_path):
+			continue
+		for profile_name in FSM.list_dir(user_path):
+			if profile_name == "." or profile_name == ".." or not _is_valid_switch_profile_folder(profile_name):
+				continue
+			var profile_path := FSM.join_paths(user_path, profile_name)
+			if not FSM.dir_exists(profile_path):
+				continue
+			for child in FSM.list_dir(profile_path):
+				if child.to_upper() != title_id.to_upper():
+					continue
+				var title_path := FSM.join_paths(profile_path, child)
+				if not FSM.dir_exists(title_path):
+					continue
+				var mtime := _get_folder_mtime(title_path)
+				if mtime > best_time:
+					best_time = mtime
+					best_path = title_path
+	return best_path
+
+## Restore/upload target for a title under a resolved save root. Device saves
+## always land at zero/zero; everything else under the active profile.
+func _eden_save_target(save_root: String, title_id: String) -> String:
+	var root := save_root.rstrip("/")
+	if _eden_is_device_save(title_id):
+		return FSM.join_paths(root, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE, title_id.to_upper())
+	var profile: Dictionary = _eden_active_profile(root)
+	return FSM.join_paths(profile.profile_path, title_id.to_upper())
+
+## Eden save structure: {save_root}/{user}/{profile}/{title_id}/
+func discover_local_eden_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "" or title_id.length() != 16:
 		print("[GameSaveSubManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
-	
-	var dir_exists = FSM.dir_exists(directory)
-	print("[GameSaveSubManager] discover_local_eden_save: dir_exists(" + directory + ") = " + str(dir_exists))
-	if not dir_exists:
+
+	if not FSM.dir_exists(directory):
+		print("[GameSaveSubManager] discover_local_eden_save: dir does not exist: " + directory)
 		return results
-	
-	# Discover the active profile
-	var profile_id = "0000000000000000"
-	if emulator_dir != "":
-		var profile_result = _discover_eden_profile(emulator_dir)
-		profile_id = profile_result.profile_id
-	
-	# Eden save structure: {base}/{user}/{profile}/{title_id}/
-	# Eden uses full TitleID (16 chars) for save folder names
-	var save_path = FSM.join_paths(directory, "0000000000000000", profile_id, title_id)
-	print("[GameSaveSubManager] discover_local_eden_save: checking " + save_path)
-	if FSM.dir_exists(save_path):
-		var mtime = _get_folder_mtime(save_path)
-		print("[GameSaveSubManager] discover_local_eden_save: found save with mtime=" + str(mtime))
+
+	var candidates: Array[String] = []
+	if _eden_is_device_save(title_id):
+		candidates.append(FSM.join_paths(directory, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE, title_id.to_upper()))
+	else:
+		var profile: Dictionary = _eden_active_profile(directory)
+		candidates.append(FSM.join_paths(profile.profile_path, title_id.to_upper()))
+
+	for candidate in candidates:
+		print("[GameSaveSubManager] discover_local_eden_save: checking " + candidate)
+		if FSM.dir_exists(candidate):
+			results.append({
+				"file_name": title_id + ".zip",
+				"file_path": candidate,
+				"modified_time": _get_folder_mtime(candidate),
+				"extension": ".zip"
+			})
+			return results
+
+	var scanned := _eden_find_title_in_profiles(directory, title_id)
+	if scanned != "":
+		print("[GameSaveSubManager] discover_local_eden_save: found via profile scan: " + scanned)
 		results.append({
 			"file_name": title_id + ".zip",
-			"file_path": save_path,
-			"modified_time": mtime,
+			"file_path": scanned,
+			"modified_time": _get_folder_mtime(scanned),
 			"extension": ".zip"
 		})
 		return results
-	
-	# Fallback: check zero profile
-	var zero_path = FSM.join_paths(directory, "0000000000000000", "0000000000000000", title_id)
-	print("[GameSaveSubManager] discover_local_eden_save: checking fallback " + zero_path)
-	if FSM.dir_exists(zero_path):
-		var mtime = _get_folder_mtime(zero_path)
-		print("[GameSaveSubManager] discover_local_eden_save: found save in zero profile with mtime=" + str(mtime))
-		results.append({
-			"file_name": title_id + ".zip",
-			"file_path": zero_path,
-			"modified_time": mtime,
-			"extension": ".zip"
-		})
-		return results
-	
+
+	if not _eden_is_device_save(title_id):
+		var zero_path := FSM.join_paths(directory, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE, title_id.to_upper())
+		print("[GameSaveSubManager] discover_local_eden_save: checking fallback " + zero_path)
+		if FSM.dir_exists(zero_path):
+			results.append({
+				"file_name": title_id + ".zip",
+				"file_path": zero_path,
+				"modified_time": _get_folder_mtime(zero_path),
+				"extension": ".zip"
+			})
+			return results
+
 	print("[GameSaveSubManager] discover_local_eden_save: no save found")
 	return results
 
@@ -1219,6 +1336,102 @@ func discover_local_shadps4_save(directory: String, title_id: String) -> Array[D
 ## Discovers local Xenia saves for an Xbox 360 game
 ## Xenia saves are in content/PROFILE_ID/TITLE_ID/ (PROFILE_ID varies per user)
 ## We search recursively from the content directory for matching TITLE_ID folders
+##
+## The xenia config TOML beside a content dir names the active save profile
+## ([Profiles] logged_profile_slot_0_xuid). The storage root is the content
+## dir's parent in every default layout; custom content_root installs fall
+## through to the folder heuristics in _xenia_active_profile.
+const XENIA_CONFIG_FILENAMES := ["xenia-edge.config.toml", "xenia.config.toml", "xenia-canary.config.toml"]
+
+func _xenia_logged_profile_xuid(content_dir: String) -> String:
+	var storage := content_dir.rstrip("/").get_base_dir()
+	# Read fresh on every call: the emulator rewrites the config on exit and
+	# fresh installs regenerate the profile XUID.
+	var xuid := ""
+	for filename in XENIA_CONFIG_FILENAMES:
+		var config_path := FSM.join_paths(storage, filename)
+		if not FSM.file_exists(config_path):
+			continue
+		var parsed: Dictionary = CSM.read_config(config_path, CSM.Format.TOML)
+		if parsed.get("status", CSM.Status.MISSING) != CSM.Status.OK:
+			continue
+		xuid = str(parsed.sections.get("Profiles", {}).get("logged_profile_slot_0_xuid", "")).strip_edges()
+		if xuid != "":
+			print("[GameSaveSubManager] _xenia_logged_profile_xuid: " + xuid + " from " + config_path)
+			break
+	return xuid
+
+## The profile folder xenia writes this title's saves under. Returns
+## {profile_id, source}. Ordering: the config-declared slot-0 XUID when its
+## folder exists (or no profile folders exist yet — pre-first-run), then the
+## profile holding FFFE07D1 account data (the live signed-in profile), then
+## the profile already containing the title, then the only/newest profile,
+## then the zero profile. Slot 0 only; multi-slot and manual selection are
+## user-resolution-layer work.
+func _xenia_active_profile(content_dir: String, title_id: String = "") -> Dictionary:
+	var root := content_dir.rstrip("/")
+
+	var profiles: Array[String] = []
+	for item in FSM.list_dir(root):
+		if item == "." or item == ".." or item.length() != 16 or not _is_hex_folder_name(item):
+			continue
+		if FSM.dir_exists(FSM.join_paths(root, item)):
+			profiles.append(item)
+
+	var xuid := _xenia_logged_profile_xuid(root)
+	if xuid.length() == 16 and _is_hex_folder_name(xuid):
+		xuid = xuid.to_upper()
+		if profiles.has(xuid) or profiles.is_empty():
+			return {"profile_id": xuid, "source": "config"}
+
+	for profile in profiles:
+		if FSM.dir_exists(FSM.join_paths(root, profile, "FFFE07D1")):
+			return {"profile_id": profile, "source": "account-data"}
+	if title_id != "":
+		for profile in profiles:
+			if FSM.dir_exists(FSM.join_paths(root, profile, title_id.to_upper())):
+				return {"profile_id": profile, "source": "title-folder"}
+	if profiles.size() == 1:
+		return {"profile_id": profiles[0], "source": "single-profile"}
+	var best := ""
+	var best_time := 0
+	for profile in profiles:
+		var mtime := _get_folder_mtime(FSM.join_paths(root, profile))
+		if mtime > best_time:
+			best_time = mtime
+			best = profile
+	if best != "":
+		return {"profile_id": best, "source": "newest-mtime"}
+	return {"profile_id": "0000000000000000", "source": "fallback"}
+
+## Moves this title's save out of a stale profile folder into the active
+## profile (fresh installs regenerate the profile XUID, stranding old
+## saves). Only fires when the active profile lacks the title; when both
+## have it the active profile wins and the stale copy is left untouched.
+func _xenia_rehome_to_active_profile(save_dir: String, title_id: String) -> void:
+	if title_id == "":
+		return
+	var root := save_dir.rstrip("/")
+	if not FSM.dir_exists(root):
+		return
+	var active: String = _xenia_active_profile(root, title_id).profile_id
+	var active_title := FSM.join_paths(root, active, title_id.to_upper())
+	if FSM.dir_exists(active_title):
+		return
+	for item in FSM.list_dir(root):
+		if item == "." or item == ".." or item == active:
+			continue
+		if item.length() != 16 or not _is_hex_folder_name(item):
+			continue
+		var stale_title := FSM.join_paths(root, item, title_id.to_upper())
+		if not FSM.dir_exists(stale_title):
+			continue
+		if FSM.move(stale_title, active_title):
+			print("[GameSaveSubManager] xenia rehome: moved " + stale_title + " -> " + active_title)
+		else:
+			push_warning("[GameSaveSubManager] xenia rehome: failed to move " + stale_title)
+		return
+
 func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
@@ -1231,7 +1444,20 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 	if not FSM.dir_exists(content_dir):
 		print("[GameSaveSubManager] discover_local_xenia_save: content dir doesn't exist yet")
 		return results
-	
+
+	# The active profile's copy wins when duplicates exist across profiles.
+	var active_profile: String = _xenia_active_profile(content_dir, title_id).profile_id
+	var active_path := FSM.join_paths(content_dir, active_profile, title_id.to_upper())
+	if FSM.dir_exists(active_path):
+		results.append({
+			"file_name": title_id.to_upper() + ".zip",
+			"file_path": active_path,
+			"modified_time": _get_folder_mtime(active_path),
+			"extension": ".zip"
+		})
+		print("[GameSaveSubManager] discover_local_xenia_save: found save at " + active_path + " (active profile)")
+		return results
+
 	# Search recursively through all profile subdirectories
 	var dirs_to_check: Array[String] = [content_dir]
 	while not dirs_to_check.is_empty():
@@ -2475,14 +2701,10 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
 			return
-		# Eden: abort sync if profile not resolved (first launch)
-		if emulator_id == "eden":
-			var emu_dir = LaunchManager._get_emulator_directory("eden")
-			var profile_result = _discover_eden_profile(emu_dir)
-			if profile_result.is_fallback:
-				print("[GameSaveSubManager] Auto-upload aborted: Eden profile not resolved (first launch?)")
-				SystemManager.notifications.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", SystemManager.notifications.Type.WARNING)
-				return
+
+	var prepare = _get_strategy(emulator_id, "prepare")
+	if prepare.is_valid():
+		prepare.call(save_dir, game)
 
 	# Discovery walks the save directory tree; run it off the main thread when safe
 	var scan_work := func() -> Array[Dictionary]:
@@ -2707,16 +2929,10 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 					if on_complete.is_valid():
 						on_complete.call()
 					return
-				# Eden: abort sync if profile not resolved (first launch)
-				if emulator_id == "eden":
-					var emu_dir = LaunchManager._get_emulator_directory("eden")
-					var profile_result = _discover_eden_profile(emu_dir)
-					if profile_result.is_fallback:
-						print("[GameSaveSubManager] Auto-download aborted: Eden profile not resolved (first launch?)")
-						SystemManager.notifications.show_notification("Save sync paused - Eden profile not found. Launch the game once to initialize your profile.", SystemManager.notifications.Type.WARNING)
-						if on_complete.is_valid():
-							on_complete.call()
-						return
+
+			var prepare = _get_strategy(emulator_id, "prepare")
+			if prepare.is_valid():
+				prepare.call(save_dir, game)
 
 			# Discovery walks the save directory tree; run it off the main thread when safe
 			var scan_work := func() -> Array[Dictionary]:
