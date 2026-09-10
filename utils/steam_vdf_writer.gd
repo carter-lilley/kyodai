@@ -38,22 +38,23 @@ static func _parse_object(data: PackedByteArray, pos_ref: Dictionary) -> Diction
 		if type_byte == TYPE_ENDOFOBJECT or type_byte == TYPE_ENDOFOBJECT_ALT:
 			break
 		
-		# Read key name (null-terminated string)
-		var key := ""
+		# Read key name (null-terminated UTF-8 string)
+		var key_bytes := PackedByteArray()
 		while pos_ref.pos < data.size() and data[pos_ref.pos] != 0:
-			key += char(data[pos_ref.pos])
+			key_bytes.append(data[pos_ref.pos])
 			pos_ref.pos += 1
 		pos_ref.pos += 1  # Skip null terminator
-		
+		var key := key_bytes.get_string_from_utf8()
+
 		match type_byte:
 			TYPE_STRING:
-				# Read string value (null-terminated)
-				var value := ""
+				# Read string value (null-terminated UTF-8)
+				var value_bytes := PackedByteArray()
 				while pos_ref.pos < data.size() and data[pos_ref.pos] != 0:
-					value += char(data[pos_ref.pos])
+					value_bytes.append(data[pos_ref.pos])
 					pos_ref.pos += 1
 				pos_ref.pos += 1  # Skip null terminator
-				obj[key] = value
+				obj[key] = value_bytes.get_string_from_utf8()
 			
 			TYPE_INT32:
 				# Read 4-byte little-endian integer
@@ -75,24 +76,44 @@ static func _parse_object(data: PackedByteArray, pos_ref: Dictionary) -> Diction
 	
 	return obj
 
-## Writes a VDF object to a file
+## Writes a VDF object to a file.
+## Backs up any existing file first, then writes via a temp file + move so a
+## crash mid-write can never leave shortcuts.vdf truncated.
 static func write_vdf(path: String, data: Dictionary) -> bool:
 	var buffer := PackedByteArray()
 	_write_object(buffer, data)
 	# Add final terminator byte
 	buffer.append(TYPE_ENDOFOBJECT)
-	
+
 	# Ensure directory exists
 	var dir_path := path.get_base_dir()
 	if not FSM.dir_exists(dir_path):
 		if not FSM.make_dir_recursive(dir_path):
 			push_error("[SteamVDF] Failed to create directory: " + dir_path)
 			return false
-	
-	if not FSM.write_file_bytes(path, buffer):
-		push_error("[SteamVDF] Failed to write file: " + path)
+
+	# Back up the existing file so a bad write never means lost shortcuts
+	if FSM.file_exists(path):
+		if not FSM.copy_file(path, path + ".kyodai-bak"):
+			push_error("[SteamVDF] Failed to back up " + path + "; aborting write")
+			return false
+
+	var tmp_path := path + ".kyodai-tmp"
+	if not FSM.write_file_bytes(tmp_path, buffer):
+		push_error("[SteamVDF] Failed to write temp file: " + tmp_path)
 		return false
-	
+
+	# rename_absolute can't overwrite on Windows, and the backup above covers
+	# the brief window where the target doesn't exist
+	if FSM.file_exists(path) and not FSM.delete_file(path):
+		push_error("[SteamVDF] Failed to replace file: " + path)
+		FSM.delete_file(tmp_path)
+		return false
+	if not FSM.move(tmp_path, path):
+		push_error("[SteamVDF] Failed to move temp file into place: " + path)
+		FSM.delete_file(tmp_path)
+		return false
+
 	return true
 
 ## Writes an object to the buffer
@@ -113,8 +134,11 @@ static func _write_object(buffer: PackedByteArray, obj: Dictionary) -> void:
 			_append_string(buffer, value)
 		
 		elif value is int:
-			if value >= 0 and value <= 4294967295:
-				# 32-bit signed int
+			# INT32 covers both freshly generated unsigned appids (up to
+			# 4294967295) and parsed-back appids, which decode as negative
+			# because the high bit is always set. Parsed values must keep
+			# Steam's native 0x02 type on the round trip.
+			if value >= -2147483648 and value <= 4294967295:
 				buffer.append(TYPE_INT32)
 				_append_string(buffer, key)
 				var int_bytes := PackedByteArray()
@@ -130,10 +154,9 @@ static func _write_object(buffer: PackedByteArray, obj: Dictionary) -> void:
 				int_bytes.encode_u64(0, value)
 				buffer.append_array(int_bytes)
 
-## Appends a null-terminated string to buffer
+## Appends a null-terminated UTF-8 string to buffer
 static func _append_string(buffer: PackedByteArray, s: String) -> void:
-	for i in range(s.length()):
-		buffer.append(s.unicode_at(i))
+	buffer.append_array(s.to_utf8_buffer())
 	buffer.append(0)
 
 ## Adds a game to the shortcuts dictionary
@@ -146,23 +169,15 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 	
 	var shortcuts_list = new_shortcuts["shortcuts"]
 	
-	# Find next available index
+	# Append after the highest existing index so deletions never cause
+	# gap-filling that reorders the user's shortcuts
 	var next_index := 0
-	while shortcuts_list.has(str(next_index)):
-		next_index += 1
-	
+	for key in shortcuts_list.keys():
+		next_index = maxi(next_index, int(key) + 1)
+
 	# Generate AppID from the exe path (without quotes) + app name
 	# Formula: crc32("exe" + app_name) | 0x80000000
-	# Extract just the exe path from the full command (first quoted string, without quotes)
-	var full_exe: String = game_data.get("exe", "")
-	var exe_path: String = ""
-	if full_exe.begins_with("\""):
-		var second_quote := full_exe.find("\"", 1)
-		if second_quote > 0:
-			exe_path = full_exe.substr(1, second_quote - 1)  # Extract without quotes
-	else:
-		exe_path = full_exe
-	
+	var exe_path := _extract_exe_path(game_data.get("exe", ""))
 	var app_name: String = game_data.get("name", "Unknown")
 	
 	var result := generate_app_id(exe_path, app_name)
@@ -197,6 +212,16 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 		"app_id": app_id_32  # Return 32-bit for grid artwork
 	}
 
+## Extracts just the exe path from a full command line (first quoted string,
+## without quotes). Launch arguments are stored in the Exe field but must not
+## feed the appid CRC.
+static func _extract_exe_path(full_command: String) -> String:
+	if full_command.begins_with("\""):
+		var second_quote := full_command.find("\"", 1)
+		if second_quote > 0:
+			return full_command.substr(1, second_quote - 1)
+	return full_command
+
 ## Generates unique AppIDs for a non-Steam game
 ## Returns both 64-bit (for shortcuts.vdf) and 32-bit (for grid files)
 ## Formula: 
@@ -229,13 +254,7 @@ static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
 ## Debug function to calculate AppID
 static func debug_calculate_app_ids(full_command: String, app_name: String) -> void:
 	# Extract exe path from full command (first quoted string, without quotes)
-	var exe_path: String = ""
-	if full_command.begins_with("\""):
-		var second_quote := full_command.find("\"", 1)
-		if second_quote > 0:
-			exe_path = full_command.substr(1, second_quote - 1)  # Without quotes
-	else:
-		exe_path = full_command
+	var exe_path := _extract_exe_path(full_command)
 	
 	# Calculate AppIDs
 	var _result := generate_app_id(exe_path, app_name)
@@ -264,20 +283,27 @@ static func _crc32(s: String) -> int:
 	
 	return crc ^ 0xFFFFFFFF
 
+## Lists Steam account IDs (userdata subfolders), excluding the shared
+## "0" and "ac" folders. Order matches the previous first-found behavior.
+static func _get_steam_user_ids(steam_path: String) -> Array[String]:
+	var ids: Array[String] = []
+	var userdata_path := steam_path.path_join("userdata")
+	if FSM.dir_exists(userdata_path):
+		for folder in FSM.list_dir(userdata_path):
+			if FSM.is_dir(userdata_path.path_join(folder)) and folder != "0" and folder != "ac":
+				ids.append(folder)
+	return ids
+
 ## Gets the path to shortcuts.vdf for a given Steam installation
 static func get_shortcuts_vdf_path(steam_path: String, user_id: String = "") -> String:
 	if user_id.is_empty():
-		# Try to find the first user ID
-		var userdata_path := steam_path.path_join("userdata")
-		if FSM.dir_exists(userdata_path):
-			for folder in FSM.list_dir(userdata_path):
-				if FSM.is_dir(userdata_path.path_join(folder)) and folder != "0" and folder != "ac":
-					user_id = folder
-					break
-	
+		var ids := _get_steam_user_ids(steam_path)
+		if not ids.is_empty():
+			user_id = ids[0]
+
 	if not user_id.is_empty():
 		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("shortcuts.vdf")
-	
+
 	return ""
 
 ## Validates that a path points to a valid Steam installation
@@ -302,30 +328,37 @@ static func is_valid_steam_path(path: String) -> bool:
 ## Gets the path to Steam's grid folder for artwork
 static func get_steam_grid_path(steam_path: String, user_id: String = "") -> String:
 	if user_id.is_empty():
-		var userdata_path := steam_path.path_join("userdata")
-		if FSM.dir_exists(userdata_path):
-			for folder in FSM.list_dir(userdata_path):
-				if FSM.is_dir(userdata_path.path_join(folder)) and folder != "0" and folder != "ac":
-					user_id = folder
-					break
-	
+		var ids := _get_steam_user_ids(steam_path)
+		if not ids.is_empty():
+			user_id = ids[0]
+
 	if not user_id.is_empty():
 		return steam_path.path_join("userdata").path_join(user_id).path_join("config").path_join("grid")
-	
+
 	return ""
 
+## Checks whether the Steam client is currently running (its in-memory
+## shortcuts.vdf copy will clobber ours on exit, so we warn about it)
+static func _is_steam_running() -> bool:
+	var output: Array = []
+	if OS.get_name() == "Windows":
+		OS.execute("tasklist", ["/FI", "IMAGENAME eq steam.exe", "/NH"], output, true)
+		return output.size() > 0 and String(output[0]).to_lower().contains("steam.exe")
+	else:
+		return OS.execute("pgrep", ["-x", "steam"], output, true) == 0
+
 ## Copies cover art to Steam's grid folder
-static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: String) -> bool:
+static func copy_artwork_to_steam(steam_path: String, app_id: int, cover_path: String, user_id: String = "") -> bool:
 	# Strip any URL query parameters
 	var query_index := cover_path.find("?")
 	if query_index != -1:
 		cover_path = cover_path.substr(0, query_index)
-	
+
 	if cover_path.is_empty() or not FSM.file_exists(cover_path):
 		push_warning("[SteamVDF] Cover path not found: " + cover_path)
 		return false
-	
-	var grid_path := get_steam_grid_path(steam_path)
+
+	var grid_path := get_steam_grid_path(steam_path, user_id)
 	if grid_path.is_empty():
 		push_warning("[SteamVDF] Could not find Steam grid folder")
 		return false
@@ -466,19 +499,6 @@ static func add_game(game: GameResource) -> void:
 		working_dir = exe_path.get_base_dir()
 	working_dir = SystemManager.filesystem.resolve_native_path(working_dir)
 	
-	var cover_art_path: String = ""
-	const CACHE_FOLDER = "user://cache/covers/"
-	
-	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
-		cover_art_path = SystemManager.filesystem.join_paths(CACHE_FOLDER, game.cover_url.md5_text() + ".jpg")
-		cover_art_path = SystemManager.filesystem.resolve_path(cover_art_path, {"format": SystemManager.filesystem.PathFormat.ABSOLUTE})
-	elif not game.cover_path.is_empty():
-		cover_art_path = game.cover_path
-		if cover_art_path.find("?") != -1:
-			cover_art_path = cover_art_path.substr(0, cover_art_path.find("?"))
-		if FSM.file_exists(cover_art_path):
-			cover_art_path = SystemManager.filesystem.resolve_path(cover_art_path, {"format": SystemManager.filesystem.PathFormat.ABSOLUTE})
-	
 	var game_data := {
 		"name": game.title,
 		"exe": full_command,
@@ -486,51 +506,118 @@ static func add_game(game: GameResource) -> void:
 		"icon": "",
 		"launch_options": "",
 		"last_play_time": 0,
-		"cover_path": cover_art_path
+		"cover_path": ""
 	}
-	
-	var shortcuts_path = get_shortcuts_vdf_path(steam_path)
-	if shortcuts_path.is_empty():
-		SystemManager.notifications.show_notification("Could not find Steam shortcuts file", SystemManager.notifications.Type.ERROR)
+
+	# Resolve cover art BEFORE touching shortcuts.vdf. The cache filename comes
+	# from the cover URL's real extension (not always .jpg), and if the LRU
+	# cache evicted the file we force a re-pull so artwork always lands.
+	if not game.cover_url.is_empty() and game.cover_url.begins_with("http"):
+		var cache_path: String = DataManager.get_cached_image_path(game.cover_url)
+		if FSM.file_exists(cache_path):
+			game_data.cover_path = FSM.resolve_path(cache_path, {"format": FSM.PathFormat.ABSOLUTE})
+			_write_game_to_steam(game, steam_path, game_data)
+		else:
+			var download_notification: int = SystemManager.notifications.show_notification(
+				"Downloading cover for " + game.title + "...",
+				SystemManager.notifications.Type.INFO,
+				null, 0.0, Callable(), Callable(), true, true)
+			DataManager.cover.download_cover(game.cover_url, func(ok: bool):
+				SystemManager.notifications.dismiss_notification(download_notification)
+				if ok and FSM.file_exists(cache_path):
+					game_data.cover_path = FSM.resolve_path(cache_path, {"format": FSM.PathFormat.ABSOLUTE})
+				else:
+					push_warning("[SteamVDF] Cover download failed for " + game.title + "; adding shortcut without artwork")
+				_write_game_to_steam(game, steam_path, game_data)
+			, true)
+	elif not game.cover_path.is_empty():
+		var cover_path: String = game.cover_path
+		var query_index := cover_path.find("?")
+		if query_index != -1:
+			cover_path = cover_path.substr(0, query_index)
+		if FSM.file_exists(cover_path):
+			game_data.cover_path = FSM.resolve_path(cover_path, {"format": FSM.PathFormat.ABSOLUTE})
+		_write_game_to_steam(game, steam_path, game_data)
+	else:
+		_write_game_to_steam(game, steam_path, game_data)
+
+## Writes the shortcut entry and artwork after cover resolution. Runs on the
+## main thread (directly, or from the cover download callback).
+static func _write_game_to_steam(game: GameResource, steam_path: String, game_data: Dictionary) -> void:
+	var user_ids := _get_steam_user_ids(steam_path)
+	if user_ids.is_empty():
+		SystemManager.notifications.show_notification("Could not find a Steam user folder", SystemManager.notifications.Type.ERROR)
 		if SystemManager.audio:
 			SystemManager.audio.play_sfx("error")
 		return
-	
+	var user_id := user_ids[0]
+	var shortcuts_path := get_shortcuts_vdf_path(steam_path, user_id)
+
 	var shortcuts := {}
 	var existing_count := 0
-	if FSM.file_exists(shortcuts_path):
+	if FSM.file_exists(shortcuts_path) and FSM.get_file_size(shortcuts_path) > 0:
 		shortcuts = read_vdf(shortcuts_path)
-		if shortcuts.has("shortcuts"):
-			existing_count = shortcuts["shortcuts"].size()
+		# A file we could not parse must never be rewritten as empty - that
+		# is how existing shortcuts get wiped
+		if not shortcuts.has("shortcuts"):
+			push_error("[SteamVDF] Parse produced no shortcuts key for: " + shortcuts_path)
+			SystemManager.notifications.show_notification("Could not read Steam shortcuts file - aborted to avoid wiping it", SystemManager.notifications.Type.ERROR)
+			if SystemManager.audio:
+				SystemManager.audio.play_sfx("error")
+			return
+		existing_count = shortcuts["shortcuts"].size()
 	print("[SteamVDF] Existing shortcuts found: ", existing_count)
-	
+
 	if not shortcuts.has("shortcuts"):
 		shortcuts["shortcuts"] = {}
-	
+
+	var cover_path: String = game_data.get("cover_path", "")
+
 	var shortcuts_list = shortcuts["shortcuts"]
 	for key in shortcuts_list.keys():
 		var entry = shortcuts_list[key]
 		if entry is Dictionary and entry.get("AppName", "") == game.title:
-			SystemManager.notifications.show_notification(game.title + " is already in Steam", SystemManager.notifications.Type.WARNING)
+			# Already present - but the shortcut existing says nothing about
+			# the artwork, so refresh it if we have a cover
+			var art_note := ""
+			if not cover_path.is_empty():
+				var existing_app_id: int = generate_app_id(_extract_exe_path(game_data.exe), game.title).app_id_32
+				if copy_artwork_to_steam(steam_path, existing_app_id, cover_path, user_id):
+					art_note = " (artwork refreshed)"
+				else:
+					art_note = " (artwork failed)"
+			SystemManager.notifications.show_notification(game.title + " is already in Steam" + art_note, SystemManager.notifications.Type.WARNING)
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx("error")
 			return
-	
-	debug_calculate_app_ids(game_data.exe, game.title)
-	
+
 	var result = add_shortcut(shortcuts, game_data)
 	shortcuts = result.shortcuts
 	var app_id = result.app_id
-	
-	if write_vdf(shortcuts_path, shortcuts):
-		var cover_path = game_data.get("cover_path", "")
-		if not cover_path.is_empty():
-			copy_artwork_to_steam(steam_path, app_id, cover_path)
-		
-		SystemManager.notifications.show_notification(game.title + " added to Steam! Restart Steam to see it.", SystemManager.notifications.Type.SUCCESS)
+
+	if not write_vdf(shortcuts_path, shortcuts):
+		SystemManager.notifications.show_notification("Failed to add " + game.title + " to Steam", SystemManager.notifications.Type.ERROR)
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("error")
+		return
+
+	var artwork_ok := true
+	if not cover_path.is_empty():
+		artwork_ok = copy_artwork_to_steam(steam_path, app_id, cover_path, user_id)
+
+	var notes: Array[String] = []
+	if user_ids.size() > 1:
+		notes.append("used Steam account " + user_id + " (multiple accounts found)")
+	if _is_steam_running():
+		notes.append("Steam is running - restart it for changes to appear")
+	else:
+		notes.append("restart Steam to see it")
+
+	if artwork_ok:
+		SystemManager.notifications.show_notification(game.title + " added to Steam! (" + "; ".join(notes) + ")", SystemManager.notifications.Type.SUCCESS)
 		if SystemManager.audio:
 			SystemManager.audio.play_sfx("success")
 	else:
-		SystemManager.notifications.show_notification("Failed to add " + game.title + " to Steam", SystemManager.notifications.Type.ERROR)
+		SystemManager.notifications.show_notification(game.title + " added to Steam, but artwork failed - re-run Add to Steam once the cover is available", SystemManager.notifications.Type.ERROR)
 		if SystemManager.audio:
 			SystemManager.audio.play_sfx("error")

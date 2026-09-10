@@ -181,6 +181,7 @@ class ChunkedDownloadInfo:
 	var use_chunking: bool = false
 	var in_place_assembly: bool = false  # Write chunks directly to a sparse partial file
 	var final_file_mutex: Mutex = null  # Serializes writes to the partial file (if shared handle)
+	var progress_mutex: Mutex = Mutex.new()  # Guards temp_bytes_downloaded (written by worker threads)
 	var active_downloads: int = 0
 	var download_callback: Callable
 	var progress_timer: Timer = null  # Timer for polling chunk progress
@@ -1364,6 +1365,9 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	# Start a watchdog that detects stuck chunk workers and falls back to single-stream.
 	_start_chunked_watchdog_timer(item.id, headers)
 
+	# Workers record byte counts under a mutex; this timer emits throttled progress.
+	_start_chunked_progress_timer(item.id)
+
 	# Use SystemManager.memory's download thread pool
 	chunked_info.batch_id = await SystemManager.memory.queue_parallel_downloads(
 		chunk_items,
@@ -1379,7 +1383,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 			_on_all_chunks_complete(item.id, headers, _results)
 	)
 
-	# Progress updates now come from worker threads only (no polling timer to avoid race conditions)
+	# Progress is emitted by the progress timer polling worker-recorded byte counts
 
 ## Downloads a single chunk on a worker thread using HTTPClient
 ## Called by the thread pool - runs on a background thread
@@ -1766,11 +1770,11 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			bytes_downloaded += chunk.size()
 			last_byte_time = current_time
 
-			# Emit progress every 10MB
-			if bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
-				call_deferred("_update_chunk_progress", chunk_data.item_id, chunk_index, bytes_downloaded)
+			# Record bytes for the main-thread progress timer (cheap mutex write)
+			_record_chunk_bytes_downloaded(chunk_data.item_id, chunk_index, bytes_downloaded)
+			if DEBUG_LOG and bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
 				last_progress_emit = bytes_downloaded
-				if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
+				print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
 		else:
 			# No data available, wait a bit before checking again
 			OS.delay_usec(1000)  # 1ms micro-sleep to prevent busy-waiting
@@ -1891,7 +1895,9 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 		chunk.actual_hash = actual_hash
 		chunk.expected_hash = expected_hash
 		# Reset progress tracking for retry
+		chunked_info.progress_mutex.lock()
 		chunk.temp_bytes_downloaded = 0
+		chunked_info.progress_mutex.unlock()
 
 		# Delete corrupt/mismatched partial files so the retry starts clean
 		if should_delete_partial and FSM.file_exists(chunk.temp_path):
@@ -1905,12 +1911,14 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 	_save_download_state(chunked_info)
 
 	# Update overall progress based on actual bytes
+	chunked_info.progress_mutex.lock()
 	var total_downloaded_bytes = 0
 	for c in chunked_info.chunks:
 		if c.completed:
 			total_downloaded_bytes += (c.end_byte - c.start_byte + 1)
 		else:
 			total_downloaded_bytes += c.temp_bytes_downloaded
+	chunked_info.progress_mutex.unlock()
 
 	var total_size = float(item.expected_file_size)
 	if total_size > 0:
@@ -2035,6 +2043,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 
 		# Apply exponential backoff to each failed chunk and compute the longest delay
 		var max_delay = 0.0
+		chunked_info.progress_mutex.lock()
 		for chunk in failed_chunks:
 			chunk.retry_count += 1
 			chunk.failed = false
@@ -2043,6 +2052,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			var delay = _chill(chunk)
 			if delay > max_delay:
 				max_delay = delay
+		chunked_info.progress_mutex.unlock()
 
 		_save_download_state(chunked_info, true)
 
@@ -2166,33 +2176,59 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 	)
 
 ## Called from worker thread to update chunk progress in real-time
-func _update_chunk_progress(item_id: String, chunk_index: int, bytes_downloaded: int):
+## Records per-chunk byte counts from download worker threads.
+## Only touches the counter under the progress mutex; emission happens on the
+## main thread via the progress timer, so no per-update deferred calls are made.
+func _record_chunk_bytes_downloaded(item_id: String, chunk_index: int, bytes_downloaded: int):
 	if not _chunked_downloads.has(item_id):
+		return
+	var chunked_info = _chunked_downloads[item_id]
+	if chunk_index < 0 or chunk_index >= chunked_info.chunks.size():
+		return
+	chunked_info.progress_mutex.lock()
+	chunked_info.chunks[chunk_index].temp_bytes_downloaded = bytes_downloaded
+	chunked_info.progress_mutex.unlock()
+
+func _start_chunked_progress_timer(item_id: String):
+	"""Start a timer that polls worker-recorded byte counts and emits progress."""
+	if not _chunked_downloads.has(item_id):
+		return
+	var chunked_info = _chunked_downloads[item_id]
+	_stop_chunked_progress_timer(item_id)
+	var timer := Timer.new()
+	timer.wait_time = 0.25
+	timer.one_shot = false
+	timer.timeout.connect(_poll_chunk_progress.bind(item_id))
+	add_child(timer)
+	timer.start()
+	chunked_info.progress_timer = timer
+
+func _poll_chunk_progress(item_id: String):
+	if not _chunked_downloads.has(item_id):
+		_stop_chunked_progress_timer(item_id)
 		return
 
 	var chunked_info = _chunked_downloads[item_id]
-	if chunk_index < chunked_info.chunks.size():
-		chunked_info.chunks[chunk_index].temp_bytes_downloaded = bytes_downloaded
 
-		# Calculate and emit progress immediately for responsive UI
-		var total_downloaded_bytes = 0
+	chunked_info.progress_mutex.lock()
+	var total_downloaded_bytes = 0
+	for chunk in chunked_info.chunks:
+		if chunk.completed:
+			total_downloaded_bytes += (chunk.end_byte - chunk.start_byte + 1)
+		else:
+			total_downloaded_bytes += chunk.temp_bytes_downloaded
+	chunked_info.progress_mutex.unlock()
 
-		for chunk in chunked_info.chunks:
-			if chunk.completed:
-				total_downloaded_bytes += (chunk.end_byte - chunk.start_byte + 1)
-			else:
-				total_downloaded_bytes += chunk.temp_bytes_downloaded
+	var total_size = float(chunked_info.item.expected_file_size)
+	if total_size > 0:
+		var progress = float(total_downloaded_bytes) / total_size
+		progress = min(progress, 0.99)
 
-		var total_size = float(chunked_info.item.expected_file_size)
-		if total_size > 0:
-			var progress = float(total_downloaded_bytes) / total_size
-			progress = min(progress, 0.99)
-
-			# Emit if progress changed significantly
-			if abs(progress - chunked_info.last_progress_update) >= _get_progress_threshold():
-				chunked_info.last_progress_update = progress
-				chunked_info.item.progress = progress
-				download_progress.emit(item_id, progress)
+		# Emit if progress changed significantly
+		if abs(progress - chunked_info.last_progress_update) >= _get_progress_threshold():
+			chunked_info.last_progress_update = progress
+			chunked_info.item.progress = progress
+			download_progress.emit(item_id, progress)
 
 func _get_progress_threshold() -> float:
 	"""Return the minimum progress delta required before emitting a signal.
@@ -2264,6 +2300,7 @@ func _on_chunked_watchdog(item_id: String):
 	var total_bytes: int = 0
 	var in_progress_count: int = 0
 	var completed_count: int = chunked_info.chunks_completed
+	chunked_info.progress_mutex.lock()
 	for chunk in chunked_info.chunks:
 		if chunk.completed:
 			total_bytes += chunk.end_byte - chunk.start_byte + 1
@@ -2271,6 +2308,7 @@ func _on_chunked_watchdog(item_id: String):
 			total_bytes += chunk.temp_bytes_downloaded
 			if chunk.in_progress:
 				in_progress_count += 1
+	chunked_info.progress_mutex.unlock()
 
 	print("[SystemManager.download] [Watchdog] item=%s chunks=%d/%d in_progress=%d total_bytes=%d" % [
 		item.name, completed_count, chunked_info.total_chunks, in_progress_count, total_bytes])

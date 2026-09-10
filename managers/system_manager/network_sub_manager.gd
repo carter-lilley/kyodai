@@ -573,6 +573,12 @@ func fetch_collections(callback: Callable, use_cache: bool = true):
 			callback.call({}, error)
 	, true, use_cache)
 
+func clear_response_cache() -> void:
+	"""Drop all cached API responses (e.g. during launch hibernation).
+	Hash-based revalidation repopulates the cache on the next fetch."""
+	_response_cache.clear()
+	_response_cache_order.clear()
+
 func get_and_reset_cache_stats() -> Dictionary:
 	"""Get cache statistics and reset counters."""
 	var stats = {

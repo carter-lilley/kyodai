@@ -381,6 +381,10 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 func is_settings_dialog_open() -> bool:
 	return overlay.is_settings_dialog_open()
 
+func set_status_bar_polling(enabled: bool) -> void:
+	if _status_bar and is_instance_valid(_status_bar):
+		_status_bar.set_polling_enabled(enabled)
+
 func show_settings_dialog_with_category(category_id: String) -> void:
 	overlay.show_settings_dialog_with_category(category_id)
 

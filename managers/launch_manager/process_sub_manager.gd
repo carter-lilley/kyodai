@@ -480,9 +480,18 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
 	var emulator_name = emulator.get("name", emulator_id)
 
-	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog
+	# Don't stack a second reminder if one is already open for this emulator
+	if launch_manager._open_install_reminders.has(emulator_id):
+		print("[ProcessManager] Install reminder already open for: " + emulator_name)
+		return
+
+	launch_manager._open_install_reminders[emulator_id] = true
+
+	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog.
+	# "Got it" routes through LaunchManager so a mid-game-launch pending launch can
+	# resume (or abort) once the user acknowledges the reminder.
 	UIManager.show_alert("Installation Reminder", "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games.",
-		Callable(),
+		launch_manager.on_install_reminder_dismissed.bind(emulator_id),
 		Callable(),
 		{"ok_text": "Got it", "overlay_type": "alert", "overlay_layer": OverlayLayers.MENU, "dismissible": false}
 	)

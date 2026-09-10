@@ -28,6 +28,13 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "xemu_toml",
+	"config_candidates": {
+	  "windows": ["{emulator_dir}/xemu.toml"],
+	  "linux": ["{emulator_dir}/xemu.toml"]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "windows": {

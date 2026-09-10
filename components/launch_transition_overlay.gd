@@ -78,6 +78,13 @@ func _on_game_launch_initiated(launched_game: GameResource, _focus_index: int):
 	# override the source with LaunchTransitionOverlay.set_source().
 	_start_transition()
 
+## Replays the transition for a game whose launch was interrupted before the
+## process started (e.g. resumed from an Android emulator install, where the
+## RESUMED notification force-hid the overlay).
+func restart(game: GameResource) -> void:
+	_game = game
+	_start_transition()
+
 signal phase1_completed
 
 func _start_transition():

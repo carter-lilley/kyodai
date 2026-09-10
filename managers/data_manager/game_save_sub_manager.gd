@@ -26,6 +26,9 @@ signal _conflict_dialog_closed
 # "cancel" = skip post-launch sync entirely.
 var _sync_choice_overrides: Dictionary = {}  # "romm_id:emulator_id" -> "local"|"cancel"
 
+# Startup dirty-save sweep runs once per session, after the DB is ready
+var _dirty_sweep_ran: bool = false
+
 func _save_sync_key(game: GameResource, emulator_id: String) -> String:
 	return str(game.romm_id) + ":" + emulator_id
 
@@ -55,6 +58,9 @@ func _run_io_task(path: String, work: Callable, callback: Callable) -> void:
 func _ready() -> void:
 	_init_strategies()
 	_cleanup_all_temp_dirs()
+	# DB init is queued from DataManager._ready (runs after this), so
+	# database_ready always fires after this connect
+	DataManager.database_ready.connect(_schedule_startup_dirty_sweep, CONNECT_ONE_SHOT)
 
 ## Cleans up all temp directories under user://temp_saves/
 func _cleanup_all_temp_dirs() -> void:
@@ -2161,6 +2167,14 @@ func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int
 	print("[GameSaveSubManager] Conflict dialog resolved with choice: " + result["choice"])
 	return result["choice"]
 
+func _short_hash(h) -> String:
+	if h == null or str(h) == "":
+		return "none"
+	return str(h).substr(0, 8)
+
+func _hash_detail(local_hash, remote_hash, last_sync_hash) -> String:
+	return " [local=" + _short_hash(local_hash) + " remote=" + _short_hash(remote_hash) + " last_sync=" + _short_hash(last_sync_hash) + "]"
+
 func _format_conflict_timestamp(unix_time: int) -> String:
 	if unix_time <= 0:
 		return "Unknown"
@@ -2302,6 +2316,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, device_id)
 		local["_hash_info"] = verdict.hash_info
 		var action: String = verdict.decision.action
+		print("[GameSaveSubManager] sync: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_rec.get("local_hash", "") if db_rec else ""))
 
 		# Slot-wide parity: identical content exists under a different server
 		# file_name - adopt the baseline instead of POSTing a duplicate.
@@ -2749,6 +2764,16 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 
 			# Check if any local save conflicts with remote (gavel decision per record)
 			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
+
+			# A successful fetch that comes back empty while the DB knows save
+			# records is a transient server/network lie - uploading here would
+			# POST duplicates of records the server already has.
+			if remote_saves.is_empty() and not db_records.is_empty():
+				push_warning("[GameSaveSubManager] auto_upload: fetch returned no remote saves but DB has " + str(db_records.size()) + " sync record(s); treating as transient failure, skipping upload")
+				SystemManager.notifications.show_notification("Save sync skipped: could not verify server state", SystemManager.notifications.Type.ERROR)
+				_end_save_sync(sync_key)
+				return
+
 			var db_by_name: Dictionary = {}
 			for rec in db_records:
 				db_by_name[rec.file_name] = rec
@@ -2768,6 +2793,7 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 				var remote = remote_by_name.get(local.file_name)
 				var verdict = _gavel_decide(emulator_id, game, local, remote, db_by_name.get(local.file_name), resolved_device_id)
 				local["_hash_info"] = verdict.hash_info
+				print("[GameSaveSubManager] auto_upload: gavel verdict for '" + local.file_name + "': " + verdict.decision.action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_by_name.get(local.file_name, {}).get("local_hash", "")))
 				if verdict.decision.action == "upload":
 					# Slot-wide parity: don't POST a duplicate of identical
 					# content living under a different server file_name
@@ -2847,6 +2873,164 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, upload_ops: A
 	for op in upload_ops:
 		_execute_save_upload(game, emulator_id, {"local": op.local, "remote": null}, device_id, current_timestamp, op.get("force", false), on_one_done)
 
+## Startup recovery sweep: checks the most recently launched game for a local
+## save that no longer matches its last sync boundary (e.g. the OS killed
+## Kyodai before the post-play upload ran). Only the most recent game is
+## checked: the OOM-kill scenario strands the killed session's game, and older
+## drift is caught by that game's next pre-launch auto-download. Discovery and
+## hashing run as one worker unit when the path is safe to thread; prompts
+## before any upload.
+func _schedule_startup_dirty_sweep() -> void:
+	if _dirty_sweep_ran:
+		return
+	_dirty_sweep_ran = true
+	# Let startup settle before touching disk
+	await get_tree().create_timer(5.0).timeout
+	if not DataManager.get_setting("save_sync_auto").value:
+		return
+	if not SystemManager.network.is_romm_connected():
+		return
+	var dirty: Dictionary = await _check_most_recent_save_dirty()
+	if dirty.is_empty():
+		print("[GameSaveSubManager] Startup sweep: most recent save matches its last sync boundary")
+		return
+	print("[GameSaveSubManager] Startup sweep: unsynced local save for " + dirty.game.get_display_name())
+	var choice = await _show_dirty_sweep_dialog([dirty])
+	if choice != "upload":
+		return
+	auto_upload_saves_for_game(dirty.game, dirty.emulator_id)
+
+## Returns {game, emulator_id} when the most recently launched game has a
+## local save whose hash differs from the recorded sync boundary, else {}.
+func _check_most_recent_save_dirty() -> Dictionary:
+	var game: GameResource = null
+	for g in DataManager.get_all_games():
+		if g.last_played == "" or (not g.has_local_copy and g.downloaded_sibling_ids.is_empty()):
+			continue
+		if game == null or g.last_played > game.last_played:
+			game = g
+	if game == null:
+		return {}
+
+	var emulator_id: String = LaunchManager.resolve_emulator_for_game(game)
+	if emulator_id == "":
+		return {}
+	var core_id = _get_core_id_for_save_resolution(emulator_id, game)
+	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, core_id)
+	var extensions = get_save_extensions(emulator_id, game.platform_slug, core_id)
+	if save_dir == "" or extensions.is_empty():
+		return {}
+	var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
+	if db_records.is_empty():
+		return {}  # never synced: no boundary to recover against
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, core_id)
+	if (is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc")) and game.get_active_title_id() == "":
+		return {}
+
+	var db_by_name: Dictionary = {}
+	for rec in db_records:
+		db_by_name[rec.file_name] = rec
+
+	# One work unit: discovery + hashing stay together so threaded paths keep
+	# the whole check off the main thread
+	var work := func() -> Array:
+		var found: Array[Dictionary]
+		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
+			found = _discover_emulator_saves(emulator_id, save_dir, game)
+		else:
+			found = _discover_game_saves(save_dir, game, extensions)
+		var rows: Array = []
+		for save in found:
+			var rec = db_by_name.get(save.file_name)
+			if rec == null or rec.get("local_hash", "") == "":
+				continue  # no baseline hash to compare against
+			rows.append({"save": save, "hash_info": _compute_local_save_hash(emulator_id, game, save)})
+		return rows
+	var state := {"done": false, "result": []}
+	_run_io_task(save_dir, work, func(r: Array):
+		state["result"] = r
+		state["done"] = true
+	)
+	while not state["done"]:
+		await get_tree().process_frame
+
+	for row in state["result"]:
+		var rec = db_by_name.get(row.save.file_name)
+		if row.hash_info.hash != "" and row.hash_info.hash != rec.local_hash:
+			print("[GameSaveSubManager] Startup sweep: dirty save '" + row.save.file_name + "' for " + game.get_display_name() + _hash_detail(row.hash_info.hash, rec.get("server_hash", ""), rec.local_hash))
+			return {"game": game, "emulator_id": emulator_id}
+	return {}
+
+## Prompts about saves that drifted from their last sync boundary (sweep).
+## Returns "upload" or "skip" (also "skip" on dismissal).
+func _show_dirty_sweep_dialog(dirty: Array) -> String:
+	# Share the conflict-dialog serialization so prompts never stack
+	while _conflict_dialog_open:
+		await _conflict_dialog_closed
+	_conflict_dialog_open = true
+
+	var result := {"choice": "skip", "upload_btn": null, "skip_btn": null}
+	var names := []
+	for entry in dirty:
+		names.append(entry.game.get_display_name())
+
+	var dialog = UIManager.show_custom_dialog(func(sweep_dialog: M3Dialog):
+		sweep_dialog.title_text = "Unsynced Save Data"
+		sweep_dialog.body_text = "Local save data changed but was never synced to the server (Kyodai may have been closed before sync finished):\n\n" + "\n".join(names) + "\n\nUpload now?"
+		sweep_dialog.dismissible = true
+		sweep_dialog.disable_default_action = true
+
+		var content = VBoxContainer.new()
+		content.alignment = BoxContainer.ALIGNMENT_BEGIN
+
+		var spacer = Control.new()
+		spacer.custom_minimum_size = Vector2(0, M3Units.dp(16))
+		content.add_child(spacer)
+
+		result["upload_btn"] = M3Button.new()
+		var dlg_upload_btn: M3Button = result["upload_btn"]
+		dlg_upload_btn.custom_minimum_size = Vector2(0, M3Units.dp(64))
+		dlg_upload_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		dlg_upload_btn.button_size = M3Button.Size.LARGE
+		dlg_upload_btn.text = "Upload to Server"
+		dlg_upload_btn.pressed.connect(func():
+			result["choice"] = "upload"
+			sweep_dialog.dismiss()
+		)
+		content.add_child(dlg_upload_btn)
+
+		result["skip_btn"] = M3Button.new()
+		var dlg_skip_btn: M3Button = result["skip_btn"]
+		dlg_skip_btn.custom_minimum_size = Vector2(0, M3Units.dp(56))
+		dlg_skip_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		dlg_skip_btn.button_size = M3Button.Size.MEDIUM
+		dlg_skip_btn.button_variant = M3Button.Variant.TEXT
+		dlg_skip_btn.text = "Skip"
+		dlg_skip_btn.pressed.connect(func():
+			result["choice"] = "skip"
+			sweep_dialog.dismiss()
+		)
+		content.add_child(dlg_skip_btn)
+
+		sweep_dialog.content_slot.add_child(content)
+	, Callable())
+
+	await get_tree().process_frame
+	var upload_btn = result["upload_btn"]
+	var skip_btn = result["skip_btn"]
+	if is_instance_valid(upload_btn) and is_instance_valid(skip_btn):
+		upload_btn.focus_neighbor_bottom = skip_btn.get_path()
+		skip_btn.focus_neighbor_top = upload_btn.get_path()
+		upload_btn.grab_focus()
+
+	await dialog.dismissed
+
+	_conflict_dialog_open = false
+	_conflict_dialog_closed.emit()
+
+	print("[GameSaveSubManager] Startup sweep dialog resolved with choice: " + result["choice"])
+	return result["choice"]
+
 ## Auto-download saves before launch (pre-launch hook)
 ## If on_complete callback is provided, it will be called when sync finishes
 func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_complete: Callable = Callable()) -> void:
@@ -2915,6 +3099,15 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			var db_by_name: Dictionary = {}
 			for rec in db_records:
 				db_by_name[rec.file_name] = rec
+
+			# A successful fetch that comes back empty while the DB knows save
+			# records is a transient server/network lie - skip this sync rather
+			# than decide against phantom state.
+			if remote_saves.is_empty() and not db_records.is_empty():
+				push_warning("[GameSaveSubManager] auto_download: fetch returned no remote saves but DB has " + str(db_records.size()) + " sync record(s); treating as transient failure, skipping sync")
+				if on_complete.is_valid():
+					on_complete.call()
+				return
 			
 			var local_saves: Array[Dictionary]
 			if is_folder_save:
@@ -2978,7 +3171,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 
 				var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, resolved_device_id)
 				var action: String = verdict.decision.action
-				print("[GameSaveSubManager] auto_download: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")")
+				print("[GameSaveSubManager] auto_download: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", ""), db_rec.get("local_hash", "") if db_rec else ""))
 
 				match action:
 					"download":

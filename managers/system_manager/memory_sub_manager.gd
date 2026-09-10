@@ -685,6 +685,43 @@ static func cancel_image_task(task_id: int) -> bool:
 	_instance._image_mutex.unlock()
 	return false
 
+## Drain every queued (not yet executing) image task from both priority queues.
+## In-flight tasks and the worker threads themselves are untouched, and game
+## downloads run on separate queues, so they are unaffected. Drained waiters
+## receive a null callback (same contract as cancellation/eviction) so callers
+## run their fallback logic instead of waiting forever; pass fire_callbacks =
+## false when the tree is being torn down. Returns the drain count.
+static func clear_pending_image_tasks(fire_callbacks: bool = true) -> int:
+	if _instance == null:
+		return 0
+
+	_instance._image_mutex.lock()
+
+	var drained_callbacks: Array = []
+	var drained_count := 0
+	for queue in [_instance._image_high_priority_queue, _instance._image_low_priority_queue]:
+		for task in queue:
+			task.cancelled = true
+			_instance._image_tasks.erase(task.id)
+			if task.callback.is_valid():
+				drained_callbacks.append(task.callback)
+			# Drain coalesced waiters on this dedup_key so they aren't dropped silently
+			if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+				for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
+					if waiting.callback.is_valid():
+						drained_callbacks.append(waiting.callback)
+				_instance._inflight_image_callbacks.erase(task.dedup_key)
+				_instance._dedup_task_ids.erase(task.dedup_key)
+			drained_count += 1
+		queue.clear()
+
+	_instance._image_mutex.unlock()
+
+	if fire_callbacks:
+		for cb in drained_callbacks:
+			_instance.call_deferred("_execute_callback", cb, null)
+	return drained_count
+
 static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	if _instance == null or task_id <= 0:
 		return false

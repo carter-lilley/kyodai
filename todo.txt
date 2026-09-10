@@ -6,17 +6,20 @@ rework hero to also accept effect stacks
 ship w music
 update notification all in one 
 tst emulator app update flow on android
-download copying step (for sd cards on android)
+x download copying step (for sd cards on android)
 
+FIX STATRTUP STUTTERS
+submenus still suck
+low-power save-sync subprocess to run behind games 'added to steam'?
+details text still too small
+text on no-covers in no-text mode
+PCEE2?
 user-added emu jsons, resolvers(?) and shader layers. 
-
 filter by letter/recent
-pause when window not active
-- bug: when returning from app install to 'remmber to launch app first' warning on android in a game launch context
-the overlay is lost and an 'already launching' error remains 
 
 x removing nav shortcut doesnt actually remove it? <- cant reproduce
 - universal extraction normalizer (walk down for expected files...saves & games)
+
 ## configs
 	- user/identity profile resolver for emulator installs and saves
 		- 3ds, xenia, eden, vita, (cemu & ps2?)
@@ -38,9 +41,9 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 ## romm
  - dev studio?
  - xtra romm metadata - HL2B, guides, logos..
+ - screenshots...& user uploaded?
  - pin a platform
  - user profile? name & icon?
- - submenus still suck
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)

@@ -679,11 +679,21 @@ func _restart_idle() -> void:
 func _stop_idle() -> void:
 	if _idle_tween and _idle_tween.is_valid():
 		_idle_tween.kill()
-	_idle_tween = null
+		_idle_tween = null
 	if _ring_item.is_valid():
 		RenderingServer.canvas_item_set_modulate(_ring_item, Color.WHITE)
 	if _ring_style:
 		_apply_style()
+
+## Public wrappers so main.gd can suspend the idle ring animation when the
+## window loses focus (rendering is suspended, so the loop would run invisibly)
+## and resume it on refocus. _restart_idle() already no-ops when the ring is
+## hidden.
+func suspend_idle_animation() -> void:
+	_stop_idle()
+
+func resume_idle_animation() -> void:
+	_restart_idle()
 
 func _set_ring_alpha(alpha: float) -> void:
 	if _ring_item.is_valid():

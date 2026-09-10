@@ -437,7 +437,9 @@
 		"firmware": {
 			"expected_files": [
 				"Complex_4627.bin",
-				"mcpx_1.0.bin"
+				"mcpx_1.0.bin",
+				"flash.bin",
+				"mcpx.bin"
 			]
 		}
 	},

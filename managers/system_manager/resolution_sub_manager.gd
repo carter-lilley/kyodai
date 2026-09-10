@@ -31,6 +31,7 @@ const PpssppIni = preload("res://utils/config_resolvers/ppsspp_ini.gd")
 const EdenIni = preload("res://utils/config_resolvers/eden_ini.gd")
 const XeniaToml = preload("res://utils/config_resolvers/xenia_toml.gd")
 const Vita3kYml = preload("res://utils/config_resolvers/vita3k_yml.gd")
+const XemuToml = preload("res://utils/config_resolvers/xemu_toml.gd")
 
 ## Resolution cache: cache key -> {mtime, result}. Entries are only stored
 ## when a config file was actually read; a missing config is re-probed.
@@ -233,6 +234,8 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 			result = XeniaToml.resolve(kind, context)
 		"vita3k_yml":
 			result = Vita3kYml.resolve(kind, context)
+		"xemu_toml":
+			result = XemuToml.resolve(kind, context)
 		_:
 			result.caveat = "unknown-strategy"
 

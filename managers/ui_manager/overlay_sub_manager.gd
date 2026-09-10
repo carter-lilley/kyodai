@@ -602,6 +602,24 @@ func _ensure_game_details_sheet() -> void:
 	# Don't add to the tree here; M3Sheet.show_overlay() adds the sheet on its
 	# first show, so we avoid "busy setting up children" errors during initialization.
 
+func release_settings_dialog() -> void:
+	"""Free the pre-created settings dialog so its memory can be reclaimed
+	(e.g. during launch hibernation). show_settings_dialog() lazily re-creates
+	it on next open, and the persistent-overlay registry holds only a weakref.
+	Skipped while visible so an open dialog survives the trim."""
+	if _settings_dialog and is_instance_valid(_settings_dialog):
+		if _settings_dialog.visible:
+			return
+		_settings_dialog.queue_free()
+	_settings_dialog = null
+
+func clear_game_details_sheet_content() -> void:
+	"""Drop artwork/content loaded into the details sheet without freeing the
+	sheet itself; show_for_game() repopulates on next open. Skipped while the
+	sheet is visible (e.g. a game launched from it) so resume shows it intact."""
+	if _game_details_sheet and is_instance_valid(_game_details_sheet) and not _game_details_sheet.visible:
+		_game_details_sheet.clear_content()
+
 func _release_overlays() -> void:
 	"""Release cached overlay references when the manager exits the tree."""
 	if _game_details_sheet and is_instance_valid(_game_details_sheet):

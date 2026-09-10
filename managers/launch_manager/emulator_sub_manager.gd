@@ -40,14 +40,19 @@ func _ready():
 func clear_validation_cache() -> void:
 	_validation_cache.clear()
 
-## Clears pending launches whose emulators are now installed.
-## Call on app resume after potential APK installations.
+## Reconciles pending launches after potential APK installations.
+## Call on app resume. Never drops a pending launch without either resuming it
+## or releasing its in-flight guard via LaunchManager._abort_pending_launches.
 func clear_stale_pending_launches() -> void:
-	var to_remove = []
-	for emulator_id in launch_manager._pending_launches:
+	for emulator_id in launch_manager._pending_launches.keys():
 		var emulator = launch_manager.registry.get_emulator(emulator_id)
 		if emulator.is_empty():
-			to_remove.append(emulator_id)
+			launch_manager._abort_pending_launches(emulator_id, "Emulator unavailable")
+			continue
+		# If the post-install permissions reminder is still open, its "Got it"
+		# dismissal (LaunchManager.on_install_reminder_dismissed) owns the
+		# continuation - leave the pending launch queued.
+		if launch_manager._open_install_reminders.has(emulator_id):
 			continue
 		var install_steps = emulator.get("install", [])
 		var all_valid = true
@@ -56,10 +61,11 @@ func clear_stale_pending_launches() -> void:
 				all_valid = false
 				break
 		if all_valid:
-			print("[EmulatorManager] Clearing stale pending launch for emulator: " + emulator_id)
-			to_remove.append(emulator_id)
-	for emulator_id in to_remove:
-		launch_manager._pending_launches.erase(emulator_id)
+			# Installed while backgrounded and no reminder is waiting on the
+			# user (e.g. they already dismissed it) - resume the launch now.
+			print("[EmulatorManager] Resuming pending launch for emulator installed while backgrounded: " + emulator_id)
+			launch_manager._continue_pending_launches(emulator_id)
+		# Not fully installed: leave queued - the user is still mid-install.
 
 ## Gets the current installation progress text for UI display
 func get_emulator_install_progress(emulator_id: String) -> String:

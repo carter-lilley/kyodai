@@ -4,7 +4,7 @@
 ; Minimizes the main game window and saves its hwnd for maximize to use.
 
 #NoTrayIcon
-#SingleInstance Force
+#SingleInstance Off
 DetectHiddenWindows(true)
 SetTitleMatchMode(2)
 

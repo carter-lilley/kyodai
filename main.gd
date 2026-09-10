@@ -2,6 +2,7 @@ extends Control
 
 const DEBUG_LOG: bool = false
 const ShaderPrewarmer := preload("res://utils/shader_prewarmer.gd")
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 # UI Nodes - initialized in _ready()
 var tab_container: TabContainer
@@ -33,6 +34,13 @@ var _last_focused_index: int = -1
 # Debounced zoom save to avoid LIST/CAROUSEL flash during interaction
 var _zoom_save_timer: Timer = null
 const ZOOM_SAVE_DELAY_MS: int = 1500
+
+# True while hibernated for a game launch (memory trim already applied)
+var _trimmed_for_launch: bool = false
+
+# Rendering suspend while the desktop window is unfocused
+var _rendering_suspended: bool = false
+var _prev_viewport_update_mode: int = -1
 
 # M3 Theme resource (applied to root for fallback native control styling)
 var _m3_theme: Theme = null
@@ -140,6 +148,9 @@ func _ready():
 		# Connect to background state signals for desktop
 		LaunchManager.background_state_entered.connect(_on_background_state_entered)
 		LaunchManager.background_state_exited.connect(_on_background_state_exited)
+		# Hibernate (release reclaimable memory) before the process/intent starts
+		LaunchManager.pre_launch_hook = _pre_launch_trim
+		LaunchManager.launch_failed_hook = _restore_after_launch
 
 	# Set initial view controls
 	phase_start_us = Time.get_ticks_usec()
@@ -1561,8 +1572,50 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 	if UIManager and UIManager.navigation:
 		UIManager.navigation.call_deferred("refresh_for_screen_swap")
 
+func _suspend_rendering_if_hidden() -> void:
+	"""Only suspend when the window is actually minimized/hidden — plain
+	alt-tab keeps rendering so the app stays live when visible again."""
+	var window := get_window()
+	if window and (window.mode == Window.MODE_MINIMIZED or not window.visible):
+		_suspend_rendering()
+
+func _suspend_rendering() -> void:
+	"""Stop issuing frames while the desktop window is minimized/hidden. The
+	SceneTree keeps processing (downloads, poll timers, sync all keep running);
+	only the renderer and the perpetual focus-ring idle animation are halted."""
+	if _rendering_suspended:
+		return
+	if SystemManager and SystemManager.platform and SystemManager.platform.is_android():
+		return
+	_rendering_suspended = true
+	_prev_viewport_update_mode = RenderingServer.viewport_get_update_mode(get_tree().root.get_viewport_rid())
+	RenderingServer.viewport_set_update_mode(get_tree().root.get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_DISABLED)
+	if UIManager and UIManager.focus:
+		UIManager.focus.suspend_idle_animation()
+	print("[Main] Rendering suspended (window unfocused)")
+
+func _resume_rendering() -> void:
+	if not _rendering_suspended:
+		return
+	_rendering_suspended = false
+	if _prev_viewport_update_mode >= 0:
+		RenderingServer.viewport_set_update_mode(get_tree().root.get_viewport_rid(), _prev_viewport_update_mode)
+		_prev_viewport_update_mode = -1
+	if UIManager and UIManager.focus:
+		UIManager.focus.resume_idle_animation()
+	print("[Main] Rendering resumed (window focused)")
+
 func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		# Defer one frame so the window manager state (minimize/hide) has settled
+		call_deferred("_suspend_rendering_if_hidden")
+		return
+
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_resume_rendering()
+		return
+
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		var close_start_us := Time.get_ticks_usec()
 		print("[Main] NOTIFICATION_WM_CLOSE_REQUEST: shutdown started")
@@ -1662,30 +1715,10 @@ func _pre_shutdown_cleanup() -> void:
 		SystemManager.network.shutdown()
 	print("[Main] network shutdown elapsed_us=", Time.get_ticks_usec() - network_start_us)
 
-	# Clear card pools in the visible grids so their pooled cards (and their
+	# Release card pools, overlays, pending image work, and static caches.
+	# Shared with the launch-hibernation trim so pooled cards (and their
 	# RenderingServer items) are freed before the root is queue_freed.
-	var pool_start_us := Time.get_ticks_usec()
-	if UIManager:
-		for view_name in ["Home", "Library"]:
-			var view = UIManager.get_view(view_name)
-			if view:
-				var grid = _get_view_grid(view)
-				if grid:
-					grid.clear_pool()
-	print("[Main] grid pool clear elapsed_us=", Time.get_ticks_usec() - pool_start_us)
-
-	# Release static caches held by UI components.
-	var cache_start_us := Time.get_ticks_usec()
-	MemorySubManager.clear_texture_cache()
-	M3Theme.clear_theme_cache()
-	EffectStack.clear_script_cache()
-	GameCard.clear_platform_icon_cache()
-	LaunchTransitionOverlay._clear_source_override()
-	M3NavigationDestination.clear_shared_stylebox()
-	M3MenuRenderer.clear_shared_stylebox()
-	LibraryFilterSheet.cleanup_instance()
-	PlatformCardPool.clear()
-	print("[Main] static cache clear elapsed_us=", Time.get_ticks_usec() - cache_start_us)
+	_release_heavy_resources("shutdown")
 
 	# Stop all background worker threads (DB, image, download, extraction, OS execute).
 	# After this point SystemManager.memory static methods will safely no-op.
@@ -1701,6 +1734,107 @@ func _deferred_quit() -> void:
 	if tree:
 		tree.quit()
 
+# ==================== LAUNCH HIBERNATION ====================
+
+func _pre_launch_trim(_game: GameResource) -> void:
+	"""Release reclaimable memory before the game process starts (and before
+	Android suspends us), then yield frames so deferred frees fully complete."""
+	_log_rss("pre-launch trim start")
+	_trim_memory("launch")
+	# queue_free()'d nodes and RenderingServer RIDs release on frame boundaries;
+	# yield so the trim is fully materialized before the process/intent starts.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_log_rss("pre-launch trim done")
+
+func _trim_memory(reason: String) -> void:
+	"""Idempotent entry point for launch hibernation."""
+	if _trimmed_for_launch:
+		return
+	_trimmed_for_launch = true
+	_release_heavy_resources(reason)
+
+func _release_heavy_resources(reason: String) -> void:
+	"""Free every reclaimable memory hold that existing lazy paths can rebuild.
+	Downloads, worker threads, and in-flight network requests are untouched."""
+	var trim_start_us := Time.get_ticks_usec()
+	print("[Main] Memory trim (", reason, ") starting")
+
+	# Stop periodic work that wakes the main thread while backgrounded.
+	if UIManager:
+		UIManager.set_status_bar_polling(false)
+	if SystemManager and SystemManager.notifications:
+		SystemManager.notifications.dismiss_all_notifications()
+
+	# Pools release their texture refs before the cache wipe below.
+	var pool_start_us := Time.get_ticks_usec()
+	if UIManager and UIManager.view:
+		for grid in UIManager.view.get_all_grids():
+			grid.clear_pool()
+	PlatformCardPool.clear()
+	print("[Main] trim grid pools elapsed_us=", Time.get_ticks_usec() - pool_start_us)
+
+	# Overlays rebuild lazily through their existing show paths.
+	if UIManager and UIManager.overlay:
+		UIManager.overlay.release_settings_dialog()
+		UIManager.overlay.clear_game_details_sheet_content()
+	LibraryFilterSheet.cleanup_instance()
+
+	# Drop queued cover/prefetch work; in-flight tasks and downloads continue.
+	# At shutdown the tree is dying, so drained waiters must not be called back.
+	MemorySubManager.clear_pending_image_tasks(reason != "shutdown")
+
+	# Static caches; covers re-decode from the disk cache on demand.
+	var cache_start_us := Time.get_ticks_usec()
+	MemorySubManager.clear_texture_cache()
+	GameCard.clear_platform_icon_cache()
+	EffectBase.clear_shared_caches()
+	EffectStack.clear_script_cache()
+	M3Theme.clear_theme_cache()
+	LaunchTransitionOverlay._clear_source_override()
+	M3NavigationDestination.clear_shared_stylebox()
+	M3MenuRenderer.clear_shared_stylebox()
+	print("[Main] trim static caches elapsed_us=", Time.get_ticks_usec() - cache_start_us)
+
+	if SystemManager and SystemManager.network:
+		SystemManager.network.clear_response_cache()
+
+	print("[Main] Memory trim (", reason, ") total elapsed_us=", Time.get_ticks_usec() - trim_start_us)
+
+func _restore_after_launch() -> void:
+	"""Undo launch hibernation. Pools, covers, and the settings dialog all
+	rebuild through existing lazy paths; only polling needs an explicit nudge."""
+	if not _trimmed_for_launch:
+		return
+	_trimmed_for_launch = false
+	if UIManager:
+		UIManager.set_status_bar_polling(true)
+	_log_rss("post-resume")
+
+func _log_rss(label: String) -> void:
+	var rss_kb := _get_process_rss_kb()
+	if rss_kb >= 0:
+		print("[Main] VmRSS (", label, "): ", snappedf(rss_kb / 1024.0, 0.1), " MB")
+	else:
+		print("[Main] Resource count (", label, "): ", Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
+
+func _get_process_rss_kb() -> int:
+	"""VmRSS from /proc/self/status (Linux/Android); -1 where unavailable.
+	procfs entries fail stat-style existence checks, so open directly."""
+	var f := FSM.open_file_read("/proc/self/status")
+	if not f:
+		return -1
+	while not f.eof_reached():
+		var line := f.get_line()
+		if line.begins_with("VmRSS:"):
+			var parts := line.split(" ", false)
+			f.close()
+			if parts.size() >= 2:
+				return parts[1].to_int()
+			return -1
+	f.close()
+	return -1
+
 func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 	"""Save the focused card index when a game launch is initiated."""
 	print("[Main] _on_game_launch_initiated() called with focus_index: ", focus_index)
@@ -1714,6 +1848,9 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
 	"""Handle entering background state - input is now blocked in _input."""
 	print("[Main] Background state entered - input blocked")
+	# Fallback trim for launch paths that bypass pre_launch_hook (e.g. standalone
+	# emulator launches); no-op if the pre-launch trim already ran.
+	_trim_memory("background")
 	# Optional: Show overlay or dim the UI
 	# UIManager.set_dimmed(true)
 
@@ -1725,6 +1862,7 @@ func _restore_platform_focus() -> void:
 func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 	"""Handle exiting background state - restore focus."""
 	print("[Main] Background state exited - restoring focus")
+	_restore_after_launch()
 	# Optional: Remove overlay
 	# UIManager.set_dimmed(false)
 

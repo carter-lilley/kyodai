@@ -472,6 +472,16 @@ func get_view(view_name: String) -> View:
 func get_all_views() -> Array[View]:
 	return _views.values()
 
+## Every instantiated grid across all views (Home, Library, Favorites, and
+## any collection tabs that have been lazily created).
+func get_all_grids() -> Array[VirtualScrollGridContainer]:
+	var grids: Array[VirtualScrollGridContainer] = []
+	for view in _views.values():
+		# Standard structure: MarginContainer/VBoxContainer/VirtualScrollGridContainer
+		if view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
+			grids.append(view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer)
+	return grids
+
 func switch_to_tab(tab_name: String):
 	var idx = _get_tab_index(tab_name)
 	if idx != -1:

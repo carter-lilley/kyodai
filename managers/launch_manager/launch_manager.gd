@@ -19,6 +19,9 @@ const M3UManager := preload("res://managers/launch_manager/m3u_sub_manager.gd")
 var _pending_launches: Dictionary = {}  # emulator_id -> Array of {game, callback}
 var _in_flight_launches: Dictionary = {}  # romm_id -> true
 
+# emulator_id -> true while its Android post-install permissions reminder is open
+var _open_install_reminders: Dictionary = {}
+
 # platform_slug -> bool
 var _pending_firmware_downloads: Dictionary = {}
 
@@ -36,6 +39,15 @@ var _pending_core_launches: Array[Dictionary] = []
 # Signals
 signal game_launched(game: GameResource)
 signal game_launch_initiated(game: GameResource, focus_index: int)
+
+## Optional async hook awaited immediately before the game process is created
+## (desktop) or the launch intent is fired (Android). main.gd installs this to
+## hibernate UI/memory so the trim is fully complete before we launch/suspend.
+var pre_launch_hook: Callable
+
+## Called when a launch fails after pre_launch_hook ran, so the app can undo
+## the hibernation (no background_state_exited fires in that case).
+var launch_failed_hook: Callable
 @warning_ignore("unused_signal")
 signal launch_completed(success: bool, message: String)
 @warning_ignore("unused_signal")
@@ -430,6 +442,86 @@ func _end_launch(romm_id: int) -> void:
 	_in_flight_launches.erase(romm_id)
 
 
+## Called when the user dismisses the Android post-install permissions reminder.
+## Outside a game-launch context this is a plain dismiss; mid-launch it resumes
+## the pending launch if the emulator is now installed, or aborts it cleanly.
+func on_install_reminder_dismissed(emulator_id: String) -> void:
+	_open_install_reminders.erase(emulator_id)
+
+	if not _pending_launches.has(emulator_id):
+		return  # Plain dismiss: no game launch is waiting on this emulator
+
+	if _is_emulator_fully_installed(emulator_id):
+		print("[LaunchManager] Install reminder dismissed, emulator installed - resuming pending launch for: " + emulator_id)
+		_continue_pending_launches(emulator_id)
+	else:
+		print("[LaunchManager] Install reminder dismissed but emulator not installed - aborting pending launch for: " + emulator_id)
+		_abort_pending_launches(emulator_id, "Emulator not installed")
+
+
+## Validates every registry install step for an emulator.
+func _is_emulator_fully_installed(emulator_id: String) -> bool:
+	var emu = registry.get_emulator(emulator_id)
+	if emu.is_empty():
+		return false
+	var install_steps = emu.get("install", [])
+	for i in range(install_steps.size()):
+		if not emulator._validate_install_step(emulator_id, i, install_steps):
+			return false
+	return true
+
+
+## Resumes queued launches for an emulator that finished installing.
+func _continue_pending_launches(emulator_id: String) -> void:
+	if not _pending_launches.has(emulator_id):
+		return
+	var pending_list: Array = _pending_launches[emulator_id]
+	_pending_launches.erase(emulator_id)
+
+	# Yield a frame so deferred focus restoration (app resume) can re-focus the
+	# launching card before the overlay tries to grab its texture.
+	await get_tree().process_frame
+
+	for pending in pending_list:
+		var pending_game: GameResource = pending.game
+		var pending_callback: Callable = pending.callback
+		SystemManager.notifications.show_notification("Launching " + pending_game.get_display_name() + "...", SystemManager.notifications.Type.INFO)
+
+		# Replay the launch transition: it was force-hidden when the app resumed
+		# from the Android installer.
+		_restart_launch_overlay(pending_game)
+
+		if pending_callback.is_valid():
+			# Re-enter _ensure_prerequisites so game preparation (e.g. PS3 ZIP
+			# extraction) runs before on_ready performs the actual launch.
+			await _ensure_prerequisites(pending_game, emulator_id, pending_callback)
+		else:
+			_end_launch(pending_game.romm_id)
+
+
+## Drops queued launches for an emulator, releasing the in-flight guard so the
+## affected games can be launched again.
+func _abort_pending_launches(emulator_id: String, reason: String) -> void:
+	if not _pending_launches.has(emulator_id):
+		return
+	var pending_list: Array = _pending_launches[emulator_id]
+	_pending_launches.erase(emulator_id)
+	for pending in pending_list:
+		var pending_game: GameResource = pending.game
+		SystemManager.notifications.show_notification(reason + " - launch cancelled for " + pending_game.get_display_name(), SystemManager.notifications.Type.WARNING)
+		_end_launch(pending_game.romm_id)
+
+
+## Replays the launch transition overlay for a game whose launch was interrupted
+## before the process started (e.g. by an Android emulator install).
+func _restart_launch_overlay(game: GameResource) -> void:
+	var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+	if overlay_nodes.size() > 0:
+		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+		if overlay:
+			overlay.restart(game)
+
+
 ## Main entry point for launching a game
 func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	print("[LaunchManager] launch_game() called for: ", game.get_display_name() if game else "null", " with focus_index: ", focus_index)
@@ -473,12 +565,17 @@ func _launch_gamenative_game(game: GameResource) -> void:
 		_end_launch(game.romm_id)
 		return
 
+	if pre_launch_hook.is_valid():
+		await pre_launch_hook.call(game)
+
 	var success = gamenative.launch_game(game.steam_app_id)
 	if success:
 		_update_last_played(game)
 	else:
 		push_error("[LaunchManager] Failed to launch GameNative game")
 		SystemManager.notifications.show_notification("Failed to launch GameNative. Is the app installed?", SystemManager.notifications.Type.ERROR)
+		if launch_failed_hook.is_valid():
+			launch_failed_hook.call()
 	_end_launch(game.romm_id)
 
 ## If game is not downloaded, queue the download first then proceed.
@@ -511,10 +608,11 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			is_actually_installed = false
 			break
 	
-	# If emulator is now installed but there's a stale pending launch, clear it
+	# If emulator is now installed but there's a stale pending launch, abort it
+	# cleanly so its in-flight guard can't wedge the game as "already launching"
 	if is_actually_installed and _pending_launches.has(emulator_id):
-		print("[LaunchManager] Emulator " + emulator_id + " is installed, clearing stale pending launch")
-		_pending_launches.erase(emulator_id)
+		print("[LaunchManager] Emulator " + emulator_id + " is installed, aborting stale pending launch")
+		_abort_pending_launches(emulator_id, "Launch superseded")
 
 	# Check if this game is already pending launch
 	if _pending_launches.has(emulator_id):
@@ -679,40 +777,20 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 func _on_emulator_installed_for_launch(emulator_id: String, success: bool):
 	if not success:
 		return
-	
+
 	# Check if emulator is actually fully installed by validating all registry steps
-	var emu = registry.get_emulator(emulator_id)
-	if not emu.is_empty() and emu.has("install"):
-		var install_steps = emu.get("install", [])
-		var all_valid = true
-		for i in range(install_steps.size()):
-			if not emulator._validate_install_step(emulator_id, i, install_steps):
-				all_valid = false
-				break
-		if not all_valid:
-			# Post-install is still running, wait for it to complete
-			return
-	
+	if not _is_emulator_fully_installed(emulator_id):
+		# Post-install is still running (or, on Android, the user hasn't finished
+		# the APK install yet). The resume path (clear_stale_pending_launches) or
+		# the install-reminder dismissal retries the pending launch.
+		return
+
 	# Check if we have pending launches for this emulator
 	if _pending_launches.has(emulator_id):
-		var pending_list: Array = _pending_launches[emulator_id]
-		_pending_launches.erase(emulator_id)
-
 		# Give a small delay for file system to settle
 		await get_tree().create_timer(0.5).timeout
-
-		for pending in pending_list:
-			var pending_game: GameResource = pending.game
-			var pending_callback: Callable = pending.callback
-			SystemManager.notifications.show_notification("Launching " + pending_game.get_display_name() + "...", SystemManager.notifications.Type.INFO)
-
-			print("[LaunchManager] _on_emulator_installed_for_launch: Calling ready callback for emulator: " + emulator_id)
-			if pending_callback.is_valid():
-				# Re-enter _ensure_prerequisites so game preparation (e.g. PS3 ZIP
-				# extraction) runs before on_ready performs the actual launch.
-				await _ensure_prerequisites(pending_game, emulator_id, pending_callback)
-			else:
-				_end_launch(pending_game.romm_id)
+		print("[LaunchManager] _on_emulator_installed_for_launch: Resuming pending launches for emulator: " + emulator_id)
+		_continue_pending_launches(emulator_id)
 
 ## Handler for on-demand core downloads - resumes pending launches
 func _on_core_download_completed(platform_slug: String, core_id: String, success: bool):
@@ -783,11 +861,20 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 			await get_tree().create_timer(0.5).timeout
 	
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
+
+	# Let the app hibernate (release UI/memory) before the process starts and,
+	# on Android, before the OS suspends us. Awaiting guarantees the trim —
+	# including frame-deferred frees — is complete before launch.
+	if pre_launch_hook.is_valid():
+		await pre_launch_hook.call(game)
+
 	var success = await process.execute_launch(launch_intent)
 	
 	if not success:
 		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
 		SystemManager.notifications.show_notification("Failed to launch " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+		if launch_failed_hook.is_valid():
+			launch_failed_hook.call()
 		_end_launch(game.romm_id)
 		print("[LaunchManager] _launch_game_internal: EXIT (launch failed)")
 		return

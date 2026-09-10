@@ -28,6 +28,12 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "xemu_toml",
+	"config_candidates": {
+	  "android": ["{app_data}/x1box/xemu.toml"]
+	}
+  },
   "launch": {
 	"platforms": {
 	  "android": {

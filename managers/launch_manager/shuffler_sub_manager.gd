@@ -35,6 +35,10 @@ var _pssuspend_path: String = ""
 # launching the next emulator instance (defensive: a wedged pssuspend must
 # not stall switching forever).
 const SUSPEND_AWAIT_TIMEOUT_SEC := 2.0
+# Max time to wait for minimize_window.ahk before suspending. AHK must finish
+# its window messages before pssuspend freezes the emulator, otherwise the
+# script wedges on a synchronous send to a suspended UI thread.
+const HIDE_AWAIT_TIMEOUT_SEC := 2.0
 
 var _reroll_in_progress: bool = false
 # Slot being refilled by a reroll (-1 = none). The refill runs in the
@@ -247,6 +251,15 @@ func stop_session() -> void:
 	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
 	_state = State.STOPPING
 
+	# Let any in-flight switch/restart finish so teardown doesn't interleave
+	# with it (its coroutines re-check state and bail once STOPPING).
+	var guard_wait := 0.0
+	while _switch_in_progress and guard_wait < 3.0:
+		await get_tree().create_timer(0.05).timeout
+		guard_wait += 0.05
+	if _switch_in_progress:
+		push_warning("[ShufflerSubManager] stop_session: switch still in progress after 3s; tearing down anyway")
+
 	_reroll_in_progress = false
 	_reroll_slot_index = -1
 	_pending_switch_index = -1
@@ -357,29 +370,35 @@ func restart_game() -> void:
 		print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
 		return
 	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
-	if _current_game_index >= 0:
-		# Wait for any in-flight switch, then hold the guard so skip/timer
-		# requests queue behind the restart instead of interleaving with it.
-		while _switch_in_progress:
-			await get_tree().process_frame
-		_switch_in_progress = true
-		var entry = _bag.entries[_current_game_index]
-		await _stop_game(entry)
-		if entry.pid != -1:
-			# Restart boots a fresh instance; the old process (suspended for
-			# suspend-method emulators, possibly still exiting for udp/tcp)
-			# would otherwise be orphaned and untracked forever.
-			LaunchManager.process.kill_process_async(entry.pid)
-			await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
-		entry.started = false
-		entry.pid = -1
-		if _state != State.STOPPING and _state != State.IDLE:
-			_launch_game(entry)
-		_switch_in_progress = false
-		if _pending_switch_index != -1:
-			var next = _pending_switch_index
-			_pending_switch_index = -1
-			_request_switch(next)
+	# Wait for any in-flight switch, then hold the guard so skip/timer
+	# requests queue behind the restart instead of interleaving with it.
+	while _switch_in_progress:
+		await get_tree().process_frame
+	# stop_session may have run while we waited; never touch the bag during
+	# or after teardown.
+	if not can_restart() or _current_game_index < 0 or _current_game_index >= _bag.size():
+		print("[ShufflerSubManager] restart_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
+		return
+	_switch_in_progress = true
+	_kill_round_timer()
+	var entry = _bag.entries[_current_game_index]
+	await _stop_game(entry)
+	if entry.pid != -1:
+		# Restart boots a fresh instance; the old process (suspended for
+		# suspend-method emulators, possibly still exiting for udp/tcp)
+		# would otherwise be orphaned and untracked forever.
+		LaunchManager.process.kill_process_async(entry.pid)
+		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
+	entry.started = false
+	entry.pid = -1
+	if _state != State.STOPPING and _state != State.IDLE:
+		_launch_game(entry)
+		_start_round_timer(_random_round_time())
+	_switch_in_progress = false
+	if _pending_switch_index != -1:
+		var next = _pending_switch_index
+		_pending_switch_index = -1
+		_request_switch(next)
 
 func remove_game() -> void:
 	if not can_reroll():
@@ -1009,7 +1028,7 @@ func _stop_game(entry: Dictionary) -> void:
 			await _send_tcp_command("localhost", 4444, "savevm " + save_hash)
 			await _send_tcp_command("localhost", 4444, "quit")
 		"suspend", _:
-			_suspend_game(entry)
+			await _suspend_game(entry)
 
 func _suspend_game(entry: Dictionary) -> void:
 	if entry.pid == -1:
@@ -1024,7 +1043,7 @@ func _suspend_game(entry: Dictionary) -> void:
 	exe_name = pc.get("executable", "")
 
 	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
-	_hide_window_async(entry.pid, exe_name)
+	await _hide_window_awaited(entry.pid, exe_name)
 
 	# Await the suspension before returning: _switch_to_game launches the next
 	# emulator instance immediately after this, and a still-running previous
@@ -1038,7 +1057,7 @@ func _suspend_game(entry: Dictionary) -> void:
 	var elapsed := 0.0
 	while not done.complete and elapsed < SUSPEND_AWAIT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.05).timeout
-		elapsed += 0.05
+		elapsed = (Time.get_ticks_msec() - suspend_start) / 1000.0
 	if done.complete:
 		print("[ShufflerSubManager] _suspend_game: pid " + str(entry.pid) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(done.exit_code) + ")")
 	else:
@@ -1052,7 +1071,18 @@ func _resume_game(entry: Dictionary) -> void:
 		return
 
 	print("[ShufflerSubManager] _resume_game: " + _format_entry(entry))
-	LaunchManager.process.resume_process_async(entry.pid, _pssuspend_path)
+	var resume_start := Time.get_ticks_msec()
+	var done := {"complete": false, "exit_code": -1}
+	LaunchManager.process.resume_process_async(entry.pid, _pssuspend_path, func(result: Dictionary):
+		done.complete = true
+		done.exit_code = result.get("exit_code", -1)
+	)
+	while not done.complete and Time.get_ticks_msec() - resume_start < int(SUSPEND_AWAIT_TIMEOUT_SEC * 1000):
+		await get_tree().create_timer(0.05).timeout
+	if done.complete:
+		print("[ShufflerSubManager] _resume_game: pid " + str(entry.pid) + " resumed in " + str(Time.get_ticks_msec() - resume_start) + "ms (exit_code=" + str(done.exit_code) + ")")
+	else:
+		push_warning("[ShufflerSubManager] _resume_game: timed out waiting for pssuspend -r (pid " + str(entry.pid) + "); maximizing anyway")
 
 	await get_tree().create_timer(0.2).timeout
 
@@ -1122,13 +1152,31 @@ func _input(event: InputEvent) -> void:
 # WINDOW / PROCESS HELPERS
 # ============================================================================
 
-func _hide_window_async(pid: int, exe_name: String) -> void:
+func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callable()) -> void:
 	var ahk_script = _tools_dir + "minimize_window.ahk"
 	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
-		MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name])
+		MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name], callback)
+	elif callback.is_valid():
+		callback.call_deferred({"exit_code": -1, "output": []})
 
 func _hide_window(pid: int, exe_name: String) -> void:
 	_hide_window_async(pid, exe_name)
+
+func _hide_window_awaited(pid: int, exe_name: String) -> void:
+	var hide_start := Time.get_ticks_msec()
+	var done := {"complete": false, "exit_code": -1}
+	_hide_window_async(pid, exe_name, func(result: Dictionary):
+		done.complete = true
+		done.exit_code = result.get("exit_code", -1)
+	)
+	var elapsed := 0.0
+	while not done.complete and elapsed < HIDE_AWAIT_TIMEOUT_SEC:
+		await get_tree().create_timer(0.05).timeout
+		elapsed = (Time.get_ticks_msec() - hide_start) / 1000.0
+	if done.complete:
+		print("[ShufflerSubManager] _hide_window_awaited: pid " + str(pid) + " hidden in " + str(Time.get_ticks_msec() - hide_start) + "ms (exit_code=" + str(done.exit_code) + ")")
+	else:
+		push_warning("[ShufflerSubManager] _hide_window_awaited: timed out waiting for minimize_window.ahk (pid " + str(pid) + "); suspending anyway")
 
 func _is_current_game_pid(pid: int) -> bool:
 	if _state != State.ACTIVE and _state != State.PAUSED:
@@ -1156,6 +1204,19 @@ func _maximize_with_retry(pid: int) -> void:
 		return
 	if not maximized:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
+	_raise_controls_window()
+	if maximized:
+		_delayed_remaximize(pid, token)
+
+# Some emulators (e.g. Vita3K) recreate their game window seconds after the
+# first one appears, so a successful maximize can bind to a doomed window.
+# Re-raise once more shortly after; no-ops if we've already switched away.
+func _delayed_remaximize(pid: int, token: int) -> void:
+	await get_tree().create_timer(4.0).timeout
+	if token != _maximize_token or not _is_current_game_pid(pid):
+		return
+	print("[ShufflerSubManager] _delayed_remaximize: re-maximizing pid " + str(pid))
+	await _maximize_window_async(pid, token)
 	_raise_controls_window()
 
 func _maximize_window_async(pid: int, token: int = -1) -> bool:
@@ -1261,7 +1322,9 @@ func _raise_controls_window() -> void:
 	if window_id == DisplayServer.INVALID_WINDOW_ID:
 		print("[ShufflerSubManager] _raise_controls_window: invalid window id")
 		return
-	DisplayServer.window_move_to_foreground(window_id)
+	# Re-assert topmost z-order only. window_move_to_foreground would activate
+	# the palette and steal foreground from the emulator we just raised.
+	DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_ALWAYS_ON_TOP, true, window_id)
 
 func _start_controls_topmost_timer() -> void:
 	_stop_controls_topmost_timer()
