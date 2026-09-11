@@ -474,16 +474,20 @@ func _update_auto_display_on_input(event):
 			get_viewport().set_input_as_handled()
 			return
 	
-	# Hide keyboard on ui_cancel action (controller B button)
+	# ui_cancel (controller B button): delete one character while the field has
+	# text; hide the keyboard only when there is nothing left to delete
 	# Only consume if the keyboard is actually visible; otherwise let the event propagate
 	if visible and event.is_action_pressed("ui_cancel"):
-		# Mark as dismissed so auto-show won't reopen when focus returns
-		if _active_line_edit != null:
-			_dismissed_line_edit = _active_line_edit
-		# Return focus to the LineEdit before hiding
-		if _active_line_edit != null:
-			_active_line_edit.grab_focus()
-		_hide_keyboard()
+		if _active_line_edit != null and _active_line_edit.text.length() > 0:
+			_backspace_active_line_edit()
+		else:
+			# Mark as dismissed so auto-show won't reopen when focus returns
+			if _active_line_edit != null:
+				_dismissed_line_edit = _active_line_edit
+			# Return focus to the LineEdit before hiding
+			if _active_line_edit != null:
+				_active_line_edit.grab_focus()
+			_hide_keyboard()
 		get_viewport().set_input_as_handled()
 	
 	# Handle ui_start (Start/Enter button) same as virtual keyboard Enter
@@ -679,6 +683,16 @@ func _set_caps_lock(value: bool):
 		key.change_uppercase(value)
 
 
+func _backspace_active_line_edit() -> void:
+	if _active_line_edit == null:
+		return
+	var text = _active_line_edit.text
+	if text.length() > 0:
+		_active_line_edit.text = text.substr(0, text.length() - 1)
+		_active_line_edit.caret_column = _active_line_edit.text.length()
+		_active_line_edit.text_changed.emit(_active_line_edit.text)
+
+
 func _trigger_uppercase(key_data):
 	uppercase = !uppercase
 	_set_caps_lock(uppercase)
@@ -695,11 +709,7 @@ func _key_released(key_data):
 		if _active_line_edit != null:
 			# Handle special keys
 			if key_value == "Backspace":
-				var text = _active_line_edit.text
-				if text.length() > 0:
-					_active_line_edit.text = text.substr(0, text.length() - 1)
-					_active_line_edit.caret_column = _active_line_edit.text.length()
-					_active_line_edit.text_changed.emit(_active_line_edit.text)
+				_backspace_active_line_edit()
 			elif key_value == "Return" or key_value == "Enter":
 				# Trigger submit/confirmation on the LineEdit
 				if _active_line_edit is LineEdit:
@@ -916,6 +926,10 @@ func _create_keyboard(layout_data):
 
 					if font_color_normal != null:
 						new_key.set_icon_color(font_color_normal)
+
+				# Controller hint: B (ui_cancel) deletes a character
+				if str(key.get("output")) == "Backspace":
+					new_key.set_badge("xbox-b")
 
 				key_row.add_child(new_key)
 				keys.push_back(new_key)

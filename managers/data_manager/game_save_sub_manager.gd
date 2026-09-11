@@ -3189,12 +3189,14 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
 			
 			var current_timestamp = Time.get_datetime_string_from_system(true, true)
-			var state = {"pending": 0, "failed": 0}
+			var state = {"pending": 0, "failed": 0, "fired": false}
 			
 			var check_complete = func():
-				if state.pending <= 0:
-					if on_complete.is_valid():
-						on_complete.call()
+				if state.fired or state.pending > 0:
+					return
+				state.fired = true
+				if on_complete.is_valid():
+					on_complete.call()
 			
 			var conflict_pairs: Array = []
 			for remote in remote_saves:
@@ -3251,6 +3253,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			# session (keep-local force-uploads post-launch without re-asking,
 			# cancel suppresses the post-launch sync entirely)
 			if not conflict_pairs.is_empty():
+				state.pending += 1  # the open dialog counts as a pending op
 				var first = conflict_pairs[0]
 				var local_mtime = first.local.modified_time if first.local else 0
 				var choice = await _show_conflict_dialog(game, local_mtime, parse_iso_timestamp(first.remote.get("updated_at", "")))
@@ -3268,10 +3271,11 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 						_sync_choice_overrides[sync_key] = "local"
 					_:
 						_sync_choice_overrides[sync_key] = "cancel"
+				state.pending -= 1
 
-			# If no downloads were queued, call completion immediately
-			if state.pending == 0:
-				check_complete.call()
+			# Fire completion once the conflict (if any) is resolved and no
+			# downloads remain in flight
+			check_complete.call()
 		)
 	)
 

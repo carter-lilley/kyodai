@@ -167,10 +167,16 @@ func apply_external_filter(kind: String, value: String, center_text: String, lab
 	if DEBUG_LOG: print("[LibraryView] apply_external_filter: kind=", kind, " value=", value, " platform_slug=", _current_platform_slug)
 	try_clear_search()
 	_active_filters = {kind: {"include": [value], "exclude": []}}
+	# Details sheets are reachable for games on any platform (search, home,
+	# collections, related cards), so composing with the cycler could exclude
+	# the very game the chip was clicked from. Reset to All Games.
+	_current_platform_index = -1
+	_current_platform_slug = ""
 	if platform_indicator:
 		platform_indicator.set_filter_active(true)
 		platform_indicator.show_filter_mode(center_text, label)
-	_load_total_count()
+	# Scrolls to top and focuses the first card once the count lands.
+	_load_total_count_with_platform(false)
 
 ## External entry point (platform chip in the details sheet): clear all
 ## search/filter state and jump the platform cycler to the given slug.
@@ -211,7 +217,8 @@ func try_clear_filters() -> bool:
 	# Keep the persistent filter sheet's selection in sync so reopening it
 	# doesn't resurrect stale chips.
 	LibraryFilterSheet.sync_selection({})
-	_load_total_count()
+	# Mirrors _clear_search: scroll to top, focus the first card on reload.
+	_load_total_count_with_platform(false)
 	return true
 
 func _on_filters_changed(filters: Dictionary) -> void:
@@ -666,11 +673,18 @@ func _on_database_failed(_error: String):
 	_is_loading = false
 	_update_status("Database unavailable - check storage permissions, then restart the app")
 
-func _on_download_completed(_item_id: String, success: bool, _message: String):
-	# Reload grid data on download completion so cards pick up the new
-	# downloaded state. Dispatches to the search variant when search is active.
-	if success and DataManager and DataManager.is_database_ready():
-		_load_total_count()
+func _on_download_completed(item_id: String, success: bool, _message: String):
+	# Downloads don't change library membership or counts, so update the
+	# game's card in place: a full _load_total_count() tears down the buffer,
+	# resets scroll to top, and races focus restoration.
+	if not success or not DataManager or not DataManager.is_database_ready():
+		return
+	var item = SystemManager.download.get_item(item_id)
+	if item and item.game_resource:
+		games_grid.update_cached_game(item.game_resource)
+		_on_game_updated(item.game_resource)
+	else:
+		_load_total_count()  # Unknown item: legacy full reload
 
 func _on_games_removed(_platform_slug: String):
 	_reload_after_change()

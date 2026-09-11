@@ -21,7 +21,7 @@ const BASE_HEIGHT := 1080.0
 const BASE_DPI := 160.0
 const DEFAULT_DPI := 96.0
 const MIN_UI_SCALE := 1.0
-const MAX_UI_SCALE := 4.0
+const MAX_UI_SCALE := 5.0
 
 ## Shared layout tier breakpoints (viewport width in dp). Compact tightens
 ## margins; small additionally collapses secondary content (covers, setting
@@ -218,7 +218,7 @@ func _calculate_ui_scale() -> float:
 		os_scale = 1.0
 
 	var screen_size := DisplayServer.screen_get_size(_current_screen)
-	var resolution_scale := pow(screen_size.y / BASE_HEIGHT, 0.85)
+	var resolution_scale := pow(screen_size.y / BASE_HEIGHT, 1.0)
 
 	var dpi := DisplayServer.screen_get_dpi()
 	if dpi <= 0:

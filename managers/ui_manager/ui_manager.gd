@@ -339,6 +339,12 @@ func switch_to_tab(tab_name: String):
 		return
 	transition.play_extended(icon_name, func(): view.switch_to_tab(tab_name), func(): return view.is_view_ready_for_reveal(tab_name), 400)
 
+## Switch tabs without the transition animation. Used when a follow-up async
+## step (grid reload, deferred focus) must find the target view already
+## current — a 400ms transition would suppress is_current_view guards.
+func switch_to_tab_immediate(tab_name: String):
+	view.switch_to_tab(tab_name)
+
 var _view_transition_overlay: ViewTransitionOverlay = null
 
 func _get_view_transition_overlay() -> ViewTransitionOverlay:

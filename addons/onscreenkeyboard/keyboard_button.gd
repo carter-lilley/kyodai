@@ -6,6 +6,7 @@ signal released
 signal down
 
 var icon_tex_rect
+var badge: M3Badge
 
 func _enter_tree():
 	pass
@@ -42,6 +43,40 @@ func set_icon(texture):
 	add_child(icon_tex_rect)
 
 
+func set_badge(icon_name: String):
+	if badge == null:
+		badge = M3Badge.new()
+		badge.icon_font = "ControllerIcons"
+		add_child(badge)
+	badge.icon_name = icon_name
+	_position_badge()
+
+
+func _position_badge():
+	if badge == null:
+		return
+	# Anchor to the icon's drawn rect when there is one (TextureRect with
+	# STRETCH_KEEP_ASPECT_CENTERED fills the button but the texture inside
+	# is smaller and centered); fall back to the button corner otherwise.
+	var anchor_size := size
+	var anchor_origin := Vector2.ZERO
+	if icon_tex_rect != null and icon_tex_rect.texture != null:
+		var tex_size: Vector2 = icon_tex_rect.texture.get_size()
+		if tex_size.x > 0 and tex_size.y > 0:
+			var tex_scale := min(size.x / tex_size.x, size.y / tex_size.y)
+			anchor_size = tex_size * tex_scale
+			anchor_origin = (size - anchor_size) / 2.0
+
+	# Badge scales with the anchor (about half the icon height, clamped)
+	var s: float = clamp(anchor_size.y * 0.55, M3Units.dp(14), M3Units.dp(22))
+	badge.custom_minimum_size = Vector2(s, s)
+	badge.size = Vector2(s, s)
+	badge.refresh()
+	# Mostly inside the icon rect (0.9) so the badge hugs the visible glyph
+	# ink instead of hanging off the button's bottom edge
+	badge.position = anchor_origin + anchor_size - Vector2(s, s) * 0.9
+
+
 func change_uppercase(value):
 	if value:
 		if key_data.has("display-uppercase"):
@@ -54,6 +89,7 @@ func change_uppercase(value):
 func _on_item_rect_changed():
 	if icon_tex_rect != null:
 		icon_tex_rect.size = size
+	_position_badge()
 
 
 var _is_pressed: bool = false

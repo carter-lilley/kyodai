@@ -62,17 +62,10 @@ func _setup_ui():
 	_search_button.icon_button_variant = M3IconButton.IconVariant.STANDARD
 	_search_button.focus_mode = Control.FOCUS_NONE
 	_search_button.pressed.connect(_on_search_clicked)
+	# Badge: right stick click activates search
+	_search_button.badge_icon_name = "analog-r"
+	_search_button.badge_icon_font = "ControllerIcons"
 	hbox.add_child(_search_button)
-
-	# Controller hints: LB/RB flank the platform group (rebuilt to index 2),
-	# right-stick-click sits next to search (activate_search binding)
-	var lb_hint = _make_controller_hint("xbox-left-shoulder")
-	hbox.add_child(lb_hint)
-	hbox.move_child(lb_hint, 1)
-	var rb_hint = _make_controller_hint("xbox-right-shoulder")
-	hbox.add_child(rb_hint)
-	hbox.move_child(rb_hint, 2)
-	hbox.add_child(_make_controller_hint("analog-r-click"))
 	
 	# Resize debounce timer
 	_resize_debounce_timer = Timer.new()
@@ -84,19 +77,6 @@ func _setup_ui():
 	
 	# Build initial platform group once size is known
 	call_deferred("_apply_responsive_layout")
-
-func _make_controller_hint(icon_name: String) -> FontIcon:
-	var hint := FontIcon.new()
-	hint.focus_mode = Control.FOCUS_NONE
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var settings := FontIconSettings.new()
-	settings.icon_font = "ControllerIcons"
-	settings.icon_name = icon_name
-	settings.icon_size = M3Units.dp(18)
-	settings.icon_color = M3Theme.get_on_surface_variant()
-	hint.icon_settings = settings
-	return hint
 
 func _notification(what: int):
 	if what == NOTIFICATION_RESIZED:
@@ -156,10 +136,13 @@ func _rebuild_platform_group() -> void:
 	
 	var center = _get_center_platform_index()
 	
-	# Previous chevron
+	# Previous chevron with left-shoulder badge
 	var prev_btn = M3Button.new()
 	prev_btn.name = "PrevButton"
 	prev_btn.icon_name = "chevron-left-circle"
+	prev_btn.badge_icon_name = "nintendo-left-shoulder"
+	prev_btn.badge_icon_font = "ControllerIcons"
+	prev_btn.badge_corner = M3Button.BadgeCorner.BOTTOM_LEFT
 	prev_btn.text = ""
 	prev_btn.button_size = _current_button_size
 	prev_btn.button_variant = M3Button.Variant.OUTLINED
@@ -181,10 +164,12 @@ func _rebuild_platform_group() -> void:
 		platform_btns.append(btn)
 		_platform_buttons.append(btn)
 	
-	# Next chevron
+	# Next chevron with right-shoulder badge
 	var next_btn = M3Button.new()
 	next_btn.name = "NextButton"
 	next_btn.icon_name = "chevron-right-circle"
+	next_btn.badge_icon_name = "nintendo-right-shoulder"
+	next_btn.badge_icon_font = "ControllerIcons"
 	next_btn.text = ""
 	next_btn.button_size = _current_button_size
 	next_btn.button_variant = M3Button.Variant.OUTLINED
@@ -203,7 +188,7 @@ func _rebuild_platform_group() -> void:
 		_platform_group.add_child(btn)
 	_platform_group.add_child(next_btn)
 	hbox.add_child(_platform_group)
-	hbox.move_child(_platform_group, 2)
+	hbox.move_child(_platform_group, 1)
 
 func _update_minimum_height() -> void:
 	var hbox = get_node_or_null("MainContainer")

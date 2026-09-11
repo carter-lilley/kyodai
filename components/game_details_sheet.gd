@@ -71,6 +71,7 @@ const STATUS_FLAG_KEYS := ["now_playing", "backlogged", "hidden"]
 var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
 var _desc_expanded: bool = false
+var _desc_full_line_count: int = 0
 var _related_games_count: int = 0
 var _metadata_chips: Array[M3Chip] = []
 var _interactive_meta_chips: Array[M3Chip] = []
@@ -116,6 +117,9 @@ func on_viewport_settled() -> void:
 		_refit_metadata_row()
 		if _current_game and not _desc_expanded:
 			_decide_related_placement()
+			# Refit the desc truncation to the settled geometry (also covers
+			# the no-related-games case, which _decide skips).
+			_finalize_desc_fold()
 	else:
 		_set_sheet_height()
 		_position_sheet()
@@ -225,9 +229,6 @@ func _apply_content_scaling() -> void:
 		if card_vbox:
 			card_vbox.add_theme_constant_override("separation", M3Units.dpi(CARD_GAP_DP))
 	_apply_chrome_tier()
-	if is_instance_valid(description_label):
-		# Body text reads as secondary content; keep the style's 16dp size.
-		description_label.remove_theme_font_size_override("font_size")
 	_sync_cover_height()
 
 func _build_files_card_style() -> StyleBoxFlat:
@@ -341,17 +342,6 @@ func _apply_related_placement() -> void:
 		# Never leave the current tab pointing at a hidden page.
 		if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
 			content_tabs.current_tab = 0
-	_update_desc_expand()
-
-## The description scroll absorbs the Overview column's leftover vertical
-## space whenever Related is NOT shown inline beneath it (small mode, tab
-## placement, or no related games at all). When Related is inline the desc
-## keeps its pinned 3-line height so Related hugs it directly below.
-func _update_desc_expand() -> void:
-	if not is_instance_valid(desc_scroll):
-		return
-	var inline_related := not _small_layout and _related_fits_inline and _related_games_count > 0
-	desc_scroll.size_flags_vertical = Control.SIZE_FILL if inline_related else Control.SIZE_EXPAND_FILL
 
 ## Decides whether Related fits inline under the Overview content by measuring
 ## the stack's remaining space after layout settles. The section stays hidden
@@ -366,6 +356,9 @@ func _decide_related_placement() -> void:
 	var related_min_h := 0.0
 	var available := 0.0
 	if not _small_layout and is_instance_valid(overview_vbox):
+		var desc_top := 0.0
+		if is_instance_valid(desc_scroll):
+			desc_top = desc_scroll.get_global_rect().position.y
 		for child in overview_vbox.get_children():
 			if child is Control and child != related_section and child.visible:
 				content_bottom = maxf(content_bottom, child.get_global_rect().end.y)
@@ -373,7 +366,11 @@ func _decide_related_placement() -> void:
 			var separation := float(overview_vbox.get_theme_constant("separation"))
 			related_min_h = related_section.get_combined_minimum_size().y
 			available = overview_vbox.get_global_rect().end.y
-			inline_ok = content_bottom + separation + related_min_h <= available
+			# Related goes inline only when it fits in the bottom HALF of the
+			# column; the description expands into everything above it (see
+			# _finalize_desc_fold), so inline requires room below the midpoint.
+			var desc_target_bottom := maxf(content_bottom, desc_top + (available - desc_top) / 2.0)
+			inline_ok = desc_target_bottom + separation + related_min_h <= available
 	_related_fits_inline = inline_ok
 	_apply_related_placement()
 	related_section.visible = true
@@ -736,16 +733,25 @@ func _chip_filter_tooltip(kind: String, label: String) -> String:
 	return ""
 
 func _on_metadata_chip_pressed(kind: String, value: String, center_text: String, label: String) -> void:
+	# The dismiss slide-out would otherwise restore focus to the summoner card
+	# (~0.3s later, after the grid has rebuilt — i.e. the wrong game) and the
+	# focus pull-back would yank the grid's first-card focus mid-animation.
+	M3Overlay._suppress_focus_pullback = true
+	_restore_focus_on_dismiss = false
 	dismiss()
+	dismissed.connect(func():
+		M3Overlay._suppress_focus_pullback = false
+		_restore_focus_on_dismiss = true, CONNECT_ONE_SHOT | CONNECT_DEFERRED)
 	var library := UIManager.get_view("Library") as LibraryView
 	if library:
 		if kind == "platform":
 			library.apply_platform_selection(value, label)
 		else:
 			library.apply_external_filter(kind, value, center_text, label)
-	UIManager.switch_to_tab("Library")
-	if library and library.games_grid:
-		library.games_grid.focus_last_or_first_card.call_deferred()
+	# Immediate switch (no transition): the count callback's deferred
+	# _focus_first_card is guarded on is_current_view, which an animated
+	# transition would still be suppressing when it lands.
+	UIManager.switch_to_tab_immediate("Library")
 
 const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -770,6 +776,10 @@ func _setup_description_fold(game: GameResource) -> void:
 	# Measure the full text first, then clamp if it exceeds the folded budget.
 	description_label.max_lines_visible = -1
 	description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	if _small_layout:
+		# Small mode has no fold: full text, scroll handles overflow. Nothing
+		# consumes the line count, so skip the measurement pass.
+		return
 	var for_romm_id := game.romm_id
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -777,10 +787,47 @@ func _setup_description_fold(game: GameResource) -> void:
 		return
 	if _desc_expanded:
 		return
-	if description_label.get_line_count() > DESC_COLLAPSED_LINES:
-		description_label.max_lines_visible = DESC_COLLAPSED_LINES
+	# Measure the full text here; truncation is decided in _finalize_desc_fold
+	# once related placement and the expanded scroll area have settled.
+	_desc_full_line_count = description_label.get_line_count()
+
+## Fit-based fold: the desc scroll always absorbs the column's leftover space
+## (EXPAND_FILL), and the text truncates to however many lines FIT that space
+## — never a hard 3-line lock. The 3-line pin stays as the minimum-height
+## floor for cramped sheets. The More button only appears on real overflow.
+func _finalize_desc_fold() -> void:
+	if not is_instance_valid(desc_scroll) or not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button):
+		return
+	if _desc_expanded:
+		return
+	if _small_layout:
+		# Small mode has no fold: full text, the scroll area handles overflow.
+		description_label.max_lines_visible = -1
+		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		desc_fold_button.visible = false
+		desc_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		return
+	desc_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var for_romm_id := _current_game.romm_id if _current_game else 0
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id or _desc_expanded:
+		return
+	var line_height := float(description_label.get_line_height())
+	if line_height <= 0.0:
+		return
+	if _desc_full_line_count <= 0:
+		# Populate skipped the measurement (opened in small mode, resized wide).
+		_desc_full_line_count = description_label.get_line_count()
+	var fit_lines := maxi(DESC_COLLAPSED_LINES, int(desc_scroll.size.y / line_height))
+	if _desc_full_line_count > fit_lines:
+		description_label.max_lines_visible = fit_lines
 		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		desc_fold_button.visible = true
+	else:
+		description_label.max_lines_visible = -1
+		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		desc_fold_button.visible = false
 
 func _on_desc_fold_pressed() -> void:
 	_desc_expanded = not _desc_expanded
@@ -809,13 +856,17 @@ func _on_desc_fold_pressed() -> void:
 		var min_h := float(description_label.get_line_height()) * DESC_COLLAPSED_LINES
 		desc_scroll.custom_minimum_size.y = clampf(minf(text_h, budget), min_h, maxf(budget, min_h))
 	else:
-		description_label.max_lines_visible = DESC_COLLAPSED_LINES
-		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		# Collapse: reset to the measured-full text and the 3-line floor, then
+		# let _finalize_desc_fold refit truncation to the settled layout.
+		description_label.max_lines_visible = -1
+		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		desc_scroll.custom_minimum_size.y = description_label.get_line_height() * DESC_COLLAPSED_LINES
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "More"
+		desc_fold_button.visible = false
 		if not _small_layout and is_instance_valid(related_section) and _related_games_count > 0:
 			related_section.visible = true
+		_finalize_desc_fold()
 
 # ==================== RELATED GAMES ====================
 
@@ -844,7 +895,7 @@ func _populate_related_games(game: GameResource) -> void:
 	if related.is_empty():
 		if content_tabs:
 			content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
-		_update_desc_expand()
+		_finalize_desc_fold()
 		return
 	if is_instance_valid(related_header):
 		related_header.text = "Related Games (%d)" % related.size()
@@ -868,6 +919,7 @@ func _populate_related_games(game: GameResource) -> void:
 	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
 		return
 	_decide_related_placement()
+	_finalize_desc_fold()
 
 	# Resolve which related games are owned on the DB thread, then badge and
 	# link their cards. Exact igdb_id match first, title fallback after.

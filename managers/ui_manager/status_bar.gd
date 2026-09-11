@@ -362,8 +362,9 @@ func _query_battery_windows() -> void:
 			state = PowerState.NO_BATTERY
 	else:
 		print("[StatusBar] battery query failed, exit_code=", exit_code, " output=", output)
-	call_deferred("_on_battery_queried", state, percent)
-	call_deferred("_on_wifi_queried", wifi_state, wifi_percent)
+	if is_instance_valid(self):
+		call_deferred("_on_battery_queried", state, percent)
+		call_deferred("_on_wifi_queried", wifi_state, wifi_percent)
 
 
 func _query_battery_android() -> void:
@@ -389,7 +390,8 @@ func _query_battery_android() -> void:
 					state = PowerState.ON_BATTERY
 	else:
 		print("[StatusBar] android battery capacity not readable at ", ANDROID_BATTERY_CAPACITY_PATH)
-	call_deferred("_on_battery_queried", state, percent)
+	if is_instance_valid(self):
+		call_deferred("_on_battery_queried", state, percent)
 
 
 func _on_battery_queried(state: int, percent: int) -> void:

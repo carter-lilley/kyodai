@@ -4295,6 +4295,18 @@ func get_visible_range() -> Dictionary:
 func get_card_at_index(index: int) -> Control:
 	return _active_cards_by_index.get(index, null)
 
+## Replace cached data for a game (matched by romm_id) without a buffer
+## rebuild, so an offscreen card picks up the new state when scrolled into
+## view. Live cards are NOT touched here — the view's _on_game_updated path
+## updates those in place.
+func update_cached_game(game: GameResource) -> void:
+	if game == null:
+		return
+	for key in _data_cache:
+		var cached = _data_cache[key]
+		if cached and cached is GameResource and cached.romm_id == game.romm_id:
+			_data_cache[key] = game
+
 func _clamp_scroll_to_range(offset: float) -> float:
 	if not _scroll_container:
 		return offset

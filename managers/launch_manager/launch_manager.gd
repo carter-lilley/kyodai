@@ -833,6 +833,13 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	print("[LaunchManager] _launch_game_internal: ENTER for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
 	
+	if process.is_in_background_state():
+		var bg_game = process.get_background_game()
+		if bg_game and bg_game.romm_id == game.romm_id:
+			push_warning("[LaunchManager] _launch_game_internal: " + game.get_display_name() + " is already running, ignoring duplicate launch")
+			_end_launch(game.romm_id)
+			return
+	
 	var launch_intent = intent_manager.create_launch_intent(game)
 	
 	if not launch_intent:
