@@ -829,6 +829,11 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
 		if UIManager:
 			UIManager.exit_focus_lock(self)
+	elif what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		# A focus grab skipped while the window was backgrounded left its
+		# target pending; restore it now that the user is back.
+		if _pending_focus_index >= 0 and M3Overlay._get_topmost_overlay() == null:
+			call_deferred("_try_apply_pending_focus")
 
 func _free_card_pool() -> void:
 	"""Release pooled card references.
@@ -4045,6 +4050,10 @@ func _release_focus_inside_grid() -> void:
 	if focused and is_ancestor_of(focused):
 		viewport.gui_release_focus()
 
+func _window_has_focus() -> bool:
+	var w := get_window()
+	return w == null or w.has_focus()
+
 func _try_apply_pending_focus() -> void:
 	"""Focus the pending card if it has been created by the latest scroll."""
 	if _pending_focus_index < 0:
@@ -4552,12 +4561,22 @@ func _apply_focus_to_card(card: Control) -> void:
 	We intentionally do NOT stop an in-flight smooth scroll here: this helper is
 	used by scroll-to-focus paths that already started a centered scroll, and
 	interrupting it leaves offscreen targets sitting at the viewport edge."""
+	if not _window_has_focus():
+		# Backgrounded (e.g. a shuffler session): grabbing focus would fire
+		# focus_entered SFX/vibration nobody can see. Keep the target pending;
+		# NOTIFICATION_WM_WINDOW_FOCUS_IN restores it when the user returns.
+		var idx := int(card.get_meta("virtual_index", -1))
+		if idx >= 0:
+			_pending_focus_index = idx
+		return
 	card.set_meta("_suppress_smooth_scroll", true)
 	card.grab_focus()
 	_pending_focus_index = -1
 
 func focus_last_or_first_card() -> void:
 	"""Focus the last focused card, or the first card if none was focused."""
+	if not _window_has_focus():
+		return
 	var card = get_card_at_index(_last_focused_virtual_index)
 	if not card or not is_instance_valid(card) or not card.is_inside_tree():
 		card = get_card_at_index(0)

@@ -78,6 +78,17 @@ signal layout_changed
 signal keyboard_opened(active_line_edit: LineEdit)
 signal keyboard_closed()
 
+## PREDEFINED display-icon names mapped to MaterialIcons glyphs (rendered via
+## M3Button's icon support)
+const PREDEFINED_ICONS := {
+	"DELETE": "keyboard-backspace",
+	"SHIFT": "apple-keyboard-shift",
+	"LEFT": "chevron-left",
+	"RIGHT": "chevron-right",
+	"HIDE": "keyboard-close",
+	"ENTER": "keyboard-return",
+}
+
 ###########################
 ## PANEL 
 ###########################
@@ -744,11 +755,6 @@ func _key_released(key_data):
 ## CONSTRUCT KEYBOARD
 ###########################
 
-func _set_key_style(style_name:String, key: Control, style:StyleBoxFlat):
-	if style != null:
-		key.add_theme_stylebox_override(style_name, style)
-
-
 func _build_m3_styles() -> void:
 	if not use_m3_theme:
 		print("[OnscreenKeyboard] _build_m3_styles skipped: use_m3_theme is false")
@@ -795,20 +801,8 @@ func refresh_theme() -> void:
 	for key in keys:
 		if not is_instance_valid(key):
 			continue
-		var key_type = key.key_data.get("type", "")
-		var is_special: bool = key_type in ["switch-layout", "special", "special-shift", "special-hide-keyboard"]
-		var normal_style = style_special_keys if is_special else style_normal
-		_set_key_style("normal", key, normal_style)
-		_set_key_style("hover", key, style_hover)
-		_set_key_style("pressed", key, style_pressed)
-		_set_key_style("focus", key, style_focus)
-		if font_color_normal != null:
-			key.set('theme_override_colors/font_color', font_color_normal)
-			key.set('theme_override_colors/font_hover_color', font_color_hover)
-			key.set('theme_override_colors/font_pressed_color', font_color_pressed)
-			key.set('theme_override_colors/font_focus_color', font_color_focus)
-			key.set('theme_override_colors/font_disabled_color', font_color_normal)
-		key.set('theme_override_font_sizes/font_size', M3Units.dpi(font_size))
+		key.refresh_theme()
+		key.custom_font_size = M3Units.dpi(font_size)
 
 
 func _create_keyboard(layout_data):
@@ -820,13 +814,6 @@ func _create_keyboard(layout_data):
 
 	KeyListHandler = preload("keylist.gd").new()
 	KeyboardButton = preload("keyboard_button.gd")
-
-	var ICON_DELETE = preload("icons/delete.png")
-	var ICON_SHIFT = preload("icons/shift.png")
-	var ICON_LEFT = preload("icons/left.png")
-	var ICON_RIGHT = preload("icons/right.png")
-	var ICON_HIDE = preload("icons/hide.png")
-	var ICON_ENTER = preload("icons/enter.png")
 
 	var data = layout_data
 
@@ -870,66 +857,42 @@ func _create_keyboard(layout_data):
 			for key in row.get("keys"):
 				var new_key = KeyboardButton.new(key)
 
-				_set_key_style("normal",new_key, style_normal)
-				_set_key_style("hover",new_key, style_hover)
-				_set_key_style("pressed",new_key, style_pressed)
-				_set_key_style("focus",new_key, style_focus)
-
-				new_key.set('theme_override_font_sizes/font_size', M3Units.dpi(font_size))
-				if font != null:
-					new_key.set('theme_override_fonts/font', font)
-				if font_color_normal != null:
-					new_key.set('theme_override_colors/font_color', font_color_normal)
-					new_key.set('theme_override_colors/font_hover_color', font_color_hover)
-					new_key.set('theme_override_colors/font_pressed_color', font_color_pressed)
-					new_key.set('theme_override_colors/font_focus_color', font_color_focus)
-					new_key.set('theme_override_colors/font_disabled_color', font_color_normal)
+				new_key.button_variant = M3Button.Variant.OUTLINED
+				# Keys render above the global focus ring's canvas layer, so
+				# they need their own visible focus indication
+				new_key.show_focus_border = true
+				new_key.custom_font_size = M3Units.dpi(font_size)
 
 				new_key.released.connect(_key_released)
 
 				if key.has("type"):
-					if key.get("type") == "switch-layout":
+					var key_type: String = key.get("type")
+					if key_type == "switch-layout":
 						new_key.released.connect(_switch_layout)
-						_set_key_style("normal",new_key, style_special_keys)
-					elif key.get("type") == "special":
-						_set_key_style("normal",new_key, style_special_keys)
-					elif key.get("type") == "special-shift":
+						new_key.button_variant = M3Button.Variant.TONAL
+					elif key_type == "special":
+						new_key.button_variant = M3Button.Variant.TONAL
+					elif key_type == "special-shift":
 						new_key.released.connect(_trigger_uppercase)
 						new_key.toggle_mode = true
+						new_key.button_type = M3Button.Type.TOGGLE
+						new_key.button_variant = M3Button.Variant.TONAL
 						capslock_keys.push_back(new_key)
-						_set_key_style("normal",new_key, style_special_keys)
-					elif key.get("type") == "special-hide-keyboard":
+					elif key_type == "special-hide-keyboard":
 						new_key.released.connect(_on_hide_keyboard_clicked)
-						_set_key_style("normal",new_key, style_special_keys)
+						new_key.button_variant = M3Button.Variant.TONAL
 
-				# SET ICONS
+				# SET ICONS (font glyphs via M3Button)
 				if key.has("display-icon"):
 					var icon_data = str(key.get("display-icon")).split(":")
-					# PREDEFINED
-					if str(icon_data[0])=="PREDEFINED":
-						if str(icon_data[1])=="DELETE":
-							new_key.set_icon(ICON_DELETE)
-						elif str(icon_data[1])=="SHIFT":
-							new_key.set_icon(ICON_SHIFT)
-						elif str(icon_data[1])=="LEFT":
-							new_key.set_icon(ICON_LEFT)
-						elif str(icon_data[1])=="RIGHT":
-							new_key.set_icon(ICON_RIGHT)
-						elif str(icon_data[1])=="HIDE":
-							new_key.set_icon(ICON_HIDE)
-						elif str(icon_data[1])=="ENTER":
-							new_key.set_icon(ICON_ENTER)
-					# CUSTOM
-					if str(icon_data[0])=="res":
-						var texture = load(key.get("display-icon"))
-						new_key.set_icon(texture)
-
-					if font_color_normal != null:
-						new_key.set_icon_color(font_color_normal)
+					if str(icon_data[0]) == "PREDEFINED" and PREDEFINED_ICONS.has(str(icon_data[1])):
+						new_key.icon_name = PREDEFINED_ICONS[str(icon_data[1])]
 
 				# Controller hint: B (ui_cancel) deletes a character
 				if str(key.get("output")) == "Backspace":
-					new_key.set_badge("xbox-b")
+					new_key.badge_icon_name = "xbox-b"
+					new_key.badge_icon_font = "ControllerIcons"
+					new_key.badge_anchor = M3Button.BadgeAnchor.ICON
 
 				key_row.add_child(new_key)
 				keys.push_back(new_key)
