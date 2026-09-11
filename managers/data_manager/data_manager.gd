@@ -175,6 +175,10 @@ func get_all_games() -> Array[GameResource]:
 	return database.get_all_games()
 
 
+func get_most_recently_played_game() -> GameResource:
+	return database.get_most_recently_played_game()
+
+
 func get_games_by_platform(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
 	return database.get_games_by_platform(platform_slug, filters)
 
@@ -229,7 +233,13 @@ func _on_database_ready_for_collections() -> void:
 		print("[DataManager] Syncing collections at startup...")
 		# Favorites are derived from the favorite collection, so sync them after it
 		sync_collections(func(_success, _msg):
-			user_props.sync_favourites()
+			# sync_favourites is pure (mutex-guarded) DB work but measures
+			# ~175ms; run it on the DB worker so the sync completion frame
+			# doesn't hitch.
+			if MemorySubManager.is_shutting_down():
+				user_props.sync_favourites()
+			else:
+				MemorySubManager.queue_db_task(func(): user_props.sync_favourites())
 		)
 		user_props.flush_pending()
 

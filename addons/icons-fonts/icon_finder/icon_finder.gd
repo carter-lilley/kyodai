@@ -40,7 +40,7 @@ func _ready():
 
 func setup():
 	# Wait for fonts to be loaded before rendering
-	if IconsFonts.material_icons.is_empty() or IconsFonts.emojis.is_empty():
+	if IconsFonts.material_icons.is_empty() or IconsFonts.emojis.is_empty() or IconsFonts.controller_icons.is_empty():
 		await IconsFonts.font_loaded
 	
 	for renderer: IconsFontsRender in icons_renderers:

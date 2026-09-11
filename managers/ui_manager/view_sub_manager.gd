@@ -12,6 +12,7 @@ var _library_scene_path: String = "res://view/library_view.tscn"
 
 var _collection_scene_path: String = "res://view/collection_view.tscn"
 var _collection_tabs: Dictionary[int, Control] = {}
+var _platform_tabs: Dictionary[String, Control] = {}
 
 const FAVORITES_TAB_TITLE := "Favorites"
 var _favorites_tab: Control = null
@@ -172,6 +173,11 @@ func _setup_collection_tabs() -> void:
 		if item_type == "favorites":
 			_add_favorites_tab()
 			continue
+		if item_type == "platform":
+			var platform_slug: String = item.get("data", {}).get("platform_slug", "")
+			if not platform_slug.is_empty():
+				_add_platform_tab(platform_slug)
+			continue
 		if item_type != "collection":
 			continue
 		var collection_id = item.get("data", {}).get("collection_id", 0)
@@ -246,8 +252,68 @@ func _remove_collection_tab(collection_id: int) -> void:
 			_tab_container.remove_child(tab)
 			tab.queue_free()
 
+func _add_platform_tab(platform_slug: String) -> void:
+	if platform_slug.is_empty():
+		return
+	if _platform_tabs.has(platform_slug):
+		return
+
+	var tab = Control.new()
+	tab.name = _platform_tab_title(platform_slug)
+	tab.visible = false
+	_tab_container.add_child(tab)
+	_platform_tabs[platform_slug] = tab
+
+func _ensure_platform_setup(platform_slug: String) -> bool:
+	var tab_title = _platform_tab_title(platform_slug)
+	if _views.has(tab_title):
+		return true
+	if not _platform_tabs.has(platform_slug):
+		return false
+
+	var tab = _platform_tabs[platform_slug]
+	var platform_name := platform_slug.capitalize()
+	for p in DataManager.get_platforms_with_games():
+		if p.get("slug", "") == platform_slug:
+			platform_name = p.get("name", platform_name)
+			break
+
+	var scene := _load_collection_scene()
+	var platform_view = scene.instantiate()
+	platform_view.platform_slug = platform_slug
+	platform_view.collection_name = platform_name
+	platform_view.view_name = tab_title
+	tab.add_child(platform_view)
+	_views[tab_title] = platform_view
+
+	if platform_view.has_signal("hero_game_changed"):
+		platform_view.hero_game_changed.connect(ui_manager._on_hero_game_changed)
+
+	return true
+
+func _remove_platform_tab(platform_slug: String) -> void:
+	var tab_title = _platform_tab_title(platform_slug)
+	_view_shown_frame.erase(tab_title)
+
+	if _current_view and _current_view.view_name == tab_title:
+		switch_to_tab("Home")
+
+	if _views.has(tab_title):
+		var view = _views[tab_title]
+		_views.erase(tab_title)
+		if view and is_instance_valid(view):
+			view.queue_free()
+
+	if _platform_tabs.has(platform_slug):
+		var tab = _platform_tabs[platform_slug]
+		_platform_tabs.erase(platform_slug)
+		if tab and is_instance_valid(tab) and tab.get_parent() == _tab_container:
+			_tab_container.remove_child(tab)
+			tab.queue_free()
+
 func _add_favorites_tab() -> void:
 	if _favorites_tab and is_instance_valid(_favorites_tab):
+		return
 		return
 	var tab = Control.new()
 	tab.name = FAVORITES_TAB_TITLE
@@ -308,6 +374,17 @@ func _get_collection_id_from_tab_title(tab_title: String) -> int:
 	var suffix = tab_title.substr("Collection_".length())
 	return suffix.to_int()
 
+func _platform_tab_title(platform_slug: String) -> String:
+	return "Platform_%s" % platform_slug
+
+func _is_platform_tab_title(tab_title: String) -> bool:
+	return tab_title.begins_with("Platform_")
+
+func _get_platform_slug_from_tab_title(tab_title: String) -> String:
+	if not _is_platform_tab_title(tab_title):
+		return ""
+	return tab_title.substr("Platform_".length())
+
 func _sync_current_view_from_tab() -> void:
 	var current_tab_idx = _tab_container.current_tab
 	var current_tab_title = _tab_container.get_tab_title(current_tab_idx)
@@ -317,6 +394,8 @@ func _sync_current_view_from_tab() -> void:
 		_ensure_favorites_setup()
 	if _is_collection_tab_title(current_tab_title):
 		_ensure_collection_setup(_get_collection_id_from_tab_title(current_tab_title))
+	if _is_platform_tab_title(current_tab_title):
+		_ensure_platform_setup(_get_platform_slug_from_tab_title(current_tab_title))
 	if _views.has(current_tab_title):
 		_current_view = _views[current_tab_title]
 		_view_shown_frame[current_tab_title] = Engine.get_process_frames()
@@ -340,6 +419,8 @@ func _on_tab_changed(tab_idx: int):
 		_ensure_favorites_setup()
 	if _is_collection_tab_title(tab_title):
 		_ensure_collection_setup(_get_collection_id_from_tab_title(tab_title))
+	if _is_platform_tab_title(tab_title):
+		_ensure_platform_setup(_get_platform_slug_from_tab_title(tab_title))
 	if _views.has(tab_title):
 		_current_view = _views[tab_title]
 		_view_shown_frame[tab_title] = Engine.get_process_frames()
@@ -465,6 +546,11 @@ func rebuild_game_grid() -> void:
 			library_view.rebuild_grid()
 
 func get_view(view_name: String) -> View:
+	# Library is lazily instantiated on first tab select; external callers
+	# (e.g. details sheet filter chips) need it to exist before the switch,
+	# so build it on demand here.
+	if view_name == "Library" and not _views.has("Library"):
+		_ensure_library_setup()
 	if _views.has(view_name):
 		return _views[view_name]
 	return null

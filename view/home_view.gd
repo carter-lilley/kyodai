@@ -516,10 +516,11 @@ func are_intro_animations_complete() -> bool:
 	return true
 
 func _on_download_completed(_item_id: String, success: bool, _message: String):
-	# Refresh when a download completes (game may now show in home view)
+	# Refresh when a download completes (game may now show in home view).
+	# preserve_cache=false: a download changes the data model, so the merged
+	# DB+GameNative cache must be rebuilt or the new game never materializes.
 	if success:
-		# Rebuild grid to ensure layout transforms are recalculated
-		rebuild_grid()
+		_load_total_count(false, false)
 
 func _on_database_ready():
 	print("[DEBUG] _on_database_ready called")

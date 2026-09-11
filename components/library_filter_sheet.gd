@@ -48,6 +48,9 @@ func _build_content() -> void:
 
 	_panel = FilterChipsPanel.new()
 	_panel.filters_changed.connect(_on_panel_filters_changed)
+	# Keep the clear-all button in sync with externally seeded selections too
+	# (company filters applied outside the sheet emit no filters_changed).
+	_panel.content_rebuilt.connect(_update_clear_button)
 	_scroll.add_child(_panel)
 
 	# Bottom bar with clear action
@@ -152,14 +155,27 @@ static func prepare() -> void:
 	"""Pre-create the sheet so the first open doesn't stutter."""
 	_ensure_instance(true)
 
-static func show_sheet() -> LibraryFilterSheet:
+## Sync the panel's selection state from outside (e.g. filters cleared via the
+## back button while the sheet is hidden) so a later open doesn't show stale
+## chips. Emits no signals.
+static func sync_selection(filters: Dictionary) -> void:
+	if _instance and is_instance_valid(_instance) and _instance._panel:
+		_instance._panel.set_selected_filters(filters)
+
+static func show_sheet(current_filters: Dictionary = {}) -> LibraryFilterSheet:
 	_ensure_instance(false)
 
 	_instance.headline_text = "Filters"
 	_instance.sheet_variant = Variant.MODAL
 	_instance.set_focus_restore_fallback(Callable(_instance, "_focus_restore_to_grid_or_home"))
-	# Two-phase show: load filter options before presenting.
-	_instance.show_prepared(_instance.reload_options)
+	# Two-phase show: load filter options before presenting. When the caller
+	# already has active filters (e.g. a company filter applied from the
+	# details sheet), seed the panel's selection state instead so unrendered
+	# kinds survive the rebuild.
+	var prepare_cb: Callable = _instance.reload_options
+	if not current_filters.is_empty() and _instance._panel:
+		prepare_cb = _instance._panel.set_selected_filters.bind(current_filters)
+	_instance.show_prepared(prepare_cb)
 	_instance._focus_first_chip()
 	return _instance
 

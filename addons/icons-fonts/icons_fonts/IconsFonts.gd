@@ -13,9 +13,14 @@ const material_icons_font := "res://addons/icons-fonts/icons_fonts/MaterialIcons
 const emojis_json := "res://addons/icons-fonts/icons_fonts/emojis/emojis.json"
 const emojis_font := "res://addons/icons-fonts/icons_fonts/emojis/NotoColorEmoji.ttf"
 
+## ControllerIcons (PromptFont)
+const controller_icons_json := "res://addons/icons-fonts/icons_fonts/ControllerIcons/icons.json"
+const controller_icons_font := "res://addons/icons-fonts/icons_fonts/ControllerIcons/promptfont.ttf"
+
 signal font_loaded(font_name: String)
 var material_icons := {}
 var emojis := {}
+var controller_icons := {}
 
 static var is_docked: bool:
 	set(value):
@@ -49,6 +54,15 @@ func _ready():
 		content = get_file_content(emojis_json)
 		if json.parse(content) == OK:
 			init_emoji_dictionaries(json.data)
+
+	if Engine.is_editor_hint():
+		json = load(controller_icons_json)
+		init_controller_icons_dict(json.data)
+	else:
+		json = JSON.new()
+		content = get_file_content(controller_icons_json)
+		if json.parse(content) == OK:
+			init_controller_icons_dict(json.data)
 	
 func get_file_content(path: String) -> String:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -79,6 +93,15 @@ func init_emoji_dictionaries(dict: Dictionary):
 	prints("FontsIcons: Emojis loaded")
 	font_loaded.emit("Emojis")
 
+func init_controller_icons_dict(data: Dictionary):
+	controller_icons = data
+	for id in data:
+		var hex = controller_icons[id]
+		controller_icons[id] = ("0x" + hex).hex_to_int()
+
+	prints("FontsIcons: ControllerIcons loaded")
+	font_loaded.emit("ControllerIcons")
+
 func get_icon_code(font: String, id: String) -> int:
 	if "," in id:
 		id = id.split(",")[0]
@@ -87,6 +110,9 @@ func get_icon_code(font: String, id: String) -> int:
 		"MaterialIcons":
 			if id in material_icons:
 				return material_icons[id]
+		"ControllerIcons":
+			if id in controller_icons:
+				return controller_icons[id]
 	
 	push_warning("Icon '%s' in font %s not found." % [id, font])
 	return 0
@@ -102,6 +128,8 @@ func get_emoji_unicode(id: String) -> String:
 func get_icon_char(font: String, id: String) -> String:
 		match font:
 			"MaterialIcons":
+				return char(get_icon_code(font, id))
+			"ControllerIcons":
 				return char(get_icon_code(font, id))
 			
 			"Emojis":

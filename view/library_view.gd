@@ -44,6 +44,8 @@ func _exit_tree() -> void:
 			DataManager.sync_completed.disconnect(_on_sync_completed)
 		if DataManager.sync_progress.is_connected(_on_sync_progress):
 			DataManager.sync_progress.disconnect(_on_sync_progress)
+	if is_instance_valid(SystemManager) and SystemManager.download and SystemManager.download.download_completed.is_connected(_on_download_completed):
+		SystemManager.download.download_completed.disconnect(_on_download_completed)
 	if UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 	# The search overlay is created as an orphan; free it explicitly.
@@ -75,6 +77,8 @@ func _connect_signals() -> void:
 		DataManager.sync_completed.connect(_on_sync_completed)
 	if not DataManager.sync_progress.is_connected(_on_sync_progress):
 		DataManager.sync_progress.connect(_on_sync_progress)
+	if SystemManager and SystemManager.download and not SystemManager.download.download_completed.is_connected(_on_download_completed):
+		SystemManager.download.download_completed.connect(_on_download_completed)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -146,15 +150,78 @@ func _refresh_grid_dimensions() -> void:
 
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
-	var sheet := LibraryFilterSheet.show_sheet()
+	var sheet := LibraryFilterSheet.show_sheet(_active_filters)
 	if not sheet.filters_changed.is_connected(_on_filters_changed):
 		sheet.filters_changed.connect(_on_filters_changed)
+
+## External entry point (e.g. a studio chip in the details sheet): replace all
+## active filters with a single company include and reload the grid.
+func apply_company_filter(company: String) -> void:
+	apply_external_filter("company", company, "STUDIO", company)
+
+## Replace all active search/filter state with a single external filter value
+## (details sheet chips: company, genre, release_week) and reload the grid.
+func apply_external_filter(kind: String, value: String, center_text: String, label: String) -> void:
+	if value == "":
+		return
+	if DEBUG_LOG: print("[LibraryView] apply_external_filter: kind=", kind, " value=", value, " platform_slug=", _current_platform_slug)
+	try_clear_search()
+	_active_filters = {kind: {"include": [value], "exclude": []}}
+	if platform_indicator:
+		platform_indicator.set_filter_active(true)
+		platform_indicator.show_filter_mode(center_text, label)
+	_load_total_count()
+
+## External entry point (platform chip in the details sheet): clear all
+## search/filter state and jump the platform cycler to the given slug.
+func apply_platform_selection(slug: String, platform_name: String = "") -> void:
+	if slug == "":
+		return
+	if _platforms.is_empty():
+		_load_platforms_list()
+	var index := -1
+	for i in range(_platforms.size()):
+		if _platforms[i].get("slug", "") == slug:
+			index = i
+			break
+	if index == -1:
+		SystemManager.notifications.show_notification("Platform not in library: " + (platform_name if platform_name != "" else slug), SystemManager.notifications.Type.WARNING)
+		return
+	if DEBUG_LOG: print("[LibraryView] apply_platform_selection: slug=", slug, " index=", index)
+	try_clear_search()
+	if not _active_filters.is_empty():
+		_active_filters = {}
+		LibraryFilterSheet.sync_selection({})
+	if platform_indicator:
+		platform_indicator.set_filter_active(false)
+		platform_indicator.update_display(_platforms, index)
+	_current_platform_index = index
+	_current_platform_slug = slug
+	_load_total_count_with_platform(false)
+
+## Clear active filters (back-button path, mirrors try_clear_search).
+## Returns true if filters were cleared.
+func try_clear_filters() -> bool:
+	if _active_filters.is_empty():
+		return false
+	_active_filters = {}
+	if platform_indicator:
+		platform_indicator.set_filter_active(false)
+		platform_indicator.update_display(_platforms, _current_platform_index)
+	# Keep the persistent filter sheet's selection in sync so reopening it
+	# doesn't resurrect stale chips.
+	LibraryFilterSheet.sync_selection({})
+	_load_total_count()
+	return true
 
 func _on_filters_changed(filters: Dictionary) -> void:
 	"""Handle live filter chip changes from the filter sheet."""
 	_active_filters = filters
 	if platform_indicator:
 		platform_indicator.set_filter_active(not filters.is_empty())
+		# Sheet edits replace the filter set; the STUDIO label only reflects
+		# chip-applied company filters, so restore the platform labels.
+		platform_indicator.update_display(_platforms, _current_platform_index)
 	_load_total_count()
 
 func _on_search_button_clicked() -> void:
@@ -598,6 +665,12 @@ func _on_database_ready():
 func _on_database_failed(_error: String):
 	_is_loading = false
 	_update_status("Database unavailable - check storage permissions, then restart the app")
+
+func _on_download_completed(_item_id: String, success: bool, _message: String):
+	# Reload grid data on download completion so cards pick up the new
+	# downloaded state. Dispatches to the search variant when search is active.
+	if success and DataManager and DataManager.is_database_ready():
+		_load_total_count()
 
 func _on_games_removed(_platform_slug: String):
 	_reload_after_change()

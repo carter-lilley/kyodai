@@ -13,10 +13,17 @@ const STEADY_BUDGET_US := 500
 ## frame budget untouched so interactive work always wins the frame.
 const LOW_PRIORITY_RESERVE_RATIO := 0.4
 
+## Frame-spike monitor: logs any main-thread frame past the threshold, with
+## the tags of whoever ran warmup work in it, for the first seconds of runtime.
+const SPIKE_THRESHOLD_STARTUP_US := 25000
+const SPIKE_THRESHOLD_STEADY_US := 50000
+const SPIKE_MONITOR_WINDOW_MS := 15000
+
 # Rough per-unit cost estimates; precision doesn't matter, the cap does.
 const COST_CARD_INSTANTIATE_US := 300
 const COST_PLATFORM_CARD_US := 150
 const COST_SHADER_PREWARM_US := 2000
+const COST_SETTINGS_CATEGORY_US := 2000
 
 static var last_input_msec: int = 0
 static var home_grid_settled: bool = false
@@ -24,12 +31,29 @@ static var home_grid_settled: bool = false
 static var _frame_start_us: int = 0
 static var _frame_id: int = -1
 static var _startup_mode: bool = true
+static var _frame_tags: Array[String] = []
+static var _app_start_ms: int = 0
 
 ## Called once per frame from MemorySubManager._process (first autoload, so
 ## it runs before every warmer's drain).
 static func begin_frame() -> void:
-	_frame_start_us = Time.get_ticks_usec()
+	var now_us := Time.get_ticks_usec()
+	if _app_start_ms == 0:
+		_app_start_ms = Time.get_ticks_msec()
+	elif _frame_start_us != 0:
+		var prev_frame_us := now_us - _frame_start_us
+		var threshold: int = SPIKE_THRESHOLD_STARTUP_US if _startup_mode else SPIKE_THRESHOLD_STEADY_US
+		if prev_frame_us > threshold and Time.get_ticks_msec() - _app_start_ms < SPIKE_MONITOR_WINDOW_MS:
+			print("[FrameSpike] frame_us=", prev_frame_us, " tags=", _frame_tags, " idle_ms=", input_idle_ms(), " startup=", _startup_mode)
+	_frame_start_us = now_us
 	_frame_id = Engine.get_process_frames()
+	_frame_tags.clear()
+
+## Records that warmup work ran (or tried to run) in the current frame, so a
+## frame spike can be attributed to whoever was active in it.
+static func tag(label: String) -> void:
+	if _frame_id == Engine.get_process_frames() and not _frame_tags.has(label):
+		_frame_tags.append(label)
 
 static func is_startup_mode() -> bool:
 	return _startup_mode
@@ -51,7 +75,9 @@ static func input_idle_ms() -> int:
 ## unit of work — the frame's actual spend accrues between checks.
 ## Gating applies ONLY during the startup window: in steady state these
 ## drains ARE the interactive path (scroll recycling) and must never starve.
-static func try_spend(estimated_us: int) -> bool:
+static func try_spend(estimated_us: int, tag_name: String = "") -> bool:
+	if tag_name != "":
+		tag(tag_name)
 	if not _startup_mode:
 		return true
 	if _frame_id != Engine.get_process_frames():
@@ -63,7 +89,9 @@ static func try_spend(estimated_us: int) -> bool:
 	return Time.get_ticks_usec() - _frame_start_us + estimated_us <= _budget_us()
 
 ## Low-priority variant: refuses unless the interactive reserve stays intact.
-static func try_spend_low(estimated_us: int) -> bool:
+static func try_spend_low(estimated_us: int, tag_name: String = "") -> bool:
+	if tag_name != "":
+		tag(tag_name)
 	if not _startup_mode:
 		return true
 	if estimated_us > _budget_us():

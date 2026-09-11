@@ -63,6 +63,16 @@ func _setup_ui():
 	_search_button.focus_mode = Control.FOCUS_NONE
 	_search_button.pressed.connect(_on_search_clicked)
 	hbox.add_child(_search_button)
+
+	# Controller hints: LB/RB flank the platform group (rebuilt to index 2),
+	# right-stick-click sits next to search (activate_search binding)
+	var lb_hint = _make_controller_hint("xbox-left-shoulder")
+	hbox.add_child(lb_hint)
+	hbox.move_child(lb_hint, 1)
+	var rb_hint = _make_controller_hint("xbox-right-shoulder")
+	hbox.add_child(rb_hint)
+	hbox.move_child(rb_hint, 2)
+	hbox.add_child(_make_controller_hint("analog-r-click"))
 	
 	# Resize debounce timer
 	_resize_debounce_timer = Timer.new()
@@ -74,6 +84,19 @@ func _setup_ui():
 	
 	# Build initial platform group once size is known
 	call_deferred("_apply_responsive_layout")
+
+func _make_controller_hint(icon_name: String) -> FontIcon:
+	var hint := FontIcon.new()
+	hint.focus_mode = Control.FOCUS_NONE
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var settings := FontIconSettings.new()
+	settings.icon_font = "ControllerIcons"
+	settings.icon_name = icon_name
+	settings.icon_size = M3Units.dp(18)
+	settings.icon_color = M3Theme.get_on_surface_variant()
+	hint.icon_settings = settings
+	return hint
 
 func _notification(what: int):
 	if what == NOTIFICATION_RESIZED:
@@ -180,7 +203,7 @@ func _rebuild_platform_group() -> void:
 		_platform_group.add_child(btn)
 	_platform_group.add_child(next_btn)
 	hbox.add_child(_platform_group)
-	hbox.move_child(_platform_group, 1)
+	hbox.move_child(_platform_group, 2)
 
 func _update_minimum_height() -> void:
 	var hbox = get_node_or_null("MainContainer")
@@ -272,12 +295,12 @@ func set_filter_active(is_active: bool) -> void:
 func show_search_mode(query: String):
 	if _platform_buttons.is_empty():
 		return
-	
+
 	var center = _get_center_platform_index()
-	
+
 	for i in range(_platform_count):
 		var btn = _platform_buttons[i]
-		
+
 		if i == center:
 			btn.text = "SEARCH"
 			btn.disabled = false
@@ -288,6 +311,32 @@ func show_search_mode(query: String):
 				if display_query.length() > 12:
 					display_query = display_query.substr(0, 9) + "..."
 				btn.text = display_query
+			else:
+				btn.text = ""
+			btn.disabled = true
+			btn.button_variant = M3Button.Variant.ELEVATED
+
+## Mirror of search mode for an externally-applied filter (e.g. a studio chip
+## in the details sheet): center reads the kind label, neighbors show the value.
+func show_filter_mode(center_text: String, label: String):
+	if _platform_buttons.is_empty():
+		return
+
+	var center = _get_center_platform_index()
+
+	for i in range(_platform_count):
+		var btn = _platform_buttons[i]
+
+		if i == center:
+			btn.text = center_text
+			btn.disabled = false
+			btn.button_variant = M3Button.Variant.FILLED
+		else:
+			if abs(i - center) == 1:
+				var display_label = label
+				if display_label.length() > 12:
+					display_label = display_label.substr(0, 9) + "..."
+				btn.text = display_label
 			else:
 				btn.text = ""
 			btn.disabled = true

@@ -49,9 +49,10 @@ func setup(root_control: Control) -> void:
 	# swaps alike) to persistent overlays that opt in via on_viewport_settled().
 	SystemManager.display.viewport_size_changed.connect(_broadcast_viewport_settled)
 	# The settings dialog script drags ~300ms of preload dependencies onto
-	# whichever thread loads it first; warm it on the loader thread so the
-	# pre-create (and first open) never pay it on the main thread.
-	ResourceLoader.load_threaded_request(SETTINGS_DIALOG_SCRIPT_PATH)
+	# whichever thread loads it first; Main._enter_tree already kicks the
+	# threaded load. This guard covers setups reached without Main.
+	if ResourceLoader.load_threaded_get_status(SETTINGS_DIALOG_SCRIPT_PATH) == ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
+		ResourceLoader.load_threaded_request(SETTINGS_DIALOG_SCRIPT_PATH, "", true)
 
 ## DS-aware sizing viewport for M3 overlays: the active overlay parent when it
 ## is a Viewport (dual-screen SubViewport), the root window otherwise.
@@ -75,7 +76,7 @@ func _broadcast_viewport_settled(_new_size: Vector2) -> void:
 			live.append(ref)
 	_persistent_overlays = live
 
-func pre_create_settings_dialog(force: bool = false) -> void:
+func pre_create_settings_dialog(force: bool = false, block_if_loading: bool = false) -> void:
 	"""Eagerly build the settings dialog in the background.
 	If a valid dialog already exists and force is false, this is a no-op."""
 	if _settings_dialog and is_instance_valid(_settings_dialog) and not force:
@@ -88,7 +89,19 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 	# Use script .new() instead of scene instantiation to avoid CanvasLayer script attachment issues in SubViewports
 	var phase_start_us := Time.get_ticks_usec()
 	# Consume the threaded load kicked in setup(); load synchronously as fallback.
+	# Never block on an in-progress threaded load: load_threaded_get waits on
+	# the loader thread, and this script's deep preload chain turns that into
+	# a multi-hundred-ms main-thread hitch. Poll across frames instead, unless
+	# the caller explicitly needs the dialog right now (first open fallback).
 	var settings_script: GDScript = null
+	if ResourceLoader.load_threaded_get_status(SETTINGS_DIALOG_SCRIPT_PATH) == ResourceLoader.ThreadLoadStatus.THREAD_LOAD_IN_PROGRESS and not block_if_loading:
+		while ResourceLoader.load_threaded_get_status(SETTINGS_DIALOG_SCRIPT_PATH) == ResourceLoader.ThreadLoadStatus.THREAD_LOAD_IN_PROGRESS:
+			WarmupBudget.tag("settings_script_poll")
+			await get_tree().process_frame
+		# Another caller may have completed the pre-create while we waited.
+		if _settings_dialog and is_instance_valid(_settings_dialog) and not force:
+			return
+	WarmupBudget.tag("settings_script_get")
 	if ResourceLoader.load_threaded_get_status(SETTINGS_DIALOG_SCRIPT_PATH) != ResourceLoader.ThreadLoadStatus.THREAD_LOAD_INVALID_RESOURCE:
 		settings_script = ResourceLoader.load_threaded_get(SETTINGS_DIALOG_SCRIPT_PATH)
 	if settings_script == null:
@@ -117,7 +130,9 @@ func pre_create_settings_dialog(force: bool = false) -> void:
 func show_settings_dialog() -> void:
 	"""Show the settings popup dialog."""
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
-		pre_create_settings_dialog()
+		# User explicitly asked for the dialog: block on the script load rather
+		# than deferring (the pre-create polling path may not have run yet).
+		pre_create_settings_dialog(false, true)
 
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
 		push_error("[OverlayManager] Settings dialog unavailable")
@@ -182,7 +197,7 @@ func _reopen_settings_dialog_async(category: String) -> void:
 func set_card_designer_preview_game(romm_id: int) -> void:
 	"""Tell the Card Designer preview which game's cover to display."""
 	if not _settings_dialog or not is_instance_valid(_settings_dialog):
-		pre_create_settings_dialog()
+		pre_create_settings_dialog(false, true)
 	
 	if not _settings_dialog:
 		return

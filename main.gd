@@ -52,6 +52,11 @@ func _enter_tree():
 	# defers its expensive pool creation and layout until Main settles it once.
 	VirtualScrollGridContainer.startup_layout_suppressed = true
 
+	# Kick the settings dialog script load immediately: its deep preload chain
+	# takes ~500ms on the loader thread, so starting here (instead of in
+	# overlay.setup) lets it finish before the pre-create consumes it.
+	ResourceLoader.load_threaded_request(OverlaySubManager.SETTINGS_DIALOG_SCRIPT_PATH, "", true)
+
 func _ready():
 	var main_ready_start_us := Time.get_ticks_usec()
 	# Disable automatic quit so we can free the scene tree before the rendering
@@ -457,14 +462,16 @@ func _pre_create_settings_dialog() -> void:
 	platform cards screen can appear instantly when opened. Waits for a gap in
 	user input (5s cap) so the build can't land mid-interaction; the category
 	builds themselves spread over frames inside the dialog."""
+	print("[Main] _pre_create_settings_dialog entered at ms=", Time.get_ticks_msec())
 	for i in range(3):
 		await get_tree().process_frame
 	var waited_ms := Time.get_ticks_msec()
 	while WarmupBudget.input_idle_ms() < 500 and Time.get_ticks_msec() - waited_ms < 5000:
 		await get_tree().process_frame
+	print("[Main] _pre_create_settings_dialog building at ms=", Time.get_ticks_msec(), " idle_ms=", WarmupBudget.input_idle_ms())
 	if UIManager:
 		var start_us := Time.get_ticks_usec()
-		UIManager.pre_create_settings_dialog()
+		await UIManager.pre_create_settings_dialog()
 		print("[Main] pre_create_settings_dialog (initial burst) elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _on_settings_button_pressed() -> void:
@@ -698,7 +705,7 @@ func _toggle_horizontal_grid() -> void:
 		call_deferred("_restore_focus_to_card", focused_index, true)
 
 func _is_grid_view(view_name: String) -> bool:
-	return view_name == "Home" or view_name == "Library" or view_name == "Favorites" or view_name.begins_with("Collection_")
+	return view_name == "Home" or view_name == "Library" or view_name == "Favorites" or view_name.begins_with("Collection_") or view_name.begins_with("Platform_")
 
 func _on_tab_changed(view_name: String):
 	# Sync slider to the current view's grid; do not re-apply saved zoom here,
@@ -1190,6 +1197,8 @@ func _sync_zoom_slider_to_current_view() -> void:
 
 func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	"""Focus the first game card in the Home grid once it has data."""
+	if attempts == 0:
+		print("[Main] Startup focus: entered at ms=", Time.get_ticks_msec())
 	if attempts > 60:
 		print("[Main] Startup focus: grid did not populate, falling back to Home button")
 		reset_focus_to_home_button()
@@ -1215,12 +1224,21 @@ func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 		return
 
 	print("[Main] Startup focus: focusing first Home card")
+	WarmupBudget.tag("startup_focus")
 	grid.scroll_to_index_and_focus(0, false)
 
 func _prewarm_shader_pipelines() -> void:
-	# Wait out the startup critical path (first paint, grid settle, focus
-	# restore) before spending frames on pipeline compilation.
+	# Fallback kick: SystemManager starts the prewarm during the autoload
+	# window so pipelines are warm before the first visible frame. If that
+	# somehow didn't run, start it once the home grid settles. Prewarm is
+	# idempotent, so this is a no-op in the normal case.
+	print("[Main] _prewarm_shader_pipelines entered at ms=", Time.get_ticks_msec())
 	await get_tree().create_timer(1.0).timeout
+	if not is_inside_tree():
+		return
+	var waited_ms := Time.get_ticks_msec()
+	while not WarmupBudget.home_grid_settled and Time.get_ticks_msec() - waited_ms < 10000:
+		await get_tree().process_frame
 	if not is_inside_tree():
 		return
 	ShaderPrewarmer.prewarm(get_tree())
@@ -1245,6 +1263,7 @@ func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, 
 		return
 	if attempts > 0:
 		print("[Main] settle waited ", attempts, " frames for grid data (source_total=", source_total, ", count_resolved_empty=", count_resolved_empty, ")")
+	WarmupBudget.tag("grid_settle")
 	var sub_start_us := Time.get_ticks_usec()
 	grid._instantiate_card_pool()
 	print("[Main] settle: _instantiate_card_pool elapsed_us=", Time.get_ticks_usec() - sub_start_us)
@@ -1331,6 +1350,12 @@ func _handle_ui_cancel() -> void:
 		if current_view.try_clear_search():
 			return
 
+	# Then clear active library filters (e.g. a studio filter from the
+	# details sheet) before falling through to grid escape / Home.
+	if current_view and current_view.view_name == "Library" and current_view.has_method("try_clear_filters"):
+		if current_view.try_clear_filters():
+			return
+
 	# If focus is locked in a grid, escape to the nav bar instead of switching to Home
 	if current_view and current_view.games_grid:
 		var grid = current_view.games_grid
@@ -1392,16 +1417,13 @@ func _input(event: InputEvent):
 			get_viewport().set_input_as_handled()
 			return
 
-	# Handle zoom in/out with triggers - only on press, not hold
+	# Handle zoom in/out with right stick - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
 		if not _zoom_in_pressed:
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx("click_04")
 			_zoom_in_pressed = true
 			_adjust_zoom(1.0)
-		return
-	elif event.is_action_released("zoom_in"):
-		_zoom_in_pressed = false
 		return
 
 	if event.is_action_pressed("zoom_out"):
@@ -1411,7 +1433,12 @@ func _input(event: InputEvent):
 			_zoom_out_pressed = true
 			_adjust_zoom(-1.0)
 		return
-	elif event.is_action_released("zoom_out"):
+
+	if event.is_action_released("zoom_in") and _zoom_in_pressed:
+		_zoom_in_pressed = false
+		return
+
+	if event.is_action_released("zoom_out") and _zoom_out_pressed:
 		_zoom_out_pressed = false
 		return
 

@@ -244,6 +244,7 @@ func _create_tables():
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_platform ON games(platform_slug)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_title ON games(title)")
 	query_bool("CREATE INDEX IF NOT EXISTS idx_games_cover_group ON games(cover_group_id)")
+	query_bool("CREATE INDEX IF NOT EXISTS idx_games_last_played ON games(last_played)")
 
 	# Normalized filter values derived from IGDB metadata (genres, game modes,
 	# age ratings) so library filtering uses indexed lookups instead of JSON scans.
@@ -398,7 +399,7 @@ func _get_is_master_entry_clause() -> String:
 
 # ==================== LIBRARY FILTERS ====================
 
-const FILTER_KINDS := ["genre", "game_mode", "esrb", "pegi", "flag", "status"]
+const FILTER_KINDS := ["genre", "game_mode", "esrb", "pegi", "flag", "status", "company", "release_week"]
 
 ## Play-state flag chips map to live per-user columns on games (whitelist).
 ## Filtered directly instead of via game_filter_values since they change
@@ -441,6 +442,9 @@ func replace_game_filter_values_unlocked(game: GameResource) -> void:
 						query_bool_unlocked(insert_sql, [game.romm_id, "esrb", value])
 					elif category == "PEGI":
 						query_bool_unlocked(insert_sql, [game.romm_id, "pegi", value])
+		for company in game.get_igdb_companies():
+			if company != "":
+				query_bool_unlocked(insert_sql, [game.romm_id, "company", company])
 
 
 ## Builds [sql_clause, bindings] for active library filters.
@@ -479,6 +483,27 @@ func _get_filter_clause(filters: Dictionary) -> Array:
 			if not exclude.is_empty():
 				clause += " AND games.status NOT IN (%s)" % ", ".join(exclude.map(func(_v): return "?"))
 				bindings.append_array(exclude)
+		elif kind == "release_week":
+			# Values are the game's own release_date epoch-ms; match by calendar
+			# week so the cohort is stable per week (vs a sliding ±3 day window).
+			# NOTE: built via concatenation, never the % format operator — it
+			# would choke on the literal %Y-%W inside the strftime pattern and
+			# silently mangle the clause.
+			var week_expr := "strftime('%Y-%W', ? / 1000, 'unixepoch')"
+			if not include.is_empty():
+				var in_parts: Array = []
+				for _v in include:
+					in_parts.append(week_expr)
+				clause += " AND strftime('%Y-%W', games.release_date / 1000, 'unixepoch') IN (" + ", ".join(in_parts) + ")"
+				bindings.append_array(include)
+			if not exclude.is_empty():
+				var ex_parts: Array = []
+				for _v in exclude:
+					ex_parts.append(week_expr)
+				clause += " AND strftime('%Y-%W', games.release_date / 1000, 'unixepoch') NOT IN (" + ", ".join(ex_parts) + ")"
+				bindings.append_array(exclude)
+			if _verbose_sql:
+				print("[DatabaseManager] release_week clause: ", clause, " bindings: ", bindings)
 		else:
 			if not include.is_empty():
 				var placeholders = ", ".join(include.map(func(_v): return "?"))
@@ -505,7 +530,7 @@ func get_filter_options() -> Dictionary:
 		return options
 	var cover_clause = _get_has_cover_art_clause().replace("has_cover_art", "g.has_cover_art")
 	var master_clause = _get_is_master_entry_clause().replace("is_master_entry", "g.is_master_entry")
-	var query = "SELECT DISTINCT gfv.kind, gfv.value FROM game_filter_values gfv JOIN games g ON g.romm_id = gfv.game_id WHERE 1=1" + master_clause + cover_clause + " AND g.cover_group_master = 1 ORDER BY gfv.value ASC"
+	var query = "SELECT DISTINCT gfv.kind, gfv.value FROM game_filter_values gfv JOIN games g ON g.romm_id = gfv.game_id WHERE 1=1 AND gfv.kind != 'company'" + master_clause + cover_clause + " AND g.cover_group_master = 1 ORDER BY gfv.value ASC"
 	for row in query_array(query):
 		var kind := str(row.get("kind", ""))
 		if options.has(kind):
@@ -1321,6 +1346,19 @@ func get_all_games() -> Array[GameResource]:
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
+
+
+func get_most_recently_played_game() -> GameResource:
+	"""Most recently played locally-available game (save-sync startup sweep).
+	Targeted LIMIT 1: get_all_games() hydrates the whole library — including
+	per-row JSON blobs (siblings, igdb_metadata) — which is a multi-second
+	stall when all the sweep needs is the single most recent game."""
+	if not _is_db_ready:
+		return null
+	var query_result = query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND last_played != '' AND (has_local_copy = 1 OR (downloaded_sibling_ids != '[]' AND downloaded_sibling_ids != '')) ORDER BY last_played DESC LIMIT 1")
+	if query_result.is_empty():
+		return null
+	return _row_to_game(query_result[0])
 
 
 func get_games_by_platform(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:

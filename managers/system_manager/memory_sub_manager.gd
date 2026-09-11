@@ -302,6 +302,7 @@ func _drain_mt_callbacks():
 	if _mt_callbacks.is_empty():
 		_mt_callback_mutex.unlock()
 		return
+	WarmupBudget.tag("mt_cbs")
 	var batch := _mt_callbacks
 	_mt_callbacks = []
 	_mt_callback_mutex.unlock()
@@ -326,6 +327,7 @@ func _drain_lp_callbacks():
 	# grid settle work; cap the drain so covers can't crowd out the first paint.
 	var per_frame_cap := 6 if WarmupBudget.is_startup_mode() else MAX_LP_CALLBACKS_PER_FRAME
 	var to_process = mini(backlog, per_frame_cap)
+	WarmupBudget.tag("img_upload_cbs")
 	var batch: Array = []
 	batch.resize(to_process)
 	for i in range(to_process):

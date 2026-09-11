@@ -295,6 +295,7 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
+		WarmupBudget.tag("net_handler")
 		_finish_pooled_request(http)
 
 		if response_code == 401:
@@ -318,6 +319,7 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 			callback.call({}, "HTTP error: " + str(response_code))
 			return
 
+		var parse_start_us := Time.get_ticks_usec()
 		var body_text = body.get_string_from_utf8()
 
 		var json = JSON.new()
@@ -329,6 +331,9 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 
 		# Client-side hash-based caching: compute hash of sorted rom IDs
 		var body_hash = _compute_content_hash(json.data)
+		var parse_us := Time.get_ticks_usec() - parse_start_us
+		if parse_us > 20000:
+			print("[Network] parse+hash '", endpoint, "' bytes=", body.size(), " elapsed_us=", parse_us)
 
 		if use_cache and not cached.is_empty():
 			var cached_hash = cached.get("hash", "")

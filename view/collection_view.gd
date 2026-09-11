@@ -9,6 +9,9 @@ extends View
 ## When true, this view shows the RomM favorites collection. The collection id
 ## is resolved dynamically (it can appear/change after collections sync).
 @export var favorites_mode: bool = false
+## When non-empty, this view shows the library filtered to this platform slug
+## (used by pinned platform tabs).
+@export var platform_slug: String = ""
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -72,6 +75,8 @@ func _disconnect_signals() -> void:
 func _ready():
 	if favorites_mode:
 		_refresh_favorites_collection_id()
+	elif not platform_slug.is_empty():
+		view_name = _platform_view_name(platform_slug)
 	elif collection_name.is_empty() and collection_id != 0:
 		var collection = DataManager.get_collection(collection_id)
 		if collection:
@@ -102,6 +107,9 @@ func _ready():
 static func _collection_view_name(id: int) -> String:
 	return "Collection_%d" % id
 
+static func _platform_view_name(slug: String) -> String:
+	return "Platform_%s" % slug
+
 func _refresh_favorites_collection_id() -> void:
 	"""Re-resolve the favorites collection id; reloads the grid if it changed."""
 	if not favorites_mode or not DataManager:
@@ -122,7 +130,11 @@ func _on_collection_membership_changed(changed_id: int, _romm_id: int) -> void:
 		_load_total_count(false)
 
 func _get_empty_status_text() -> String:
-	return "No favorites yet" if favorites_mode else "No games in this collection"
+	if favorites_mode:
+		return "No favorites yet"
+	if not platform_slug.is_empty():
+		return "No games for this platform"
+	return "No games in this collection"
 
 func _on_database_ready() -> void:
 	# One-shot: the manual is_database_ready() path and the signal can both
@@ -170,6 +182,9 @@ func _refresh_grid_dimensions() -> void:
 		games_grid.refresh_dimensions()
 
 func _load_total_count(preserve_cache: bool = false) -> void:
+	if not platform_slug.is_empty():
+		_load_platform_total_count(preserve_cache)
+		return
 	if collection_id == 0:
 		if favorites_mode:
 			_total_games = 0
@@ -198,7 +213,43 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 			_is_loading = false
 	)
 
+func _load_platform_total_count(preserve_cache: bool = false) -> void:
+	_is_loading = true
+	_update_status("Loading platform...")
+
+	MemorySubManager.queue_db_task(
+		func():
+			var count = DataManager.get_total_games_count(platform_slug)
+			return count,
+		func(count: int):
+			if not is_instance_valid(games_grid):
+				_is_loading = false
+				return
+			_total_games = count
+			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
+			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
+			if count == 0:
+				_update_status(_get_empty_status_text())
+			else:
+				_update_status("Showing 0-0 of %d games" % count)
+			_is_loading = false
+	)
+
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> void:
+	if not platform_slug.is_empty():
+		MemorySubManager.queue_db_task(
+			func():
+				if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
+					var stale: Array[GameResource] = []
+					return stale
+				var games = DataManager.get_games_paginated(offset, limit, "title", true, platform_slug)
+				return games,
+			func(games: Array[GameResource]):
+				if not is_instance_valid(games_grid):
+					return
+				games_grid.on_items_loaded(games, offset, is_preload)
+		)
+		return
 	if collection_id == 0:
 		return
 	MemorySubManager.queue_db_task(

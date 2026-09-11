@@ -2,7 +2,7 @@
 class_name IconsFontsRender
 extends RichTextLabel
 
-@export_enum("MaterialIcons", "Emojis")
+@export_enum("MaterialIcons", "Emojis", "ControllerIcons")
 var icon_font := "MaterialIcons"
 
 @export var start_size := 1065
@@ -18,6 +18,7 @@ func get_font_data() -> Dictionary:
 	match icon_font:
 		"MaterialIcons": data =  IconsFonts.material_icons
 		"Emojis": data = IconsFonts.emojis
+		"ControllerIcons": data = IconsFonts.controller_icons
 		_: text = "Unsupported IconsFont %s" % icon_font
 
 	return data
@@ -26,6 +27,7 @@ func get_icon(key:String) -> String:
 	match icon_font:
 		"MaterialIcons": return IconsFonts.get_icon_char("MaterialIcons", key)
 		"Emojis": return str(IconsFonts.emojis[key])
+		"ControllerIcons": return IconsFonts.get_icon_char("ControllerIcons", key)
 
 	return ""
 

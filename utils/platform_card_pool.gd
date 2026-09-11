@@ -74,7 +74,7 @@ static func process(_delta: float = 0.0) -> void:
 static func _warmup_step() -> void:
 	var pool_names := _get_pool_names()
 	var frames_left := PREWARM_BATCH_PER_FRAME
-	while frames_left > 0 and _warmup_remaining > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US):
+	while frames_left > 0 and _warmup_remaining > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US, "platform_card_pool"):
 		var pool_name: String = pool_names[_warmup_pool_index % pool_names.size()]
 		var card := PlatformCard.new()
 		card.visible = false
@@ -88,7 +88,7 @@ static func _background_warm_step() -> void:
 	# Warm platform cards first (they're the laggy screen), then shuffler cards.
 	# This runs continuously after the initial prewarm until both pools are full.
 	var frames_left := BACKGROUND_WARM_BATCH_PER_FRAME
-	while frames_left > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US):
+	while frames_left > 0 and WarmupBudget.try_spend_low(WarmupBudget.COST_PLATFORM_CARD_US, "platform_card_pool"):
 		var target_pool: String = ""
 		if _pools.get(POOL_PLATFORM_SETTINGS, []).size() < MAX_PLATFORM_POOL_SIZE:
 			target_pool = POOL_PLATFORM_SETTINGS

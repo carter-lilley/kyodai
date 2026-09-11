@@ -9,6 +9,10 @@ extends RefCounted
 
 const SCAN_DIRS := ["res://shaders", "res://addons/m3/shaders"]
 
+# Prewarm is kicked early (autoload) with a fallback kick from Main; the
+# guard makes whichever runs second a no-op.
+static var _started := false
+
 static func collect_shader_paths() -> Array[String]:
 	var paths: Array[String] = []
 	for dir_path in SCAN_DIRS:
@@ -31,6 +35,9 @@ static func _collect_dir(dir_path: String, out: Array[String]) -> void:
 	dir.list_dir_end()
 
 static func prewarm(tree: SceneTree) -> void:
+	if _started:
+		return
+	_started = true
 	var start_us := Time.get_ticks_usec()
 	var paths := collect_shader_paths()
 	if paths.is_empty():
@@ -48,8 +55,9 @@ static func prewarm(tree: SceneTree) -> void:
 	for path in paths:
 		# Pipeline compilation is a frame-time spike by nature; skip frames
 		# where the warmup budget is already spent so compiles never stack
-		# onto grid settle or scroll work.
-		while not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US):
+		# onto grid settle or scroll work, and skip frames with recent input
+		# so a compile spike can't hitch an in-flight interaction.
+		while not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US, "shader_prewarm") or WarmupBudget.input_idle_ms() < 100:
 			await tree.process_frame
 		var shader: Shader = load(path)
 		if shader == null:
@@ -63,6 +71,9 @@ static func prewarm(tree: SceneTree) -> void:
 		# UPDATE_ONCE renders on the next frame, then disables again.
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		await tree.process_frame
+		# With threaded rendering the compile stalls the render thread and
+		# surfaces a frame late; tag the render frame too so spikes attribute.
+		WarmupBudget.tag("shader_rendered")
 		rect.queue_free()
 		compiled += 1
 

@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://bni8w3a3pcbwn"]
+[gd_scene load_steps=6 format=3 uid="uid://bni8w3a3pcbwn"]
 
 [ext_resource type="Script" path="res://addons/icons-fonts/icon_finder/icon_finder.gd" id="1_nv02s"]
 [ext_resource type="FontFile" uid="uid://bbfeoo2kuf30n" path="res://addons/icons-fonts/icons_fonts/MaterialIcons/material_design_icons.ttf" id="2_8e28h"]
 [ext_resource type="Script" path="res://addons/icons-fonts/icon_finder/IconsFontsRender.gd" id="3_hobrt"]
 [ext_resource type="FontFile" uid="uid://be10y8fgoiayy" path="res://addons/icons-fonts/icons_fonts/emojis/NotoColorEmoji.ttf" id="3_sggto"]
+[ext_resource type="FontFile" uid="uid://akpqnmnf162gz" path="res://addons/icons-fonts/icons_fonts/ControllerIcons/promptfont.ttf" id="4_pfctl"]
 
 [node name="IconFinder" type="Panel" node_paths=PackedStringArray("icons_renderers", "icons_renderers_tabs", "notify_label", "search_line_edit", "size_slider", "size_label", "scroll_container", "fonts_dropdown")]
 anchors_preset = 15
@@ -14,7 +15,7 @@ grow_vertical = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_nv02s")
-icons_renderers = [NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs/MaterialIcons"), NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs/Emojis")]
+icons_renderers = [NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs/MaterialIcons"), NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs/Emojis"), NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs/ControllerIcons")]
 icons_renderers_tabs = NodePath("MarginContainer/VBoxContainer/ScrollContainer/Tabs")
 notify_label = NodePath("MarginContainer/VBoxContainer/Notify")
 search_line_edit = NodePath("MarginContainer/VBoxContainer/HBoxContainer/Search")
@@ -50,10 +51,12 @@ text = "Font"
 [node name="FontsDropdown" type="OptionButton" parent="MarginContainer/VBoxContainer/HBoxContainer"]
 layout_mode = 2
 selected = 0
-item_count = 2
+item_count = 3
 popup/item_0/text = "MaterialIcons"
 popup/item_1/text = "Emojis"
 popup/item_1/id = 1
+popup/item_2/text = "ControllerIcons"
+popup/item_2/id = 2
 
 [node name="Search" type="LineEdit" parent="MarginContainer/VBoxContainer/HBoxContainer"]
 layout_mode = 2
@@ -136,3 +139,24 @@ icon_font = "Emojis"
 size_slider = NodePath("../../../SliderContainer/HSlider")
 search_line_edit = NodePath("../../../HBoxContainer/Search")
 metadata/_tab_index = 1
+
+[node name="ControllerIcons" type="RichTextLabel" parent="MarginContainer/VBoxContainer/ScrollContainer/Tabs" node_paths=PackedStringArray("size_slider", "search_line_edit")]
+visible = false
+clip_contents = false
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_fonts/normal_font = ExtResource("4_pfctl")
+theme_override_font_sizes/normal_font_size = 16
+bbcode_enabled = true
+text = "Loading"
+fit_content = true
+scroll_active = false
+autowrap_mode = 0
+meta_underlined = false
+threaded = false
+script = ExtResource("3_hobrt")
+icon_font = "ControllerIcons"
+size_slider = NodePath("../../../SliderContainer/HSlider")
+search_line_edit = NodePath("../../../HBoxContainer/Search")
+metadata/_tab_index = 2

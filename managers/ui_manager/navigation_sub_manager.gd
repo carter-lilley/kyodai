@@ -418,7 +418,7 @@ func _get_pinned_shortcuts() -> Array[Dictionary]:
 	for item in setting.value:
 		if item is Dictionary:
 			var type = item.get("type", "")
-			if type == current_type or type == "collection" or type == "favorites":
+			if type == current_type or type == "collection" or type == "favorites" or type == "platform":
 				result.append(item)
 	return result
 
@@ -431,7 +431,7 @@ func _get_nav_destinations() -> Array[Dictionary]:
 	return result
 
 func _is_pinned_destination(dest: Dictionary) -> bool:
-	return dest.get("type") in ["app", "program", "collection", "favorites"]
+	return dest.get("type") in ["app", "program", "collection", "favorites", "platform"]
 
 func _on_nav_node_ready() -> void:
 	"""Apply deferred nav node config now that _ready() has created internal UI."""
@@ -471,6 +471,8 @@ func get_transition_icon_for_view(view_name: String) -> String:
 		return "star"
 	if view_name == "Favorites":
 		return "heart"
+	if view_name.begins_with("Platform_"):
+		return "gamepad-variant"
 	return ""
 
 func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
@@ -497,7 +499,7 @@ func _on_nav_destination_selected(index: int, _reselected: bool) -> void:
 	if index >= static_count and index < static_count + pin_count:
 		# Pinned shortcut selected; keep static selection highlighted.
 		_set_nav_selected_index_no_signal(_last_nav_index)
-		if dest.get("type") == "collection" or dest.get("type") == "favorites":
+		if dest.get("type") == "collection" or dest.get("type") == "favorites" or dest.get("type") == "platform":
 			_focus_tapped_destination(index)
 			ui_manager.switch_to_tab(dest.view)
 		else:
@@ -539,6 +541,7 @@ func _show_add_menu(anchor: Control) -> void:
 	_add_menu.add_item("Collection", _on_add_collection_selected, "star")
 	if not _has_favorites_pin():
 		_add_menu.add_item("Favorites", _on_add_favorites_selected, "heart")
+	_add_menu.add_item("Platform", _on_add_platform_selected, "gamepad-variant")
 	_add_menu.popup(anchor)
 
 func _on_add_menu_item_selected() -> void:
@@ -616,6 +619,48 @@ func _on_collection_pin_selected(collection_id: int, collection_name: String) ->
 		"icon": "star",
 		"view": "Collection_%d" % collection_id,
 		"data": {"collection_id": collection_id, "collection_name": collection_name}
+	}
+	_add_pinned_shortcut(pin)
+	ui_manager.switch_to_tab(pin.view)
+
+func _on_add_platform_selected() -> void:
+	"""Open the platform picker to pin a synced platform."""
+	var picker := PlatformPicker.new()
+	picker.set_disabled_slugs(_get_pinned_platform_slugs())
+	picker.platform_selected.connect(_on_platform_pin_selected)
+	picker.show_overlay()
+
+func _get_pinned_platform_slugs() -> Array[String]:
+	var slugs: Array[String] = []
+	if not DataManager:
+		return slugs
+	var setting = DataManager.get_setting("nav_pinned_shortcuts")
+	if not setting or not (setting.value is Array):
+		return slugs
+	for item in setting.value:
+		if item is Dictionary and item.get("type", "") == "platform":
+			var slug = item.get("data", {}).get("platform_slug", "")
+			if slug is String and not slug.is_empty() and not slugs.has(slug):
+				slugs.append(slug)
+	return slugs
+
+func _on_platform_pin_selected(platform_slug: String, platform_name: String) -> void:
+	"""Persist a new platform pin and rebuild the navigation."""
+	if platform_slug.is_empty():
+		return
+	if _get_pinned_platform_slugs().has(platform_slug):
+		return
+
+	if ui_manager and ui_manager.view:
+		ui_manager.view._add_platform_tab(platform_slug)
+
+	var pin := {
+		"id": "platform_%s" % platform_slug,
+		"type": "platform",
+		"label": platform_name,
+		"icon": "gamepad-variant",
+		"view": "Platform_%s" % platform_slug,
+		"data": {"platform_slug": platform_slug, "platform_name": platform_name}
 	}
 	_add_pinned_shortcut(pin)
 	ui_manager.switch_to_tab(pin.view)
@@ -706,6 +751,10 @@ func _on_remove_pin_selected(dest: Dictionary) -> void:
 	elif dest.get("type") == "favorites":
 		if ui_manager and ui_manager.view:
 			ui_manager.view._remove_favorites_tab()
+	elif dest.get("type") == "platform":
+		var platform_slug: String = dest.get("data", {}).get("platform_slug", "")
+		if not platform_slug.is_empty() and ui_manager and ui_manager.view:
+			ui_manager.view._remove_platform_tab(platform_slug)
 	
 	_rebuild_nav_and_layout()
 

@@ -298,6 +298,14 @@ func get_igdb_multiplayer_modes() -> Array[Dictionary]:
 		return result
 	return []
 
+## Returns the IGDB companies list (developer/publisher names) if present
+func get_igdb_companies() -> Array[String]:
+	var result: Array[String] = []
+	if igdb_metadata is Dictionary and igdb_metadata.has("companies") and igdb_metadata["companies"] is Array:
+		for item in igdb_metadata["companies"]:
+			result.append(str(item))
+	return result
+
 ## Returns combined IGDB related games from all relation categories
 func get_igdb_related_games() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

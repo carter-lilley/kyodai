@@ -6,12 +6,10 @@ rework hero to also accept effect stacks
 ship w music
 update notification all in one 
 tst emulator app update flow on android
-x download copying step (for sd cards on android)
+download copying step (for sd cards on android)
 
-FIX STATRTUP STUTTERS
 submenus still suck
 low-power save-sync subprocess to run behind games 'added to steam'?
-details text still too small
 text on no-covers in no-text mode
 PCEE2?
 user-added emu jsons, resolvers(?) and shader layers. 
@@ -39,10 +37,8 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	- shadps4
 	
 ## romm
- - dev studio?
  - xtra romm metadata - HL2B, guides, logos..
  - screenshots...& user uploaded?
- - pin a platform
  - user profile? name & icon?
 
 ## general UI
@@ -77,6 +73,7 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	
 	auto m3us
 	emulator repo downloads & updates
+	flexible user profile & emu config support
 	romm firmware & save sync
 	gamenative support
 	gavel & sigil support

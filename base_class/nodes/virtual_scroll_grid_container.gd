@@ -1123,13 +1123,13 @@ func _process_buffer_expansion() -> void:
 		print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
 
 	var added: int = 0
-	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
+	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "grid_buffer"):
 		_add_card_at_end(current_last + 1)
 		current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 		added += 1
 
 	current_first = _active_cards[0].get_meta("virtual_index", 0)
-	while current_first > _buffer_target_start and current_first > 0 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
+	while current_first > _buffer_target_start and current_first > 0 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "grid_buffer"):
 		_add_card_at_start(current_first - 1)
 		current_first = _active_cards[0].get_meta("virtual_index", 0)
 		added += 1
@@ -2566,7 +2566,7 @@ func _process_pool_growth() -> void:
 		return
 	var count = mini(POOL_GROWTH_PER_FRAME, _pending_pool_growth)
 	for i in range(count):
-		if not WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US):
+		if not WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "card_pool"):
 			return
 		var card = _card_scene.instantiate()
 		card.visible = false

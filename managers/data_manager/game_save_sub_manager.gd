@@ -53,14 +53,25 @@ func _run_io_task(path: String, work: Callable, callback: Callable) -> void:
 	if _should_thread_io(path):
 		MemorySubManager.queue_extraction_task(work, callback)
 	else:
-		callback.call(work.call())
+		var result = work.call()
+		if callback.is_valid():
+			callback.call(result)
 
 func _ready() -> void:
 	_init_strategies()
-	_cleanup_all_temp_dirs()
+	# Temp-dir cleanup does recursive disk deletes; keep it off the startup
+	# critical path and off the main thread.
+	call_deferred("_schedule_temp_dir_cleanup")
 	# DB init is queued from DataManager._ready (runs after this), so
 	# database_ready always fires after this connect
 	DataManager.database_ready.connect(_schedule_startup_dirty_sweep, CONNECT_ONE_SHOT)
+
+## Runs temp-dir cleanup on the IO worker once startup has settled.
+func _schedule_temp_dir_cleanup() -> void:
+	await get_tree().create_timer(5.0).timeout
+	if not is_inside_tree():
+		return
+	_run_io_task("user://temp_saves", _cleanup_all_temp_dirs, Callable())
 
 ## Cleans up all temp directories under user://temp_saves/
 func _cleanup_all_temp_dirs() -> void:
@@ -2877,15 +2888,20 @@ func _perform_auto_upload(game: GameResource, emulator_id: String, upload_ops: A
 ## save that no longer matches its last sync boundary (e.g. the OS killed
 ## Kyodai before the post-play upload ran). Only the most recent game is
 ## checked: the OOM-kill scenario strands the killed session's game, and older
-## drift is caught by that game's next pre-launch auto-download. Discovery and
-## hashing run as one worker unit when the path is safe to thread; prompts
-## before any upload.
+## drift is caught by that game's next pre-launch auto-download. Path resolution,
+## the sync-record fetch, discovery, and hashing run as one worker unit when the
+## path is safe to thread; prompts before any upload.
 func _schedule_startup_dirty_sweep() -> void:
 	if _dirty_sweep_ran:
 		return
 	_dirty_sweep_ran = true
-	# Let startup settle before touching disk
-	await get_tree().create_timer(5.0).timeout
+	# Let startup settle before touching disk: wait out the warmup window so
+	# the sweep can't collide with shader prewarm or the settings pre-creation
+	# (capped in case the home grid never settles), then a short buffer.
+	var waited_ms := Time.get_ticks_msec()
+	while WarmupBudget.is_startup_mode() and Time.get_ticks_msec() - waited_ms < 20000:
+		await get_tree().process_frame
+	await get_tree().create_timer(3.0).timeout
 	if not DataManager.get_setting("save_sync_auto").value:
 		return
 	if not SystemManager.network.is_romm_connected():
@@ -2903,63 +2919,87 @@ func _schedule_startup_dirty_sweep() -> void:
 ## Returns {game, emulator_id} when the most recently launched game has a
 ## local save whose hash differs from the recorded sync boundary, else {}.
 func _check_most_recent_save_dirty() -> Dictionary:
-	var game: GameResource = null
-	for g in DataManager.get_all_games():
-		if g.last_played == "" or (not g.has_local_copy and g.downloaded_sibling_ids.is_empty()):
-			continue
-		if game == null or g.last_played > game.last_played:
-			game = g
-	if game == null:
-		return {}
+	# Android restricted-path scans can't thread (PackageChecker), so resolve
+	# the context inline there: the save dir decides whether the unit threads.
+	# On desktop even the context resolves inside the worker.
+	var prologue_start_us := Time.get_ticks_usec()
+	var ctx := {}
+	if SystemManager.platform.is_android():
+		ctx = _resolve_sweep_context()
+		if ctx.is_empty():
+			return {}
+	print("[GameSaveSubManager] Startup sweep prologue (main thread) elapsed_us=", Time.get_ticks_usec() - prologue_start_us)
+	var worker_start_us := Time.get_ticks_usec()
 
-	var emulator_id: String = LaunchManager.resolve_emulator_for_game(game)
-	if emulator_id == "":
-		return {}
-	var core_id = _get_core_id_for_save_resolution(emulator_id, game)
-	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, core_id)
-	var extensions = get_save_extensions(emulator_id, game.platform_slug, core_id)
-	if save_dir == "" or extensions.is_empty():
-		return {}
-	var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
-	if db_records.is_empty():
-		return {}  # never synced: no boundary to recover against
-	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, core_id)
-	if (is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc")) and game.get_active_title_id() == "":
-		return {}
-
-	var db_by_name: Dictionary = {}
-	for rec in db_records:
-		db_by_name[rec.file_name] = rec
-
-	# One work unit: discovery + hashing stay together so threaded paths keep
-	# the whole check off the main thread
-	var work := func() -> Array:
+	# One work unit: context (game query, emulator/path resolution), sync-record
+	# fetch, discovery, hashing, and the boundary comparison all stay together
+	# so threaded paths keep the whole check off the main thread. Read-only:
+	# the DB is mutex-guarded and registry/settings reads from workers are
+	# already an established pattern here.
+	var work := func() -> Dictionary:
+		var c: Dictionary = ctx
+		if c.is_empty():
+			c = _resolve_sweep_context()
+			if c.is_empty():
+				return {}
+		var db_records = DataManager.get_save_sync_records(c.game.romm_id, c.emulator_id)
+		if db_records.is_empty():
+			return {}  # never synced: no boundary to recover against
+		var db_by_name: Dictionary = {}
+		for rec in db_records:
+			db_by_name[rec.file_name] = rec
 		var found: Array[Dictionary]
-		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
-			found = _discover_emulator_saves(emulator_id, save_dir, game)
+		if c.is_folder_save or (c.emulator_id == "dolphin" and c.game.platform_slug == "ngc"):
+			found = _discover_emulator_saves(c.emulator_id, c.save_dir, c.game)
 		else:
-			found = _discover_game_saves(save_dir, game, extensions)
-		var rows: Array = []
+			found = _discover_game_saves(c.save_dir, c.game, c.extensions)
 		for save in found:
 			var rec = db_by_name.get(save.file_name)
 			if rec == null or rec.get("local_hash", "") == "":
 				continue  # no baseline hash to compare against
-			rows.append({"save": save, "hash_info": _compute_local_save_hash(emulator_id, game, save)})
-		return rows
-	var state := {"done": false, "result": []}
-	_run_io_task(save_dir, work, func(r: Array):
+			var hash_info := _compute_local_save_hash(c.emulator_id, c.game, save)
+			if hash_info.hash != "" and hash_info.hash != rec.local_hash:
+				print("[GameSaveSubManager] Startup sweep: dirty save '" + save.file_name + "' for " + c.game.get_display_name() + _hash_detail(hash_info.hash, rec.get("server_hash", ""), rec.local_hash))
+				return {"game": c.game, "emulator_id": c.emulator_id}
+		return {}
+	var state := {"done": false, "result": {}}
+	_run_io_task(ctx.get("save_dir", "user://"), work, func(r: Dictionary):
 		state["result"] = r
 		state["done"] = true
 	)
 	while not state["done"]:
 		await get_tree().process_frame
+	print("[GameSaveSubManager] Startup sweep worker (resolve+db+discover+hash) elapsed_us=", Time.get_ticks_usec() - worker_start_us)
+	return state["result"]
 
-	for row in state["result"]:
-		var rec = db_by_name.get(row.save.file_name)
-		if row.hash_info.hash != "" and row.hash_info.hash != rec.local_hash:
-			print("[GameSaveSubManager] Startup sweep: dirty save '" + row.save.file_name + "' for " + game.get_display_name() + _hash_detail(row.hash_info.hash, rec.get("server_hash", ""), rec.local_hash))
-			return {"game": game, "emulator_id": emulator_id}
-	return {}
+## Gathers everything the sweep needs to check the most recently played game:
+## {game, emulator_id, extensions, is_folder_save, save_dir}, or {} when there
+## is nothing to check. Uses a targeted LIMIT 1 query — get_all_games()
+## hydrates the whole library (per-row JSON blobs) just to find one game.
+func _resolve_sweep_context() -> Dictionary:
+	var game: GameResource = DataManager.get_most_recently_played_game()
+	if game == null:
+		return {}
+	var emulator_id: String = LaunchManager.resolve_emulator_for_game(game)
+	if emulator_id == "":
+		return {}
+	var core_id = _get_core_id_for_save_resolution(emulator_id, game)
+	var extensions = get_save_extensions(emulator_id, game.platform_slug, core_id)
+	if extensions.is_empty():
+		return {}
+	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, core_id)
+	if (is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc")) and game.get_active_title_id() == "":
+		return {}
+	var save_dir := resolve_active_save_directory(emulator_id, game.platform_slug, core_id)
+	if save_dir == "":
+		return {}
+	return {
+		"game": game,
+		"emulator_id": emulator_id,
+		"extensions": extensions,
+		"is_folder_save": is_folder_save,
+		"save_dir": save_dir,
+	}
 
 ## Prompts about saves that drifted from their last sync boundary (sweep).
 ## Returns "upload" or "skip" (also "skip" on dismissal).

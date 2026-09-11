@@ -39,6 +39,7 @@ func sync_collections(callback: Callable = Callable()) -> void:
 	print("[CollectionSubManager] Syncing collections...")
 
 	SystemManager.network.fetch_collections(func(result: Dictionary, error: String):
+		WarmupBudget.tag("collection_sync_cb")
 		if not error.is_empty():
 			push_error("[CollectionSubManager] Failed to sync collections: " + error)
 			_is_syncing = false
@@ -50,21 +51,33 @@ func sync_collections(callback: Callable = Callable()) -> void:
 			return
 
 		var collections = result.get("collections", []) as Array
-		data_manager.database.clear_all_collections()
-		for collection in collections:
-			_save_collection(collection)
 
-		# Re-apply locally queued collection adds so pending offline edits win
-		for entry in data_manager.database.get_pending_props_sync():
-			var kind := str(entry["kind"])
-			if kind.begins_with(COLLECTION_ADD_KIND_PREFIX):
-				data_manager.database.add_collection_roms(int(kind.split(":")[1]), [entry["romm_id"]])
+		# Persist on the DB worker: the write burst (clear + re-save every
+		# collection + re-apply pending adds) is synchronous SQLite work that
+		# previously ran inline on the main thread right at startup.
+		var db_work := func():
+			data_manager.database.clear_all_collections()
+			for collection in collections:
+				_save_collection(collection)
 
-		_is_syncing = false
-		print("[CollectionSubManager] Synced %d collections" % collections.size())
-		if callback.is_valid():
-			callback.call(true, "Synced %d collections" % collections.size())
-		collections_synced.emit(true, "Synced %d collections" % collections.size())
+			# Re-apply locally queued collection adds so pending offline edits win
+			for entry in data_manager.database.get_pending_props_sync():
+				var kind := str(entry["kind"])
+				if kind.begins_with(COLLECTION_ADD_KIND_PREFIX):
+					data_manager.database.add_collection_roms(int(kind.split(":")[1]), [entry["romm_id"]])
+
+		var db_done := func(_r):
+			_is_syncing = false
+			print("[CollectionSubManager] Synced %d collections" % collections.size())
+			if callback.is_valid():
+				callback.call(true, "Synced %d collections" % collections.size())
+			collections_synced.emit(true, "Synced %d collections" % collections.size())
+
+		if MemorySubManager.is_shutting_down():
+			db_work.call()
+			db_done.call(null)
+		else:
+			MemorySubManager.queue_db_task(db_work, db_done)
 	)
 
 

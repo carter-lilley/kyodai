@@ -376,7 +376,7 @@ func is_focus_in_onscreen_keyboard(control: Control) -> bool:
 	return kb != null and kb.is_focus_within_keyboard(control)
 
 func pre_create_settings_dialog(force: bool = false) -> void:
-	overlay.pre_create_settings_dialog(force)
+	await overlay.pre_create_settings_dialog(force)
 
 func is_settings_dialog_open() -> bool:
 	return overlay.is_settings_dialog_open()

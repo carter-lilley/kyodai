@@ -10,6 +10,20 @@
 [ext_resource type="Script" uid="uid://dt6xlxivwdgeh" path="res://components/launch_transition_overlay.gd" id="11_launchoverlay"]
 [ext_resource type="Script" uid="uid://4uvqmmcc48yl" path="res://components/view_transition_overlay.gd" id="12_viewtransition"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="m3label"]
+[ext_resource type="Script" uid="uid://iy5cq2cs4uq1" path="res://addons/icons-fonts/nodes/FontIcon.gd" id="fonticon"]
+[ext_resource type="Script" uid="uid://55wn6pkc4a3m" path="res://addons/icons-fonts/resources/FontIconSetting.gd" id="fonticonsettings"]
+
+[sub_resource type="Resource" id="FontIconSettings_zoom_out"]
+script = ExtResource("fonticonsettings")
+icon_font = "ControllerIcons"
+icon_name = "analog-r-down"
+icon_size = 32
+
+[sub_resource type="Resource" id="FontIconSettings_zoom_in"]
+script = ExtResource("fonticonsettings")
+icon_font = "ControllerIcons"
+icon_name = "analog-r-up"
+icon_size = 32
 
 [sub_resource type="Shader" id="Shader_controlbar_mask"]
 code = "shader_type canvas_item;
@@ -350,18 +364,30 @@ layout_mode = 2
 text = "K"
 script = ExtResource("m3label")
 
+[node name="ZoomOutIcon" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207356]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+size_flags_vertical = 4
+script = ExtResource("fonticon")
+icon_settings = SubResource("FontIconSettings_zoom_out")
+
 [node name="M3Slider_Zoom" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207355]
 custom_minimum_size = Vector2(250, 0)
 layout_mode = 2
 script = ExtResource("4_w48qg")
 slider_size = 0
-start_icon_name = "magnify-minus"
-end_icon_name = "magnify-plus"
 min_value = 0.15
 max_value = 0.5
 step = 0.05
 value = 0.15
 metadata/_custom_type_script = "uid://63mocgx1dxi4"
+
+[node name="ZoomInIcon" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207357]
+custom_minimum_size = Vector2(32, 0)
+layout_mode = 2
+size_flags_vertical = 4
+script = ExtResource("fonticon")
+icon_settings = SubResource("FontIconSettings_zoom_in")
 
 [node name="Control" type="Control" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=283909580]
 layout_mode = 2

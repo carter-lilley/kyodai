@@ -761,6 +761,9 @@ func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_si
 			DataManager.update_game(game)
 			if not suppress_notification:
 				SystemManager.notifications.show_notification(game.get_display_name() + " is already downloaded", SystemManager.notifications.Type.INFO)
+			# No QueueItem exists on this path, but listeners (HomeView) still need
+			# to refresh; synthesized IDs are ignored by item-based consumers.
+			download_completed.emit("ondisk_" + str(disc_id) + "_" + str(Time.get_ticks_msec()), true, destination_path)
 			on_done.call(true)
 			return
 	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource)

@@ -23,26 +23,6 @@ func _setup_platform_specific_behavior():
 		var first_run_completed = DataManager.get_setting("first_run_completed")
 		if first_run_completed and first_run_completed.value:
 			_request_android_permissions()
-		# Swap trigger axes: Android handhelds (Ayn, Retroid, Anbernic) report
-		# left trigger as axis 5 and right trigger as axis 4 (opposite of standard)
-		_swap_android_trigger_axes()
-
-func _swap_android_trigger_axes():
-	"""Swap zoom trigger axes for Android handhelds.
-	Most Android handhelds (Ayn, Retroid, Anbernic) map left trigger to axis 5
-	and right trigger to axis 4, opposite of standard Xbox/PC controllers."""
-	var zoom_in_events = InputMap.action_get_events("zoom_in")
-	var zoom_out_events = InputMap.action_get_events("zoom_out")
-	
-	for event in zoom_in_events:
-		if event is InputEventJoypadMotion:
-			event.axis = 4
-			break
-	
-	for event in zoom_out_events:
-		if event is InputEventJoypadMotion:
-			event.axis = 5
-			break
 
 func _on_node_added_android(node: Node):
 	# When a LineEdit/TextEdit is added on Android, disable the native virtual keyboard

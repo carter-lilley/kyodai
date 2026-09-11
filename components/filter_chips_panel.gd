@@ -9,6 +9,13 @@ extends VBoxContainer
 signal filters_changed(filters: Dictionary)
 signal content_rebuilt()
 
+## Kinds excluded from the options fetch (unbounded or computed value sets).
+## Selected values still render as removable chips in their own sections.
+const SELECTED_ONLY_KINDS := {
+	"company": "Company",
+	"release_week": "Release Week",
+}
+
 var _selected: Dictionary = {}  # kind -> {value: ChipState}
 
 func _init() -> void:
@@ -44,6 +51,25 @@ func clear_all() -> void:
 
 func has_active_filters() -> bool:
 	return not get_active_filters().is_empty()
+
+## Seed selections from an external filters dict (kind -> {include, exclude}).
+## Kinds without rendered chips (e.g. company) are kept in _selected so they
+## round-trip through get_active_filters() and clear via clear_all().
+func set_selected_filters(filters: Dictionary) -> void:
+	_selected.clear()
+	for kind in filters:
+		var spec = filters[kind]
+		if not spec is Dictionary:
+			continue
+		for value in spec.get("include", []):
+			if not _selected.has(kind):
+				_selected[kind] = {}
+			_selected[kind][value] = M3Chip.ChipState.INCLUDE
+		for value in spec.get("exclude", []):
+			if not _selected.has(kind):
+				_selected[kind] = {}
+			_selected[kind][value] = M3Chip.ChipState.EXCLUDE
+	load_options()
 
 func get_active_filters() -> Dictionary:
 	var out: Dictionary = {}
@@ -91,7 +117,29 @@ func _populate(options: Dictionary) -> void:
 			_add_chip_subgroup(section, "ESRB", "esrb", esrb)
 		if not pegi.is_empty():
 			_add_chip_subgroup(section, "PEGI", "pegi", pegi)
+	# Kinds with no options section (company, release_week) only render their
+	# currently-selected values, applied externally (details sheet chips).
+	for kind in SELECTED_ONLY_KINDS:
+		var selected_values: Dictionary = _selected.get(kind, {})
+		if selected_values.is_empty():
+			continue
+		var section := _make_section(SELECTED_ONLY_KINDS[kind])
+		var flow := _make_flow(section)
+		for value in selected_values:
+			_add_chip(kind, str(value), flow, _selected_only_display_text(kind, str(value)))
 	content_rebuilt.emit()
+
+const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+## Display label for selected-only chip values (raw values can be opaque,
+## e.g. release_week stores the game's release_date epoch-ms).
+func _selected_only_display_text(kind: String, value: String) -> String:
+	if kind == "release_week":
+		var epoch_ms := int(value)
+		if epoch_ms > 0:
+			var dict := Time.get_datetime_dict_from_unix_time(epoch_ms / 1000)
+			return "%s %d, %d" % [MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)], dict.day, dict.year]
+	return value
 
 func _make_section(title: String) -> VBoxContainer:
 	var section := VBoxContainer.new()

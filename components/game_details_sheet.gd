@@ -30,6 +30,7 @@ const STAR_GAP_DP := 2.0
 @onready var content_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox
 @onready var cover_texture: TextureRect = $MarginContainer/HBoxContainer/CoverContainer/CoverClip/CoverTexture
 @onready var title_label: Label = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/TitleLabel
+@onready var studio_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/StudioRow
 @onready var metadata_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/MetadataRow
 @onready var content_tabs: TabContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs
 @onready var overview_vbox: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox
@@ -72,6 +73,7 @@ var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size
 var _desc_expanded: bool = false
 var _related_games_count: int = 0
 var _metadata_chips: Array[M3Chip] = []
+var _interactive_meta_chips: Array[M3Chip] = []
 var _overflow_chip: M3Chip = null
 var _stars_trailer: Control = null
 
@@ -226,6 +228,7 @@ func _apply_content_scaling() -> void:
 	if is_instance_valid(description_label):
 		# Body text reads as secondary content; keep the style's 16dp size.
 		description_label.remove_theme_font_size_override("font_size")
+	_sync_cover_height()
 
 func _build_files_card_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -260,7 +263,25 @@ func _connect_signals() -> void:
 		favorite_button.pressed.connect(_on_favorite_button_pressed)
 	if desc_fold_button:
 		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
+	if content_tabs:
+		content_tabs.tab_changed.connect(_on_tab_changed_geometry)
 	SystemManager.download.download_completed.connect(_on_download_completed)
+
+## Tab pages report different minimum heights; after a switch the content
+## column can settle taller or shorter and pull the cover column with it.
+## Re-pin the cover against the stamped sheet geometry once layout settles.
+func _on_tab_changed_geometry(tab: int) -> void:
+	call_deferred("_sync_cover_height")
+	# TEMP diagnostic: confirms which min-size mechanism moved the cover.
+	call_deferred("_debug_report_tab_geometry", tab)
+
+func _debug_report_tab_geometry(tab: int) -> void:
+	if not _sheet_container:
+		return
+	print("[GameDetailsSheet] tab=", tab,
+		" sheet=", _sheet_container.size,
+		" content_min=", _sheet_container.get_combined_minimum_size(),
+		" cover=", cover_container.size if is_instance_valid(cover_container) else Vector2.ZERO)
 
 const RELATED_TAB_INDEX := 2
 var _compact_layout := false
@@ -320,6 +341,17 @@ func _apply_related_placement() -> void:
 		# Never leave the current tab pointing at a hidden page.
 		if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
 			content_tabs.current_tab = 0
+	_update_desc_expand()
+
+## The description scroll absorbs the Overview column's leftover vertical
+## space whenever Related is NOT shown inline beneath it (small mode, tab
+## placement, or no related games at all). When Related is inline the desc
+## keeps its pinned 3-line height so Related hugs it directly below.
+func _update_desc_expand() -> void:
+	if not is_instance_valid(desc_scroll):
+		return
+	var inline_related := not _small_layout and _related_fits_inline and _related_games_count > 0
+	desc_scroll.size_flags_vertical = Control.SIZE_FILL if inline_related else Control.SIZE_EXPAND_FILL
 
 ## Decides whether Related fits inline under the Overview content by measuring
 ## the stack's remaining space after layout settles. The section stays hidden
@@ -356,6 +388,40 @@ func _set_sheet_height() -> void:
 
 func _position_sheet():
 	super._position_sheet()
+	_sync_cover_height()
+
+func _reposition_open():
+	super._reposition_open()
+	_sync_cover_height()
+
+## Pins the cover column to the height implied by the STAMPED sheet geometry
+## (peek height minus sheet chrome and content margins), never to container
+## negotiation. Without this, a tab page with a taller minimum (expanded
+## description, inline Related near the fit boundary) stretches ContentVBox
+## past the slot and the EXPAND_FILL cover column visibly grows/shrinks when
+## switching tabs.
+func _sync_cover_height() -> void:
+	if not is_instance_valid(cover_container) or not _sheet_container:
+		return
+	if _small_layout:
+		cover_container.custom_minimum_size.y = 0.0
+		return
+	var margin := _sheet_container.get_child(0) as MarginContainer
+	var root := margin.get_child(0) if margin and margin.get_child_count() > 0 else null
+	if not root:
+		return
+	var chrome := float(margin.get_theme_constant("margin_top")) + float(margin.get_theme_constant("margin_bottom"))
+	for child in root.get_children():
+		if child == _content_slot:
+			continue
+		if child is Control and child.visible:
+			chrome += child.get_combined_minimum_size().y
+	var screen_size := _get_screen_size()
+	var stamped := minf(M3Units.dp(peek_height), screen_size.y)
+	var edge := M3Units.dpi(16.0 if _compact_layout else 24.0)
+	cover_container.custom_minimum_size.y = maxf(0.0, stamped - chrome - edge * 2.0)
+	# FILL only, never EXPAND: siblings overflowing the row must not stretch it.
+	cover_container.size_flags_vertical = Control.SIZE_FILL
 
 func _reduce_top_padding() -> void:
 	# Tighten the default M3BottomSheet top padding.
@@ -416,6 +482,13 @@ func set_game(game: GameResource) -> void:
 
 func clear_content() -> void:
 	_current_game = null
+	if is_instance_valid(studio_row):
+		studio_row.visible = false
+		for child in studio_row.get_children():
+			# Detach before queue_free so get_children() in the same frame
+			# (focus chain rebuild) never sees dying chips.
+			studio_row.remove_child(child)
+			child.queue_free()
 	if is_instance_valid(_content_root):
 		_content_root.visible = false
 	_set_cover_texture(null)
@@ -430,6 +503,7 @@ func clear_content() -> void:
 
 func _populate_basic_info(game: GameResource) -> void:
 	title_label.text = game.title if game.title else "Unknown Game"
+	_populate_studio(game)
 	_populate_metadata_chips(game)
 
 	_setup_sibling_dropdown(game)
@@ -441,29 +515,88 @@ func _populate_basic_info(game: GameResource) -> void:
 	await _setup_description_fold(game)
 	await _populate_related_games(game)
 
+func _populate_studio(game: GameResource) -> void:
+	if not is_instance_valid(studio_row):
+		return
+	for child in studio_row.get_children():
+		# Detach before queue_free; see clear_content().
+		studio_row.remove_child(child)
+		child.queue_free()
+	var companies := game.get_igdb_companies()
+	studio_row.visible = not companies.is_empty()
+	for company in companies:
+		var chip := M3Chip.new()
+		chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
+		chip.text = company
+		chip.dense = true
+		chip.focus_mode = Control.FOCUS_ALL
+		chip.tooltip_text = "Show all games by %s" % company
+		chip.pressed.connect(_on_company_chip_pressed.bind(company))
+		studio_row.add_child(chip)
+	_update_chips_focus_chain()
+
+## Wire the studio and interactive metadata chips into the vertical focus
+## chain between the header buttons and the tabs; only visible chips count.
+func _update_chips_focus_chain() -> void:
+	if not content_tabs or not action_button:
+		return
+	var chain: Array[Control] = []
+	if is_instance_valid(studio_row) and studio_row.visible:
+		for child in studio_row.get_children():
+			if child is Control and child.visible and not child.is_queued_for_deletion():
+				chain.append(child)
+	for chip in _interactive_meta_chips:
+		if is_instance_valid(chip) and chip.visible and not chip.is_queued_for_deletion():
+			chain.append(chip)
+	if chain.is_empty():
+		_setup_focus_neighbors()
+		return
+	var first := chain[0]
+	var last := chain[chain.size() - 1]
+	action_button.focus_neighbor_bottom = action_button.get_path_to(first)
+	if sync_button:
+		sync_button.focus_neighbor_bottom = sync_button.get_path_to(first)
+	if favorite_button:
+		favorite_button.focus_neighbor_bottom = favorite_button.get_path_to(first)
+	first.focus_neighbor_top = first.get_path_to(action_button)
+	last.focus_neighbor_bottom = last.get_path_to(content_tabs)
+	content_tabs.focus_neighbor_top = content_tabs.get_path_to(last)
+
+func _on_company_chip_pressed(company: String) -> void:
+	_on_metadata_chip_pressed("company", company, "STUDIO", company)
+
 func _populate_metadata_chips(game: GameResource) -> void:
 	if not is_instance_valid(metadata_row):
 		return
 	for child in metadata_row.get_children():
 		child.queue_free()
 	_metadata_chips.clear()
+	_interactive_meta_chips.clear()
 	_overflow_chip = null
 	_stars_trailer = null
-	_add_metadata_chip(game.platform if game.platform else "Unknown Platform", "gamepad-variant", true, true)
+	var platform_name: String = game.platform if game.platform else "Unknown Platform"
+	_add_metadata_chip(platform_name, "gamepad-variant", true, true, "platform", game.platform_slug, "", platform_name)
 	if game.release_date > 0:
 		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000)).year)
 		if year > 1971:
-			_add_metadata_chip(_format_release_date(game.release_date), "calendar", false)
+			var date_text := _format_release_date(game.release_date)
+			_add_metadata_chip(date_text, "calendar", false, false, "release_week", str(game.release_date), "WEEK", date_text)
 	# Genres from the IGDB blob (clean canonical list); fall back to the
 	# merged genres column only when IGDB has none.
 	var genre_list: Array = []
 	var igdb_genres = game.igdb_metadata.get("genres", []) if game.igdb_metadata is Dictionary else []
-	if igdb_genres is Array and not igdb_genres.is_empty():
+	var genres_from_igdb: bool = igdb_genres is Array and not igdb_genres.is_empty()
+	if genres_from_igdb:
 		genre_list = igdb_genres
 	else:
 		genre_list = game.genres
 	for genre in genre_list:
-		_add_metadata_chip(str(genre), "", false)
+		# Only IGDB-sourced genres have matching filter rows; the merged
+		# fallback taxonomy would filter to zero results, so it stays static.
+		if genres_from_igdb:
+			_add_metadata_chip(str(genre), "", false, false, "genre", str(genre), "GENRE", str(genre))
+		else:
+			_add_metadata_chip(str(genre), "", false)
 	# Non-interactive "+N" overflow indicator; revealed by the overflow pass.
 	_overflow_chip = M3Chip.new()
 	_overflow_chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
@@ -475,6 +608,8 @@ func _populate_metadata_chips(game: GameResource) -> void:
 	metadata_row.add_child(_overflow_chip)
 	_populate_rating_stars(game)
 	_layout_metadata_row_overflow()
+	# Overflow visibility is final here; wire the focus chain last.
+	_update_chips_focus_chain()
 
 ## The chips row is a clipped single-line HBox: show as many chips as fit and
 ## collapse the rest into a "+N" chip so the row never wraps. Runs
@@ -571,19 +706,46 @@ func _populate_rating_stars(game: GameResource) -> void:
 		star.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		stars_box.add_child(star)
 
-func _add_metadata_chip(text: String, icon: String, elevated: bool, accent: bool = false) -> void:
+func _add_metadata_chip(text: String, icon: String, elevated: bool, accent: bool = false, filter_kind: String = "", filter_value: String = "", center_text: String = "", filter_label: String = "") -> void:
 	var chip := M3Chip.new()
 	chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
 	chip.text = text
 	chip.elevated = elevated
 	chip.accent_colored = accent
 	chip.dense = _small_layout
-	chip.focus_mode = Control.FOCUS_NONE
-	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var clickable := filter_kind != "" and filter_value != ""
+	chip.focus_mode = Control.FOCUS_ALL if clickable else Control.FOCUS_NONE
+	chip.mouse_filter = Control.MOUSE_FILTER_STOP if clickable else Control.MOUSE_FILTER_IGNORE
+	if clickable:
+		chip.tooltip_text = _chip_filter_tooltip(filter_kind, filter_label)
+		chip.pressed.connect(_on_metadata_chip_pressed.bind(filter_kind, filter_value, center_text, filter_label))
+		_interactive_meta_chips.append(chip)
 	if icon != "":
 		chip.leading_icon = icon
 	metadata_row.add_child(chip)
 	_metadata_chips.append(chip)
+
+func _chip_filter_tooltip(kind: String, label: String) -> String:
+	match kind:
+		"platform":
+			return "Show all %s games" % label
+		"genre":
+			return "Show all %s games" % label
+		"release_week":
+			return "Show all games from this week"
+	return ""
+
+func _on_metadata_chip_pressed(kind: String, value: String, center_text: String, label: String) -> void:
+	dismiss()
+	var library := UIManager.get_view("Library") as LibraryView
+	if library:
+		if kind == "platform":
+			library.apply_platform_selection(value, label)
+		else:
+			library.apply_external_filter(kind, value, center_text, label)
+	UIManager.switch_to_tab("Library")
+	if library and library.games_grid:
+		library.games_grid.focus_last_or_first_card.call_deferred()
 
 const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -682,6 +844,7 @@ func _populate_related_games(game: GameResource) -> void:
 	if related.is_empty():
 		if content_tabs:
 			content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
+		_update_desc_expand()
 		return
 	if is_instance_valid(related_header):
 		related_header.text = "Related Games (%d)" % related.size()

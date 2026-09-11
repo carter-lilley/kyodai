@@ -3,7 +3,7 @@
 class_name FontIconSettings
 extends Resource
 
-@export_enum("MaterialIcons", "Emojis")
+@export_enum("MaterialIcons", "Emojis", "ControllerIcons")
 var icon_font := "MaterialIcons"
 
 ## Name of Icon to display
@@ -57,6 +57,8 @@ func update_label_settings(label_settings: LabelSettings) -> void:
 			label_settings.font = load(IconsFonts.material_icons_font)
 		"Emojis":
 			label_settings.font = load(IconsFonts.emojis_font)
+		"ControllerIcons":
+			label_settings.font = load(IconsFonts.controller_icons_font)
 
 	label_settings.font_size = max(1, icon_size)
 	label_settings.font_color = icon_color

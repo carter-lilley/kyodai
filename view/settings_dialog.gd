@@ -168,9 +168,15 @@ func _is_compact_sidebar() -> bool:
 	"""Use icon-only category buttons on small screens."""
 	return _is_small_screen()
 
+## Waits out frames whose warmup budget is already spent so the pre-created
+## category builds can't stack onto grid settle or shader prewarm work.
+## No-op outside the startup window (try_spend always passes in steady mode).
+func _await_build_budget() -> void:
+	while not WarmupBudget.try_spend(WarmupBudget.COST_SETTINGS_CATEGORY_US, "settings_category"):
+		await get_tree().process_frame
+
 func _build_categories() -> void:
 	"""Create category buttons and content directly from DataManager + scenes."""
-
 	var subgroups = DataManager.get_settings_by_subgroup()
 
 	# Regular subgroups — build SettingsMenu content directly
@@ -205,6 +211,7 @@ func _build_categories() -> void:
 		# The dialog is pre-created at startup; spread category builds over
 		# frames so the whole dialog doesn't land in one synchronous burst.
 		await get_tree().process_frame
+		await _await_build_budget()
 
 	# RomM — platform settings scene
 	var cat_start_us := Time.get_ticks_usec()
@@ -214,6 +221,7 @@ func _build_categories() -> void:
 	_category_contents["romm"] = platforms_view
 	print("[SettingsDialog] category 'romm' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
+	await _await_build_budget()
 
 	# Card Designer
 	cat_start_us = Time.get_ticks_usec()
@@ -223,6 +231,7 @@ func _build_categories() -> void:
 	_category_contents["card_designer"] = card_designer
 	print("[SettingsDialog] category 'card_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
+	await _await_build_budget()
 
 	# Background Designer
 	cat_start_us = Time.get_ticks_usec()
@@ -232,6 +241,7 @@ func _build_categories() -> void:
 	_category_contents["background_designer"] = background_designer
 	print("[SettingsDialog] category 'background_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
+	await _await_build_budget()
 
 	# GameNative (Android only)
 	if SystemManager.platform.is_android():
