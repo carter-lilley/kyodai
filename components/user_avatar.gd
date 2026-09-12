@@ -8,23 +8,37 @@ extends Control
 ##
 ## Rendering reuses the card effect pipeline (EffectStack + MediaContainer):
 ## the base effect center-crops the image and clips it to a circle via the
-## rounded-rect SDF (corner_radius_ratio = 1.0), and the border effect draws
-## the ring around it.
+## rounded-rect SDF (corner_radius_ratio = 1.0). The white ring is a solid
+## backing disc drawn behind the stack: the border shader cannot anti-alias
+## its inner edge (hard discard), so instead the media is inset by the ring
+## width and both visible edges come from shaders that do AA.
 
-const SIZE_DP := 76
+const SIZE_DP := 88
 
-## Ring width as a ratio of the avatar width.
+## Ring width as a ratio of the avatar width (media inset revealing the disc).
 const BORDER_RATIO := 0.07
 
-## Ring color, applied as a single-stop gradient (solid color resolution).
+## Ring/disc color.
 const BORDER_COLOR := Color.WHITE
 
 ## Center-crop factor applied before upload so the subject fills the circle.
-const CENTER_CROP := 0.9
+const CENTER_CROP := 0.75
 
 ## Sources at or below this width are treated as pixel art and sampled with
 ## nearest-neighbor filtering so they stay crisp; larger sources use linear.
 const PIXEL_ART_MAX_WIDTH := 128
+
+const DISC_SHADER := """shader_type canvas_item;
+
+uniform vec4 color : source_color = vec4(1.0);
+
+void fragment() {
+	vec2 p = (UV - vec2(0.5)) * 2.0;
+	float d = length(p);
+	float aa = fwidth(d) * 1.5;
+	COLOR = vec4(color.rgb, color.a * (1.0 - smoothstep(1.0 - aa, 1.0, d)));
+}
+"""
 
 var _fallback_icon: FontIcon = null
 var _media_container: MediaContainer = null
@@ -35,6 +49,20 @@ func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# Backing disc: the visible white ring once the inset image sits on top.
+	# Also serves as the placeholder background behind the fallback icon.
+	var disc := ColorRect.new()
+	disc.color = BORDER_COLOR
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var disc_shader := Shader.new()
+	disc_shader.code = DISC_SHADER
+	var disc_material := ShaderMaterial.new()
+	disc_material.shader = disc_shader
+	disc_material.set_shader_parameter("color", BORDER_COLOR)
+	disc.material = disc_material
+	add_child(disc)
 
 	_fallback_icon = FontIcon.new()
 	_fallback_icon.icon_settings = FontIconSettings.new()
@@ -55,23 +83,17 @@ func _ready() -> void:
 	_media_container.edge_aa_enabled = true
 	_media_container.bounds = Rect2(Vector2.ZERO, size)
 
+	# Base effect only (auto-added); no border effect — its inner edge cannot
+	# be anti-aliased, which produced the jagged ring seam.
 	_stack = EffectStack.new()
 	_stack.set_parent_rid(get_canvas_item())
 	_stack.set_clip_children(false)
-	var ring_gradient := Gradient.new()
-	ring_gradient.offsets = [0.0]
-	ring_gradient.colors = [BORDER_COLOR]
-	_stack.initialize(_media_container, [
-		{"effect_id": "border", "settings": {
-			"border_size": BORDER_RATIO,
-			"border_gradient": ring_gradient,
-		}},
-	], "base_card")
-	# The stack insets the media by border_size, which makes the image's AA
-	# edge expose the background between image and ring (visible as a dark
-	# jagged seam). Zero the inset so the image fills the whole circle and
-	# the ring draws on top of it instead.
-	_media_container.border_inset_ratio = 0.0
+	_stack.initialize(_media_container, [], "base_card")
+	# The stack renders via raw RenderingServer canvas items; without an
+	# explicit draw index the backing disc node can draw on top of it.
+	_stack.set_draw_index(1)
+	# Inset the media by the ring width so the backing disc shows as the ring.
+	_media_container.border_inset_ratio = BORDER_RATIO
 	_stack.force_refresh()
 	# Hidden until an avatar image arrives; the fallback icon shows instead.
 	_stack.set_visible(false)

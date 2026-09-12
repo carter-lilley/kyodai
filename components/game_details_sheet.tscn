@@ -148,29 +148,30 @@ button_size = 0
 button_shape = 0
 text = "More"
 
-[node name="RelatedSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
+[node name="ScreenshotsSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
 visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
-[node name="RelatedHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection"]
+[node name="ScreenshotsHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 7
-text = "Related Games"
+text = "Screenshots"
 
-[node name="RelatedScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection"]
+[node name="ScreenshotsScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection"]
 layout_mode = 2
 size_flags_horizontal = 3
 vertical_scroll_mode = 0
+follow_focus = true
 
-[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll"]
+[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_bottom = 8
 
-[node name="RelatedRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll/RowMargin"]
+[node name="ScreenshotsRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll/RowMargin"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 12
@@ -251,4 +252,31 @@ theme_override_constants/margin_top = 12
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+
+[node name="RelatedSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent"]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="RelatedHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection"]
+script = ExtResource("2_m3label")
+layout_mode = 2
+label_style = 7
+text = "Related Games"
+
+[node name="RelatedScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection"]
+layout_mode = 2
+size_flags_horizontal = 3
+vertical_scroll_mode = 0
+
+[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/margin_bottom = 8
+
+[node name="RelatedRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
 

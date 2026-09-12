@@ -1284,6 +1284,15 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	else:
 		game.cover_url = ""
 	game.cover_path = path_cover_large
+	var screenshots: PackedStringArray = []
+	var merged_screenshots = data.get("merged_screenshots", [])
+	if merged_screenshots is Array:
+		for shot in merged_screenshots:
+			var shot_path := str(shot)
+			if shot_path == "" or shot_path == "null" or shot_path == "<null>" or shot_path == "None":
+				continue
+			screenshots.append(SystemManager.network.build_media_url(shot_path))
+	game.screenshot_urls = screenshots
 	game.file_name = str(data.get("fs_name", ""))
 	game.file_path = str(data.get("full_path", ""))
 	game.file_size = data.get("fs_size_bytes", 0)
@@ -1440,8 +1449,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, screenshots)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1478,7 +1487,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		1 if game.backlogged else 0,
 		1 if game.hidden else 0,
 		is_favorite,
-		unwrapped
+		unwrapped,
+		JSON.stringify(Array(game.screenshot_urls))
 	]
 
 	return {"query": query, "bindings": bindings}

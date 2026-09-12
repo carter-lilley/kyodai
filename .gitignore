@@ -25,6 +25,9 @@ android/*.keystore
 android/plugin/PackageCheckerPlugin.aar
 android/plugins/
 
+# gdcef / CEF runtime binaries (download from gdcef releases)
+cef_artifacts/
+
 # Local headless smoke-test artifacts
 .kimi/smoke/
 addons/godot-sqlite/bin/~libgdsqlite.windows.template_debug.x86_64.dll

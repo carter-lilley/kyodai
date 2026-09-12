@@ -10,6 +10,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var platform_slug: String
 @export var cover_url: String
 @export var cover_path: String
+## RomM screenshot media URLs (from merged_screenshots), streamed on demand
+## by the details sheet; never prefetched or disk-cached beyond the shared
+## image cache.
+@export var screenshot_urls: PackedStringArray = []
 @export var file_name: String
 @export var file_path: String
 @export var file_size: int

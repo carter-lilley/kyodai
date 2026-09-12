@@ -16,6 +16,8 @@ const MAX_DETAILS_TEXTURE_SIZE: int = 1024
 
 
 const TAB_MARGIN_TOP_DP := 12.0
+const TAB_BADGE_SIZE_DP := 22.0
+const TAB_BADGE_GAP_DP := 6.0
 const CARD_PADDING_DP := 16.0
 const CARD_GAP_DP := 8.0
 const STAR_SIZE_DP := 14.0
@@ -37,11 +39,14 @@ const STAR_GAP_DP := 2.0
 @onready var desc_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll
 @onready var description_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescScroll/DescriptionLabel
 @onready var desc_fold_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/DescFoldButton
-@onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection
-@onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedHeader
-@onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll
-@onready var related_tab_content: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent
-@onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/RelatedSection/RelatedScroll/RowMargin/RelatedRow
+@onready var screenshots_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection
+@onready var screenshots_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsHeader
+@onready var screenshots_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll
+@onready var screenshots_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll/RowMargin/ScreenshotsRow
+@onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection
+@onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedHeader
+@onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll
+@onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin/RelatedRow
 @onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard
 @onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
 @onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
@@ -71,12 +76,21 @@ const STATUS_FLAG_KEYS := ["now_playing", "backlogged", "hidden"]
 var _current_game: GameResource = null
 var _sibling_options: Array[Dictionary] = []  # [{id, name, file_name, file_size}, ...]
 var _desc_expanded: bool = false
-var _desc_full_line_count: int = 0
 var _related_games_count: int = 0
+var _screenshots_count: int = 0
+## Whether the strip has anything to show (scraped/user shots or the upload
+## card for RomM games). Drives visibility; _screenshots_count is thumbs only.
+var _screenshots_strip_active: bool = false
+var _add_screenshot_card: M3Card = null
+var _uploaded_thumb_count: int = 0
+var _screenshot_upload_in_flight: bool = false
 var _metadata_chips: Array[M3Chip] = []
+var _studio_chips: Array[M3Chip] = []
 var _interactive_meta_chips: Array[M3Chip] = []
 var _overflow_chip: M3Chip = null
 var _stars_trailer: Control = null
+var _tab_badge_prev: M3Badge = null
+var _tab_badge_next: M3Badge = null
 
 func _init():
 	super._init()
@@ -97,6 +111,10 @@ func _ready():
 	_setup_related_section_card()
 	_setup_focus_neighbors()
 	_connect_signals()
+	if sibling_dropdown:
+		sibling_dropdown.fit_to_longest_item = false
+	if status_dropdown:
+		status_dropdown.fit_to_longest_item = false
 	_set_sheet_height()
 	_reduce_top_padding()
 	_apply_content_scaling()
@@ -135,27 +153,18 @@ func _cycle_tab(direction: int) -> void:
 ## Settled-geometry hook (broadcast by OverlaySubManager on debounced viewport
 ## changes — resizes and DS swaps alike). Re-stamps geometry against the
 ## settled viewport so no stale stamp can survive a configuration change.
+## Geometry-dependent content (desc fold, chip overflow) refits itself via
+## resized signals; only the stamped shell and tier breakpoints live here.
 func on_viewport_settled() -> void:
 	if not is_node_ready() or not is_inside_tree():
 		return
+	_set_sheet_height()
 	if visible:
-		# Re-stamp final geometry against the settled viewport; re-tier and
-		# re-fit related placement (unless the user has the description
-		# expanded, which intentionally hides inline related).
-		_set_sheet_height()
 		_reposition_open()
-		_apply_responsive_layout()
-		_refit_metadata_row()
-		if _current_game and not _desc_expanded:
-			_decide_related_placement()
-			# Refit the desc truncation to the settled geometry (also covers
-			# the no-related-games case, which _decide skips).
-			_finalize_desc_fold()
 	else:
-		_set_sheet_height()
 		_position_sheet()
-		_apply_responsive_layout()
-		_refit_metadata_row()
+	_apply_responsive_layout()
+	_refit_metadata_row()
 
 ## Recomputes chip overflow against the current sheet width so a re-stamp
 ## (screen swap, settle) can't leave a stale fit whose minimum size forces
@@ -163,6 +172,13 @@ func on_viewport_settled() -> void:
 func _refit_metadata_row() -> void:
 	if _metadata_chips.size() > 0:
 		_layout_metadata_row_overflow()
+	if _studio_chips.size() > 0:
+		_layout_studio_row_overflow()
+
+## Row width changes (sheet re-stamp, tier switch, DS swap) invalidate the
+## overflow fit; recompute against the real width. Idempotent.
+func _on_content_row_resized() -> void:
+	_refit_metadata_row()
 
 func refresh_theme():
 	super.refresh_theme()
@@ -190,16 +206,72 @@ func _setup_tabs() -> void:
 		var tab := content_tabs.get_node_or_null(NodePath(tab_name)) as MarginContainer
 		if tab:
 			tab.add_theme_constant_override("margin_top", tab_margin)
-	# The Related tab only exists in small mode (revealed on tier switch).
+	# The Related tab starts hidden; it's revealed when the game has related
+	# games (see _update_related_tab_visibility).
 	content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 	_apply_m3_control_styling()
+	_setup_tab_badges()
+
+## Shoulder-button badges at the ends of the tab strip, hinting that LB/RB
+## cycle the tabs. The tab bar's side_margin (set in _apply_m3_control_styling)
+## reserves a pocket at each end. Badges are parented to the internal TabBar
+## because TabContainer would treat them as tab pages.
+func _setup_tab_badges() -> void:
+	var bar := content_tabs.get_tab_bar()
+	if not bar:
+		return
+	var badge_px := M3Units.dpi(TAB_BADGE_SIZE_DP)
+	_tab_badge_prev = M3Badge.new()
+	_tab_badge_prev.icon_font = "ControllerIcons"
+	_tab_badge_prev.icon_name = "nintendo-left-shoulder"
+	_tab_badge_prev.size = Vector2(badge_px, badge_px)
+	_tab_badge_prev.z_index = 1
+	_tab_badge_next = M3Badge.new()
+	_tab_badge_next.icon_font = "ControllerIcons"
+	_tab_badge_next.icon_name = "nintendo-right-shoulder"
+	_tab_badge_next.size = Vector2(badge_px, badge_px)
+	_tab_badge_next.z_index = 1
+	bar.add_child(_tab_badge_prev)
+	bar.add_child(_tab_badge_next)
+	bar.resized.connect(_position_tab_badges)
+	bar.item_rect_changed.connect(_position_tab_badges)
+	_position_tab_badges.call_deferred()
+
+func _position_tab_badges() -> void:
+	if not is_instance_valid(_tab_badge_prev) or not is_instance_valid(_tab_badge_next):
+		return
+	var bar := content_tabs.get_tab_bar()
+	if not bar:
+		return
+	# Anchor to the visible tab rects, not the bar's edges: side_margin shifts
+	# the bar's origin, and the bar spans the full container width, so edge
+	# anchoring overlaps the first tab and strands the badge in dead space.
+	var first := -1
+	var last := -1
+	for i in bar.tab_count:
+		if not content_tabs.is_tab_hidden(i):
+			if first == -1:
+				first = i
+			last = i
+	if first == -1:
+		return
+	var badge_px := _tab_badge_prev.size.x
+	var gap := M3Units.dpi(TAB_BADGE_GAP_DP)
+	var y := (bar.size.y - badge_px) / 2.0
+	_tab_badge_prev.position = Vector2(bar.get_tab_rect(first).position.x - gap - badge_px, y)
+	_tab_badge_next.position = Vector2(bar.get_tab_rect(last).end.x + gap, y)
 
 func _apply_m3_control_styling() -> void:
 	"""M3-style the native TabContainer and the sheet's scrollbars."""
 	if content_tabs:
 		M3Theme.style_tab_container(content_tabs)
+		# Reserve pockets at the tab strip's ends for the shoulder badges.
+		content_tabs.add_theme_constant_override(
+			"side_margin", M3Units.dpi(TAB_BADGE_SIZE_DP + TAB_BADGE_GAP_DP * 2.0))
 	if is_instance_valid(related_scroll):
 		M3Theme.style_scrollbar(related_scroll.get_h_scroll_bar())
+	if is_instance_valid(screenshots_scroll):
+		M3Theme.style_scrollbar(screenshots_scroll.get_h_scroll_bar())
 	if is_instance_valid(desc_scroll):
 		M3Theme.style_scrollbar(desc_scroll.get_v_scroll_bar())
 
@@ -260,7 +332,6 @@ func _apply_content_scaling() -> void:
 		if card_vbox:
 			card_vbox.add_theme_constant_override("separation", M3Units.dpi(CARD_GAP_DP))
 	_apply_chrome_tier()
-	_sync_cover_height()
 
 func _build_files_card_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -295,30 +366,17 @@ func _connect_signals() -> void:
 		favorite_button.pressed.connect(_on_favorite_button_pressed)
 	if desc_fold_button:
 		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
-	if content_tabs:
-		content_tabs.tab_changed.connect(_on_tab_changed_geometry)
+	if desc_scroll:
+		desc_scroll.resized.connect(_on_desc_scroll_resized)
+	if metadata_row:
+		metadata_row.resized.connect(_on_content_row_resized)
+	if studio_row:
+		studio_row.resized.connect(_on_content_row_resized)
 	SystemManager.download.download_completed.connect(_on_download_completed)
-
-## Tab pages report different minimum heights; after a switch the content
-## column can settle taller or shorter and pull the cover column with it.
-## Re-pin the cover against the stamped sheet geometry once layout settles.
-func _on_tab_changed_geometry(tab: int) -> void:
-	call_deferred("_sync_cover_height")
-	# TEMP diagnostic: confirms which min-size mechanism moved the cover.
-	call_deferred("_debug_report_tab_geometry", tab)
-
-func _debug_report_tab_geometry(tab: int) -> void:
-	if not _sheet_container:
-		return
-	print("[GameDetailsSheet] tab=", tab,
-		" sheet=", _sheet_container.size,
-		" content_min=", _sheet_container.get_combined_minimum_size(),
-		" cover=", cover_container.size if is_instance_valid(cover_container) else Vector2.ZERO)
 
 const RELATED_TAB_INDEX := 2
 var _compact_layout := false
 var _small_layout := false
-var _related_fits_inline := true
 
 ## Viewport-dp breakpoint check (DS-aware: display tracks the active
 ## SubViewport size across swaps).
@@ -333,8 +391,7 @@ func _is_viewport_narrow(breakpoint_dp: float) -> bool:
 ## Tiered layout (shared breakpoints live on DisplaySubManager):
 ## - expanded: full margins
 ## - compact (<700dp viewport): tighter margins
-## - small (<600dp viewport): compact + cover hidden + dense chips + Related
-##   becomes its own tab instead of living under the description
+## - small (<600dp viewport): compact + cover hidden + dense chips
 ## The title truncates with an ellipsis so the actions always share its row.
 func _apply_responsive_layout() -> void:
 	if not is_node_ready():
@@ -349,62 +406,21 @@ func _apply_responsive_layout() -> void:
 		_small_layout = small
 		changed = true
 		cover_container.visible = not small
-		_apply_related_placement()
 		# Rebuild metadata chips with/without dense sizing.
 		if _current_game:
 			_populate_metadata_chips(_current_game)
 	if changed:
 		_apply_content_scaling()
 
-## Move the related section between the Overview tab and its own Related tab.
-## Placement is tab when small mode is active or when the Overview stack
-## wouldn't fit the sheet height with Related inline (see _decide_related_placement).
-func _apply_related_placement() -> void:
-	if not is_instance_valid(related_section) or not is_instance_valid(related_tab_content):
+## Related always lives in its own tab; only the tab's visibility is managed
+## here (hidden when the game has no related games).
+func _update_related_tab_visibility() -> void:
+	if not content_tabs:
 		return
-	var use_tab := _small_layout or not _related_fits_inline
-	var target: Node = related_tab_content if use_tab else overview_vbox
-	if related_section.get_parent() != target:
-		if related_section.get_parent():
-			related_section.get_parent().remove_child(related_section)
-		target.add_child(related_section)
-	if content_tabs:
-		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, not use_tab or _related_games_count == 0)
-		# Never leave the current tab pointing at a hidden page.
-		if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
-			content_tabs.current_tab = 0
-
-## Decides whether Related fits inline under the Overview content by measuring
-## the stack's remaining space after layout settles. The section stays hidden
-## until this runs, so its minimum size never inflates the content column
-## (Control.set_size clamps up to the content minimum — that's what made the
-## sheet grow past the screen).
-func _decide_related_placement() -> void:
-	if _related_games_count == 0 or not is_instance_valid(related_section):
-		return
-	var inline_ok := false
-	var content_bottom := 0.0
-	var related_min_h := 0.0
-	var available := 0.0
-	if not _small_layout and is_instance_valid(overview_vbox):
-		var desc_top := 0.0
-		if is_instance_valid(desc_scroll):
-			desc_top = desc_scroll.get_global_rect().position.y
-		for child in overview_vbox.get_children():
-			if child is Control and child != related_section and child.visible:
-				content_bottom = maxf(content_bottom, child.get_global_rect().end.y)
-		if content_bottom > 0.0:
-			var separation := float(overview_vbox.get_theme_constant("separation"))
-			related_min_h = related_section.get_combined_minimum_size().y
-			available = overview_vbox.get_global_rect().end.y
-			# Related goes inline only when it fits in the bottom HALF of the
-			# column; the description expands into everything above it (see
-			# _finalize_desc_fold), so inline requires room below the midpoint.
-			var desc_target_bottom := maxf(content_bottom, desc_top + (available - desc_top) / 2.0)
-			inline_ok = desc_target_bottom + separation + related_min_h <= available
-	_related_fits_inline = inline_ok
-	_apply_related_placement()
-	related_section.visible = true
+	content_tabs.set_tab_hidden(RELATED_TAB_INDEX, _related_games_count == 0)
+	# Never leave the current tab pointing at a hidden page.
+	if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
+		content_tabs.current_tab = 0
 
 func _set_sheet_height() -> void:
 	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
@@ -413,43 +429,6 @@ func _set_sheet_height() -> void:
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
 	var new_peek := screen_dp * HEIGHT_FRACTION
 	peek_height = new_peek
-
-func _position_sheet():
-	super._position_sheet()
-	_sync_cover_height()
-
-func _reposition_open():
-	super._reposition_open()
-	_sync_cover_height()
-
-## Pins the cover column to the height implied by the STAMPED sheet geometry
-## (peek height minus sheet chrome and content margins), never to container
-## negotiation. Without this, a tab page with a taller minimum (expanded
-## description, inline Related near the fit boundary) stretches ContentVBox
-## past the slot and the EXPAND_FILL cover column visibly grows/shrinks when
-## switching tabs.
-func _sync_cover_height() -> void:
-	if not is_instance_valid(cover_container) or not _sheet_container:
-		return
-	if _small_layout:
-		cover_container.custom_minimum_size.y = 0.0
-		return
-	var margin := _sheet_container.get_child(0) as MarginContainer
-	var root := margin.get_child(0) if margin and margin.get_child_count() > 0 else null
-	if not root:
-		return
-	var chrome := float(margin.get_theme_constant("margin_top")) + float(margin.get_theme_constant("margin_bottom"))
-	for child in root.get_children():
-		if child == _content_slot:
-			continue
-		if child is Control and child.visible:
-			chrome += child.get_combined_minimum_size().y
-	var screen_size := _get_screen_size()
-	var stamped := minf(M3Units.dp(peek_height), screen_size.y)
-	var edge := M3Units.dpi(16.0 if _compact_layout else 24.0)
-	cover_container.custom_minimum_size.y = maxf(0.0, stamped - chrome - edge * 2.0)
-	# FILL only, never EXPAND: siblings overflowing the row must not stretch it.
-	cover_container.size_flags_vertical = Control.SIZE_FILL
 
 func _reduce_top_padding() -> void:
 	# Tighten the default M3BottomSheet top padding.
@@ -494,18 +473,13 @@ func set_game(game: GameResource) -> void:
 	if not is_instance_valid(self) or _current_game == null:
 		return
 
-	await _populate_basic_info(game)
+	# Populate is fully synchronous: nothing here reads layout geometry, so
+	# the hidden-prep phase is pure data. Geometry-driven refits (desc fold,
+	# chip overflow) fire off resized signals once the sheet is laid out.
+	_populate_basic_info(game)
 	if is_instance_valid(_content_root):
 		_content_root.visible = true
-
-	await Engine.get_main_loop().process_frame
-	if not is_instance_valid(self) or _current_game == null:
-		return
 	_update_sync_ui()
-
-	await Engine.get_main_loop().process_frame
-	if not is_instance_valid(self) or _current_game == null:
-		return
 	_load_cover(game)
 
 func clear_content() -> void:
@@ -517,6 +491,11 @@ func clear_content() -> void:
 			# (focus chain rebuild) never sees dying chips.
 			studio_row.remove_child(child)
 			child.queue_free()
+	_studio_chips.clear()
+	if is_instance_valid(sibling_dropdown):
+		sibling_dropdown.custom_minimum_size.x = 0.0
+	if is_instance_valid(status_dropdown):
+		status_dropdown.custom_minimum_size.x = 0.0
 	if is_instance_valid(_content_root):
 		_content_root.visible = false
 	_set_cover_texture(null)
@@ -527,6 +506,17 @@ func clear_content() -> void:
 		related_section.visible = false
 	if is_instance_valid(related_row):
 		for child in related_row.get_children():
+			child.queue_free()
+	_screenshots_count = 0
+	_screenshots_strip_active = false
+	_add_screenshot_card = null
+	_uploaded_thumb_count = 0
+	_screenshot_upload_in_flight = false
+	if is_instance_valid(screenshots_section):
+		screenshots_section.visible = false
+	if is_instance_valid(screenshots_row):
+		for child in screenshots_row.get_children():
+			screenshots_row.remove_child(child)
 			child.queue_free()
 
 func _populate_basic_info(game: GameResource) -> void:
@@ -540,8 +530,9 @@ func _populate_basic_info(game: GameResource) -> void:
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
-	await _setup_description_fold(game)
-	await _populate_related_games(game)
+	_setup_description_fold()
+	_populate_screenshots(game)
+	_populate_related_games(game)
 
 func _populate_studio(game: GameResource) -> void:
 	if not is_instance_valid(studio_row):
@@ -550,6 +541,7 @@ func _populate_studio(game: GameResource) -> void:
 		# Detach before queue_free; see clear_content().
 		studio_row.remove_child(child)
 		child.queue_free()
+	_studio_chips.clear()
 	var companies := game.get_igdb_companies()
 	studio_row.visible = not companies.is_empty()
 	for company in companies:
@@ -561,7 +553,41 @@ func _populate_studio(game: GameResource) -> void:
 		chip.tooltip_text = "Show all games by %s" % company
 		chip.pressed.connect(_on_company_chip_pressed.bind(company))
 		studio_row.add_child(chip)
+		_studio_chips.append(chip)
+	_layout_studio_row_overflow()
+	# Overflow visibility is final here; wire the focus chain last.
 	_update_chips_focus_chain()
+
+## Same single-line overflow discipline as the metadata row: hide the chips
+## that don't fit so the row's combined minimum width can never inflate the
+## sheet past its stamped width (clip_contents alone still propagates min size).
+func _layout_studio_row_overflow() -> void:
+	if not is_instance_valid(studio_row) or _studio_chips.is_empty():
+		return
+	var sep := float(studio_row.get_theme_constant("separation"))
+	var avail := studio_row.size.x
+	var estimate := _estimate_metadata_row_width()
+	if avail <= 0.0 or (estimate > 0.0 and avail > estimate + 1.0):
+		# A live width wider than the sheet's content area is stale; the row
+		# can never legitimately be wider than the sheet.
+		avail = estimate
+	if avail <= 0.0:
+		return
+	var used := 0.0
+	var fit := 0
+	for i in range(_studio_chips.size()):
+		if not is_instance_valid(_studio_chips[i]):
+			break
+		var w := _studio_chips[i].get_combined_minimum_size().x + (sep if i > 0 else 0.0)
+		if fit == 0 or used + w <= avail:
+			# Always show at least the first chip.
+			used += w
+			fit += 1
+		else:
+			break
+	for i in range(_studio_chips.size()):
+		if is_instance_valid(_studio_chips[i]):
+			_studio_chips[i].visible = i < fit
 
 ## Wire the studio and interactive metadata chips into the vertical focus
 ## chain between the header buttons and the tabs; only visible chips count.
@@ -790,68 +816,43 @@ const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 const DESC_COLLAPSED_LINES := 3
 
-func _setup_description_fold(game: GameResource) -> void:
-	if not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button):
+func _setup_description_fold() -> void:
+	if not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button) or not is_instance_valid(desc_scroll):
 		return
 	_desc_expanded = false
 	desc_fold_button.text = "More"
 	desc_fold_button.visible = false
-	# The scroll container is a min-size boundary: AUTO never propagates the
-	# label's intrinsic height upward, and the pinned custom minimum is the
-	# only height the content column ever reports for the description —
-	# collapsed or mid-measurement alike.
 	desc_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	desc_scroll.size_flags_vertical = Control.SIZE_FILL
+	desc_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	desc_scroll.scroll_vertical = 0
-	desc_scroll.custom_minimum_size.y = description_label.get_line_height() * DESC_COLLAPSED_LINES
-	# Measure the full text first, then clamp if it exceeds the folded budget.
+	# Min-size hygiene: the scroll is a zero-minimum slack absorber — its
+	# height is negotiated by the container, never by the text inside it, so
+	# the description can never grow the sheet.
+	desc_scroll.custom_minimum_size.y = 0.0
 	description_label.max_lines_visible = -1
 	description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-	if _small_layout:
-		# Small mode has no fold: full text, scroll handles overflow. Nothing
-		# consumes the line count, so skip the measurement pass.
-		return
-	var for_romm_id := game.romm_id
-	await get_tree().process_frame
-	await get_tree().process_frame
-	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
-		return
-	if _desc_expanded:
-		return
-	# Measure the full text here; truncation is decided in _finalize_desc_fold
-	# once related placement and the expanded scroll area have settled.
-	_desc_full_line_count = description_label.get_line_count()
+	# Correct any truncation state left over from the previous game; on first
+	# show geometry is zero and this no-ops until resized fires.
+	_refit_description()
 
-## Fit-based fold: the desc scroll always absorbs the column's leftover space
-## (EXPAND_FILL), and the text truncates to however many lines FIT that space
-## — never a hard 3-line lock. The 3-line pin stays as the minimum-height
-## floor for cramped sheets. The More button only appears on real overflow.
-func _finalize_desc_fold() -> void:
+## Fit-based fold, event-driven: the desc scroll absorbs the column's
+## leftover space (EXPAND_FILL), and the text truncates to however many lines
+## FIT that space. Recomputes everything against CURRENT geometry — full line
+## count at the current width, fit lines at the current height — so no cached
+## measurement can go stale. Idempotent; called from desc_scroll.resized, so
+## it only ever sees real laid-out rects, never pre-layout or mid-animation
+## guesses.
+func _refit_description() -> void:
 	if not is_instance_valid(desc_scroll) or not is_instance_valid(description_label) or not is_instance_valid(desc_fold_button):
 		return
-	if _desc_expanded:
-		return
-	if _small_layout:
-		# Small mode has no fold: full text, the scroll area handles overflow.
-		description_label.max_lines_visible = -1
-		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-		desc_fold_button.visible = false
-		desc_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		return
-	desc_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var for_romm_id := _current_game.romm_id if _current_game else 0
-	await get_tree().process_frame
-	await get_tree().process_frame
-	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id or _desc_expanded:
+	if _desc_expanded or _current_game == null:
 		return
 	var line_height := float(description_label.get_line_height())
-	if line_height <= 0.0:
+	if line_height <= 0.0 or desc_scroll.size.y <= 0.0 or description_label.size.x <= 0.0:
 		return
-	if _desc_full_line_count <= 0:
-		# Populate skipped the measurement (opened in small mode, resized wide).
-		_desc_full_line_count = description_label.get_line_count()
+	var full_lines := description_label.get_line_count()
 	var fit_lines := maxi(DESC_COLLAPSED_LINES, int(desc_scroll.size.y / line_height))
-	if _desc_full_line_count > fit_lines:
+	if full_lines > fit_lines:
 		description_label.max_lines_visible = fit_lines
 		description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		desc_fold_button.visible = true
@@ -860,44 +861,193 @@ func _finalize_desc_fold() -> void:
 		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		desc_fold_button.visible = false
 
+func _on_desc_scroll_resized() -> void:
+	_refit_description()
+
 func _on_desc_fold_pressed() -> void:
 	_desc_expanded = not _desc_expanded
 	if _desc_expanded:
-		# Trade space with the related row when it is inline (in small mode or
-		# when Related lives in its own tab there is nothing to hide): give the
-		# description's scroll area an explicit height — never more than the
-		# space above the cover column's bottom (expanded/compact) or the tab
-		# area bottom (small/tab), so the Less button can't be pushed off-screen.
-		# Shorter texts get a snug area (button hugs the text); longer texts
-		# scroll inside the cap.
-		if not _small_layout and is_instance_valid(related_section) and related_section.get_parent() == overview_vbox:
-			related_section.visible = false
+		# Trade space with the screenshot strip: expanding hides it (collapse
+		# restores it); the full text fills the freed column and scrolls.
+		if is_instance_valid(screenshots_section):
+			screenshots_section.visible = false
 		description_label.max_lines_visible = -1
 		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "Less"
-		await get_tree().process_frame
-		await get_tree().process_frame
-		if not is_instance_valid(self) or not _desc_expanded:
-			return
-		var separation := float(overview_vbox.get_theme_constant("separation"))
-		var boundary_y := overview_vbox.get_global_rect().end.y if _small_layout else cover_container.global_position.y + cover_container.size.y
-		var budget := boundary_y - desc_scroll.global_position.y - desc_fold_button.get_combined_minimum_size().y - separation
-		var text_h := description_label.get_combined_minimum_size().y
-		var min_h := float(description_label.get_line_height()) * DESC_COLLAPSED_LINES
-		desc_scroll.custom_minimum_size.y = clampf(minf(text_h, budget), min_h, maxf(budget, min_h))
 	else:
-		# Collapse: reset to the measured-full text and the 3-line floor, then
-		# let _finalize_desc_fold refit truncation to the settled layout.
-		description_label.max_lines_visible = -1
-		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-		desc_scroll.custom_minimum_size.y = description_label.get_line_height() * DESC_COLLAPSED_LINES
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "More"
 		desc_fold_button.visible = false
-		if not _small_layout and is_instance_valid(related_section) and _related_games_count > 0:
-			related_section.visible = true
-		_finalize_desc_fold()
+		if is_instance_valid(screenshots_section) and _screenshots_strip_active:
+			screenshots_section.visible = true
+		_refit_description()
+
+# ==================== SCREENSHOTS ====================
+
+const SCREENSHOT_HEIGHT_DP := 140.0
+
+func _populate_screenshots(game: GameResource) -> void:
+	if not is_instance_valid(screenshots_section) or not is_instance_valid(screenshots_row):
+		return
+	for child in screenshots_row.get_children():
+		screenshots_row.remove_child(child)
+		child.queue_free()
+	screenshots_section.visible = false
+	_screenshots_count = 0
+	_screenshots_strip_active = false
+	_add_screenshot_card = null
+	_uploaded_thumb_count = 0
+	_screenshot_upload_in_flight = false
+
+	# The strip lives whenever there's anything to show or the game can take
+	# uploads (RomM games always can, even with zero screenshots).
+	var can_upload := game.source == "romm" and game.romm_id > 0
+	if not can_upload and game.screenshot_urls.is_empty():
+		return
+	_screenshots_strip_active = true
+
+	var for_romm_id := game.romm_id
+	if can_upload:
+		_add_screenshot_upload_card()
+	for url in game.screenshot_urls:
+		_add_screenshot_thumb(url, for_romm_id)
+	_screenshots_count = game.screenshot_urls.size()
+	_update_screenshots_header()
+
+	if can_upload:
+		_fetch_user_screenshots(for_romm_id)
+
+	# Always visible while active: the strip's height is fixed and part of
+	# the sheet's bounded-overhead budget (min-size hygiene), so no fit
+	# check or deferred reveal is needed.
+	screenshots_section.visible = true
+
+func _update_screenshots_header() -> void:
+	if not is_instance_valid(screenshots_header):
+		return
+	screenshots_header.text = "Screenshots" if _screenshots_count == 0 else "Screenshots (%d)" % _screenshots_count
+
+func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1) -> void:
+	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
+	# Media-only M3Card: no text, so the media fills the card with the card's
+	# rounded-corner rendering. Focusable so the strip is controller-scrollable;
+	# not clickable (no press action yet).
+	var card := M3Card.new()
+	card.card_variant = M3Card.Variant.FILLED
+	card.enforce_min_height = false
+	card.custom_minimum_size = Vector2(height * 16.0 / 9.0, height)
+	card.media_aspect_ratio = 16.0 / 9.0
+	# No text band: the screenshot covers the whole card, aspect-covered by
+	# the card's media shader (no stretch), corners rounded the same way.
+	card.show_text_margin = false
+	card.clickable = false
+	card.focus_mode = Control.FOCUS_ALL
+	card.set_placeholder(true)
+	screenshots_row.add_child(card)
+	if at_position >= 0:
+		screenshots_row.move_child(card, at_position)
+	DataManager.load_image(url, func(texture):
+		if not is_instance_valid(card):
+			return
+		if texture and _current_game and _current_game.romm_id == for_romm_id:
+			card.media_texture = texture
+			card.set_placeholder(false)
+	)
+
+func _add_screenshot_upload_card() -> void:
+	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
+	var card := M3Card.new()
+	card.card_variant = M3Card.Variant.FILLED
+	card.enforce_min_height = false
+	card.custom_minimum_size = Vector2(height * 16.0 / 9.0, height)
+	card.content_alignment = M3Card.ContentAlignment.CENTER
+	card.headline = "+"
+	card.supporting_text = "Add"
+	card.clickable = true
+	card.focus_mode = Control.FOCUS_ALL
+	card.tooltip_text = "Upload a screenshot"
+	card.pressed.connect(_on_add_screenshot_pressed)
+	screenshots_row.add_child(card)
+	screenshots_row.move_child(card, 0)
+	_add_screenshot_card = card
+
+## User-uploaded screenshots aren't in the library-sync payload (SimpleRomSchema
+## only carries scraped merged_screenshots); they come from the detailed rom
+## endpoint, merged across own (user_screenshots) and everyone's public shots
+## (all_user_screenshots), deduped by id.
+func _fetch_user_screenshots(for_romm_id: int) -> void:
+	SystemManager.network.fetch_game_details(for_romm_id, func(data: Dictionary, error: String):
+		if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
+			return
+		if error != "" or not data is Dictionary:
+			return
+		var by_id: Dictionary = {}
+		for entry in data.get("all_user_screenshots", []):
+			if entry is Dictionary and not bool(entry.get("missing_from_fs", false)):
+				by_id[int(entry.get("id", 0))] = entry
+		for entry in data.get("user_screenshots", []):
+			if entry is Dictionary and not bool(entry.get("missing_from_fs", false)):
+				by_id[int(entry.get("id", 0))] = entry
+		var ids := by_id.keys()
+		ids.sort()
+		for id in ids:
+			var url := _screenshot_download_url(by_id[id])
+			if url == "":
+				continue
+			# Uploads lead the strip: after the + card and any earlier
+			# uploads, before the scraped thumbs.
+			_add_screenshot_thumb(url, for_romm_id, 1 + _uploaded_thumb_count)
+			_uploaded_thumb_count += 1
+			_screenshots_count += 1
+		_update_screenshots_header()
+	)
+
+func _screenshot_download_url(entry: Dictionary) -> String:
+	var path := str(entry.get("download_path", ""))
+	if path == "" or path == "null":
+		var id := int(entry.get("id", 0))
+		if id > 0:
+			path = "/api/screenshots/%d/content" % id
+	if path == "":
+		return ""
+	return SystemManager.network.build_media_url(path)
+
+func _on_add_screenshot_pressed() -> void:
+	if _screenshot_upload_in_flight or _current_game == null:
+		return
+	UIManager.show_file_dialog(
+		"Select Screenshot",
+		PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp ; Image Files"]),
+		"",
+		_upload_screenshot
+	)
+
+func _upload_screenshot(path: String) -> void:
+	if _current_game == null:
+		return
+	var for_romm_id := _current_game.romm_id
+	_screenshot_upload_in_flight = true
+	if is_instance_valid(_add_screenshot_card):
+		_add_screenshot_card.disabled = true
+	SystemManager.network.upload_screenshot(for_romm_id, path, func(data: Dictionary, error: String):
+		_screenshot_upload_in_flight = false
+		if is_instance_valid(_add_screenshot_card):
+			_add_screenshot_card.disabled = false
+		if not is_instance_valid(self):
+			return
+		if error != "":
+			SystemManager.notifications.show_notification("Screenshot upload failed: " + error, SystemManager.notifications.Type.ERROR)
+			return
+		SystemManager.notifications.show_notification("Screenshot uploaded", SystemManager.notifications.Type.INFO)
+		if _current_game and _current_game.romm_id == for_romm_id:
+			var url := _screenshot_download_url(data)
+			if url != "":
+				_add_screenshot_thumb(url, for_romm_id, 1 + _uploaded_thumb_count)
+				_uploaded_thumb_count += 1
+				_screenshots_count += 1
+				_update_screenshots_header()
+	)
 
 # ==================== RELATED GAMES ====================
 
@@ -923,10 +1073,9 @@ func _populate_related_games(game: GameResource) -> void:
 
 	var related := game.get_igdb_related_games()
 	_related_games_count = related.size()
+	var for_romm_id := game.romm_id
 	if related.is_empty():
-		if content_tabs:
-			content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
-		_finalize_desc_fold()
+		_update_related_tab_visibility()
 		return
 	if is_instance_valid(related_header):
 		related_header.text = "Related Games (%d)" % related.size()
@@ -941,16 +1090,9 @@ func _populate_related_games(game: GameResource) -> void:
 			igdb_ids.append(igdb_id)
 		titles.append(str(entry.get("name", "")))
 
-	# Placement (inline vs tab) is decided on vertical fit once layout settles.
-	# The section stays hidden until then so its minimum size never propagates
-	# upward and grows the sheet.
-	var for_romm_id := game.romm_id
-	await get_tree().process_frame
-	await get_tree().process_frame
-	if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
-		return
-	_decide_related_placement()
-	_finalize_desc_fold()
+	# Related always lives in its own tab; reveal it now that cards exist.
+	related_section.visible = true
+	_update_related_tab_visibility()
 
 	# Resolve which related games are owned on the DB thread, then badge and
 	# link their cards. Exact igdb_id match first, title fallback after.

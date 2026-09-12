@@ -66,6 +66,13 @@ func set_clip_children(value: bool) -> void:
 	if _stack_canvas_item.is_valid():
 		RenderingServer.canvas_item_set_clip(_stack_canvas_item, value)
 
+## Explicitly order the stack's canvas item among its parent's children.
+## Mirrors M3Card's use of canvas_item_set_draw_index to keep RS-rendered
+## layers above sibling content (e.g. UserAvatar's backing disc).
+func set_draw_index(idx: int) -> void:
+	_ensure_stack_canvas_item()
+	RenderingServer.canvas_item_set_draw_index(_stack_canvas_item, idx)
+
 func set_visible(value: bool) -> void:
 	_visible = value
 	if _stack_canvas_item.is_valid():

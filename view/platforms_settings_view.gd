@@ -312,7 +312,7 @@ func _show_loading_indicator() -> void:
 		var row_count := 4 if c == 0 else 3
 		for i in range(row_count):
 			var skeleton := Panel.new()
-			skeleton.custom_minimum_size = Vector2(0, 80)
+			skeleton.custom_minimum_size = Vector2(0, M3Units.dp(140))
 			skeleton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			var style := StyleBoxFlat.new()
 			style.bg_color = Color.WHITE

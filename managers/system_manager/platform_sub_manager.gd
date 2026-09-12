@@ -19,10 +19,55 @@ func _setup_platform_specific_behavior():
 	if is_android():
 		# Disable native Android virtual keyboard - we use our own onscreen keyboard
 		get_tree().node_added.connect(_on_node_added_android)
+		# Watch for the "set as HOME while running" failure mode where the
+		# activity resumes but its window never gains input focus
+		var plugin = _get_android_plugin()
+		if plugin and plugin.has_signal("window_focus_stuck"):
+			plugin.connect("window_focus_stuck", _on_window_focus_stuck)
 		# Check and request permissions on Android (skip during first-run OOBE)
 		var first_run_completed = DataManager.get_setting("first_run_completed")
 		if first_run_completed and first_run_completed.value:
 			_request_android_permissions()
+
+func _notification(what: int) -> void:
+	if not is_android():
+		return
+	if what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		_on_android_window_focus_in()
+
+func _on_android_window_focus_in() -> void:
+	# The native IME must never be visible - it steals gamepad key events via
+	# its input connection. Hide it natively and through the plugin.
+	DisplayServer.virtual_keyboard_hide()
+	var plugin = _get_android_plugin()
+	if plugin and plugin.has_method("forceHideKeyboard"):
+		plugin.forceHideKeyboard()
+	# A text field holding focus at window-focus time can re-attach the IME.
+	# Release it unless our own on-screen keyboard is intentionally open.
+	if UIManager and UIManager.is_onscreen_keyboard_visible():
+		return
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		focus_owner.release_focus()
+
+var _window_focus_stuck_dialog_shown := false
+
+func _on_window_focus_stuck() -> void:
+	# Only reachable when the activity is resumed but its window never gains
+	# input focus (system input dispatcher desync). Automatic recovery already
+	# failed, so the only known fix is a device reboot.
+	if _window_focus_stuck_dialog_shown:
+		return
+	_window_focus_stuck_dialog_shown = true
+	push_error("[SystemManager.platform] Window focus never gained; controller input will not work until reboot")
+	if UIManager:
+		UIManager.show_alert(
+			"Input Not Responding",
+			"The system stopped delivering controller input to Kyodai. A device restart fixes this.",
+			func(): _window_focus_stuck_dialog_shown = false
+		)
+	else:
+		_window_focus_stuck_dialog_shown = false
 
 func _on_node_added_android(node: Node):
 	# When a LineEdit/TextEdit is added on Android, disable the native virtual keyboard

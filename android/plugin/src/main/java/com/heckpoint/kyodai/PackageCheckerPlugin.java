@@ -64,12 +64,16 @@ public class PackageCheckerPlugin extends GodotPlugin {
     private static final String ALT_ACCESS_DIR = "KyodaiUC";
     private Activity activity;
     private BroadcastReceiver extractionReceiver;
+    private WindowFocusGuard windowFocusGuard;
     
     public PackageCheckerPlugin(Godot godot) {
         super(godot);
         Log.d(TAG, "PackageCheckerPlugin constructor called");
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
+        if (this.activity != null) {
+            this.windowFocusGuard = new WindowFocusGuard(activity, () -> emitSignal("window_focus_stuck"));
+        }
         registerExtractionReceiver();
     }
     
@@ -85,7 +89,44 @@ public class PackageCheckerPlugin extends GodotPlugin {
         signals.add(new SignalInfo("copy_progress", String.class, Long.class, Long.class));
         signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
+        signals.add(new SignalInfo("window_focus_stuck"));
         return signals;
+    }
+    
+    @Override
+    public void onMainResume() {
+        if (windowFocusGuard != null) {
+            windowFocusGuard.onResumeOrNewIntent();
+        }
+    }
+    
+    @Override
+    public void onMainPause() {
+        if (windowFocusGuard != null) {
+            windowFocusGuard.onPause();
+        }
+    }
+    
+    // No @Override: onNewIntent is missing from the Godot 4.2 compile-time
+    // stub, but the 4.7 runtime dispatches to it via virtual dispatch.
+    public void onNewIntent(Intent intent) {
+        if (windowFocusGuard != null) {
+            windowFocusGuard.onResumeOrNewIntent();
+        }
+    }
+    
+    /// Hides the native IME and re-hardens the window against soft-input takeover.
+    @UsedByGodot
+    public void forceHideKeyboard() {
+        if (windowFocusGuard != null) {
+            windowFocusGuard.hardenWindow();
+        }
+    }
+    
+    /// True while the activity window holds input focus.
+    @UsedByGodot
+    public boolean hasWindowFocus() {
+        return windowFocusGuard != null && windowFocusGuard.hasWindowFocus();
     }
     
     private void registerExtractionReceiver() {

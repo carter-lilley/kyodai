@@ -26,6 +26,7 @@ const _EXPECTED_SCHEMA := {
 		"cover_group_id": "TEXT DEFAULT ''", "cover_group_master": "INTEGER DEFAULT 1",
 		"igdb_metadata": "TEXT DEFAULT '{}'", "igdb_id": "INTEGER DEFAULT 0",
 		"m3u_path": "TEXT DEFAULT ''", "unwrapped": "INTEGER DEFAULT 0",
+		"screenshots": "TEXT DEFAULT '[]'",
 	},
 	"platforms": {
 		"id": "TEXT PRIMARY KEY", "romm_id": "INTEGER UNIQUE NOT NULL", "name": "TEXT NOT NULL",
@@ -224,7 +225,8 @@ func _create_tables():
 		igdb_metadata TEXT DEFAULT '{}',
 		igdb_id INTEGER DEFAULT 0,
 		m3u_path TEXT DEFAULT '',
-		unwrapped INTEGER DEFAULT 0
+		unwrapped INTEGER DEFAULT 0,
+		screenshots TEXT DEFAULT '[]'
 	)
 	""")
 
@@ -582,6 +584,16 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.release_date = int(release_date_value) if release_date_value != null else 0
 	var igdb_id_value = row.get("igdb_id", 0)
 	game.igdb_id = int(igdb_id_value) if igdb_id_value != null else 0
+
+	# Restore screenshot URLs
+	if row.has("screenshots") and row["screenshots"] is String and row["screenshots"] != "":
+		var json_shots = JSON.new()
+		if json_shots.parse(row["screenshots"]) == OK and json_shots.data is Array:
+			var shots: PackedStringArray = []
+			for shot in json_shots.data:
+				if shot is String:
+					shots.append(shot)
+			game.screenshot_urls = shots
 
 	# Restore sibling data
 	if row.has("siblings") and row["siblings"] != "":
@@ -1063,10 +1075,11 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 				save_usage = ?,
 		cover_group_id = ?,
 		cover_group_master = ?,
-		igdb_metadata = ?,
-		igdb_id = ?,
-		m3u_path = ?
-	WHERE romm_id = ?
+	igdb_metadata = ?,
+	igdb_id = ?,
+	m3u_path = ?,
+	screenshots = ?
+WHERE romm_id = ?
 """
 			var bindings = [
 				game.title,
@@ -1097,6 +1110,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 	JSON.stringify(game.igdb_metadata),
 	game.igdb_id,
 	game.m3u_path,
+	JSON.stringify(Array(game.screenshot_urls)),
 	game.romm_id
 ]
 			var success = query_bool_unlocked(query, bindings)

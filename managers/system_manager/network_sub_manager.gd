@@ -1230,6 +1230,93 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 			callback.call(json.data, "")
 	)
 
+## Upload a per-user gallery screenshot for a ROM (POST /api/screenshots).
+## callback(screenshot_data: Dictionary, error: String) - screenshot_data is
+## the ScreenshotSchema response on success.
+func upload_screenshot(rom_id: int, file_path: String, callback: Callable = Callable()) -> void:
+	if not _is_online:
+		if callback.is_valid():
+			callback.call({}, "Not connected")
+		return
+
+	if not FSM.file_exists(file_path):
+		if callback.is_valid():
+			callback.call({}, "File not found: " + file_path)
+		return
+
+	var file = FSM.open_file_read(file_path)
+	if not file:
+		if callback.is_valid():
+			callback.call({}, "Cannot open file: " + file_path)
+		return
+	var file_data = file.get_buffer(file.get_length())
+	file.close()
+
+	var boundary = "----KyodaiBoundary" + str(Time.get_ticks_msec())
+	var file_name = file_path.get_file()
+
+	var body = PackedByteArray()
+	body.append_array(("--" + boundary + "\r\n").to_utf8_buffer())
+	body.append_array(("Content-Disposition: form-data; name=\"screenshotFile\"; filename=\"" + file_name + "\"\r\n").to_utf8_buffer())
+	body.append_array("Content-Type: application/octet-stream\r\n\r\n".to_utf8_buffer())
+	body.append_array(file_data)
+	body.append_array(("\r\n--" + boundary + "--\r\n").to_utf8_buffer())
+
+	var url = _base_url.rstrip("/") + "/api/screenshots?rom_id=" + str(rom_id)
+
+	var headers = [
+		"Content-Type: multipart/form-data; boundary=" + boundary,
+		"Authorization: " + _get_auth_header()
+	]
+
+	var http = _create_http_request()
+	_active_request_count += 1
+
+	print("[SystemManager.network] upload_screenshot URL: " + url)
+	var error = http.request_raw(url, headers, HTTPClient.METHOD_POST, body)
+	if error != OK:
+		if callback.is_valid():
+			callback.call({}, "Failed to start upload: " + str(error))
+		_finish_pooled_request(http)
+		return
+
+	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
+		_finish_pooled_request(http)
+
+		if response_code == 401:
+			authentication_failed.emit()
+			if callback.is_valid():
+				callback.call({}, "Authentication failed")
+			return
+
+		if result != HTTPRequest.RESULT_SUCCESS:
+			if callback.is_valid():
+				callback.call({}, "Upload failed: " + str(result))
+			return
+
+		var body_text = response_body.get_string_from_utf8()
+
+		if response_code < 200 or response_code >= 300:
+			var error_msg = "HTTP error: " + str(response_code)
+			print("[SystemManager.network] upload_screenshot failed: " + error_msg + " | body: " + body_text)
+			if callback.is_valid():
+				callback.call({}, error_msg)
+			return
+
+		var json = JSON.new()
+		var parse_result = json.parse(body_text)
+		if parse_result != OK:
+			print("[SystemManager.network] upload_screenshot parse error: " + json.get_error_message() + " | body: " + body_text)
+			if callback.is_valid():
+				callback.call({}, "Failed to parse response: " + json.get_error_message())
+			return
+
+		print("[SystemManager.network] upload_screenshot success: " + str(json.data))
+		if callback.is_valid():
+			callback.call(json.data if json.data is Dictionary else {}, "")
+	)
+
+
 ## Fetch remote saves for a ROM
 ## callback(saves: Array, error: String)
 func fetch_saves(rom_id: int, device_id: String = "", callback: Callable = Callable()) -> void:

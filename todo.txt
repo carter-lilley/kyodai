@@ -36,8 +36,8 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	- shadps4
 	
 ## romm
- - xtra romm metadata - HL2B, guides, logos..
- - screenshots...& user uploaded?
+ - xtra romm metadata - HL2B, x guides, logos..
+ - x screenshots...& x user uploaded?
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)
