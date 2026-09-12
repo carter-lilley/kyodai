@@ -67,6 +67,10 @@ var _defer_dropdown: bool = false
 var _bulk_reset: bool = false
 var _pending_emulators: Array[Dictionary] = []
 
+# Loading state: the card renders as a shimmer placeholder at its final
+# geometry until the view has populated it with real data.
+var _loading: bool = false
+
 # Reentrancy guard for dropdown rebuilds. Setting selected_emulator/selected_core_id
 # from _on_emulator_selected triggers _update_display() -> _update_emulator_dropdown(),
 # and without this guard the menu items can be rebuilt/appended while a selection is
@@ -133,12 +137,43 @@ func _ready():
 	# Defer the first firmware check so creating many cards doesn't block the UI.
 	call_deferred("refresh_firmware_indicator")
 	_update_media_panel_size(true)
+	if _loading:
+		_apply_loading_state()
+
+func set_loading(p_loading: bool) -> void:
+	if p_loading == _loading:
+		return
+	_loading = p_loading
+	if is_node_ready():
+		_apply_loading_state()
+
+func is_loading() -> bool:
+	return _loading
+
+func _apply_loading_state() -> void:
+	if _loading:
+		M3Shimmer.attach(self, card_rounding_ratio)
+		focus_mode = Control.FOCUS_NONE
+		if _text_row:
+			_text_row.visible = false
+		elif _text_content:
+			_text_content.visible = false
+	else:
+		M3Shimmer.detach(self)
+		_apply_clickable_state()
+		if _text_row:
+			_text_row.visible = show_text_margin
+		elif _text_content:
+			_text_content.visible = show_text_margin
 
 func _enter_tree():
 	set_visual_layer(null)
 	super._enter_tree()
 	if _ready_called:
 		refresh_basic_ui()
+		if _loading:
+			# Pooled cards skip _ready on reuse; re-apply the loading state.
+			_apply_loading_state()
 
 func _build_ui():
 	# Platform cards have no media
@@ -237,6 +272,12 @@ func _update_media_panel_size(force: bool = false) -> void:
 	super._update_media_panel_size(force)
 	if not is_node_ready():
 		return
+	if _loading:
+		# super() re-shows the text area every layout pass; keep it hidden.
+		if _text_row:
+			_text_row.visible = false
+		elif _text_content:
+			_text_content.visible = false
 	# Size the text area to the card's actual rect, not the requested minimum,
 	# so cards that are narrower than their custom_minimum_size still clip their
 	# content correctly.
@@ -581,6 +622,11 @@ func _update_shuffler_mode() -> void:
 func reset_for_borrow() -> void:
 	# Hide the card while it's being rebound so stale content doesn't flash.
 	visible = false
+
+	if _loading:
+		_loading = false
+		if is_node_ready():
+			_apply_loading_state()
 
 	if _sync_toggle_connected:
 		if _sync_toggle.toggled.is_connected(_on_sync_toggled):

@@ -109,7 +109,6 @@ func _apply_responsive_layout() -> void:
 	_update_icon_button_sizes()
 	_rebuild_platform_group()
 	_update_minimum_height()
-	call_deferred("_update_minimum_height")
 	_refresh_labels()
 
 func _update_icon_button_sizes() -> void:
@@ -190,19 +189,13 @@ func _rebuild_platform_group() -> void:
 	hbox.add_child(_platform_group)
 	hbox.move_child(_platform_group, 1)
 
+## Button heights are fixed per M3Button.Size tier, so the minimum height is
+## derived from the current tier's spec — no child min-size scan, no deferred
+## re-run waiting on layout. The root is a plain Control (non-propagating);
+## ui_manager reads this via get_combined_minimum_size().
 func _update_minimum_height() -> void:
-	var hbox = get_node_or_null("MainContainer")
-	if hbox == null:
-		return
-	
-	var max_child_height := 0.0
-	for child in hbox.get_children():
-		if child is Control:
-			max_child_height = max(max_child_height, child.get_combined_minimum_size().y)
-	
-	var min_height_px := M3Units.dp(MIN_HEIGHT_DP)
-	var padded_height_px := max_child_height + M3Units.dp(VERTICAL_PADDING_DP)
-	custom_minimum_size.y = max(min_height_px, padded_height_px)
+	var button_height_px := M3Units.dp(M3Button.SIZE_SPECS[_current_button_size]["height"])
+	custom_minimum_size.y = max(M3Units.dp(MIN_HEIGHT_DP), button_height_px + M3Units.dp(VERTICAL_PADDING_DP))
 
 func update_display(platforms: Array[Dictionary], current_index: int):
 	_platforms = platforms

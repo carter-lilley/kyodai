@@ -2,49 +2,25 @@
 
 [ext_resource type="Script" uid="uid://ddec4id7tpgk3" path="res://view/platforms_settings_view.gd" id="1_psview"]
 
-[node name="PlatformsSettingsView" type="Control"]
+[node name="PlatformsSettingsView" type="MarginContainer"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-script = ExtResource("1_psview")
-
-[node name="ScrollContainer" type="ScrollContainer" parent="."]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-follow_focus = true
-horizontal_scroll_mode = 0
-
-[node name="MarginContainer" type="MarginContainer" parent="ScrollContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
 theme_override_constants/margin_left = 20
 theme_override_constants/margin_top = 20
 theme_override_constants/margin_right = 20
 theme_override_constants/margin_bottom = 20
+script = ExtResource("1_psview")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer/MarginContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 0
 
-[node name="CardsHBox" type="HBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer"]
+[node name="CardsFlow" type="HFlowContainer" parent="VBoxContainer"]
 layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="CardsLeft" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 10
-
-[node name="CardsRight" type="VBoxContainer" parent="ScrollContainer/MarginContainer/VBoxContainer/CardsHBox"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 10
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10

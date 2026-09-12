@@ -1635,10 +1635,8 @@ func _on_screens_swapped(_is_swapped: bool) -> void:
 		else:
 			push_warning("[Main] _on_screens_swapped: dual_screen_swapped setting not found!")
 
-	# Rebuild the settings dialog if it is open so it sizes to the new
-	# viewport and is reparented to the correct overlay parent.
-	if UIManager and UIManager.is_settings_dialog_open():
-		UIManager.reopen_settings_dialog()
+	# The settings dialog survives the swap (survive_ds_swap): it is reparented
+	# by the overlay manager and re-stamps its geometry from on_viewport_settled.
 
 	# The navigation bar sizes its items from the parent width, which can be
 	# stale after a screen swap. Force a deferred nav/grid refresh once the new

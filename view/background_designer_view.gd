@@ -39,9 +39,15 @@ func on_view_hide():
 func _setup_ui():
 	var hsplit = HSplitContainer.new()
 	hsplit.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hsplit.split_offset = 0
+	# Preserve the user's dragged split ratio across resizes instead of
+	# slamming the divider back to a constant on every size change.
+	var split_ratio := [0.55]
+	hsplit.dragged.connect(func(offset: int):
+		if hsplit.size.x > 0.0:
+			split_ratio[0] = clampf(offset / hsplit.size.x, 0.1, 0.9)
+	)
 	hsplit.resized.connect(func():
-		hsplit.split_offset = int(hsplit.size.x * 0.55)
+		hsplit.split_offset = int(hsplit.size.x * split_ratio[0])
 	)
 	add_child(hsplit)
 

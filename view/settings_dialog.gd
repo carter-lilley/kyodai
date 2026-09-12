@@ -41,8 +41,12 @@ func _init():
 	title_text = "Settings"
 	persistent = true
 	fill_viewport_height = true
-	# Content must never resize the dialog: tall pages scroll inside it.
+	# Stamped mode: the dialog's size is a pure function of the viewport and
+	# tall pages scroll inside it; content never resizes the dialog.
 	fixed_size = true
+	# Ride DS swaps (reparent + on_viewport_settled re-stamp) instead of being
+	# dismissed, so pending setting changes survive a screen swap.
+	survive_ds_swap = true
 	super._init()
 	if UIManager:
 		set_focus_restore_fallback(UIManager.get_focus_restore_fallback_to_home())
@@ -64,11 +68,6 @@ func _ready():
 	await _build_categories()
 	print("[SettingsDialog] _build_categories (first burst) elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
-	# Categories are built asynchronously; re-position now that the real content
-	# minimum size is known so the first summon matches subsequent summons.
-	if is_inside_tree():
-		_position_dialog()
-
 	# Hide default body label; keep the title label as the popup title.
 	if _body_label:
 		_body_label.visible = false
@@ -85,32 +84,17 @@ func _build_two_pane_layout() -> void:
 	for child in content_slot.get_children():
 		child.queue_free()
 
-	# Make content slot expand to fill the dialog interior. Done here, before any
-	# positioning pass, so the dialog never measures against the default flags.
+	# M3Dialog's chrome firewall severs min-size propagation above the vbox, so
+	# the slot is container-managed: claim the leftover dialog height directly.
 	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content_slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+	# Page content propagates no further than the chrome firewall and can never
+	# inflate the dialog's stamped size.
 	var hbox = HBoxContainer.new()
 	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	# Wrap the content in a plain Control so the right-pane ScrollContainer's
-	# natural content height does not propagate to the dialog's minimum size.
-	# The HBox fills the wrapper via anchors; the wrapper fills the dialog via
-	# size flags, and the dialog clamps its own height to the viewport.
-	# clip_contents guarantees page content can never paint outside the slot.
-	var content_wrapper = Control.new()
-	content_wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content_wrapper.custom_minimum_size = Vector2(0, 0)
-	content_wrapper.clip_contents = true
-	content_slot.add_child(content_wrapper)
-	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hbox.offset_left = 0
-	hbox.offset_top = 0
-	hbox.offset_right = 0
-	hbox.offset_bottom = 0
-	content_wrapper.add_child(hbox)
+	content_slot.add_child(hbox)
 
 	# Left sidebar. The category list lives in a ScrollContainer so its natural
 	# height can never inflate the dialog's minimum size (a Control's rect can
@@ -365,16 +349,12 @@ func _dump_layout_metrics(id: String) -> void:
 	if get_window():
 		window_size = get_window().size
 	print("[SettingsDialog] layout dump for category '%s': viewport=%s window=%s dp_scale=%.2f" % [id, viewport_size, window_size, M3Units.dp(1.0)])
-	var wrapper: Control = null
-	if content_slot and content_slot.get_child_count() > 0:
-		wrapper = content_slot.get_child(0) as Control
 	var hbox_node: Control = null
-	if wrapper and wrapper.get_child_count() > 0:
-		hbox_node = wrapper.get_child(0) as Control
+	if content_slot and content_slot.get_child_count() > 0:
+		hbox_node = content_slot.get_child(0) as Control
 	var layers: Array = [
 		["dialog_container", _dialog_container],
 		["content_slot", content_slot],
-		["content_wrapper", wrapper],
 		["hbox", hbox_node],
 		["right_pane", _right_pane],
 		["right_scroll", _right_scroll],

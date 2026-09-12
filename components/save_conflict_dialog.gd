@@ -28,7 +28,6 @@ func setup(game_name: String, server_time_unix: int, local_time_unix: int) -> vo
 
 func _ready() -> void:
 	_ready_internal()
-	await get_tree().process_frame
 	_update_ui()
 
 func _ready_internal() -> void:

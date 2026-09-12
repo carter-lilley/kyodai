@@ -11,7 +11,6 @@ var _loading_indicator: Control
 var _loading_platforms: bool = false
 var _platform_cards: Dictionary[String, PlatformCard] = {}
 var _selected_platforms: Array[String] = []
-var _pending_cards: Array[PlatformCard] = []
 var _active_batch_id: int = -1
 var _toggle_all_button: M3Button
 
@@ -231,29 +230,22 @@ func _show_setup_page() -> void:
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
-	# Skeleton rows stand in for the platform cards while the precompute runs.
-	var wrapper = HBoxContainer.new()
-	wrapper.name = "LoadingIndicator"
-	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	wrapper.add_theme_constant_override("separation", int(M3Units.dp(8)))
-	for c in range(2):
-		var column := VBoxContainer.new()
-		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		column.add_theme_constant_override("separation", int(M3Units.dp(8)))
-		var row_count := 3 if c == 0 else 2
-		for i in range(row_count):
-			var skeleton := Panel.new()
-			skeleton.custom_minimum_size = Vector2(0, M3Units.dp(140))
-			skeleton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			var style := StyleBoxFlat.new()
-			style.bg_color = Color.WHITE
-			skeleton.add_theme_stylebox_override("panel", style)
-			M3Shimmer.attach(skeleton, 0.12)
-			column.add_child(skeleton)
-		wrapper.add_child(column)
-	_cards_hbox.add_child(wrapper)
-	_cards_hbox.move_child(wrapper, 0)
-	_loading_indicator = wrapper
+	# Unknown-count wait: a label + spinner is the honest placeholder. Once the
+	# platform list is known, real cards render in their loading state instead.
+	var row := HBoxContainer.new()
+	row.name = "LoadingIndicator"
+	row.add_theme_constant_override("separation", int(M3Units.dp(12)))
+	var spinner := M3Progress.new()
+	spinner.mode = M3Progress.Mode.CIRCULAR
+	spinner.progress_size = M3Progress.Size.SMALL
+	spinner.indeterminate = true
+	row.add_child(spinner)
+	var label := M3Label.new()
+	label.text = "Loading platforms..."
+	row.add_child(label)
+	_cards_hbox.add_child(row)
+	_cards_hbox.move_child(row, 0)
+	_loading_indicator = row
 
 func _hide_loading_indicator() -> void:
 	if is_instance_valid(_loading_indicator):
@@ -278,15 +270,67 @@ func _load_platforms_deferred() -> void:
 		return
 	var platforms = DataManager.get_platforms_with_games()
 	var enabled_platforms = _get_enabled_platforms()
+
+	var card_payloads: Array[Dictionary] = []
+	for platform in platforms:
+		var slug: String = platform["slug"]
+		var platform_name: String = platform["name"]
+		if slug == "":
+			continue
+		card_payloads.append({"slug": slug, "name": platform_name})
+
+	_hide_loading_indicator()
+
+	if card_payloads.is_empty():
+		_loading_platforms = false
+		return
+
+	# Phase A: create every card in its loading state so the final layout
+	# materializes immediately; cards flip to live content as the populate
+	# batch reaches them.
+	_active_batch_id = MemorySubManager.start_batch(
+		card_payloads,
+		func(payload: Dictionary, index: int) -> PlatformCard:
+			return _create_loading_card(payload, index),
+		SystemManager.memory.BatchMode.SYNC,
+		3,
+		func(_processed: int, _total: int):
+			pass,
+		func(_results: Array):
+			_active_batch_id = -1
+			if not is_inside_tree():
+				_return_all_cards()
+				return
+			_precompute_and_populate(card_payloads, enabled_platforms)
+	)
+
+func _create_loading_card(payload: Dictionary, index: int) -> PlatformCard:
+	"""Phase A: create a card in its loading state — final geometry, shimmering,
+	non-interactive — with no emulator data yet."""
+	var card: PlatformCard = PlatformCardPool.get_card(PlatformCardPool.POOL_SHUFFLER)
+	card._bulk_reset = true
+	card.shuffler_mode = true
+	card.platform_slug = payload.slug
+	card.platform_name = payload.name
+	card._bulk_reset = false
+	card.set_loading(true)
+	if index % 2 == 0:
+		_platform_grid.add_child(card)
+	else:
+		_cards_right.add_child(card)
+	_platform_cards[payload.slug] = card
+	return card
+
+func _precompute_and_populate(card_payloads: Array[Dictionary], enabled_platforms: Dictionary) -> void:
+	"""Heavy registry/filesystem lookups run once up front (main thread, as
+	before), then phase B fills each loading card and flips it live."""
 	var platform_emulator_cache: Dictionary = {}
 	var platform_default_core_cache: Dictionary = {}
 	var precomputed_status: Dictionary = {}
 	var unique_emulators: Array[String] = []
 
-	for platform in platforms:
-		var slug = platform["slug"]
-		if slug == "":
-			continue
+	for payload in card_payloads:
+		var slug: String = payload.slug
 		platform_emulator_cache[slug] = LaunchManager.get_emulators_for_platform(slug)
 		platform_default_core_cache[slug] = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
 		for emulator in platform_emulator_cache[slug]:
@@ -298,63 +342,45 @@ func _load_platforms_deferred() -> void:
 		var progress = LaunchManager.get_install_progress(emu_id)
 		precomputed_status[emu_id] = progress["status"] == "complete"
 
-	var card_payloads: Array[Dictionary] = []
-	for platform in platforms:
-		var slug: String = platform["slug"]
-		var platform_name: String = platform["name"]
-		if slug == "":
-			continue
-		card_payloads.append({"slug": slug, "name": platform_name})
-
 	_active_batch_id = MemorySubManager.start_batch(
 		card_payloads,
 		func(payload: Dictionary, _index: int) -> PlatformCard:
-			return _create_platform_card(
+			var card: PlatformCard = _platform_cards.get(payload.slug)
+			if card == null or not is_instance_valid(card):
+				return null
+			_populate_shuffler_card(
+				card,
 				payload.slug,
-				payload.name,
 				enabled_platforms,
 				precomputed_status,
 				platform_emulator_cache,
 				platform_default_core_cache
-			),
+			)
+			card.set_loading(false)
+			return card,
 		SystemManager.memory.BatchMode.SYNC,
 		3,
 		func(_processed: int, _total: int):
 			pass,
-		func(results: Array):
+		func(_results: Array):
 			_active_batch_id = -1
 			_loading_platforms = false
 			if not is_inside_tree():
 				_return_all_cards()
 				return
 
-			_hide_loading_indicator()
-			var column_index := 0
-			var created_cards: Array[PlatformCard] = []
-			for card in results:
-				if not card is PlatformCard:
-					continue
-				created_cards.append(card)
-				if column_index % 2 == 0:
-					_platform_grid.add_child(card)
-				else:
-					_cards_right.add_child(card)
-				column_index += 1
-				_platform_cards[card.platform_slug] = card
-
-			_pending_cards.clear()
 			_update_toggle_all_button()
-			
+
 			# Populate emulator dropdowns in a second batch so the cards appear first
 			# and the heavy dropdown rebuild is spread across frames.
 			_active_batch_id = MemorySubManager.start_batch(
-				created_cards,
+				_platform_cards.values(),
 				_populate_card_dropdown,
 				SystemManager.memory.BatchMode.SYNC,
 				3,
 				func(_processed: int, _total: int):
 					pass,
-				func(_results: Array):
+				func(_dropdown_results: Array):
 					_active_batch_id = -1
 			)
 	)
@@ -362,18 +388,15 @@ func _load_platforms_deferred() -> void:
 func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
 	card.populate_dropdown()
 
-func _create_platform_card(
+func _populate_shuffler_card(
+	card: PlatformCard,
 	slug: String,
-	platform_name: String,
 	enabled_platforms: Dictionary,
 	precomputed_status: Dictionary,
 	platform_emulator_cache: Dictionary,
 	_platform_default_core_cache: Dictionary
-) -> PlatformCard:
-	var card: PlatformCard = PlatformCardPool.get_card(PlatformCardPool.POOL_SHUFFLER)
-	card.shuffler_mode = true
-	card.platform_slug = slug
-	card.platform_name = platform_name
+) -> void:
+	card._bulk_reset = true
 	card.registry_default_core_id = LaunchManager.get_shuffler_default_core_for_platform(slug)
 	card.registry_default_emulator = LaunchManager.get_shuffler_default_emulator_for_platform(slug)
 	card._defer_dropdown = true
@@ -414,8 +437,8 @@ func _create_platform_card(
 		LaunchManager.set_shuffle_override(slug, emu_id, selected_core)
 	)
 
-	_pending_cards.append(card)
-	return card
+	card._bulk_reset = false
+	card.refresh_basic_ui()
 
 func _get_enabled_platforms() -> Dictionary:
 	var setting = DataManager.get_setting("enabled_platforms")
@@ -491,11 +514,6 @@ func _return_all_cards() -> void:
 			PlatformCardPool.return_card(PlatformCardPool.POOL_SHUFFLER, card)
 	_platform_cards.clear()
 	_selected_platforms.clear()
-
-	for card in _pending_cards:
-		if is_instance_valid(card):
-			PlatformCardPool.return_card(PlatformCardPool.POOL_SHUFFLER, card)
-	_pending_cards.clear()
 
 func _create_section_label(text: String) -> Label:
 	var label = M3Label.new()

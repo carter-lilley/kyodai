@@ -2,11 +2,8 @@
 class_name PlatformsSettingsView
 extends View
 
-@onready var _scroll_container: ScrollContainer = $ScrollContainer
-@onready var _platforms_container: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer
-@onready var _cards_hbox: HBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox
-@onready var _cards_left: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsLeft
-@onready var _cards_right: VBoxContainer = $ScrollContainer/MarginContainer/VBoxContainer/CardsHBox/CardsRight
+@onready var _platforms_container: VBoxContainer = $VBoxContainer
+@onready var _cards_flow: HFlowContainer = $VBoxContainer/CardsFlow
 
 var _platforms_data: Array = []
 var _platform_cards: Dictionary = {}  # slug -> PlatformCard
@@ -19,10 +16,8 @@ var _platforms_data_loaded: bool = false  # true once we've loaded from DB or ne
 # Track platform selection state for lock-in behavior
 var _sync_triggered: bool = false  # Tracks if sync button was pressed
 var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
-var _was_narrow: bool = false
 
 var _romm_connection_panel: RommConnectionPanel = null
-var _loading_indicator: Control = null
 
 # Action row buttons (built in code by _build_sections)
 var _check_updates_button: M3Button = null
@@ -39,26 +34,22 @@ var _status_poll_timer: Timer = null
 # added to orphaned containers and leaked.
 var _active_batch_id: int = -1
 
-const NARROW_BREAKPOINT_DP := 850.0
+# Two-phase render state: loading cards are created first (phase A), then
+# populated once both creation and the DB-thread precompute finish (phase B).
+var _cards_created: bool = false
+var _precompute_pending: bool = false
+var _precompute_result: Dictionary = {}
+var _pending_payloads: Array[Dictionary] = []
 
-func _is_narrow_screen() -> bool:
-	if SystemManager.display:
-		return SystemManager.display.is_narrow_viewport(NARROW_BREAKPOINT_DP)
-	var viewport = get_viewport()
-	if viewport == null:
-		return true
-	var viewport_width = viewport.get_visible_rect().size.x
-	return viewport_width < M3Units.dp(NARROW_BREAKPOINT_DP)
+## Card minimum width. The HFlowContainer wraps from this alone — actual pane
+## width decides 1 vs 2 cards per row, no viewport breakpoint math.
+const CARD_MIN_WIDTH_DP := 380.0
 
 func _ready():
 	view_name = "RomM"
 
 	_platforms_container.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	_build_sections()
-
-	# Set initial column visibility
-	_was_narrow = _is_narrow_screen()
-	_update_column_visibility()
 
 	# Create a single shared timer to refresh all platform cards' status
 	# indicators, replacing per-card timers. Use autostart so it restarts itself
@@ -75,9 +66,9 @@ func refresh_scale() -> void:
 	if not is_node_ready():
 		return
 	_platforms_container.add_theme_constant_override("separation", int(M3Units.dp(16)))
-	# _cards_right's dp(300) width is re-baked by _update_column_visibility(),
-	# which also runs on viewport resize.
-	_update_column_visibility()
+	for child in _cards_flow.get_children():
+		if child is PlatformCard:
+			child.custom_minimum_size.x = M3Units.dp(CARD_MIN_WIDTH_DP)
 	if has_method("refresh_theme"):
 		call("refresh_theme")
 
@@ -113,7 +104,7 @@ func _build_sections() -> void:
 	var platforms_section := SettingsSection.new("Platforms", "gamepad")
 	platforms_section.add_content(_build_action_row(), false)
 	_platforms_container.add_child(platforms_section)
-	_platforms_container.move_child(platforms_section, _cards_hbox.get_index())
+	_platforms_container.move_child(platforms_section, _cards_flow.get_index())
 
 func _build_action_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
@@ -298,40 +289,28 @@ func _get_platforms_from_database() -> Array:
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
-	# Skeleton rows mimic the platform card layout (two columns when wide) so
-	# the list feels populated while the fetch/precompute runs.
-	var wrapper = HBoxContainer.new()
-	wrapper.name = "LoadingIndicator"
-	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	wrapper.add_theme_constant_override("separation", 10)
-	var column_count := 1 if _is_narrow_screen() else 2
-	for c in range(column_count):
-		var column := VBoxContainer.new()
-		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		column.add_theme_constant_override("separation", 10)
-		var row_count := 4 if c == 0 else 3
-		for i in range(row_count):
-			var skeleton := Panel.new()
-			skeleton.custom_minimum_size = Vector2(0, M3Units.dp(140))
-			skeleton.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			var style := StyleBoxFlat.new()
-			style.bg_color = Color.WHITE
-			skeleton.add_theme_stylebox_override("panel", style)
-			M3Shimmer.attach(skeleton, 0.12)
-			column.add_child(skeleton)
-		wrapper.add_child(column)
-	_platforms_container.add_child(wrapper)
-	var cards_index = _platforms_container.get_node("CardsHBox").get_index()
-	_platforms_container.move_child(wrapper, cards_index)
-	_loading_indicator = wrapper
+	# Unknown-count network wait: a label + spinner is the honest placeholder.
+	# Once the platform list is known, real cards render in their loading state
+	# instead of fake skeleton nodes.
+	var row := HBoxContainer.new()
+	row.name = "LoadingIndicator"
+	row.add_theme_constant_override("separation", int(M3Units.dp(12)))
+	var spinner := M3Progress.new()
+	spinner.mode = M3Progress.Mode.CIRCULAR
+	spinner.progress_size = M3Progress.Size.SMALL
+	spinner.indeterminate = true
+	row.add_child(spinner)
+	var label := M3Label.new()
+	label.text = "Loading platforms..."
+	row.add_child(label)
+	_cards_flow.add_child(row)
 
 func _hide_loading_indicator() -> void:
-	if is_instance_valid(_loading_indicator):
-		_loading_indicator.queue_free()
-	_loading_indicator = null
-	# Sweep any stragglers. queue_free() is deferred, so a same-frame hide+show
-	# can leave an auto-renamed duplicate ("@LoadingIndicator@2") that an exact
-	# name match would never find.
+	# Sweep by substring: queue_free() is deferred, so a same-frame hide+show
+	# can leave an auto-renamed duplicate that an exact name match would miss.
+	for child in _cards_flow.get_children():
+		if child.name.contains("LoadingIndicator"):
+			child.queue_free()
 	for child in _platforms_container.get_children():
 		if child.name.contains("LoadingIndicator") or child.name == "LoadingLabel":
 			child.queue_free()
@@ -344,11 +323,9 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 		_active_batch_id = -1
 
 	# Cards are kept alive across view hides. If the incoming data matches the
-	# cards we already have, skip the rebuild entirely.
+	# cards we already have, skip the rebuild entirely. The HFlowContainer
+	# re-wraps itself, so no re-layout work is needed here.
 	if not _platform_cards.is_empty() and _cards_match_data(data):
-		_update_column_visibility()
-		# Re-balance columns if the narrow/wide state changed while hidden.
-		_on_viewport_size_changed(Vector2.ZERO)
 		_hide_loading_indicator()
 		_update_select_all_button_text()
 		if on_complete.is_valid():
@@ -357,15 +334,49 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 
 	_return_all_cards()
 	_clear_error_ui()
-	_show_loading_indicator()
+	_hide_loading_indicator()
 
 	_render_generation += 1
 	var render_generation = _render_generation
 	var enabled_platforms = _get_enabled_platforms()
 
+	# Prepare card payloads up front: loading-state cards are created from
+	# these immediately, while the heavy precompute runs on the DB thread.
+	var fetched_slugs: Array[String] = []
+	var card_payloads: Array[Dictionary] = []
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		var platform_name = platform_data.get("name", slug)
+		var romm_id = platform_data.get("id", 0)
+		if slug == "" or romm_id == 0:
+			continue
+		fetched_slugs.append(slug)
+		card_payloads.append({
+			"slug": slug,
+			"platform_name": platform_name,
+			"romm_id": romm_id,
+			"icon_url": platform_data.get("icon_url", "")
+		})
+
+	if card_payloads.is_empty():
+		var no_platforms_label = M3Label.new()
+		no_platforms_label.name = "NoPlatformsLabel"
+		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
+		_cards_flow.add_child(no_platforms_label)
+		if on_complete.is_valid():
+			on_complete.call()
+		return
+
+	_cards_created = false
+	_precompute_pending = true
+	_precompute_result = {}
+	_pending_payloads = card_payloads
+
 	# Precompute emulator lists, defaults, firmware state, and install status on
 	# the DB thread so the main thread stays free while the registry/filesystem
-	# lookups run.
+	# lookups run. Runs in parallel with loading-card creation below.
 	var data_copy: Array = data.duplicate(true)
 	SystemManager.memory.queue_db_task(
 		func(): return _precompute_card_data(data_copy),
@@ -374,8 +385,58 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 				if on_complete.is_valid():
 					on_complete.call()
 				return
-			_start_card_batches(data, enabled_platforms, precomputed, on_complete)
+			_precompute_result = precomputed
+			_precompute_pending = false
+			_maybe_start_populate_batch(render_generation, enabled_platforms, fetched_slugs, on_complete)
 	)
+
+	# Create every card in its loading state right away so the final layout
+	# materializes immediately; each card flips to live content as the populate
+	# batch reaches it.
+	_active_batch_id = MemorySubManager.start_batch(
+		card_payloads,
+		func(payload: Dictionary, _index: int) -> PlatformCard:
+			return _create_loading_card(payload),
+		SystemManager.memory.BatchMode.SYNC,
+		_get_card_batch_size(),
+		func(_processed: int, _total: int):
+			pass,
+		func(_results: Array):
+			_active_batch_id = -1
+			if not is_inside_tree():
+				_return_all_cards()
+				if on_complete.is_valid():
+					on_complete.call()
+				return
+			_cards_created = true
+			_maybe_start_populate_batch(render_generation, enabled_platforms, fetched_slugs, on_complete)
+	, _get_frame_budget_us())
+
+func _maybe_start_populate_batch(render_generation: int, enabled_platforms: Dictionary, fetched_slugs: Array[String], on_complete: Callable) -> void:
+	"""Gate for the populate batch: it needs both the loading cards created and
+	the DB-thread precompute finished, whichever comes last."""
+	if render_generation != _render_generation or not is_inside_tree():
+		return
+	if not _cards_created or _precompute_pending:
+		return
+	_start_populate_batch(enabled_platforms, _precompute_result, fetched_slugs, on_complete)
+
+func _create_loading_card(payload: Dictionary) -> PlatformCard:
+	"""Phase A: create a card in its loading state — final geometry, shimmering,
+	non-interactive — with no emulator data yet."""
+	var card: PlatformCard = PlatformCardPool.get_card(PlatformCardPool.POOL_PLATFORM_SETTINGS)
+	card._bulk_reset = true
+	card.begin_bulk_layout()
+	card.shuffler_mode = false
+	card.platform_slug = payload.slug
+	card.platform_name = payload.platform_name
+	card._bulk_reset = false
+	card.set_loading(true)
+	_register_card(card, payload.slug)
+	_add_card_to_flow(card)
+	card.end_bulk_layout()
+	card.visible = true
+	return card
 
 func _cards_match_data(data: Array) -> bool:
 	"""True if the currently kept-alive cards fully represent the given data."""
@@ -391,9 +452,9 @@ func _cards_match_data(data: Array) -> bool:
 		var card: PlatformCard = _platform_cards.get(slug)
 		if card == null or not is_instance_valid(card):
 			return false
-		# Cards from a cancelled batch are unparented or have unpopulated
-		# dropdowns; treat those as stale and rebuild.
-		if card.get_parent() == null or card._defer_dropdown:
+		# Cards still in their loading state, from a cancelled batch, or with
+		# unpopulated dropdowns are stale; rebuild.
+		if card.is_loading() or card.get_parent() == null or card._defer_dropdown:
 			return false
 		if card.platform_name != platform_data.get("name", slug):
 			return false
@@ -442,9 +503,9 @@ func _precompute_card_data(data: Array) -> Dictionary:
 		"install_status": precomputed_status,
 	}
 
-func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed: Dictionary, on_complete: Callable) -> void:
-	"""Main-thread entry point once precomputed data is ready: create cards in
-	batched chunks, then populate dropdowns in a second batch."""
+func _start_populate_batch(enabled_platforms: Dictionary, precomputed: Dictionary, fetched_slugs: Array[String], on_complete: Callable) -> void:
+	"""Phase B: fill each loading card with precomputed data and flip it to live
+	content, then populate dropdowns in a second batch."""
 	var platform_emulator_cache: Dictionary = precomputed["emulator_cache"]
 	var platform_default_core_cache: Dictionary = precomputed["default_core_cache"]
 	var platform_default_emulator_cache: Dictionary = precomputed["default_emulator_cache"]
@@ -455,64 +516,30 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 	# refreshes indicators once all combos are cached.
 	_warm_firmware_caches_async(platform_emulator_cache, platform_default_core_cache)
 
-	# Prepare card creation payloads so the work can be batched across frames.
-	var fetched_slugs: Array[String] = []
-	var card_payloads: Array[Dictionary] = []
-	for platform_data in data:
-		if not platform_data is Dictionary:
-			continue
-		var slug = platform_data.get("slug", "")
-		var platform_name = platform_data.get("name", slug)
-		var romm_id = platform_data.get("id", 0)
-		if slug == "" or romm_id == 0:
-			continue
-		fetched_slugs.append(slug)
-		card_payloads.append({
-			"slug": slug,
-			"platform_name": platform_name,
-			"romm_id": romm_id,
-			"icon_url": platform_data.get("icon_url", "")
-		})
-
-	if card_payloads.is_empty():
-		_hide_loading_indicator()
-		var no_platforms_label = M3Label.new()
-		no_platforms_label.name = "NoPlatformsLabel"
-		no_platforms_label.text = "No platforms found. Please connect to RomM to fetch platforms."
-		_cards_left.add_child(no_platforms_label)
-		if on_complete.is_valid():
-			on_complete.call()
-		return
-
-	# Create AND add each card inside the budgeted batch item: the expensive
-	# part of a card is the add_child _ready cascade + layout, so it must be
-	# measured by the frame budget, not deferred to an unbudgeted callback.
-	var card_batch_size = _get_card_batch_size()
 	var dropdown_batch_size = _get_dropdown_batch_size()
 
 	_active_batch_id = MemorySubManager.start_batch(
-		card_payloads,
-		func(payload: Dictionary, index: int) -> PlatformCard:
-			var card = _create_platform_card(
-				payload.slug,
-				payload.platform_name,
-				payload.romm_id,
-				payload.icon_url,
+		_pending_payloads,
+		func(payload: Dictionary, _index: int) -> PlatformCard:
+			var card: PlatformCard = _platform_cards.get(payload.slug)
+			if card == null or not is_instance_valid(card):
+				return null
+			_populate_card(
+				card,
+				payload,
 				enabled_platforms,
 				precomputed_status,
 				platform_emulator_cache,
 				platform_default_core_cache,
 				platform_default_emulator_cache
 			)
-			_register_card(card, payload.slug)
-			_add_card_to_column(card, index)
+			card.set_loading(false)
 			card.end_bulk_layout()
 			return card,
 		SystemManager.memory.BatchMode.SYNC,
-		card_batch_size,
+		_get_card_batch_size(),
 		func(_processed: int, _total: int):
-			# First chunk landed: swap the skeletons for real cards.
-			_hide_loading_indicator(),
+			pass,
 		func(_results: Array):
 			_active_batch_id = -1
 
@@ -521,9 +548,6 @@ func _start_card_batches(data: Array, enabled_platforms: Dictionary, precomputed
 				if on_complete.is_valid():
 					on_complete.call()
 				return
-
-			# Remove loading label now that the first batch has rendered.
-			_hide_loading_indicator()
 
 			# Remove platforms that no longer exist on RomM
 			_remove_deleted_platforms(fetched_slugs)
@@ -580,15 +604,13 @@ func _warm_firmware_caches_async(emulator_cache: Dictionary, default_core_cache:
 					card.refresh_firmware_indicator()
 	)
 
-func _create_platform_card(slug: String, platform_name: String, romm_id: int, _icon_url: String, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}, default_emulator_cache: Dictionary = {}) -> PlatformCard:
-	var card = PlatformCardPool.get_card(PlatformCardPool.POOL_PLATFORM_SETTINGS)
+func _populate_card(card: PlatformCard, payload: Dictionary, enabled_platforms: Dictionary, precomputed_status: Dictionary = {}, emulator_cache: Dictionary = {}, default_core_cache: Dictionary = {}, default_emulator_cache: Dictionary = {}) -> void:
+	var slug: String = payload.slug
+	var romm_id: int = payload.romm_id
 	# Suppress per-setter display/dropdown/status rebuilds while the card is
 	# being configured; the card is refreshed once at the end instead.
 	card._bulk_reset = true
 	card.begin_bulk_layout()
-	card.shuffler_mode = false
-	card.platform_slug = slug
-	card.platform_name = platform_name
 	# Pass cached default core id so the card doesn't re-query the registry.
 	if default_core_cache.has(slug):
 		card.registry_default_core_id = default_core_cache[slug]
@@ -663,25 +685,16 @@ func _create_platform_card(slug: String, platform_name: String, romm_id: int, _i
 		LaunchManager.launch_emulator_standalone(emu_id)
 	)
 
-	# Cards are now registered and added to the tree in bulk chunks by the caller
-	# to avoid per-card layout/appearance passes and UI hitches.
-	card.visible = true
-
-	return card
-
 func _register_card(card: PlatformCard, slug: String) -> void:
 	"""Register a card in the slug map without adding it to a column yet."""
 	_platform_cards[slug] = card
 
-func _add_card_to_column(card: PlatformCard, index: int) -> void:
-	"""Add an already-registered card to the left or right column based on index."""
-	if _is_narrow_screen():
-		_cards_left.add_child(card)
-	else:
-		if index % 2 == 0:
-			_cards_left.add_child(card)
-		else:
-			_cards_right.add_child(card)
+func _add_card_to_flow(card: PlatformCard) -> void:
+	"""Add an already-registered card to the flow. The fixed minimum width is
+	what the HFlowContainer wraps on; EXPAND_FILL lets cards share row slack."""
+	card.custom_minimum_size.x = M3Units.dp(CARD_MIN_WIDTH_DP)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cards_flow.add_child(card)
 
 func _return_all_cards() -> void:
 	for slug in _platform_cards.keys():
@@ -689,6 +702,9 @@ func _return_all_cards() -> void:
 		if card:
 			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, card)
 	_platform_cards.clear()
+	_pending_payloads.clear()
+	_cards_created = false
+	_precompute_pending = false
 
 func _get_card_batch_size() -> int:
 	# One card per frame on Android keeps each frame under budget; desktop can
@@ -734,10 +750,6 @@ func _exit_tree() -> void:
 		LaunchManager.firmware_download_completed.disconnect(_on_firmware_download_completed)
 	if DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.disconnect(_on_sync_completed)
-	if get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
-		get_viewport().gui_focus_changed.disconnect(_on_focus_changed)
-	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
-		SystemManager.display.viewport_size_changed.disconnect(_on_viewport_size_changed)
 
 func _enter_tree() -> void:
 	# _status_poll_timer is restarted automatically via autostart when this view
@@ -754,25 +766,17 @@ func _enter_tree() -> void:
 		LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
 	if not DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.connect(_on_sync_completed)
-	
-	var viewport = get_viewport()
-	if viewport and not viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.connect(_on_focus_changed)
-	
-	if SystemManager.display and not SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
-		SystemManager.display.viewport_size_changed.connect(_on_viewport_size_changed)
 
 func _clear_error_ui():
 	"""Remove transient platform-fetch UI (loading, error, retry, no-platforms) so they don't accumulate."""
 	for child in _platforms_container.get_children():
-		if child.name.contains("LoadingIndicator") or child.name in ["LoadingLabel", "ErrorLabel", "RetryButton"]:
+		if child.name in ["LoadingIndicator", "LoadingLabel", "ErrorLabel", "RetryButton"]:
 			child.queue_free()
-	
-	# NoPlatformsLabel is added to the card columns, not the platforms container
-	for column in [_cards_left, _cards_right]:
-		for child in column.get_children():
-			if child.name == "NoPlatformsLabel":
-				child.queue_free()
+
+	# NoPlatformsLabel and the loading indicator live in the card flow, not the platforms container
+	for child in _cards_flow.get_children():
+		if child.name == "NoPlatformsLabel" or child.name.contains("LoadingIndicator"):
+			child.queue_free()
 
 func _remove_deleted_platforms(current_slugs: Array[String]):
 	var enabled_platforms = _get_enabled_platforms()
@@ -1087,50 +1091,6 @@ func _on_select_all_pressed():
 	# Update button text
 	_select_all_button.text = "Deselect All" if new_state else "Select All"
 
-func _update_column_visibility() -> void:
-	var is_narrow = _is_narrow_screen()
-	_cards_right.visible = not is_narrow
-	if is_narrow:
-		_cards_right.custom_minimum_size = Vector2.ZERO
-		_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	else:
-		_cards_right.custom_minimum_size = Vector2(M3Units.dp(300), 0)
-		_cards_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-func _on_viewport_size_changed(_new_size: Vector2) -> void:
-	"""Re-layout cards when viewport size crosses the narrow breakpoint.
-	SystemManager.display debounces this signal, so this only runs after the user
-	stops resizing."""
-	_update_column_visibility()
-
-	if _platform_cards.is_empty():
-		return
-
-	var is_narrow := _is_narrow_screen()
-	if is_narrow == _was_narrow:
-		return
-	_was_narrow = is_narrow
-
-	var has_right_cards := _cards_right.get_child_count() > 0
-
-	if is_narrow and has_right_cards:
-		# Move all cards from right to left
-		for child in _cards_right.get_children():
-			_cards_right.remove_child(child)
-			_cards_left.add_child(child)
-	elif not is_narrow and not has_right_cards and _cards_left.get_child_count() > 1:
-		# Re-distribute cards evenly across both columns
-		var all_cards = []
-		for child in _cards_left.get_children():
-			all_cards.append(child)
-			_cards_left.remove_child(child)
-
-		for i in range(all_cards.size()):
-			if i % 2 == 0:
-				_cards_left.add_child(all_cards[i])
-			else:
-				_cards_right.add_child(all_cards[i])
-
 func refresh_cards() -> void:
 	"""Refresh UI for all existing platform cards without re-fetching from network."""
 	for slug in _platform_cards.keys():
@@ -1188,25 +1148,3 @@ func _on_network_status_changed(online: bool) -> void:
 
 func _on_romm_connection_succeeded() -> void:
 	_fetch_platforms()
-
-func reconnect_viewport() -> void:
-	"""Reconnect to the current viewport's gui_focus_changed signal.
-	Call this after reparenting into a SubViewport."""
-	var viewport = get_viewport()
-	if not is_instance_valid(viewport):
-		return
-
-	if viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-
-	viewport.gui_focus_changed.connect(_on_focus_changed)
-
-func _on_focus_changed(control: Control) -> void:
-	"""Ensure focused controls are visible in the scroll container."""
-	if not control:
-		return
-	if not is_instance_valid(_scroll_container):
-		return
-	if not _scroll_container.is_ancestor_of(control):
-		return
-	_scroll_container.ensure_control_visible(control)

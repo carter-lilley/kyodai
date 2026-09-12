@@ -7,7 +7,9 @@ ship w music
 update notification all in one 
 tst emulator app update flow on android
 download copying step (for sd cards on android)
-
+change global font to variable weight
+https://godotshaders.com/shader/vibrancy-backdrop-blurred-frosted-canvas-items/
+make skeltons real skeletons
 submenus still suck
 low-power save-sync subprocess to run behind games 'added to steam'?
 text on no-covers in no-text mode
