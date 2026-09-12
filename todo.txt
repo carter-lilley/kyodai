@@ -23,7 +23,6 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 		- 3ds, xenia, eden, vita, (cemu & ps2?)
 		- metadata tags for saves w/ emu user?
 		- identity packages in bios optional during install steps
-		- identity manager?
 		- leaving 3ds in a weird spot. force pull user identity as bios
 	- online compat database scan perhaps?
 	- dolphin: controller inis
@@ -39,7 +38,6 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 ## romm
  - xtra romm metadata - HL2B, guides, logos..
  - screenshots...& user uploaded?
- - user profile? name & icon?
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)

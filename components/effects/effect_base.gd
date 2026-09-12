@@ -121,6 +121,12 @@ func set_z_index(value: int) -> void:
 	if _canvas_item_rid.is_valid():
 		RenderingServer.canvas_item_set_draw_index(_canvas_item_rid, value)
 
+## Overrides the texture sampling filter for this effect's canvas item. Only
+## affects shaders whose samplers use filter_default (e.g. base_card).
+func set_texture_filter(filter: RenderingServer.CanvasItemTextureFilter) -> void:
+	ensure_canvas_item(RID())
+	RenderingServer.canvas_item_set_default_texture_filter(_canvas_item_rid, filter)
+
 func get_z_index() -> int:
 	return _z_index
 

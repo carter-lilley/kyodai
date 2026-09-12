@@ -115,17 +115,16 @@ Loop {
 	if WinActive(hwndRef) {
 		; Settle check: the window may still be recreated moments later
 		; (Vita3K loading -> game transition). Re-verify after a beat.
+		; Foreground loss alone is fine: the shuffler controls palette raises
+		; itself every 0.5s by design, stealing activation back. Only a dead
+		; hwnd requires rediscovery.
 		Sleep(1500)
-		if WinExist(hwndRef) and WinActive(hwndRef) {
+		if WinExist(hwndRef) {
 			success := true
 			break
 		}
-		if not WinExist(hwndRef) {
-			FileAppend(Format("hwnd={1} died after activation, rediscovering`n", bestHwnd), logFile)
-			bestHwnd := 0
-		} else {
-			FileAppend("lost foreground after activation, retrying`n", logFile)
-		}
+		FileAppend(Format("hwnd={1} died after activation, rediscovering`n", bestHwnd), logFile)
+		bestHwnd := 0
 		continue
 	}
 

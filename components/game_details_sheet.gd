@@ -101,6 +101,37 @@ func _ready():
 	_reduce_top_padding()
 	_apply_content_scaling()
 
+func _input(event: InputEvent):
+	# Cycle tabs with bumpers while the sheet is the topmost overlay.
+	# Handled before super so the press never reaches the library view's
+	# platform cycler, which binds the same actions.
+	if visible and participates_in_dismiss_stack and overlay_layer >= _max_layer:
+		if event.is_action_pressed("cycle_platform_next"):
+			_cycle_tab(1)
+			get_viewport().set_input_as_handled()
+			return
+		elif event.is_action_pressed("cycle_platform_prev"):
+			_cycle_tab(-1)
+			get_viewport().set_input_as_handled()
+			return
+	super._input(event)
+
+func _cycle_tab(direction: int) -> void:
+	if not content_tabs:
+		return
+	var count := content_tabs.get_tab_count()
+	if count <= 1:
+		return
+	var idx := content_tabs.current_tab
+	for step in count:
+		idx = (idx + direction + count) % count
+		if not content_tabs.is_tab_hidden(idx):
+			break
+	if idx != content_tabs.current_tab:
+		if SystemManager.audio:
+			SystemManager.audio.play_sfx("click_03")
+		content_tabs.current_tab = idx
+
 ## Settled-geometry hook (broadcast by OverlaySubManager on debounced viewport
 ## changes — resizes and DS swaps alike). Re-stamps geometry against the
 ## settled viewport so no stale stamp can survive a configuration change.

@@ -23,7 +23,6 @@ var _round_timer: Timer = null
 var _countdown_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
-var _controls_topmost_timer: Timer = null
 var _main_window: Window = null
 var _total_downloads: int = 0
 var _pending_downloads: int = 0
@@ -302,7 +301,6 @@ func stop_session() -> void:
 
 	_cleanup_vita3k_shuffler_apps()
 
-	_stop_controls_topmost_timer()
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
 		_controls_window = null
@@ -1205,6 +1203,7 @@ func _maximize_with_retry(pid: int) -> void:
 	if not maximized:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
 	_raise_controls_window()
+	_reassert_palette_tail()
 	if maximized:
 		_delayed_remaximize(pid, token)
 
@@ -1312,7 +1311,7 @@ func _create_controls_window() -> void:
 	get_tree().root.add_child(_controls_window)
 	_controls_window.popup()
 	_raise_controls_window()
-	_start_controls_topmost_timer()
+	_reassert_palette_tail()
 	print("[ShufflerSubManager] Controls palette created: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
 
 func _raise_controls_window() -> void:
@@ -1322,29 +1321,23 @@ func _raise_controls_window() -> void:
 	if window_id == DisplayServer.INVALID_WINDOW_ID:
 		print("[ShufflerSubManager] _raise_controls_window: invalid window id")
 		return
-	# Re-assert topmost z-order only. window_move_to_foreground would activate
-	# the palette and steal foreground from the emulator we just raised.
-	DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_ALWAYS_ON_TOP, true, window_id)
+	DisplayServer.window_move_to_foreground(window_id)
 
-func _start_controls_topmost_timer() -> void:
-	_stop_controls_topmost_timer()
-	if not _controls_window or not is_instance_valid(_controls_window):
-		print("[ShufflerSubManager] _start_controls_topmost_timer: no controls window")
-		return
-	print("[ShufflerSubManager] _start_controls_topmost_timer")
-	_controls_topmost_timer = Timer.new()
-	_controls_topmost_timer.wait_time = 0.5
-	_controls_topmost_timer.one_shot = false
-	_controls_topmost_timer.timeout.connect(_raise_controls_window)
-	add_child(_controls_topmost_timer)
-	_controls_topmost_timer.start()
-
-func _stop_controls_topmost_timer() -> void:
-	if _controls_topmost_timer and is_instance_valid(_controls_topmost_timer):
-		print("[ShufflerSubManager] _stop_controls_topmost_timer")
-		_controls_topmost_timer.stop()
-		_controls_topmost_timer.queue_free()
-		_controls_topmost_timer = null
+# Bounded reassert tail: some emulators grab the foreground once during load,
+# covering the palette. Re-raise at +2s and +5s after creation/switch, then
+# stop. Replaces the old 0.5s perpetual topmost timer, which re-activated the
+# transparent palette every tick and visibly flashed it in fullscreen games.
+func _reassert_palette_tail() -> void:
+	var token := _maximize_token
+	for delay in [2.0, 3.0]:
+		await get_tree().create_timer(delay).timeout
+		if token != _maximize_token:
+			return
+		if not _controls_window or not is_instance_valid(_controls_window):
+			return
+		if _state != State.ACTIVE and _state != State.PAUSED:
+			return
+		_raise_controls_window()
 
 # ============================================================================
 # RETROARCH CONFIG

@@ -13,6 +13,9 @@ var root_layout: Control
 var view_mode_group: M3ButtonGroup
 var toolbar: PanelContainer = null
 
+# Cached reference to the controls-bar user avatar (survives reparenting)
+var _user_avatar: UserAvatar = null
+
 # Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
 var _keyboard: PanelContainer = null
 
@@ -132,7 +135,20 @@ func _ready():
 	# Connect more-options button
 	var more_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
 	if more_button:
+		# M3IconButton._ready() stomps size_flags_vertical to 0, so the scene
+		# value never takes effect; re-apply shrink-center here so the button
+		# stays vertically centered in the taller controls bar.
+		more_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		more_button.pressed.connect(_on_more_button_pressed)
+
+	# Set up the controls-bar user avatar: fetch the current RomM user once
+	# the network is online and swap the fallback icon for the avatar image.
+	_user_avatar = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/UserAvatar")
+	if _user_avatar and SystemManager.network:
+		SystemManager.network.network_status_changed.connect(_on_network_status_changed_for_avatar)
+		SystemManager.network.current_user_changed.connect(_on_current_user_changed)
+		if SystemManager.network.is_online():
+			SystemManager.network.fetch_current_user()
 
 	# Connect to UIManager for tab changes and settings dialog
 	UIManager.tab_changed.connect(_on_tab_changed)
@@ -476,6 +492,37 @@ func _pre_create_settings_dialog() -> void:
 
 func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
+
+func _on_network_status_changed_for_avatar(online: bool) -> void:
+	if online and SystemManager.network.current_user.is_empty():
+		SystemManager.network.fetch_current_user()
+
+func _on_current_user_changed(user: Dictionary) -> void:
+	if not is_instance_valid(_user_avatar):
+		return
+	var avatar_path: String = user.get("avatar_path", "")
+	var user_id := int(user.get("id", 0))
+	if avatar_path.is_empty() or user_id <= 0:
+		_user_avatar.clear_avatar()
+		return
+	SystemManager.network.download_avatar(user_id, func(success: bool, body: PackedByteArray, _status: int, _err: String):
+		if not success or not is_instance_valid(_user_avatar) or body.size() < 16:
+			return
+		var image := Image.new()
+		var err := FAILED
+		match FSM.detect_image_format(body):
+			FSM.ImageFormat.JPEG:
+				err = image.load_jpg_from_buffer(body)
+			FSM.ImageFormat.PNG:
+				err = image.load_png_from_buffer(body)
+			FSM.ImageFormat.WEBP:
+				err = image.load_webp_from_buffer(body)
+			_:
+				return
+		if err != OK or image.is_empty():
+			return
+		_user_avatar.set_avatar_image(image)
+	)
 
 func _on_more_button_pressed() -> void:
 	var menu = M3Menu.new()

@@ -60,13 +60,21 @@ func _on_setting_changed(value, setting):
 	match setting.property_name:
 		"romm_url":
 			_base_url = value if value else ""
+			_clear_current_user()
 			_load_credentials()
 		"romm_username":
 			_username = value if value else ""
+			_clear_current_user()
 			_load_credentials()
 		"romm_password":
 			_password = value if value else ""
+			_clear_current_user()
 			_load_credentials()
+
+func _clear_current_user() -> void:
+	if not current_user.is_empty():
+		current_user = {}
+		current_user_changed.emit(current_user)
 
 func _load_credentials():
 	# Load credentials from settings
@@ -100,6 +108,30 @@ func _check_configuration():
 ## Used to warm up the host at startup before real API calls.
 func fetch_heartbeat(callback: Callable) -> void:
 	make_request("/heartbeat", callback, true, false)
+
+# ==================== CURRENT USER ====================
+
+signal current_user_changed(user: Dictionary)
+
+## Cached profile of the currently authenticated user (GET /api/users/me).
+var current_user: Dictionary = {}
+
+## Fetches the currently authenticated user. On success the result is cached
+## on `current_user` and announced via `current_user_changed` when it changes.
+func fetch_current_user(callback: Callable = Callable()) -> void:
+	make_request("/users/me", func(data, error):
+		if error == "" and data is Dictionary and not data.is_empty() and data != current_user:
+			current_user = data
+			current_user_changed.emit(current_user)
+		if callback.is_valid():
+			callback.call(data, error)
+	, true, false)
+
+## Downloads a user's avatar image (GET /api/users/{id}/avatar).
+## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
+func download_avatar(user_id: int, callback: Callable) -> void:
+	var url = get_base_url().rstrip("/") + "/api/users/" + str(user_id) + "/avatar"
+	http_get(url, get_auth_headers_for_url(url), callback)
 
 # ==================== HTTP REQUEST POOLING ====================
 # Pooling is enabled on desktop for better performance (connection reuse)
