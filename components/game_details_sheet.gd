@@ -43,10 +43,11 @@ const STAR_GAP_DP := 2.0
 @onready var screenshots_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsHeader
 @onready var screenshots_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll
 @onready var screenshots_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox/ScreenshotsSection/ScreenshotsScroll/RowMargin/ScreenshotsRow
-@onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection
-@onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedHeader
-@onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll
-@onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin/RelatedRow
+@onready var screenshots_tab_content: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Screenshots/ScreenshotsTabScroll/ScreenshotsTabContent
+@onready var related_section: VBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection
+@onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedHeader
+@onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll
+@onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin/RelatedRow
 @onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard
 @onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
 @onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
@@ -158,13 +159,16 @@ func _cycle_tab(direction: int) -> void:
 func on_viewport_settled() -> void:
 	if not is_node_ready() or not is_inside_tree():
 		return
+	# Shrink the content minimum BEFORE re-stamping: the tier switch and chip
+	# refit are what allow the clamped-up shell to come back down, and
+	# Control.set_size can never shrink below the content minimum on its own.
+	_apply_responsive_layout()
+	_refit_metadata_row()
 	_set_sheet_height()
 	if visible:
 		_reposition_open()
 	else:
 		_position_sheet()
-	_apply_responsive_layout()
-	_refit_metadata_row()
 
 ## Recomputes chip overflow against the current sheet width so a re-stamp
 ## (screen swap, settle) can't leave a stale fit whose minimum size forces
@@ -202,15 +206,22 @@ func _setup_tabs() -> void:
 	# Let the sheet background show through instead of the themed opaque panel.
 	content_tabs.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var tab_margin := M3Units.dpi(TAB_MARGIN_TOP_DP)
-	for tab_name in [&"Overview", &"Files", &"Related"]:
+	for tab_name in [&"Overview", &"Files", &"Related", &"Screenshots"]:
 		var tab := content_tabs.get_node_or_null(NodePath(tab_name)) as MarginContainer
 		if tab:
 			tab.add_theme_constant_override("margin_top", tab_margin)
 	# The Related tab starts hidden; it's revealed when the game has related
-	# games (see _update_related_tab_visibility).
+	# games (see _update_related_tab_visibility). The Screenshots tab likewise
+	# starts hidden; it's revealed when the strip folds out of the Overview
+	# column (see _decide_screenshots_placement).
 	content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
+	content_tabs.set_tab_hidden(SCREENSHOTS_TAB_INDEX, true)
 	_apply_m3_control_styling()
 	_setup_tab_badges()
+	# _setup_tabs also runs on scale refresh, which would otherwise strand
+	# both tabs hidden for the current game; restore live visibility.
+	_update_related_tab_visibility()
+	_decide_screenshots_placement()
 
 ## Shoulder-button badges at the ends of the tab strip, hinting that LB/RB
 ## cycle the tabs. The tab bar's side_margin (set in _apply_m3_control_styling)
@@ -375,15 +386,17 @@ func _connect_signals() -> void:
 	SystemManager.download.download_completed.connect(_on_download_completed)
 
 const RELATED_TAB_INDEX := 2
+const SCREENSHOTS_TAB_INDEX := 3
 var _compact_layout := false
 var _small_layout := false
 
-## Viewport-dp breakpoint check (DS-aware: display tracks the active
-## SubViewport size across swaps).
+## Viewport-dp breakpoint check, measured against the same authoritative
+## viewport the sheet stamps its geometry against (DS-aware: the active
+## SubViewport in dual-screen mode). DisplaySubManager's cached size is the
+## ROOT window's and can go stale relative to that frame (root resizes
+## overwrite it even while the UI lives in a smaller SubViewport).
 func _is_viewport_narrow(breakpoint_dp: float) -> bool:
-	if SystemManager.display:
-		return SystemManager.display.is_narrow_viewport(breakpoint_dp)
-	var viewport = get_viewport()
+	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
 	if viewport == null:
 		return true
 	return viewport.get_visible_rect().size.x < M3Units.dp(breakpoint_dp)
@@ -411,6 +424,10 @@ func _apply_responsive_layout() -> void:
 			_populate_metadata_chips(_current_game)
 	if changed:
 		_apply_content_scaling()
+	# Tier flips change both the margins and the small-mode rule, so the
+	# strip's inline-vs-tab placement is only valid for the tier it was
+	# computed in. Idempotent.
+	_decide_screenshots_placement()
 
 ## Related always lives in its own tab; only the tab's visibility is managed
 ## here (hidden when the game has no related games).
@@ -421,6 +438,112 @@ func _update_related_tab_visibility() -> void:
 	# Never leave the current tab pointing at a hidden page.
 	if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
 		content_tabs.current_tab = 0
+
+## Vertical space the Overview tab's VBox can occupy inside the STAMPED sheet
+## height. Pure arithmetic over synchronous minimum sizes (theme/font metrics,
+## not layout passes): stamped height minus sheet chrome, content margins, the
+## rows above the tabs, separations, the tab bar, and the tab's top margin.
+## The stamp is derived from the live viewport (== dp(peek_height)), so the
+## result is ordering-independent — valid before or after a re-stamp.
+func _compute_overview_budget() -> float:
+	if not _sheet_container or not is_instance_valid(content_vbox) or not content_tabs:
+		return 0.0
+	var screen := _get_screen_size()
+	if screen.y <= 0.0:
+		return 0.0
+	var used := 0.0
+	var margin := _sheet_container.get_child(0) as MarginContainer
+	if margin:
+		used += float(margin.get_theme_constant("margin_top")) + float(margin.get_theme_constant("margin_bottom"))
+		var root := margin.get_child(0) if margin.get_child_count() > 0 else null
+		if root:
+			for child in root.get_children():
+				if child == _content_slot:
+					continue
+				if child is Control and child.visible:
+					used += child.get_combined_minimum_size().y
+	var content_margin := _content_root as MarginContainer
+	if content_margin:
+		used += float(content_margin.get_theme_constant("margin_top")) + float(content_margin.get_theme_constant("margin_bottom"))
+	var sep := float(content_vbox.get_theme_constant("separation"))
+	var visible_children := 0
+	for child in content_vbox.get_children():
+		if child is Control and child.visible:
+			visible_children += 1
+			if child != content_tabs:
+				used += child.get_combined_minimum_size().y
+	used += sep * maxf(0.0, float(visible_children - 1))
+	var bar := content_tabs.get_tab_bar()
+	if bar:
+		used += bar.get_combined_minimum_size().y
+	used += M3Units.dp(TAB_MARGIN_TOP_DP)
+	return maxf(0.0, screen.y * HEIGHT_FRACTION - used)
+
+## Moves the screenshots strip between the Overview column (inline, under the
+## description) and its own tab. Inline only when the strip's fixed minimum
+## plus a usable description (DESC_COLLAPSED_LINES lines) plus the fold button
+## fit the Overview budget; the small tier always folds to the tab. Pure
+## synchronous arithmetic — no layout waits. Control.set_size clamps UP to the
+## content minimum, so an inline strip that doesn't fit would grow the sheet
+## past its stamp; this decision is the only thing standing in the way.
+func _decide_screenshots_placement() -> void:
+	if not is_instance_valid(screenshots_section) or not is_instance_valid(screenshots_tab_content) or not content_tabs:
+		return
+	var inline := false
+	if _screenshots_strip_active and not _small_layout and is_instance_valid(overview_vbox):
+		var sep := float(overview_vbox.get_theme_constant("separation"))
+		var need := screenshots_section.get_combined_minimum_size().y + sep \
+			+ float(description_label.get_line_height()) * DESC_COLLAPSED_LINES + sep \
+			+ desc_fold_button.get_combined_minimum_size().y + sep
+		inline = need <= _compute_overview_budget()
+	var target: Control = overview_vbox if inline else screenshots_tab_content
+	if screenshots_section.get_parent() != target:
+		screenshots_section.get_parent().remove_child(screenshots_section)
+		target.add_child(screenshots_section)
+	# An expanded description borrows the inline strip's space; in the tab the
+	# strip is unaffected by the fold.
+	screenshots_section.visible = _screenshots_strip_active and (not inline or not _desc_expanded)
+	content_tabs.set_tab_hidden(SCREENSHOTS_TAB_INDEX, inline or not _screenshots_strip_active)
+	# Never leave the current tab pointing at a hidden page.
+	if content_tabs.is_tab_hidden(SCREENSHOTS_TAB_INDEX) and content_tabs.current_tab == SCREENSHOTS_TAB_INDEX:
+		content_tabs.current_tab = 0
+
+## Budget-violation diagnostics: when the content's combined minimum exceeds
+## the stamped shell, name the exact subtree responsible — every visible
+## child's min at each level, descending into the largest contributor along
+## the violated axis. Gated on M3Debug (debug_geometry_logging); grep logcat
+## for "min-chain".
+func _report_content_budget(tag: String) -> void:
+	super._report_content_budget(tag)
+	if not _sheet_container:
+		return
+	var min_size := _sheet_container.get_combined_minimum_size()
+	var stamped := _sheet_container.size
+	var over_x := min_size.x > stamped.x + 1.0
+	var over_y := min_size.y > stamped.y + 1.0
+	if not over_x and not over_y:
+		return
+	_dump_min_chain(tag, _sheet_container, "y" if over_y else "x", 0)
+
+func _dump_min_chain(tag: String, node: Control, axis: String, depth: int) -> void:
+	if depth > 10:
+		return
+	var listing := ""
+	var worst: Control = null
+	var worst_v := -1.0
+	for child in node.get_children():
+		if not (child is Control and child.visible):
+			continue
+		var m: Vector2 = child.get_combined_minimum_size()
+		listing += " | %s=%s" % [child.name, m]
+		var v := m.y if axis == "y" else m.x
+		if v > worst_v:
+			worst_v = v
+			worst = child
+	M3Debug.geom("bottom_sheet", "min-chain[%s] d%d %s min=%s children:%s" % [
+		tag, depth, node.name, node.get_combined_minimum_size(), listing])
+	if worst:
+		_dump_min_chain(tag, worst, axis, depth + 1)
 
 func _set_sheet_height() -> void:
 	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
@@ -481,6 +604,9 @@ func set_game(game: GameResource) -> void:
 		_content_root.visible = true
 	_update_sync_ui()
 	_load_cover(game)
+	# Populate finished after the prepare-phase stamp; surface any content
+	# minimum that busts the budget now instead of at the next re-stamp.
+	_report_content_budget("post_populate")
 
 func clear_content() -> void:
 	_current_game = null
@@ -502,10 +628,12 @@ func clear_content() -> void:
 	if is_instance_valid(content_tabs):
 		content_tabs.current_tab = 0
 		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
+		content_tabs.set_tab_hidden(SCREENSHOTS_TAB_INDEX, true)
 	if is_instance_valid(related_section):
 		related_section.visible = false
 	if is_instance_valid(related_row):
 		for child in related_row.get_children():
+			related_row.remove_child(child)
 			child.queue_free()
 	_screenshots_count = 0
 	_screenshots_strip_active = false
@@ -623,6 +751,11 @@ func _populate_metadata_chips(game: GameResource) -> void:
 	if not is_instance_valid(metadata_row):
 		return
 	for child in metadata_row.get_children():
+		# Detach before queue_free: a queued child still counts toward the
+		# row's combined minimum until frame end, and any re-stamp in the same
+		# frame (settle + tier flip) would clamp the sheet to the dying chips'
+		# width — the accumulation bug.
+		metadata_row.remove_child(child)
 		child.queue_free()
 	_metadata_chips.clear()
 	_interactive_meta_chips.clear()
@@ -714,11 +847,19 @@ func _layout_metadata_row_overflow() -> void:
 
 ## Deterministic width of the metadata row for the synchronous overflow pass,
 ## used before the row has been laid out (e.g. first summon).
+## Derived from the STAMP (the same math _reposition_open applies), never the
+## live container size: set_size clamps up to the content minimum, so a live
+## read from an inflated sheet would budget against the inflation and the
+## sheet could never shrink back.
 func _estimate_metadata_row_width() -> float:
-	if not _sheet_container or _sheet_container.size.x <= 0.0:
+	if not _sheet_container:
 		return 0.0
+	var screen := _get_screen_size()
+	if screen.x <= 0.0:
+		return 0.0
+	var stamped := minf(_get_sheet_width(screen.x), screen.x)
 	var edge := M3Units.dp(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
-	var content_w := _sheet_container.size.x - edge * 2.0
+	var content_w := stamped - edge * 2.0
 	if not _small_layout and is_instance_valid(cover_container) and cover_container.visible:
 		# Cover column takes ~0.3 of the HBox (stretch ratio 0.3/0.7) plus the gap.
 		content_w = (content_w - edge) * 0.7
@@ -793,11 +934,11 @@ func _on_metadata_chip_pressed(kind: String, value: String, center_text: String,
 	# The dismiss slide-out would otherwise restore focus to the summoner card
 	# (~0.3s later, after the grid has rebuilt — i.e. the wrong game) and the
 	# focus pull-back would yank the grid's first-card focus mid-animation.
-	M3Overlay._suppress_focus_pullback = true
+	M3Overlay.push_focus_pullback_suppression()
 	_restore_focus_on_dismiss = false
 	dismiss()
 	dismissed.connect(func():
-		M3Overlay._suppress_focus_pullback = false
+		M3Overlay.pop_focus_pullback_suppression()
 		_restore_focus_on_dismiss = true, CONNECT_ONE_SHOT | CONNECT_DEFERRED)
 	var library := UIManager.get_view("Library") as LibraryView
 	if library:
@@ -867,9 +1008,10 @@ func _on_desc_scroll_resized() -> void:
 func _on_desc_fold_pressed() -> void:
 	_desc_expanded = not _desc_expanded
 	if _desc_expanded:
-		# Trade space with the screenshot strip: expanding hides it (collapse
-		# restores it); the full text fills the freed column and scrolls.
-		if is_instance_valid(screenshots_section):
+		# Trade space with the inline screenshot strip: expanding hides it
+		# (collapse restores it); the full text fills the freed column and
+		# scrolls. A strip folded into its own tab is unaffected.
+		if is_instance_valid(screenshots_section) and screenshots_section.get_parent() == overview_vbox:
 			screenshots_section.visible = false
 		description_label.max_lines_visible = -1
 		description_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
@@ -879,7 +1021,7 @@ func _on_desc_fold_pressed() -> void:
 		desc_scroll.scroll_vertical = 0
 		desc_fold_button.text = "More"
 		desc_fold_button.visible = false
-		if is_instance_valid(screenshots_section) and _screenshots_strip_active:
+		if is_instance_valid(screenshots_section) and _screenshots_strip_active and screenshots_section.get_parent() == overview_vbox:
 			screenshots_section.visible = true
 		_refit_description()
 
@@ -904,6 +1046,7 @@ func _populate_screenshots(game: GameResource) -> void:
 	# uploads (RomM games always can, even with zero screenshots).
 	var can_upload := game.source == "romm" and game.romm_id > 0
 	if not can_upload and game.screenshot_urls.is_empty():
+		_decide_screenshots_placement()
 		return
 	_screenshots_strip_active = true
 
@@ -918,10 +1061,9 @@ func _populate_screenshots(game: GameResource) -> void:
 	if can_upload:
 		_fetch_user_screenshots(for_romm_id)
 
-	# Always visible while active: the strip's height is fixed and part of
-	# the sheet's bounded-overhead budget (min-size hygiene), so no fit
-	# check or deferred reveal is needed.
-	screenshots_section.visible = true
+	# Inline under the description when the Overview budget fits it, folded to
+	# its own tab otherwise; decided by pure arithmetic, no layout waits.
+	_decide_screenshots_placement()
 
 func _update_screenshots_header() -> void:
 	if not is_instance_valid(screenshots_header):
@@ -960,7 +1102,8 @@ func _add_screenshot_upload_card() -> void:
 	var card := M3Card.new()
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
-	card.custom_minimum_size = Vector2(height * 16.0 / 9.0, height)
+	# Narrow strip: just an affordance, not a media tile.
+	card.custom_minimum_size = Vector2(M3Units.dp(72), height)
 	card.content_alignment = M3Card.ContentAlignment.CENTER
 	card.headline = "+"
 	card.supporting_text = "Add"
@@ -1068,6 +1211,7 @@ func _populate_related_games(game: GameResource) -> void:
 	if not is_instance_valid(related_section) or not is_instance_valid(related_row):
 		return
 	for child in related_row.get_children():
+		related_row.remove_child(child)
 		child.queue_free()
 	related_section.visible = false
 

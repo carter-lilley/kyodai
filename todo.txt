@@ -6,7 +6,7 @@ rework hero to also accept effect stacks
 ship w music
 update notification all in one 
 tst emulator app update flow on android
-download copying step (for sd cards on android)
+x download copying step (for sd cards on android)
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 0.5 RomM server-deletion reconciliation	Still valid — sync only upserts; nothing deletes games removed server-side (sync_sub_manager.gd:1027)
 submenus still suck

@@ -43,7 +43,12 @@ var _onscreen_keyboard: PanelContainer = null
 # in the scene are temporarily set to FOCUS_NONE so directional input cannot leak.
 var _focus_lock_active: bool = false
 var _focus_locked_grid: VirtualScrollGridContainer = null
-var _saved_focus_modes: Dictionary[NodePath, int] = {}
+# instance_id -> [WeakRef, int]. Keyed by instance (not NodePath) so dual-screen
+# reparents and nav rebuilds can't strand the original focus modes.
+var _saved_focus_modes: Dictionary = {}
+var _focus_lock_refresh_queued: bool = false
+var _focusables_cache: Array[Control] = []
+var _focusables_cache_valid: bool = false
 
 # Proxy for legacy external access to dual-screen keyboard state.
 @warning_ignore("unused_private_class_variable")
@@ -512,9 +517,17 @@ func grab_focus_silent(control: Control) -> void:
 	suppress_next_focus_sound()
 	control.grab_focus.call_deferred()
 
+## Returns the viewport that actually owns GUI focus for the app UI. In
+## dual-screen mode the UI is reparented into a SubViewport, so this manager's
+## own root viewport has no focus owner.
+func get_active_viewport() -> Viewport:
+	if _root_control and is_instance_valid(_root_control) and _root_control.is_inside_tree():
+		return _root_control.get_viewport()
+	return get_viewport()
+
 ## Returns the current focus owner, resolving through the on-screen keyboard.
 func get_current_focus_owner() -> Control:
-	var viewport := get_viewport()
+	var viewport := get_active_viewport()
 	if not viewport:
 		return null
 	var focus := viewport.gui_get_focus_owner()
@@ -557,6 +570,9 @@ func enter_focus_lock(grid: VirtualScrollGridContainer) -> void:
 		_exit_focus_lock()
 	_focus_locked_grid = grid
 	_focus_lock_active = true
+	_focusables_cache_valid = false
+	if not get_tree().node_added.is_connected(_on_lock_tree_node_added):
+		get_tree().node_added.connect(_on_lock_tree_node_added)
 	_apply_focus_lock()
 
 func exit_focus_lock(grid: VirtualScrollGridContainer) -> void:
@@ -579,7 +595,34 @@ func _exit_focus_lock() -> void:
 		return
 	_focus_lock_active = false
 	_focus_locked_grid = null
+	if get_tree().node_added.is_connected(_on_lock_tree_node_added):
+		get_tree().node_added.disconnect(_on_lock_tree_node_added)
+	_focusables_cache.clear()
+	_focusables_cache_valid = false
 	_restore_focus_modes()
+
+func _on_lock_tree_node_added(node: Node) -> void:
+	"""Invalidate the focusables cache when a Control appears outside the locked grid."""
+	if _focusables_cache_valid and node is Control and _is_in_lock_scope(node):
+		_focusables_cache_valid = false
+
+func _is_in_lock_scope(node: Node) -> bool:
+	if not _root_control or not _root_control.is_ancestor_of(node):
+		return false
+	if _focus_locked_grid and (_focus_locked_grid == node or _focus_locked_grid.is_ancestor_of(node)):
+		return false
+	return true
+
+func queue_refresh_focus_lock_state() -> void:
+	"""Coalesce refresh requests: at most one lock re-apply per frame."""
+	if _focus_lock_refresh_queued:
+		return
+	_focus_lock_refresh_queued = true
+	call_deferred("_refresh_focus_lock_state_deferred")
+
+func _refresh_focus_lock_state_deferred() -> void:
+	_focus_lock_refresh_queued = false
+	refresh_focus_lock_state()
 
 func refresh_focus_lock_state() -> void:
 	"""Re-apply the current focus lock after layout/theme changes."""
@@ -604,21 +647,31 @@ func _apply_focus_lock() -> void:
 	"""Save and disable focus modes for all controls outside the locked grid."""
 	if not _focus_locked_grid or not _root_control:
 		return
-	_saved_focus_modes.clear()
-	var focusables := _gather_focusable_controls(_root_control)
+	var focusables := _get_focusables()
 	for ctrl in focusables:
 		if not is_instance_valid(ctrl):
 			continue
-		var path := ctrl.get_path()
-		_saved_focus_modes[path] = ctrl.focus_mode
+		if ctrl.focus_mode == Control.FOCUS_NONE:
+			continue
+		var id := ctrl.get_instance_id()
+		if not _saved_focus_modes.has(id):
+			_saved_focus_modes[id] = [weakref(ctrl), ctrl.focus_mode]
 		ctrl.focus_mode = Control.FOCUS_NONE
+
+func _get_focusables() -> Array[Control]:
+	if _focusables_cache_valid:
+		return _focusables_cache
+	_focusables_cache = _gather_focusable_controls(_root_control)
+	_focusables_cache_valid = true
+	return _focusables_cache
 
 func _restore_focus_modes() -> void:
 	"""Restore original focus modes saved by _apply_focus_lock."""
-	for path in _saved_focus_modes.keys():
-		var node := get_node_or_null(path)
-		if node is Control and is_instance_valid(node):
-			node.focus_mode = _saved_focus_modes[path]
+	for id in _saved_focus_modes.keys():
+		var entry: Array = _saved_focus_modes[id]
+		var ctrl: Control = (entry[0] as WeakRef).get_ref()
+		if ctrl and is_instance_valid(ctrl):
+			ctrl.focus_mode = entry[1]
 	_saved_focus_modes.clear()
 
 func _gather_focusable_controls(node: Node) -> Array[Control]:
@@ -668,7 +721,7 @@ func _on_apply_preset_end() -> void:
 		card_settings_state.end_batch()
 	theme._on_apply_preset_end()
 	# Theme/layout may have created new focusable controls; re-apply lock if needed.
-	call_deferred("refresh_focus_lock_state")
+	queue_refresh_focus_lock_state()
 
 var _persisting_ui_font_path: bool = false
 
@@ -711,7 +764,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			navigation.set_nav_type(setting.value)
 			navigation._rebuild_nav_and_layout()
 			# Nav rebuild may add/reparent focusable controls; re-apply lock.
-			call_deferred("refresh_focus_lock_state")
+			queue_refresh_focus_lock_state()
 		"hero_effect_config":
 			var hero_image = get_hero_image()
 			if hero_image and hero_image.has_method("refresh_from_settings"):

@@ -41,7 +41,16 @@ enum IdleAnim { NONE, BREATHE, CHASE }
 
 signal config_changed
 
+## Hub re-emission of the UI viewport's gui_focus_changed. Subscribers that
+## only care about app-UI focus connect here once instead of tracking
+## Viewport.gui_focus_changed across dual-screen reparents. Overlays and the
+## on-screen keyboard still connect to their own viewport directly.
+signal ui_focus_changed(control: Control)
+
 static var _instance: FocusSubManager = null
+
+static func get_instance() -> FocusSubManager:
+	return _instance
 
 var ui_manager: Node = null
 
@@ -257,6 +266,7 @@ func reconnect_viewport(vp: Viewport = null) -> void:
 # ============================================================================
 
 func _on_gui_focus_changed(control: Control) -> void:
+	ui_focus_changed.emit(control)
 	_untrack_target()
 	if not enabled or control == null or not is_instance_valid(control) \
 			or not control.is_visible_in_tree() or not control.has_method("m3_get_focus_geometry"):

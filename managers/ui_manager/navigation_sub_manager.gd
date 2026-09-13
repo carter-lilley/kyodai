@@ -25,7 +25,6 @@ var _inner_layout: BoxContainer = null
 var _add_menu: M3Menu = null
 
 # Feedback tracking for navigation sounds
-var _feedback_connected_viewport: Viewport = null
 var _is_first_focus: bool = true
 
 # Input tracking for mouse hover focus
@@ -224,7 +223,7 @@ func _rebuild_nav_and_layout() -> void:
 	# The actual grid refresh is deferred to _refresh_nav_layout() so it runs
 	# after the nav node has finalized its dimensions and compact level.
 	# Layout rebuild may create/reparent focusable controls; re-apply focus lock.
-	ui_manager.call_deferred("refresh_focus_lock_state")
+	ui_manager.queue_refresh_focus_lock_state()
 	# The nav node may have been sized before its parent assigned a real width;
 	# force a deferred sizing pass once the layout has settled.
 	call_deferred("_refresh_nav_layout")
@@ -947,17 +946,12 @@ func _setup_feedback_handlers() -> void:
 	_reconnect_feedback_viewport()
 
 func _reconnect_feedback_viewport() -> void:
-	"""Reconnect feedback handlers to the current viewport."""
-	if _feedback_connected_viewport and is_instance_valid(_feedback_connected_viewport):
-		if _feedback_connected_viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
-			_feedback_connected_viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
-
-	var viewport = _get_active_viewport()
-	if is_instance_valid(viewport):
-		if viewport.gui_focus_changed.is_connected(_on_feedback_focus_changed):
-			viewport.gui_focus_changed.disconnect(_on_feedback_focus_changed)
-		viewport.gui_focus_changed.connect(_on_feedback_focus_changed)
-		_feedback_connected_viewport = viewport
+	"""Ensure the feedback handler is connected. Focus events arrive via the
+	FocusSubManager hub, which tracks the UI viewport across dual-screen
+	reparents itself, so this is an idempotent ensure-connect."""
+	var hub := FocusSubManager.get_instance()
+	if hub and not hub.ui_focus_changed.is_connected(_on_feedback_focus_changed):
+		hub.ui_focus_changed.connect(_on_feedback_focus_changed)
 
 func _on_feedback_focus_changed(control: Control) -> void:
 	"""Play navigation sounds on focus changes."""
@@ -997,11 +991,8 @@ func _control_is_game_card(control: Control) -> bool:
 
 func _get_active_viewport() -> Viewport:
 	"""Resolve the viewport that actually owns GUI focus for the nav UI.
-	In dual-screen mode the UI is reparented into a SubViewport, so this
-	manager's own root viewport has no focus owner."""
-	if _nav_node and is_instance_valid(_nav_node) and _nav_node.is_inside_tree():
-		return _nav_node.get_viewport()
-	return get_viewport()
+	Delegates to UIManager's unified resolver (dual-screen SubViewport aware)."""
+	return ui_manager.get_active_viewport()
 
 func _unhandled_input(event: InputEvent) -> void:
 	"""Play activation sound on ui_accept for non-game card elements."""

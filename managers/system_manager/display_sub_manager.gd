@@ -123,7 +123,18 @@ func _on_viewport_size_changed() -> void:
 
 func _on_resize_debounced() -> void:
 	"""Stable resize event: update cached viewport size and notify consumers."""
+	# In dual-screen SubViewport mode the app lives in MainViewport, not the
+	# root window; cache the active SubViewport size so breakpoint consumers
+	# track the rectangle the UI actually occupies (mirrors
+	# _emit_swap_resize_notification). Root resizes must not clobber it.
 	var viewport = get_viewport()
+	if UIManager and UIManager.dual_screen:
+		# Group membership is the authoritative marker that the app UI has
+		# been reparented into MainViewport (Android viewport mode); on the
+		# desktop fallback the app stays in the root window.
+		var sub = UIManager.dual_screen.get_main_viewport()
+		if sub and sub.is_in_group("m3_overlay_parent"):
+			viewport = sub
 	if viewport:
 		_viewport_size = viewport.size
 	else:

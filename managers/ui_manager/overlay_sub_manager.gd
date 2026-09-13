@@ -204,7 +204,7 @@ func _on_settings_dialog_dismissed() -> void:
 	ui_manager.view.flush_pending_rebuilds_if_no_dialog()
 
 	# If focus returns to a locked grid, re-apply scene-wide focus lock.
-	ui_manager.refresh_focus_lock_state()
+	ui_manager.queue_refresh_focus_lock_state()
 
 
 func _track_dialog(dialog: M3Dialog) -> void:

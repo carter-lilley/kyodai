@@ -192,6 +192,14 @@ class ChunkedDownloadInfo:
 	var watchdog_last_total_bytes: int = 0
 	var watchdog_last_progress_time_ms: int = 0
 	var batch_id: int = -1  # DownloadBatch ID for cancelling queued chunk tasks
+	# Flush mode (Android): each completed chunk temp file is written directly
+	# into the destination at its byte offset by the native plugin, so no
+	# end-of-download full-file copy is needed.
+	var flush_mode: bool = false
+	var flushes_pending: int = 0
+	var flush_failed: bool = false
+	var all_chunks_done: bool = false
+	var flush_retry_counts: Dictionary = {}  # chunk_index -> int
 
 class ChunkInfo:
 	var index: int
@@ -209,6 +217,7 @@ class ChunkInfo:
 	var actual_hash: String = ""    # SHA-256 computed after the chunk is written
 	var coolmul: float = 0.5        # Exponential backoff multiplier
 	var cooldown_until_ms: int = 0  # Absolute time (ticks_msec) before retry
+	var flushed: bool = false       # Flush mode: chunk written into the destination
 
 # ============================================================================
 # DOWNLOAD STATE FILE (chunk bitmap for resume)
@@ -374,6 +383,16 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 	if not (chunks_data is Array):
 		return
 
+	# Flush mode: chunks marked flushed live in the destination file. Verify its
+	# size once via the plugin (Godot can't stat SAF-restricted paths directly).
+	var flush_dest_ok := false
+	if chunked_info.flush_mode:
+		var plugin = Engine.get_singleton("PackageChecker")
+		if plugin != null:
+			flush_dest_ok = int(plugin.call("androidFileSize", chunked_info.final_path)) == chunked_info.item.expected_file_size
+		if not flush_dest_ok:
+			print("[SystemManager.download] Flush-mode resume: destination missing/wrong size, flushed chunks will be re-downloaded")
+
 	for chunk_state in chunks_data:
 		if not (chunk_state is Dictionary):
 			continue
@@ -387,13 +406,29 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 		chunk.retry_count = int(chunk_state.get("retry_count", 0))
 		chunk.coolmul = float(chunk_state.get("coolmul", 0.5))
 		chunk.cooldown_until_ms = int(chunk_state.get("cooldown_until_ms", 0))
+		chunk.flushed = chunk_state.get("flushed", false)
 
 		var status = chunk_state.get("status", "pending")
 		if status == "complete":
 			var expected_size = chunk.end_byte - chunk.start_byte + 1
 			var verified = false
 
-			if chunked_info.in_place_assembly:
+			if chunked_info.flush_mode:
+				if chunk.flushed:
+					# Already written into the destination; trust the one-shot size check.
+					verified = flush_dest_ok
+					if not verified:
+						chunk.flushed = false
+				else:
+					# Completed but not yet flushed: re-flush if the temp file survived.
+					if FileAccess.file_exists(chunk.temp_path):
+						var f = FileAccess.open(chunk.temp_path, FileAccess.READ)
+						if f != null:
+							var actual_size = f.get_length()
+							f.close()
+							if actual_size == expected_size:
+								verified = true
+			elif chunked_info.in_place_assembly:
 				# For sparse in-place assembly, verify the chunk range in the partial file.
 				if FileAccess.file_exists(chunked_info.partial_path):
 					var partial_file = FileAccess.open(chunked_info.partial_path, FileAccess.READ)
@@ -471,7 +506,8 @@ func _save_download_state(chunked_info: ChunkedDownloadInfo, force: bool = false
 			"actual_hash": chunk.actual_hash,
 			"retry_count": chunk.retry_count,
 			"coolmul": chunk.coolmul,
-			"cooldown_until_ms": chunk.cooldown_until_ms
+			"cooldown_until_ms": chunk.cooldown_until_ms,
+			"flushed": chunk.flushed
 		})
 
 	var data = {
@@ -1222,14 +1258,19 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 
 	# Decide whether to use in-place assembly.
 	# Desktop: create a sparse partial next to the destination.
-	# Android: always stream into a partial in the temp dir, then copy/move it
-	# to the destination. This avoids the blocking native reassembly step.
+	# Android: probe flush mode first (chunks are written into the destination
+	# as they complete, eliminating the final copy). Fall back to streaming
+	# into a temp-dir partial, then copy/move it to the destination.
 	var in_place_assembly = false
 	if IN_PLACE_CHUNKED_DOWNLOADS:
 		if SystemManager.platform.is_android():
-			chunked_info.partial_path = temp_dir + "/partial"
-			in_place_assembly = true
-			print("[SystemManager.download] Using Android temp-dir in-place assembly for: " + item.name)
+			if _prepare_flush_destination(chunked_info, file_size):
+				chunked_info.flush_mode = true
+				print("[SystemManager.download] Using flush-mode chunked download for: " + item.name)
+			else:
+				chunked_info.partial_path = temp_dir + "/partial"
+				in_place_assembly = true
+				print("[SystemManager.download] Flush mode unavailable, using Android temp-dir in-place assembly for: " + item.name)
 		else:
 			chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 			var state_path = _get_state_file_path(item.destination_path)
@@ -1294,16 +1335,16 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	# (Resume state would have been applied above if it were valid.)
 	if SystemManager.platform.is_android():
 		if state.is_empty():
-			if FSM.file_exists(chunked_info.partial_path):
+			if not chunked_info.partial_path.is_empty() and FSM.file_exists(chunked_info.partial_path):
 				FSM.delete_file(chunked_info.partial_path)
 			# Also remove any leftover legacy chunk temp files
 			for chunk in chunked_info.chunks:
 				if FSM.file_exists(chunk.temp_path):
 					FSM.delete_file(chunk.temp_path)
 
-		# Ensure the partial file exists so worker threads can open it READ_WRITE.
-		# Only create it when missing; on resume the existing partial is preserved.
-		if not FSM.file_exists(chunked_info.partial_path):
+		# In-place mode only: ensure the partial file exists so worker threads
+		# can open it READ_WRITE. On resume the existing partial is preserved.
+		if chunked_info.in_place_assembly and not FSM.file_exists(chunked_info.partial_path):
 			var partial_create = FileAccess.open(chunked_info.partial_path, FileAccess.WRITE)
 			if partial_create:
 				partial_create.close()
@@ -1317,6 +1358,13 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 				queue_changed.emit()
 				_process_queue()
 				return
+
+	# Flush mode resume: chunks that completed but were never flushed (crash
+	# between completion and flush) still have temp files - flush them now.
+	if chunked_info.flush_mode:
+		for chunk in chunked_info.chunks:
+			if chunk.completed and not chunk.flushed and FSM.file_exists(chunk.temp_path):
+				_flush_chunk_async(item.id, chunk.index)
 
 	# Initialize per-download concurrency semaphore and connection pool
 	var chunk_sem = Semaphore.new()
@@ -1893,6 +1941,8 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 			chunk.expected_hash = expected_hash
 			chunked_info.chunks_completed += 1
 			print("[SystemManager.download] Chunk " + str(chunk_index) + " completed successfully (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+			if chunked_info.flush_mode:
+				_flush_chunk_async(item_id, chunk_index)
 	else:
 		chunk.failed = true
 		chunk.actual_hash = actual_hash
@@ -1941,6 +1991,16 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 	var item = chunked_info.item
 
 	print("[SystemManager.download] Thread pool callback: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + " chunks done")
+
+	# Flush mode: chunk data is already in the destination (or in flight).
+	# Skip file-based verification/reassembly; finalize once flushes settle.
+	if chunked_info.flush_mode:
+		if chunked_info.chunks_completed >= chunked_info.total_chunks:
+			chunked_info.all_chunks_done = true
+			_maybe_finalize_flush_download(item_id)
+		else:
+			_handle_failed_chunks_thread_pool(item_id, headers)
+		return
 
 	# Check if all chunks completed successfully
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
@@ -2051,6 +2111,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			chunk.retry_count += 1
 			chunk.failed = false
 			chunk.in_progress = false
+			chunk.flushed = false
 			chunk.temp_bytes_downloaded = 0
 			var delay = _chill(chunk)
 			if delay > max_delay:
@@ -2290,6 +2351,146 @@ func _stop_chunked_watchdog_timer(item_id: String):
 		chunked_info.watchdog_timer.stop()
 		chunked_info.watchdog_timer.queue_free()
 		chunked_info.watchdog_timer = null
+
+# ============================================================================
+# FLUSH MODE (Android): per-chunk positioned writes into the destination
+# ============================================================================
+
+var _flush_signal_connected: bool = false
+
+func _ensure_flush_signal_connected() -> void:
+	if _flush_signal_connected:
+		return
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		return
+	if not plugin.is_connected("chunk_flush_complete", _on_chunk_flush_complete):
+		plugin.connect("chunk_flush_complete", _on_chunk_flush_complete)
+	_flush_signal_connected = true
+
+## Probes whether the destination supports positioned writes (direct or SAF)
+## and preallocates it. Returns true if flush mode can be used.
+func _prepare_flush_destination(chunked_info: ChunkedDownloadInfo, file_size: int) -> bool:
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		return false
+	_ensure_flush_signal_connected()
+	var ok = plugin.call("prepareChunkedDestination", chunked_info.final_path, file_size)
+	return ok == true
+
+## Asks the native plugin to write a completed chunk temp file into the
+## destination at its byte offset. Runs async on a Java thread; completion
+## arrives via the chunk_flush_complete signal.
+func _flush_chunk_async(item_id: String, chunk_index: int) -> void:
+	if not _chunked_downloads.has(item_id):
+		return
+	var chunked_info = _chunked_downloads[item_id]
+	if not chunked_info.flush_mode:
+		return
+	var chunk = chunked_info.chunks[chunk_index]
+	var plugin = Engine.get_singleton("PackageChecker")
+	if plugin == null:
+		_on_chunk_flush_failed(item_id, chunk_index, "Plugin not available")
+		return
+	chunked_info.flushes_pending += 1
+	var token = item_id + "|" + str(chunk_index)
+	var absolute_chunk = ProjectSettings.globalize_path(chunk.temp_path)
+	var started = plugin.call("flushChunkAsync", absolute_chunk, chunked_info.final_path, chunk.start_byte, token)
+	if started != true:
+		chunked_info.flushes_pending = maxi(0, chunked_info.flushes_pending - 1)
+		_on_chunk_flush_failed(item_id, chunk_index, "Failed to start chunk flush")
+
+func _on_chunk_flush_complete(token: String, success: bool, error: String) -> void:
+	var sep = token.rfind("|")
+	if sep == -1:
+		return
+	var item_id = token.substr(0, sep)
+	var chunk_index = int(token.substr(sep + 1))
+	if not _chunked_downloads.has(item_id):
+		return
+
+	var chunked_info = _chunked_downloads[item_id]
+	if chunk_index < 0 or chunk_index >= chunked_info.chunks.size():
+		return
+	var chunk = chunked_info.chunks[chunk_index]
+	chunked_info.flushes_pending = maxi(0, chunked_info.flushes_pending - 1)
+
+	if success:
+		chunk.flushed = true
+		chunked_info.flush_retry_counts.erase(chunk_index)
+		# Persist before deleting the temp file so a crash here re-flushes
+		# from the temp file instead of re-downloading.
+		_save_download_state(chunked_info, true)
+		if FSM.file_exists(chunk.temp_path):
+			FSM.delete_file(chunk.temp_path)
+		_maybe_finalize_flush_download(item_id)
+	else:
+		push_error("[SystemManager.download] Chunk flush failed for chunk " + str(chunk_index) + ": " + error)
+		var retries = int(chunked_info.flush_retry_counts.get(chunk_index, 0)) + 1
+		chunked_info.flush_retry_counts[chunk_index] = retries
+		if retries <= 3:
+			var delay = float(retries) * 2.0
+			await get_tree().create_timer(delay).timeout
+			if not _chunked_downloads.has(item_id):
+				return
+			if chunk.flushed:
+				return  # Another path already flushed it
+			_flush_chunk_async(item_id, chunk_index)
+		else:
+			chunked_info.flush_failed = true
+			_fail_flush_download(item_id, "Failed to write chunk " + str(chunk_index) + " to destination: " + error)
+
+func _on_chunk_flush_failed(item_id: String, chunk_index: int, error: String) -> void:
+	# Synchronous start failure; route through the same retry logic.
+	_on_chunk_flush_complete(item_id + "|" + str(chunk_index), false, error)
+
+## Finalizes a flush-mode download once all chunks are done and every flush
+## has landed. The destination is verified by size (per-chunk hashes were
+## already validated during download).
+func _maybe_finalize_flush_download(item_id: String) -> void:
+	if not _chunked_downloads.has(item_id):
+		return
+	var chunked_info = _chunked_downloads[item_id]
+	if not chunked_info.flush_mode or not chunked_info.all_chunks_done:
+		return
+	if chunked_info.flushes_pending > 0 or chunked_info.flush_failed:
+		return
+	if chunked_info.chunks_completed < chunked_info.total_chunks:
+		return
+	for chunk in chunked_info.chunks:
+		if not chunk.flushed:
+			return
+
+	var item = chunked_info.item
+	var plugin = Engine.get_singleton("PackageChecker")
+	var final_size = int(plugin.call("androidFileSize", chunked_info.final_path)) if plugin != null else -1
+	if final_size != item.expected_file_size:
+		push_error("[SystemManager.download] Flush-mode final size mismatch: expected " + str(item.expected_file_size) + ", got " + str(final_size))
+		_fail_flush_download(item_id, "Destination size mismatch after flush")
+		return
+
+	print("[SystemManager.download] Flush-mode download finalized: " + item.name)
+	_stop_chunked_progress_timer(item_id)
+	_stop_chunked_watchdog_timer(item_id)
+	_delete_download_state(chunked_info.final_path)
+	_cleanup_chunked_download(item_id)
+	_on_file_download_complete(item, true, "")
+
+func _fail_flush_download(item_id: String, error_msg: String) -> void:
+	if not _chunked_downloads.has(item_id):
+		return
+	var chunked_info = _chunked_downloads[item_id]
+	var item = chunked_info.item
+	_stop_chunked_progress_timer(item_id)
+	_stop_chunked_watchdog_timer(item_id)
+	item.status = "failed"
+	item.error_message = error_msg
+	_cleanup_chunked_download(item_id)
+	_cleanup_item(item)
+	_active_items.erase(item_id)
+	download_completed.emit(item_id, false, error_msg)
+	queue_changed.emit()
+	_process_queue()
 
 func _on_chunked_watchdog(item_id: String):
 	if not _chunked_downloads.has(item_id):

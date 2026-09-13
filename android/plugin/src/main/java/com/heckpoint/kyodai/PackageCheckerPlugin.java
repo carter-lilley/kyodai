@@ -88,6 +88,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
         signals.add(new SignalInfo("extraction_complete", Boolean.class, String.class, String.class));
         signals.add(new SignalInfo("copy_progress", String.class, Long.class, Long.class));
         signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
+        signals.add(new SignalInfo("chunk_flush_complete", String.class, Boolean.class, String.class));
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
         signals.add(new SignalInfo("window_focus_stuck"));
         return signals;
@@ -1181,6 +1182,244 @@ public class PackageCheckerPlugin extends GodotPlugin {
         return true;
     }
     
+    // ========================================================================
+    // Chunked flush mode: chunk temp files are written directly into the
+    // final destination at their byte offsets as each chunk completes, so the
+    // end-of-download full-file copy disappears. Works for direct paths
+    // (RandomAccessFile), AltAccess-aliased paths, and SAF DocumentsContract
+    // paths (ParcelFileDescriptor "rw" + positioned FileChannel writes).
+    // ========================================================================
+
+    /** Single-thread executor: sequential flushes avoid flash write thrash. */
+    private java.util.concurrent.ExecutorService chunkFlushExecutor = null;
+
+    /**
+     * Probes whether a destination supports positioned writes and preallocates
+     * it to the expected size. Returns false if chunked flush mode cannot be
+     * used (caller falls back to temp-dir assembly + final copy).
+     */
+    @UsedByGodot
+    public boolean prepareChunkedDestination(String destPath, long totalSize) {
+        if (activity == null || destPath == null || destPath.isEmpty()) {
+            return false;
+        }
+        try {
+            File file = directFile(destPath);
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            if (parent != null && parent.canWrite()) {
+                java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
+                if (totalSize > 0) {
+                    raf.setLength(totalSize);
+                }
+                raf.close();
+                return true;
+            }
+            if (requiresDocumentsContract(destPath)) {
+                Uri uri = ensureDocumentExists(destPath);
+                if (uri == null) {
+                    return false;
+                }
+                android.os.ParcelFileDescriptor pfd =
+                        activity.getContentResolver().openFileDescriptor(uri, "rw");
+                if (pfd == null) {
+                    return false;
+                }
+                // Positioned write at the last byte both preallocates and
+                // verifies the provider supports random access.
+                if (totalSize > 0) {
+                    java.nio.channels.FileChannel channel =
+                            new FileOutputStream(pfd.getFileDescriptor()).getChannel();
+                    channel.position(totalSize - 1);
+                    channel.write(java.nio.ByteBuffer.allocate(1));
+                    channel.close();
+                }
+                pfd.close();
+                return true;
+            }
+            // Last resort: plain direct access
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
+            if (totalSize > 0) {
+                raf.setLength(totalSize);
+            }
+            raf.close();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "prepareChunkedDestination failed for " + destPath + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** Creates the destination document via DocumentsContract if missing. */
+    private Uri ensureDocumentExists(String path) {
+        Uri uri = documentUriFor(path);
+        if (uri == null) {
+            return null;
+        }
+        try {
+            android.os.ParcelFileDescriptor probe =
+                    activity.getContentResolver().openFileDescriptor(uri, "r");
+            if (probe != null) {
+                probe.close();
+                return uri;
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "ensureDocumentExists: doc missing, creating: " + e.getMessage());
+        }
+        String parentPath = path.substring(0, path.lastIndexOf('/'));
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        Uri parentUri = documentUriFor(parentPath);
+        if (parentUri == null) {
+            return null;
+        }
+        try {
+            return DocumentsContract.createDocument(
+                    activity.getContentResolver(), parentUri, "application/octet-stream", name);
+        } catch (Exception e) {
+            Log.w(TAG, "ensureDocumentExists: createDocument failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Flushes a downloaded chunk temp file into the destination at the given
+     * byte offset, asynchronously. Emits chunk_flush_complete(token, success, error).
+     */
+    @UsedByGodot
+    public boolean flushChunkAsync(String chunkPath, String destPath, long offset, String token) {
+        if (activity == null) {
+            return false;
+        }
+        if (chunkFlushExecutor == null) {
+            chunkFlushExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        }
+        chunkFlushExecutor.execute(() -> {
+            boolean success = false;
+            String error = "";
+            try {
+                success = writeChunkAt(chunkPath, destPath, offset);
+                if (!success) {
+                    error = "No writable destination for: " + destPath;
+                }
+            } catch (Exception e) {
+                error = String.valueOf(e.getMessage());
+                Log.e(TAG, "flushChunk failed: " + chunkPath + " -> " + destPath + " @" + offset + ": " + error);
+            }
+            final boolean s = success;
+            final String err = error;
+            activity.runOnUiThread(() -> emitSignal("chunk_flush_complete", token, s, err));
+        });
+        return true;
+    }
+
+    /** Streams a chunk file into the destination at a byte offset. */
+    private boolean writeChunkAt(String chunkPath, String destPath, long offset) throws Exception {
+        File chunkFile = new File(chunkPath);
+        if (!chunkFile.exists()) {
+            throw new Exception("Chunk file not found: " + chunkPath);
+        }
+        byte[] buffer = new byte[8 * 1024 * 1024];
+        FileInputStream in = new FileInputStream(chunkFile);
+        try {
+            File file = directFile(destPath);
+            File parent = file.getParentFile();
+            if (parent != null && parent.canWrite()) {
+                java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
+                try {
+                    raf.seek(offset);
+                    int r;
+                    while ((r = in.read(buffer)) != -1) {
+                        raf.write(buffer, 0, r);
+                    }
+                } finally {
+                    raf.close();
+                }
+                return true;
+            }
+            if (requiresDocumentsContract(destPath)) {
+                Uri uri = documentUriFor(destPath);
+                if (uri == null) {
+                    return false;
+                }
+                android.os.ParcelFileDescriptor pfd =
+                        activity.getContentResolver().openFileDescriptor(uri, "rw");
+                if (pfd == null) {
+                    return false;
+                }
+                java.nio.channels.FileChannel channel =
+                        new FileOutputStream(pfd.getFileDescriptor()).getChannel();
+                try {
+                    channel.position(offset);
+                    java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(buffer);
+                    int r;
+                    while ((r = in.read(buffer)) != -1) {
+                        bb.clear();
+                        bb.limit(r);
+                        while (bb.hasRemaining()) {
+                            channel.write(bb);
+                        }
+                    }
+                } finally {
+                    channel.close();
+                    pfd.close();
+                }
+                return true;
+            }
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
+            try {
+                raf.seek(offset);
+                int r;
+                while ((r = in.read(buffer)) != -1) {
+                    raf.write(buffer, 0, r);
+                }
+            } finally {
+                raf.close();
+            }
+            return true;
+        } finally {
+            in.close();
+        }
+    }
+
+    /**
+     * Returns the size of a file in bytes, using DocumentsContract for
+     * restricted paths. Returns -1 if the file is missing or unreadable.
+     */
+    @UsedByGodot
+    public long androidFileSize(String path) {
+        if (path == null || path.isEmpty()) {
+            return -1;
+        }
+        File file = directFile(path);
+        if (file.exists()) {
+            return file.length();
+        }
+        if (requiresDocumentsContract(path)) {
+            try {
+                Uri docUri = pathToDocumentUri(path);
+                if (docUri != null) {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                            docUri,
+                            new String[]{DocumentsContract.Document.COLUMN_SIZE},
+                            null, null, null);
+                    if (cursor != null) {
+                        long size = -1;
+                        if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                            size = cursor.getLong(0);
+                        }
+                        cursor.close();
+                        return size;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "androidFileSize failed for " + path + ": " + e.getMessage());
+            }
+        }
+        return -1;
+    }
+
     /**
      * Starts the foreground service to prevent Android from killing the app during downloads.
      * Shows a persistent notification while downloads are active.

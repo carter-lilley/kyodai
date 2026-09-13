@@ -455,14 +455,14 @@ func dismiss() -> void:
 		# Suppress overlay focus pull-back while applying settings and dismissing.
 		# The preset triggers grid layout rebuilds and deferred focus restoration;
 		# without suppression the still-visible dialog would yank focus back.
-		M3Overlay._suppress_focus_pullback = true
+		M3Overlay.push_focus_pullback_suppression()
 		_apply_settings()
 
 	if DataManager:
 		DataManager.save_settings()
 
 	super.dismiss()
-	M3Overlay._suppress_focus_pullback = false
+	M3Overlay.pop_focus_pullback_suppression()
 
 func _input(event: InputEvent) -> void:
 	# Treat ui_cancel as Cancel so focus returns to the Home button.

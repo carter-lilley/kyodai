@@ -1494,10 +1494,8 @@ func _input(event: InputEvent):
 		_handle_ui_cancel()
 
 func _get_focus_owner() -> Control:
-	"""Get the focused control, accounting for dual-screen SubViewport."""
-	if root_layout and root_layout.is_inside_tree():
-		return root_layout.get_viewport().gui_get_focus_owner()
-	return get_viewport().gui_get_focus_owner()
+	"""Get the focused control (dual-screen and keyboard aware)."""
+	return UIManager.get_current_focus_owner()
 
 func _forward_input_to_second_viewport(event: InputEvent) -> bool:
 	"""Forward controller actions to the second viewport while the keyboard is displayed there."""
@@ -1575,22 +1573,13 @@ func _adjust_zoom(delta: float) -> void:
 
 func _get_focused_card_index() -> int:
 	"""Get the virtual index of the currently focused card, or -1 if none."""
-	var viewport = get_viewport()
-	if not viewport:
+	var current_view = UIManager.get_current_view()
+	if not current_view:
 		return -1
-
-	var focused = viewport.gui_get_focus_owner()
-	if not focused:
+	var games_grid = _get_view_grid(current_view)
+	if not games_grid:
 		return -1
-
-	# Find the GameCard that contains the focused control
-	var parent = focused
-	while parent:
-		if parent.has_meta("virtual_index"):
-			return parent.get_meta("virtual_index", -1)
-		parent = parent.get_parent()
-
-	return -1
+	return games_grid.get_focused_virtual_index()
 
 func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	"""Restore focus to the card at the given virtual index."""
@@ -1608,17 +1597,9 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	if not games_grid:
 		return
 
-	var card = games_grid.get_card_at_index(target_index)
-	if not card:
-		return
-
-	# Grab focus on the card directly (M3Card-based GameCard has no CardInput sub-node).
-	# Suppress the container's follow-focus smooth scroll: the grid already ran
-	# scroll_to_index_and_focus for this zoom tick, and an unsuppressed provider
-	# scroll here overrides in-flight wheel scrolling and spams value_changed.
-	if card is Control and card.focus_mode != Control.FOCUS_NONE:
-		card.set_meta("_suppress_smooth_scroll", true)
-		card.grab_focus()
+	# The grid handles follow-focus suppression internally; a direct grab here
+	# would override in-flight wheel scrolling and spam value_changed.
+	games_grid.restore_focus_to_index(target_index)
 
 func _on_screens_swapped(_is_swapped: bool) -> void:
 	"""Handle screen swap from AynThorManager."""

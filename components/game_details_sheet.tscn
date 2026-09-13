@@ -135,8 +135,9 @@ vertical_scroll_mode = 0
 script = ExtResource("2_m3label")
 layout_mode = 2
 size_flags_horizontal = 3
-label_style = 9
+label_style = 10
 use_on_surface_variant = true
+line_spacing = -2.0
 autowrap_mode = 3
 
 [node name="DescFoldButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Overview/OverviewVBox"]
@@ -248,35 +249,57 @@ visible = false
 layout_mode = 2
 theme_override_constants/margin_top = 12
 
-[node name="RelatedTabContent" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related"]
+[node name="RelatedTabScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="RelatedTabContent" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="RelatedSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent"]
+[node name="RelatedSection" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent"]
 visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
-[node name="RelatedHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection"]
+[node name="RelatedHeader" type="Label" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection"]
 script = ExtResource("2_m3label")
 layout_mode = 2
 label_style = 7
 text = "Related Games"
 
-[node name="RelatedScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection"]
+[node name="RelatedScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection"]
 layout_mode = 2
 size_flags_horizontal = 3
 vertical_scroll_mode = 0
 
-[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll"]
+[node name="RowMargin" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_bottom = 8
 
-[node name="RelatedRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin"]
+[node name="RelatedRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 12
+
+[node name="Screenshots" type="MarginContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs"]
+visible = false
+layout_mode = 2
+theme_override_constants/margin_top = 12
+
+[node name="ScreenshotsTabScroll" type="ScrollContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Screenshots"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="ScreenshotsTabContent" type="VBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Screenshots/ScreenshotsTabScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
 

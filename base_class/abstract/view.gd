@@ -24,9 +24,6 @@ const MAX_REBUILD_ATTEMPTS: int = 5
 var _deferred_rebuild_attempts: int = 0
 const MAX_DEFERRED_REBUILD_ATTEMPTS: int = 10
 
-# Track last connected viewport to prevent signal leaks on reparent
-var _last_connected_viewport: Viewport = null
-
 # Track a focused GameCard that hasn't loaded its game data yet, so we can
 # re-emit hero_game_changed once the data arrives.
 var _pending_hero_card: GameCard = null
@@ -206,23 +203,13 @@ func _clear_pending_hero_card() -> void:
 	_pending_hero_card = null
 
 func reconnect_viewport() -> void:
-	"""Reconnect to the current viewport's gui_focus_changed signal.
-	Call this after reparenting to ensure focus events are received."""
-	# Disconnect from the PREVIOUSLY connected viewport (not get_viewport() which
-	# returns the NEW viewport after reparenting). This prevents signal leaks.
-	if _last_connected_viewport and is_instance_valid(_last_connected_viewport):
-		if _last_connected_viewport.gui_focus_changed.is_connected(_on_focus_changed):
-			_last_connected_viewport.gui_focus_changed.disconnect(_on_focus_changed)
-		_last_connected_viewport = null
-	
-	var viewport = get_viewport()
-	if not is_instance_valid(viewport):
-		return
-	
-	# Connect to new/current viewport
-	viewport.gui_focus_changed.connect(_on_focus_changed)
-	_last_connected_viewport = viewport
-	
+	"""Ensure focus-event connections after reparenting. Focus events come from
+	the FocusSubManager hub, which tracks the UI viewport across dual-screen
+	reparents itself, so this only needs an idempotent ensure-connect."""
+	var hub := FocusSubManager.get_instance()
+	if hub and not hub.ui_focus_changed.is_connected(_on_focus_changed):
+		hub.ui_focus_changed.connect(_on_focus_changed)
+
 	# Reconnect grid's scroll container follow_focus
 	if games_grid and games_grid._scroll_container:
 		games_grid._scroll_container.reconnect_viewport()

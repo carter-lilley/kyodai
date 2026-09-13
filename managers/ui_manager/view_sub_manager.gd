@@ -428,7 +428,7 @@ func _on_tab_changed(tab_idx: int):
 
 	ui_manager.tab_changed.emit(tab_title)
 	# A new view may have a focused grid; refresh focus lock state next frame.
-	ui_manager.call_deferred("refresh_focus_lock_state")
+	ui_manager.queue_refresh_focus_lock_state()
 
 func _get_tab_index(tab_title: String) -> int:
 	for i in range(_tab_container.get_tab_count()):

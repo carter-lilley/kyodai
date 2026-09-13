@@ -34,15 +34,12 @@ var _last_wheel_tick_msec: int = -10000
 			if is_inside_tree():
 				_reconnect_scrollbars()
 
-var _last_focus_viewport: Viewport = null
-
 var _target_scroll: float = 0.0
 var _scroll_tween: Tween
 var _is_smooth_scrolling: bool = false
 var _is_dragging_scrollbar: bool = false
 var _scrollbar_drag_start_mouse_pos: float = 0.0
 var _scrollbar_drag_start_value: float = 0.0
-var _focus_timer: Timer = null
 
 ## Optional delegate for follow-focus scroll targets. Signature: (Control) -> float.
 ## When set, the provider decides where to scroll when a control inside this
@@ -119,28 +116,19 @@ func _ready():
 	_connect_focus_signal()
 
 func _exit_tree():
-	# Disconnect from viewport to prevent dangling signal connections.
-	# Track the LAST connected viewport: after a reparent, get_viewport() is the
-	# new viewport, which would leave the old viewport's connection behind.
-	var viewport = _last_focus_viewport if is_instance_valid(_last_focus_viewport) else get_viewport()
-	if is_instance_valid(viewport) and viewport.gui_focus_changed.is_connected(_on_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_focus_changed)
-	_last_focus_viewport = null
+	# Disconnect from the focus hub to prevent dangling signal connections.
+	var hub := FocusSubManager.get_instance()
+	if hub and hub.ui_focus_changed.is_connected(_on_focus_changed):
+		hub.ui_focus_changed.disconnect(_on_focus_changed)
 
 func _connect_focus_signal() -> void:
-	"""Connect to the current viewport's gui_focus_changed signal."""
-	if _last_focus_viewport and is_instance_valid(_last_focus_viewport):
-		if _last_focus_viewport.gui_focus_changed.is_connected(_on_focus_changed):
-			_last_focus_viewport.gui_focus_changed.disconnect(_on_focus_changed)
-		_last_focus_viewport = null
-
-	var viewport = get_viewport()
-	if not is_instance_valid(viewport):
+	"""Connect to UI-viewport focus changes via the FocusSubManager hub, which
+	survives dual-screen reparents without any reconnect bookkeeping."""
+	var hub := FocusSubManager.get_instance()
+	if not hub:
 		return
-
-	# Connect to handle focus changes for smooth scrolling
-	viewport.gui_focus_changed.connect(_on_focus_changed)
-	_last_focus_viewport = viewport
+	if not hub.ui_focus_changed.is_connected(_on_focus_changed):
+		hub.ui_focus_changed.connect(_on_focus_changed)
 
 func _on_focus_changed(control: Control) -> void:
 	"""Handle focus changes to smoothly scroll focused items into view."""
@@ -175,7 +163,7 @@ func _on_focus_changed(control: Control) -> void:
 		if absf(provided_target - _get_current_scroll()) < 1.0:
 			return
 		_target_scroll = provided_target
-		_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Callable(), Tween.TRANS_CUBIC, Tween.EASE_OUT)
+		_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Tween.TRANS_CUBIC, Tween.EASE_OUT)
 		return
 
 	# If the control is already fully visible, don't re-center it. This prevents
@@ -186,13 +174,11 @@ func _on_focus_changed(control: Control) -> void:
 
 	# Calculate and smoothly scroll to centered position
 	_target_scroll = _get_centered_scroll_for_control(control)
-	_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Callable(), Tween.TRANS_CUBIC, Tween.EASE_OUT)
+	_start_smooth_scroll(focus_scroll_duration_multiplier, -1.0, Tween.TRANS_CUBIC, Tween.EASE_OUT)
 
 func reconnect_viewport() -> void:
-	"""Reconnect to the current viewport's gui_focus_changed signal.
-	Call this after reparenting into a SubViewport."""
-	# _connect_focus_signal disconnects from the LAST connected viewport
-	# (tracked in _last_focus_viewport), so the old viewport can't leak.
+	"""Ensure the hub focus connection after reparenting into a SubViewport.
+	The hub follows the UI viewport itself, so this is an idempotent ensure."""
 	_connect_focus_signal()
 
 func _connect_scrollbar():
@@ -400,20 +386,14 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, _focus_callback: Callable = Callable(), trans_type: Tween.TransitionType = Tween.TRANS_EXPO, ease_type: Tween.EaseType = Tween.EASE_OUT):
+func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, trans_type: Tween.TransitionType = Tween.TRANS_EXPO, ease_type: Tween.EaseType = Tween.EASE_OUT):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
 
-	# Cancel any pending focus timer from previous scroll
-	if _focus_timer:
-		_focus_timer.stop()
-		_focus_timer.queue_free()
-		_focus_timer = null
-
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
-	_wheel_chase_active = false
+		_wheel_chase_active = false
 
 	var start_value = _get_current_scroll()
 	var target_value = _target_scroll
@@ -438,19 +418,6 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	
 	_is_smooth_scrolling = true
 
-	# DISABLED: Focus callback logic causing HSL flicker during scroll
-	# This was added for the "random game" feature but causes focus conflicts
-	# during smooth scrolling, making HSL effects flicker.
-	# TODO: Find alternative approach for focusing after scroll completes
-	# Set up focus callback to fire at 60% completion
-	#if focus_callback.is_valid():
-	#   _focus_timer = Timer.new()
-	#   _focus_timer.wait_time = duration * 0.6
-	#   _focus_timer.one_shot = true
-	#   _focus_timer.timeout.connect(focus_callback)
-	#   add_child(_focus_timer)
-	#   _focus_timer.start()
-	
 	_scroll_tween = create_tween()
 	_scroll_tween.set_trans(trans_type)
 	_scroll_tween.set_ease(ease_type)
@@ -501,17 +468,16 @@ func _on_native_scroll_ended() -> void:
 		return
 	snap_to_page()
 
-func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0, _focus_callback: Callable = Callable()):
+func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0):
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
-	_wheel_chase_active = false
-	_is_smooth_scrolling = false
-	_page_scroll_in_flight = false
-	
+		_wheel_chase_active = false
+		_is_smooth_scrolling = false
+		_page_scroll_in_flight = false
+
 	if animate and smooth_scrolling:
 		_target_scroll = target
-		# Focus callback disabled - see _start_smooth_scroll() for details
 		_start_smooth_scroll(duration_multiplier)
 	else:
 		_target_scroll = target

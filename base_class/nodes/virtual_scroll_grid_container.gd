@@ -240,7 +240,6 @@ var staggered: bool = false
 
 # Track the last focused card's virtual index so we can restore it after layout recalculations.
 var _last_focused_virtual_index: int = -1
-var _viewport_focus_connection: Viewport = null
 
 # Monotonically-increasing ID used to cancel stale deferred-focus requests.
 var _focus_request_id: int = 0
@@ -3888,19 +3887,18 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 			card.set_image_priority(card_visible)
 
 func _connect_focus_lock_viewport() -> void:
-	var viewport = get_viewport()
-	if not is_instance_valid(viewport):
+	# Hub connection: FocusSubManager re-emits the UI viewport's focus changes,
+	# so this survives dual-screen reparents without reconnecting.
+	var hub := FocusSubManager.get_instance()
+	if not hub:
 		return
-	if viewport.gui_focus_changed.is_connected(_on_viewport_focus_changed):
-		viewport.gui_focus_changed.disconnect(_on_viewport_focus_changed)
-	viewport.gui_focus_changed.connect(_on_viewport_focus_changed)
-	_viewport_focus_connection = viewport
+	if not hub.ui_focus_changed.is_connected(_on_viewport_focus_changed):
+		hub.ui_focus_changed.connect(_on_viewport_focus_changed)
 
 func _disconnect_focus_lock_viewport() -> void:
-	if _viewport_focus_connection and is_instance_valid(_viewport_focus_connection):
-		if _viewport_focus_connection.gui_focus_changed.is_connected(_on_viewport_focus_changed):
-			_viewport_focus_connection.gui_focus_changed.disconnect(_on_viewport_focus_changed)
-	_viewport_focus_connection = null
+	var hub := FocusSubManager.get_instance()
+	if hub and hub.ui_focus_changed.is_connected(_on_viewport_focus_changed):
+		hub.ui_focus_changed.disconnect(_on_viewport_focus_changed)
 
 func _reconnect_focus_lock_viewport() -> void:
 	_disconnect_focus_lock_viewport()
@@ -3989,6 +3987,22 @@ func _get_focused_virtual_index() -> int:
 			return node.get_meta("virtual_index", -1)
 		node = node.get_parent()
 	return -1
+
+## Public read of the focused card's virtual index (-1 when focus is outside
+## the grid). External callers (main.gd) use this instead of walking ancestors
+## for the virtual_index meta themselves.
+func get_focused_virtual_index() -> int:
+	return _get_focused_virtual_index()
+
+## Public focus-restore entry point: focus the card for `index` without
+## scrolling, with follow-focus suppression handled internally. No-op when the
+## card isn't in the buffer or isn't focusable.
+func restore_focus_to_index(index: int) -> void:
+	var card := get_card_at_index(index)
+	if not card or not is_instance_valid(card) or not card.is_inside_tree():
+		return
+	if card is Control and card.focus_mode != Control.FOCUS_NONE:
+		_apply_focus_to_card(card)
 
 func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> int:
 	"""Compute the target virtual index from a 2D row/column delta.
@@ -4508,10 +4522,10 @@ func _on_follow_focus_target_request(control: Control) -> float:
 		node = node.get_parent()
 	return _get_current_scroll_pos()
 
-func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0, focus_callback: Callable = Callable()):
+func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0):
 	if _scroll_container:
 		_reset_transient_scroll_state("scroll_to_index")
-		_scroll_container.scroll_to(int(get_centered_scroll_for_index(index)), animate, duration_multiplier, focus_callback)
+		_scroll_container.scroll_to(int(get_centered_scroll_for_index(index)), animate, duration_multiplier)
 
 func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multiplier: float = 1.0) -> void:
 	"""Scroll to an item and focus it, honoring the focus-centering mode."""
@@ -4555,18 +4569,23 @@ func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
 	"""Wait until the card for `index` exists, then grab focus."""
 	if request_id != _focus_request_id:
 		return
+	if _pending_focus_index != index:
+		# Focused already, superseded by a newer request, or cancelled.
+		return
 
 	var card := get_card_at_index(index)
 	if card and is_instance_valid(card) and card.is_inside_tree():
 		_apply_focus_to_card(card)
 		return
 
-	# The card may not exist until the scroll value change is processed; retry briefly.
-	if attempt < 5:
+	# The card may not enter the buffer until the scroll passes its row, which
+	# can take seconds on long animated jumps. Keep waiting while this request's
+	# scroll is in flight; the _process settle backstop performs the final focus
+	# and lifts follow-focus suppression once the scroll ends.
+	var in_flight := _scroll_container != null and _scroll_container.is_scrolling()
+	if in_flight or attempt < 5:
 		await get_tree().process_frame
 		_deferred_focus_index(index, request_id, attempt + 1)
-	else:
-		_pending_focus_index = -1
 
 func _restore_focus_only(index: int) -> void:
 	"""Re-grab focus on the card for `index` without changing the scroll

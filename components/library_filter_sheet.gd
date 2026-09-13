@@ -138,13 +138,13 @@ func dismiss() -> void:
 	# deferred grab back into the still-visible sheet, so keep it suppressed
 	# until the dismissal completes; the built-in post-animation restore is
 	# disabled for this dismiss and re-armed afterwards for the next open.
-	M3Overlay._suppress_focus_pullback = true
+	M3Overlay.push_focus_pullback_suppression()
 	_restore_focus_on_dismiss = false
 	if UIManager:
 		UIManager.restore_focus(_summoner_focus, _focus_restore_fallback)
 	super.dismiss()
 	dismissed.connect(func():
-		M3Overlay._suppress_focus_pullback = false
+		M3Overlay.pop_focus_pullback_suppression()
 		_restore_focus_on_dismiss = true, CONNECT_ONE_SHOT | CONNECT_DEFERRED)
 
 func _update_clear_button() -> void:
