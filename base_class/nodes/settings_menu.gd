@@ -30,10 +30,17 @@ func _init() -> void:
 	setting_changed.connect(func(_value, _setting): _update_visibility())
 
 func _ready() -> void:
+	call_deferred("_reevaluate_compact")
+
+func _enter_tree() -> void:
 	# Live re-tier when the viewport crosses the small breakpoint (incl. DS
-	# swaps while a settings page is open).
+	# swaps while a settings page is open). Connect on every tree entry, not
+	# just _ready: settings pages are cached and remove_child/add_child'd on
+	# category switches, and _ready only runs once per node lifetime, so a
+	# reconnect here is the only way the connection survives page caching.
 	if SystemManager.display and not SystemManager.display.viewport_size_changed.is_connected(_reevaluate_compact):
 		SystemManager.display.viewport_size_changed.connect(_reevaluate_compact)
+	# Heal any fold transition missed while disconnected.
 	call_deferred("_reevaluate_compact")
 
 func _exit_tree() -> void:

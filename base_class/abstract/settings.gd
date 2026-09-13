@@ -34,6 +34,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 ]
 @export var resolution := SettingsVar.new(Type.ARRAY,resolutions[0],State.ENABLED, "Windowed Resolution:", "", 0.0, 1.0, 0.1, resolutions)
 @export var dual_screen_mode := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Dual Screen Mode", "Automatically use second display for hero image when available")
+@export var ui_font := SettingsVar.new(Type.PATH, "", State.ENABLED, "Interface Font", "Custom variable-weight font for the interface; leave empty to use the built-in M PLUS 1", 0.0, 1.0, 0.1, [], false, {"dialog": "file", "filters": ["*.ttf ; TrueType Font", "*.otf ; OpenType Font", "*.woff2 ; WOFF2 Font"]})
 
 # Internal DS screen swap state (managed by AynThorManager)
 @export var dual_screen_swapped := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Dual Screen Swapped")
@@ -104,6 +105,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export_subgroup("Library Appearance")
 # General layout settings (always visible)
 @export var dark_mode := _preset(SettingsVar.new(Type.BOOL, true, State.ENABLED, "Dark Mode", "Use dark colors for the Material 3 interface"))
+@export var frosted_look := _preset(SettingsVar.new(Type.BOOL, false, State.ENABLED, "Frosted Look", "Blur the backdrop behind cards, dialogs and sheets, tinted with the current theme colors"))
 @export var library_layout_mode := _preset(SettingsVar.new(Type.ARRAY, 0, State.INTERNAL, "Layout Mode", "How game cards are arranged in the library", 0.0, 2.0, 1.0, ["Grid", "List", "Carousel"]))
 @export var library_grid_vertical := _preset(SettingsVar.new(Type.BOOL, true, State.INTERNAL, "Grid Vertical", "Scroll grid vertically (true) or horizontally (false)"))
 @export var library_pagination_view := _preset(SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Pagination View", "Split the grid into viewport-sized pages with a gap in the scroll direction instead of a continuous scrolling list"))

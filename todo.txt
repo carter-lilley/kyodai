@@ -7,9 +7,8 @@ ship w music
 update notification all in one 
 tst emulator app update flow on android
 download copying step (for sd cards on android)
-change global font to variable weight
-https://godotshaders.com/shader/vibrancy-backdrop-blurred-frosted-canvas-items/
-make skeltons real skeletons
+Docs: there is no docs/ folder and no AGENTS.md; todo.txt
+0.5 RomM server-deletion reconciliation	Still valid — sync only upserts; nothing deletes games removed server-side (sync_sub_manager.gd:1027)
 submenus still suck
 low-power save-sync subprocess to run behind games 'added to steam'?
 text on no-covers in no-text mode

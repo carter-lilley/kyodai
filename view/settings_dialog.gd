@@ -22,6 +22,10 @@ var _right_content: Control
 var _category_buttons: Dictionary[String, M3Button] = {}
 var _category_contents: Dictionary[String, Control] = {}
 var _current_category: String = ""
+# Remember how each category button was built (icon-only vs text) so the
+# sidebar can be rebuilt when the viewport crosses the compact breakpoint.
+var _category_button_specs: Dictionary = {}  # id -> {label, icon}
+var _sidebar_built_compact: bool = false
 
 # Built-in ScrollContainer.follow_focus binds to the viewport at
 # NOTIFICATION_READY and never re-binds, so it dies when the dialog is
@@ -246,6 +250,8 @@ func _build_categories() -> void:
 
 func _add_category_button(id: String, label: String, icon: String, target: Container = null) -> void:
 	var parent: Container = target if target else _left_pane
+	_category_button_specs[id] = {"label": label, "icon": icon, "target": target}
+	_sidebar_built_compact = _is_compact_sidebar()
 	var btn: M3Button
 	if _is_compact_sidebar():
 		var icon_btn = M3IconButton.new()
@@ -547,6 +553,12 @@ func on_viewport_settled() -> void:
 
 func _apply_scale() -> void:
 	var compact := _is_compact_sidebar()
+	# The icon-only vs text button choice is made at build time; when the
+	# viewport crosses the compact breakpoint while the dialog is alive,
+	# rebuild the sidebar buttons in the other mode.
+	if not _category_button_specs.is_empty() and compact != _sidebar_built_compact:
+		_rebuild_category_buttons()
+	
 	if is_instance_valid(_left_pane):
 		_left_pane.add_theme_constant_override("separation", int(M3Units.dp(4)))
 	if is_instance_valid(_left_column):
@@ -572,6 +584,43 @@ func _apply_scale() -> void:
 			content.add_theme_constant_override("margin_top", M3Units.dp(content_margin))
 			content.add_theme_constant_override("margin_right", M3Units.dp(content_margin))
 			content.add_theme_constant_override("margin_bottom", M3Units.dp(content_margin))
+
+func _rebuild_category_buttons() -> void:
+	"""Rebuild sidebar buttons in the opposite compact mode, preserving order
+	and the current selection highlight."""
+	var ordered_ids: Array = []
+	var parent: Container = _left_pane
+	for child in _left_pane.get_children():
+		for id in _category_buttons.keys():
+			if _category_buttons[id] == child:
+				ordered_ids.append(id)
+	# Fallback if the parent walk missed anything.
+	for id in _category_button_specs.keys():
+		if id not in ordered_ids:
+			ordered_ids.append(id)
+
+	for id in ordered_ids:
+		var old_btn: M3Button = _category_buttons.get(id)
+		var spec: Dictionary = _category_button_specs[id]
+		var target: Container = spec.get("target")
+		var insert_parent: Container = target if target else parent
+		var insert_index := -1
+		if is_instance_valid(old_btn):
+			insert_index = old_btn.get_index()
+			insert_parent.remove_child(old_btn)
+			old_btn.queue_free()
+		_category_buttons.erase(id)
+		_add_category_button(id, spec["label"], spec["icon"], target)
+		var new_btn: M3Button = _category_buttons[id]
+		if insert_index >= 0:
+			insert_parent.move_child(new_btn, mini(insert_index, insert_parent.get_child_count() - 1))
+		# Restore selection highlight.
+		if id == _current_category:
+			if new_btn is M3IconButton:
+				new_btn.icon_button_variant = M3IconButton.IconVariant.TONAL
+			else:
+				new_btn.button_variant = M3Button.Variant.TONAL
+	_sidebar_built_compact = _is_compact_sidebar()
 
 func _refresh_theme_recursive(node: Node) -> void:
 	if node.has_method("refresh_theme"):

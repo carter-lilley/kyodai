@@ -22,9 +22,6 @@ const ANDROID_BATTERY_STATUS_PATH := "/sys/class/power_supply/battery/status"
 const ANDROID_NET_IFACES_PATH := "/sys/class/net"
 const ANDROID_PROC_WIRELESS_PATH := "/proc/net/wireless"
 
-const CLOCK_FONT_PATH := "res://assets/fonts/MPLUS1-VariableFont_wght.ttf"
-# OpenType 'wght' tag (0x77676874); M PLUS 1 supports 100-900.
-const OPENTYPE_TAG_WGHT: int = 0x77676874
 const CLOCK_FONT_WEIGHT: int = 850
 
 enum PowerState { UNKNOWN, ON_BATTERY, NO_BATTERY, CHARGING, CHARGED }
@@ -48,10 +45,7 @@ var _clock_font: FontVariation = null
 
 
 static func _create_clock_font() -> FontVariation:
-	var variation := FontVariation.new()
-	variation.base_font = load(CLOCK_FONT_PATH)
-	variation.variation_opentype = {OPENTYPE_TAG_WGHT: CLOCK_FONT_WEIGHT}
-	return variation
+	return M3Theme.get_font_at_weight(CLOCK_FONT_WEIGHT)
 
 
 func _ready() -> void:
@@ -124,6 +118,7 @@ func _ready() -> void:
 
 
 func refresh_theme() -> void:
+	_clock_font = null
 	_apply_colors()
 
 

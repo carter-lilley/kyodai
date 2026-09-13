@@ -112,6 +112,10 @@ func _on_apply_preset_end() -> void:
 	var dark_mode_setting = DataManager.get_setting("dark_mode")
 	if dark_mode_setting:
 		_apply_dark_mode(dark_mode_setting.value)
+	# Apply frosted look in case it changed during preset
+	var frosted_setting = DataManager.get_setting("frosted_look")
+	if frosted_setting and frosted_setting.value is bool:
+		M3Theme.frosted_look = frosted_setting.value
 	# Apply primary color in case it changed during preset
 	var primary_color_setting = DataManager.get_setting("library_primary_color")
 	if primary_color_setting and primary_color_setting.value is Color:

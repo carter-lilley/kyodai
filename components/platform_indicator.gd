@@ -36,6 +36,21 @@ func _ready():
 	z_index = 5
 	_setup_ui()
 
+func _enter_tree():
+	# The control's own NOTIFICATION_RESIZED only fires when its rect changes;
+	# a window resize that leaves the rect unchanged (or that the grid's recalc
+	# skips) would never re-tier the buttons. Listen to the debounced viewport
+	# signal as well so the tier always follows the real window size.
+	if SystemManager.display and not SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
+		SystemManager.display.viewport_size_changed.connect(_on_viewport_size_changed)
+
+func _exit_tree():
+	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_on_viewport_size_changed):
+		SystemManager.display.viewport_size_changed.disconnect(_on_viewport_size_changed)
+
+func _on_viewport_size_changed(_new_size: Vector2) -> void:
+	_request_layout_recompute()
+
 func _setup_ui():
 	var hbox = HBoxContainer.new()
 	hbox.name = "MainContainer"
@@ -67,21 +82,33 @@ func _setup_ui():
 	_search_button.badge_icon_font = "ControllerIcons"
 	hbox.add_child(_search_button)
 	
-	# Resize debounce timer
-	_resize_debounce_timer = Timer.new()
-	_resize_debounce_timer.name = "ResizeDebounceTimer"
-	_resize_debounce_timer.one_shot = true
-	_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_TIME
-	_resize_debounce_timer.timeout.connect(_apply_responsive_layout)
-	add_child(_resize_debounce_timer)
+	# Resize debounce timer (may already exist if a resize arrived pre-_ready)
+	if _resize_debounce_timer == null:
+		_resize_debounce_timer = Timer.new()
+		_resize_debounce_timer.name = "ResizeDebounceTimer"
+		_resize_debounce_timer.one_shot = true
+		_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_TIME
+		_resize_debounce_timer.timeout.connect(_apply_responsive_layout)
+		add_child(_resize_debounce_timer)
 	
 	# Build initial platform group once size is known
 	call_deferred("_apply_responsive_layout")
 
 func _notification(what: int):
 	if what == NOTIFICATION_RESIZED:
-		if _resize_debounce_timer != null:
-			_resize_debounce_timer.start()
+		_request_layout_recompute()
+
+func _request_layout_recompute() -> void:
+	# Lazily create the timer so resize notifications arriving before _setup_ui
+	# are not silently dropped.
+	if _resize_debounce_timer == null:
+		_resize_debounce_timer = Timer.new()
+		_resize_debounce_timer.name = "ResizeDebounceTimer"
+		_resize_debounce_timer.one_shot = true
+		_resize_debounce_timer.wait_time = RESIZE_DEBOUNCE_TIME
+		_resize_debounce_timer.timeout.connect(_apply_responsive_layout)
+		add_child(_resize_debounce_timer)
+	_resize_debounce_timer.start()
 
 func _apply_responsive_layout() -> void:
 	var available_width := size.x

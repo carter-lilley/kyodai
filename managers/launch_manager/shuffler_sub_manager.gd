@@ -1250,7 +1250,7 @@ func _is_process_running_async(pid: int) -> bool:
 	return await LaunchManager.process.is_running_async(pid)
 
 func _send_udp_command(host: String, port: int, command: String) -> void:
-	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)
+	var address := _resolve_host(host)
 	if address.is_empty():
 		push_error("[ShufflerSubManager] Failed to resolve host: " + host)
 		return
@@ -1263,8 +1263,15 @@ func _send_udp_command(host: String, port: int, command: String) -> void:
 	udp.put_packet(command.to_utf8_buffer())
 	udp.close()
 
+func _resolve_host(host: String) -> String:
+	if host == "localhost":
+		return "127.0.0.1"
+	if host.is_valid_ip_address():
+		return host
+	return IP.resolve_hostname(host, IP.TYPE_IPV4)
+
 func _send_tcp_command(host: String, port: int, command: String) -> void:
-	var address := IP.resolve_hostname(host, IP.TYPE_IPV4)
+	var address := _resolve_host(host)
 	var tcp = StreamPeerTCP.new()
 	var err = tcp.connect_to_host(address, port)
 	if err != OK:
@@ -1280,7 +1287,17 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 		push_error("[ShufflerSubManager] TCP connection timed out to " + host + ":" + str(port))
 		return
 
-	tcp.put_data((command + "\n").to_utf8_buffer())
+	var data := (command + "\n").to_utf8_buffer()
+	var sent := 0
+	while sent < data.size():
+		var result: Array = tcp.put_partial_data(data.slice(sent))
+		if result[0] != OK:
+			push_error("[ShufflerSubManager] TCP put_data failed (err=" + str(result[0]) + ") sending: " + command)
+			tcp.disconnect_from_host()
+			return
+		sent += result[1]
+		if sent < data.size():
+			await get_tree().process_frame
 
 	await get_tree().create_timer(0.1).timeout
 	tcp.disconnect_from_host()

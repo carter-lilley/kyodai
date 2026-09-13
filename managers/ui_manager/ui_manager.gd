@@ -2,6 +2,8 @@ extends Manager
 
 const DEBUG_LOG: bool = false
 
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
+
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.
 
@@ -175,10 +177,20 @@ func initialize(
 	if dark_mode_setting:
 		theme._apply_dark_mode(dark_mode_setting.value)
 
+	# Apply frosted look setting on startup
+	var frosted_setting = DataManager.get_setting("frosted_look")
+	if frosted_setting and frosted_setting.value is bool:
+		M3Theme.frosted_look = frosted_setting.value
+
 	# Apply primary color setting on startup
 	var primary_color_setting = DataManager.get_setting("library_primary_color")
 	if primary_color_setting and primary_color_setting.value is Color:
 		M3Theme.set_primary_seed(primary_color_setting.value)
+
+	# Apply custom interface font on startup
+	var ui_font_setting = DataManager.get_setting("ui_font")
+	if ui_font_setting and ui_font_setting.value is String and not ui_font_setting.value.is_empty():
+		_apply_ui_font(ui_font_setting.value)
 
 	# Apply focus ring animation settings on startup
 	var focus_movement_setting = DataManager.get_setting("library_focus_movement_anim")
@@ -658,6 +670,24 @@ func _on_apply_preset_end() -> void:
 	# Theme/layout may have created new focusable controls; re-apply lock if needed.
 	call_deferred("refresh_focus_lock_state")
 
+var _persisting_ui_font_path: bool = false
+
+func _apply_ui_font(path: String) -> void:
+	"""Point M3Theme's font endpoint at the user's font, empty restores default."""
+	if path.is_empty():
+		M3Theme.set_custom_font("")
+		return
+	# Resolve/import content:// URIs (Android file picker) to a durable real path
+	var effective_path: String = FSM.import_content_file(path, "user://fonts/")
+	if effective_path != path and not _persisting_ui_font_path:
+		# Persist the usable path back to the setting (re-emits setting_changed)
+		_persisting_ui_font_path = true
+		var ui_font_setting = DataManager.get_setting("ui_font")
+		if ui_font_setting:
+			DataManager.set_setting(effective_path, ui_font_setting)
+		_persisting_ui_font_path = false
+	M3Theme.set_custom_font(effective_path)
+
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes.
 
@@ -696,6 +726,14 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 				if not theme._preset_in_progress:
 					EffectThemeAdapter.on_dark_mode_changed(_value)
 			theme._apply_dark_mode(_value)
+		"frosted_look":
+			if _value is bool:
+				M3Theme.frosted_look = _value
+				theme._request_theme_refresh()
+		"ui_font":
+			if _value is String:
+				_apply_ui_font(_value)
+				theme._request_theme_refresh()
 		"library_primary_color":
 			M3Theme.set_primary_seed(_value)
 			theme._request_theme_refresh()

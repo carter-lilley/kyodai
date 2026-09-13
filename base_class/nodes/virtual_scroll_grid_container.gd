@@ -756,13 +756,21 @@ func _on_display_size_changed(_new_size: Vector2):
 		_visual_layer.position = Vector2.ZERO
 		_visual_layer.size = get_viewport_rect().size
 
-	# Ignore resize events that don't actually change this container's size.
-	var new_size = Vector2(size.x, size.y)
-	if is_equal_approx(new_size.x, _last_resized_size.x) and is_equal_approx(new_size.y, _last_resized_size.y):
-		return
+	# Dedupe on the signal's viewport size, not this container's local rect:
+	# display_sub_manager sometimes emits immediately (DS swap, fullscreen
+	# toggle) before the container system has propagated the new rect, and a
+	# local-size check would early-out against the stale rect with no retry.
+	var viewport_changed: bool = not (is_equal_approx(_new_size.x, _last_viewport_arg_size.x) and is_equal_approx(_new_size.y, _last_viewport_arg_size.y))
+	_last_viewport_arg_size = _new_size
 
-	# Ignore tiny size jitters that don't meaningfully affect layout.
-	if abs(new_size.x - _last_resized_size.x) < RESIZE_IGNORE_DELTA and abs(new_size.y - _last_resized_size.y) < RESIZE_IGNORE_DELTA:
+	var new_size = Vector2(size.x, size.y)
+	var local_changed: bool = not (abs(new_size.x - _last_resized_size.x) < RESIZE_IGNORE_DELTA and abs(new_size.y - _last_resized_size.y) < RESIZE_IGNORE_DELTA)
+
+	# Skip only when neither the viewport nor our rect moved. When in doubt,
+	# run: _on_resize_debounced re-derives the deterministic available size
+	# from the viewport (not the possibly-stale local rect), and the recalc's
+	# input-cache early-exit absorbs redundant passes.
+	if not viewport_changed and not local_changed:
 		return
 
 	_last_resized_size = new_size
@@ -937,7 +945,11 @@ func _refresh_cached_settings() -> void:
 		_last_layout_media_aspect_ratio = state.media_aspect_ratio
 
 var _last_resized_size: Vector2 = Vector2.ZERO
+var _last_viewport_arg_size: Vector2 = Vector2.ZERO
 var _is_recalculating_layout: bool = false
+# Set when a resize arrives mid-recalc; consumed with one deferred follow-up
+# pass when the current recalc finishes, so no resize is ever dropped.
+var _resize_pending: bool = false
 
 # During zoom/layout transitions, ScrollContainer may clamp its scroll value and
 # emit a signal that reaches _on_scroll_value_changed() *after* _recalculate_layout()
@@ -1012,8 +1024,10 @@ func _on_resize_debounced():
 			_log_parent_chain_sizes()
 	if startup_layout_suppressed:
 		return
-	# Prevent re-entrant layout recalculations.
+	# Prevent re-entrant layout recalculations. Don't drop the resize: flag it
+	# and let the in-flight recalc run one deferred follow-up pass.
 	if _is_recalculating_layout:
+		_resize_pending = true
 		return
 
 	# Update the cached size so later viewport_size_changed events can de-duplicate.
@@ -1885,11 +1899,22 @@ func _calculate_snapped_ratio(desired_ratio: float) -> float:
 	var viewport_area = available.x * available.y
 	return _compute_ratio_for_items_per_line(_get_nearest_level_for_ratio(desired_ratio), base_dims, available, viewport_area)
 
+func _finish_recalculate() -> void:
+	"""Clear the recalc guard; if a resize arrived mid-pass, run one deferred
+	follow-up so the new size is never dropped."""
+	_is_recalculating_layout = false
+	if _resize_pending:
+		_resize_pending = false
+		call_deferred("_on_resize_debounced")
+
 func _recalculate_layout():
 	var start_us := Time.get_ticks_usec()
 	if startup_layout_suppressed:
 		return
 	if _is_recalculating_layout:
+		# A resize (or other recalc request) arrived mid-recalc. Flag it so the
+		# in-flight pass runs one deferred follow-up instead of dropping it.
+		_resize_pending = true
 		return
 	if not _flow_container or not _scroll_container:
 		return
@@ -1940,7 +1965,7 @@ func _recalculate_layout():
 
 	if current_zoom <= 0:
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
-		_is_recalculating_layout = false
+		_finish_recalculate()
 		return
 
 	base_card_size = base_dims
@@ -2035,7 +2060,7 @@ func _recalculate_layout():
 		# to one column. Both calls are idempotent and write-cached.
 		_update_layout()
 		_update_margin()
-		_is_recalculating_layout = false
+		_finish_recalculate()
 		return
 
 	# Update the input cache now that we know work is required
@@ -2184,7 +2209,7 @@ func _recalculate_layout():
 			if _card_has_update_media_panel_size:
 				card._update_media_panel_size(true)
 
-	_is_recalculating_layout = false
+	_finish_recalculate()
 	_update_visual_draw_order()
 	_ensure_pool_capacity()
 	# Rebuild spacer placement for the new page composition, then push the snap
