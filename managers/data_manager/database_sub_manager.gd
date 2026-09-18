@@ -7,8 +7,8 @@ const DB_PATH = "user://database/kyodai.db"
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Expected schema (table -> column -> DDL fragment). Single source of truth for
-## ensure_schema_alignment(), which ALTERs in missing columns at full-sync start.
-## A stale DB schema otherwise fails every affected statement silently.
+## ensure_schema_alignment(), which ALTERs in missing columns at DB open.
+## A stale DB schema otherwise fails every affected statement (logged only).
 const _EXPECTED_SCHEMA := {
 	"games": {
 		"id": "TEXT PRIMARY KEY", "romm_id": "INTEGER UNIQUE NOT NULL", "title": "TEXT NOT NULL",
@@ -180,6 +180,9 @@ func initialize_database() -> bool:
 	if _db.open_db():
 		_create_tables()
 		_is_db_ready = true
+		# Repair schema drift from older app versions immediately; waiting for
+		# a full sync leaves every statement touching new columns broken.
+		ensure_schema_alignment()
 		return true
 
 	push_error("[DatabaseManager] Failed to open database at " + DB_PATH)
@@ -333,7 +336,7 @@ func is_database_init_failed() -> bool:
 
 
 ## Verifies every expected column exists and ALTERs in any that are missing.
-## Called at full-sync start (nowhere else): the DB is a cache, and a stale
+## Called at DB open and at full-sync start: the DB is a cache, and a stale
 ## schema (e.g. from an older app version) makes every affected statement fail.
 func ensure_schema_alignment() -> bool:
 	if not _is_db_ready:
@@ -353,8 +356,11 @@ func ensure_schema_alignment() -> bool:
 	_db_unlock()
 	if not repaired.is_empty():
 		push_warning("[DatabaseManager] Schema drift repaired - added missing columns: " + ", ".join(repaired))
-		if SystemManager and SystemManager.notifications:
-			SystemManager.notifications.show_notification("Database schema updated (" + str(repaired.size()) + " missing columns added)", SystemManager.notifications.Type.WARNING)
+		# May run on the DB worker thread; marshal the notification to the main thread.
+		SystemManager.memory.queue_main_thread_callback(func():
+			if SystemManager and SystemManager.notifications:
+				SystemManager.notifications.show_notification("Database schema updated (" + str(repaired.size()) + " missing columns added)", SystemManager.notifications.Type.WARNING)
+		)
 	return true
 
 

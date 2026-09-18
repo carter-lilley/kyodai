@@ -1729,6 +1729,8 @@ func _notification(what: int) -> void:
 		if LaunchManager:
 			LaunchManager.clear_validation_cache()
 			LaunchManager.clear_stale_pending_launches()
+			if LaunchManager.update:
+				LaunchManager.update.on_app_resumed()
 		var platforms_view = UIManager.get_settings_dialog_platforms_view()
 		if platforms_view and platforms_view.has_method("refresh_cards"):
 			platforms_view.refresh_cards()

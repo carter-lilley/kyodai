@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://managers/launch_manager/shuffler_sub_manager.gd" id="9_shuffler"]
 [ext_resource type="Script" path="res://managers/launch_manager/gamenative_sub_manager.gd" id="10_gamenative"]
 [ext_resource type="Script" path="res://managers/launch_manager/m3u_sub_manager.gd" id="11_m3u"]
+[ext_resource type="Script" path="res://managers/launch_manager/update_sub_manager.gd" id="12_update"]
 
 [node name="LaunchManager" type="Node"]
 script = ExtResource("1_8h4fk")
@@ -44,3 +45,6 @@ script = ExtResource("10_gamenative")
 
 [node name="M3USubManager" type="Node" parent="."]
 script = ExtResource("11_m3u")
+
+[node name="UpdateSubManager" type="Node" parent="."]
+script = ExtResource("12_update")

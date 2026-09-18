@@ -37,7 +37,8 @@
 		"{emulator_dir}/settings.xml"
 	  ],
 	  "linux": [
-		"{emulator_dir}/portable/settings.xml"
+		"{emulator_dir}/portable/settings.xml",
+		"{emulator_dir}/settings.xml"
 	  ]
 	}
   },

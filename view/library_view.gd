@@ -46,6 +46,8 @@ func _exit_tree() -> void:
 			DataManager.sync_progress.disconnect(_on_sync_progress)
 	if is_instance_valid(SystemManager) and SystemManager.download and SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.disconnect(_on_download_completed)
+	if is_instance_valid(LaunchManager) and LaunchManager.update and LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+		LaunchManager.update.update_session_finished.disconnect(_on_update_session_finished)
 	if UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 	# The search overlay is created as an orphan; free it explicitly.
@@ -79,6 +81,8 @@ func _connect_signals() -> void:
 		DataManager.sync_progress.connect(_on_sync_progress)
 	if SystemManager and SystemManager.download and not SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.connect(_on_download_completed)
+	if LaunchManager and LaunchManager.update and not LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+		LaunchManager.update.update_session_finished.connect(_on_update_session_finished)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -674,6 +678,11 @@ func _on_database_failed(_error: String):
 	_update_status("Database unavailable - check storage permissions, then restart the app")
 
 func _on_download_completed(item_id: String, success: bool, _message: String):
+	# During an update-all session, emulator downloads complete in bursts and
+	# each one would reload the grid - the session's update_session_finished
+	# signal triggers one reload at the end instead.
+	if LaunchManager and LaunchManager.update and LaunchManager.update.is_session_active():
+		return
 	# Downloads don't change library membership or counts, so update the
 	# game's card in place: a full _load_total_count() tears down the buffer,
 	# resets scroll to top, and races focus restoration.
@@ -685,6 +694,10 @@ func _on_download_completed(item_id: String, success: bool, _message: String):
 		_on_game_updated(item.game_resource)
 	else:
 		_load_total_count()  # Unknown item: legacy full reload
+
+func _on_update_session_finished(_succeeded: Array, _failed: Array):
+	if DataManager and DataManager.is_database_ready():
+		_load_total_count()
 
 func _on_games_removed(_platform_slug: String):
 	_reload_after_change()

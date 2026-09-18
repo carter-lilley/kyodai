@@ -80,12 +80,13 @@ const DYNAMIC_CHUNK_MAX_ANDROID: int = 16 * 1024 * 1024
 
 # Per-file chunk concurrency caps for each download speed profile.
 # Index matches download_speed_profile value (Conservative=0, Balanced=1, Fast=2, Unrestricted=3).
+# Android: slightly below desktop parity for battery/heat on handhelds.
 const MAX_CONCURRENT_CHUNKS_PROFILES: Array[int] = [2, 4, 6, 10]
-const MAX_CONCURRENT_CHUNKS_ANDROID_PROFILES: Array[int] = [1, 2, 3, 4]
+const MAX_CONCURRENT_CHUNKS_ANDROID_PROFILES: Array[int] = [2, 4, 6, 8]
 
-# Overall concurrent downloads for each profile. Keep Android conservative.
+# Overall concurrent downloads for each profile. Android stays one notch below desktop.
 const MAX_CONCURRENT_DOWNLOADS_PROFILES: Array[int] = [2, 4, 6, 8]
-const MAX_CONCURRENT_DOWNLOADS_ANDROID_PROFILES: Array[int] = [1, 2, 3, 4]
+const MAX_CONCURRENT_DOWNLOADS_ANDROID_PROFILES: Array[int] = [1, 2, 4, 6]
 
 # In-place assembly writes chunks directly into the final sparse file at the
 # correct offset, eliminating the post-download reassembly pass.
@@ -383,15 +384,17 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 	if not (chunks_data is Array):
 		return
 
-	# Flush mode: chunks marked flushed live in the destination file. Verify its
+	# Flush mode: chunks marked flushed live in the destination file. Fetch its
 	# size once via the plugin (Godot can't stat SAF-restricted paths directly).
-	var flush_dest_ok := false
+	# The file grows lazily as chunks flush, so flushed chunks are trusted only
+	# when the file extends past their end byte.
+	var flush_dest_size := -1
 	if chunked_info.flush_mode:
 		var plugin = Engine.get_singleton("PackageChecker")
 		if plugin != null:
-			flush_dest_ok = int(plugin.call("androidFileSize", chunked_info.final_path)) == chunked_info.item.expected_file_size
-		if not flush_dest_ok:
-			print("[SystemManager.download] Flush-mode resume: destination missing/wrong size, flushed chunks will be re-downloaded")
+			flush_dest_size = int(plugin.call("androidFileSize", chunked_info.final_path))
+		if flush_dest_size < 0:
+			print("[SystemManager.download] Flush-mode resume: destination missing/unreadable, flushed chunks will be re-downloaded")
 
 	for chunk_state in chunks_data:
 		if not (chunk_state is Dictionary):
@@ -415,8 +418,9 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 
 			if chunked_info.flush_mode:
 				if chunk.flushed:
-					# Already written into the destination; trust the one-shot size check.
-					verified = flush_dest_ok
+					# Already written into the destination; trust it if the file
+					# extends past this chunk's end byte.
+					verified = chunk.end_byte < flush_dest_size
 					if not verified:
 						chunk.flushed = false
 				else:
@@ -1165,8 +1169,8 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 					# Also update the game resource if available
 					if item.game_resource:
 						item.game_resource.file_size = content_length
-				else:
-					print("[SystemManager.download] Warning: Server did not provide Content-Length for " + item.name + ", using expected size: " + str(item.expected_file_size))
+			else:
+				print("[SystemManager.download] Warning: Server did not provide Content-Length for " + item.name + ", using expected size: " + str(item.expected_file_size))
 
 			_start_chunked_download(item, headers)
 		else:
@@ -2376,7 +2380,8 @@ func _prepare_flush_destination(chunked_info: ChunkedDownloadInfo, file_size: in
 		return false
 	_ensure_flush_signal_connected()
 	var ok = plugin.call("prepareChunkedDestination", chunked_info.final_path, file_size)
-	return ok == true
+	# JNISingleton marshals Java boolean as int; use truthiness, not == true
+	return true if ok else false
 
 ## Asks the native plugin to write a completed chunk temp file into the
 ## destination at its byte offset. Runs async on a Java thread; completion
@@ -2396,7 +2401,7 @@ func _flush_chunk_async(item_id: String, chunk_index: int) -> void:
 	var token = item_id + "|" + str(chunk_index)
 	var absolute_chunk = ProjectSettings.globalize_path(chunk.temp_path)
 	var started = plugin.call("flushChunkAsync", absolute_chunk, chunked_info.final_path, chunk.start_byte, token)
-	if started != true:
+	if not started:
 		chunked_info.flushes_pending = maxi(0, chunked_info.flushes_pending - 1)
 		_on_chunk_flush_failed(item_id, chunk_index, "Failed to start chunk flush")
 

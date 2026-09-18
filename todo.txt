@@ -2,21 +2,14 @@
 
 xemu raw hdd save sync
 prewarm covers on random jump
-rework hero to also accept effect stacks
 ship w music
-update notification all in one 
-tst emulator app update flow on android
-x download copying step (for sd cards on android)
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-0.5 RomM server-deletion reconciliation	Still valid — sync only upserts; nothing deletes games removed server-side (sync_sub_manager.gd:1027)
-submenus still suck
 low-power save-sync subprocess to run behind games 'added to steam'?
-text on no-covers in no-text mode
 PCEE2?
 user-added emu jsons, resolvers(?) and shader layers. 
 filter by letter/recent
 
-x removing nav shortcut doesnt actually remove it? <- cant reproduce
+x removing nav shortcut doesnt actually remove it? <- cant reproduce?
 - universal extraction normalizer (walk down for expected files...saves & games)
 
 ## configs
@@ -38,7 +31,6 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	
 ## romm
  - xtra romm metadata - HL2B, x guides, logos..
- - x screenshots...& x user uploaded?
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)
@@ -58,7 +50,8 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce
 	'controls/info bar'
 	add letters to library navigation?
 	badge effect placement opts
-	
+
+rework hero to also accept effect stacks
 ## hero <- currently depreciated
 	postcard-style [[img] name ]
 	card/image/poster style

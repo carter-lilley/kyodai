@@ -413,7 +413,14 @@ func check_for_updates(callback: Callable, progress_callback: Callable = Callabl
 	if not DataManager:
 		callback.call([], [], [], {})
 		return
-	
+
+	# Wrap the caller's callback so all collected updates are triggered as one
+	# coordinated session (single aggregate snackbar) once every check settles.
+	var session_callback = func(updated: Array, up_to_date: Array, failed: Array, failed_details: Dictionary):
+		if not updated.is_empty() and launch_manager.update:
+			launch_manager.update.begin_session(updated)
+		callback.call(updated, up_to_date, failed, failed_details)
+
 	var version_setting = DataManager.get_setting("installed_emulator_versions")
 	var installed_versions = {}
 	if version_setting:
@@ -461,9 +468,8 @@ func check_for_updates(callback: Callable, progress_callback: Callable = Callabl
 		
 		# If installed but no version stored, force reinstall to get the actual version
 		if not installed_versions.has(emulator_id):
-			print("[RegistryManager] Emulator %s installed but no version stored - triggering reinstall" % emulator_id)
+			print("[RegistryManager] Emulator %s installed but no version stored - queueing reinstall" % emulator_id)
 			results.updated.append(emulator_id)
-			_trigger_emulator_update(emulator_id, emulator.get("name", emulator_id), platform_config)
 			continue
 		
 		var installed_version = installed_versions[emulator_id]
@@ -471,23 +477,23 @@ func check_for_updates(callback: Callable, progress_callback: Callable = Callabl
 		match action_type:
 			"download_scrape":
 				results.pending += 1
-				_check_scrape_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback, progress_callback)
+				_check_scrape_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, session_callback, progress_callback)
 			"download_repo":
 				results.pending += 1
-				_check_repo_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, callback, progress_callback)
+				_check_repo_update(emulator_id, emulator.get("name", emulator_id), installed_version, platform_config, results, session_callback, progress_callback)
 			"download_url":
 				# Hardcoded URL - can't check for updates automatically
 				results.up_to_date.append(emulator_id)
-	
+
 	# If nothing was pending and nothing was auto-updated, call callback immediately
 	if results.pending == 0 and results.updated.is_empty():
-		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
+		session_callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 		return
 
 	# Set total for progress tracking and fire initial progress
 	results.total = results.pending
 	if results.pending == 0:
-		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
+		session_callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 		return
 	if not progress_callback.is_null():
 		progress_callback.call(0, results.total)
@@ -502,7 +508,7 @@ func _check_updates_complete(results: Dictionary, callback: Callable, progress_c
 		callback.call(results.updated, results.up_to_date, results.failed, results.failed_details)
 
 ## Checks for a scrape-based update
-func _check_scrape_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
+func _check_scrape_update(emulator_id: String, _emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
 	var scrape_url = platform_config.get("scrape_url", "")
 	var version_pattern = platform_config.get("version_pattern", "")
 	var url_template = platform_config.get("url_template", "")
@@ -543,13 +549,11 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 				# Mixed formats - can't compare, assume update needed
 				results.updated.append(emulator_id)
 				print("[RegistryManager] " + emulator_id + " version format mismatch ('" + installed_version + "' vs '" + version + "'), assuming update needed")
-				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
 			else:
 				var comparison = _compare_versions(installed_version, version)
 				if comparison == -1 or comparison == 2:
 					# Update available or incomparable (treat as update)
 					results.updated.append(emulator_id)
-					_trigger_emulator_update(emulator_id, emulator_name, platform_config)
 				else:
 					results.up_to_date.append(emulator_id)
 			
@@ -559,7 +563,7 @@ func _check_scrape_update(emulator_id: String, emulator_name: String, installed_
 	)
 
 ## Checks for a repo-based update
-func _check_repo_update(emulator_id: String, emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
+func _check_repo_update(emulator_id: String, _emulator_name: String, installed_version: String, platform_config: Dictionary, results: Dictionary, callback: Callable, progress_callback: Callable = Callable()):
 	var github_repo = platform_config.get("github_repo", "")
 	var asset_pattern = platform_config.get("asset_pattern", "")
 	var release_tag = platform_config.get("release_tag", "")
@@ -632,7 +636,6 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 			
 			if update_available:
 				results.updated.append(emulator_id)
-				_trigger_emulator_update(emulator_id, emulator_name, platform_config)
 			else:
 				results.up_to_date.append(emulator_id)
 			
@@ -641,18 +644,21 @@ func _check_repo_update(emulator_id: String, emulator_name: String, installed_ve
 		api_base_url
 	)
 
-## Triggers re-installation of an emulator for update
-func _trigger_emulator_update(emulator_id: String, _emulator_name: String, _platform_config: Dictionary):
+## Triggers re-installation of an emulator for update.
+## Preserves user config files across the overwrite via the config guard
+## (desktop only; Android APK updates keep app-private data by design).
+func trigger_emulator_update(emulator_id: String):
 	print("[RegistryManager] Triggering update for: " + emulator_id)
-	
+
 	# Clear install progress to force fresh install
 	launch_manager.emulator._emulator_install_progress.erase(emulator_id)
-	
+
 	# Clear stored version so the first download step can save the new version
 	launch_manager.emulator._clear_emulator_version(emulator_id)
 	launch_manager.emulator._pending_emulator_version.erase(emulator_id)
 	launch_manager.emulator._force_install_step[emulator_id] = true
-	
+	launch_manager.emulator._begin_config_guard(emulator_id)
+
 	# Start installation from step 0
 	launch_manager.emulator._execute_install_step(emulator_id, 0)
 

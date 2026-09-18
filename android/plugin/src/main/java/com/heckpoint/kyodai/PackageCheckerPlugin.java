@@ -1194,9 +1194,12 @@ public class PackageCheckerPlugin extends GodotPlugin {
     private java.util.concurrent.ExecutorService chunkFlushExecutor = null;
 
     /**
-     * Probes whether a destination supports positioned writes and preallocates
-     * it to the expected size. Returns false if chunked flush mode cannot be
-     * used (caller falls back to temp-dir assembly + final copy).
+     * Probes whether a destination supports positioned writes. Shrinks stale
+     * oversized leftovers (instant), but never eagerly extends: growing a
+     * file zero-fills the gap on exFAT/FUSE, which can block for minutes on
+     * multi-GB files. Positioned flush writes grow the file lazily instead.
+     * Returns false if chunked flush mode cannot be used (caller falls back
+     * to temp-dir assembly + final copy).
      */
     @UsedByGodot
     public boolean prepareChunkedDestination(String destPath, long totalSize) {
@@ -1211,8 +1214,14 @@ public class PackageCheckerPlugin extends GodotPlugin {
             }
             if (parent != null && parent.canWrite()) {
                 java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
-                if (totalSize > 0) {
+                if (totalSize > 0 && raf.length() > totalSize) {
                     raf.setLength(totalSize);
+                }
+                // Fresh file: prove beyond-EOF positioned writes with a cheap
+                // small-offset write (chunk 0 overwrites this byte anyway).
+                if (raf.length() == 0) {
+                    raf.seek(Math.min(Math.max(totalSize - 1, 0), 1024));
+                    raf.write(0);
                 }
                 raf.close();
                 return true;
@@ -1227,22 +1236,28 @@ public class PackageCheckerPlugin extends GodotPlugin {
                 if (pfd == null) {
                     return false;
                 }
-                // Positioned write at the last byte both preallocates and
-                // verifies the provider supports random access.
-                if (totalSize > 0) {
-                    java.nio.channels.FileChannel channel =
-                            new FileOutputStream(pfd.getFileDescriptor()).getChannel();
-                    channel.position(totalSize - 1);
-                    channel.write(java.nio.ByteBuffer.allocate(1));
-                    channel.close();
+                java.nio.channels.FileChannel channel =
+                        new FileOutputStream(pfd.getFileDescriptor()).getChannel();
+                long size = channel.size();
+                if (totalSize > 0 && size > totalSize) {
+                    channel.truncate(totalSize);
                 }
+                if (size == 0) {
+                    channel.position(Math.min(Math.max(totalSize - 1, 0), 1024));
+                    channel.write(java.nio.ByteBuffer.allocate(1));
+                }
+                channel.close();
                 pfd.close();
                 return true;
             }
             // Last resort: plain direct access
             java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
-            if (totalSize > 0) {
+            if (totalSize > 0 && raf.length() > totalSize) {
                 raf.setLength(totalSize);
+            }
+            if (raf.length() == 0) {
+                raf.seek(Math.min(Math.max(totalSize - 1, 0), 1024));
+                raf.write(0);
             }
             raf.close();
             return true;

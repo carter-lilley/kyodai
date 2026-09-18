@@ -1253,12 +1253,16 @@ func upload_screenshot(rom_id: int, file_path: String, callback: Callable = Call
 	file.close()
 
 	var boundary = "----KyodaiBoundary" + str(Time.get_ticks_msec())
-	var file_name = file_path.get_file()
+	var file_name = _screenshot_upload_filename(file_path, file_data)
+	if file_name == "":
+		if callback.is_valid():
+			callback.call({}, "Unsupported image type: " + file_path)
+		return
 
 	var body = PackedByteArray()
 	body.append_array(("--" + boundary + "\r\n").to_utf8_buffer())
 	body.append_array(("Content-Disposition: form-data; name=\"screenshotFile\"; filename=\"" + file_name + "\"\r\n").to_utf8_buffer())
-	body.append_array("Content-Type: application/octet-stream\r\n\r\n".to_utf8_buffer())
+	body.append_array(("Content-Type: " + _screenshot_upload_mime_type(file_name.get_extension().to_lower()) + "\r\n\r\n").to_utf8_buffer())
 	body.append_array(file_data)
 	body.append_array(("\r\n--" + boundary + "--\r\n").to_utf8_buffer())
 
@@ -1315,6 +1319,50 @@ func upload_screenshot(rom_id: int, file_path: String, callback: Callable = Call
 		if callback.is_valid():
 			callback.call(json.data if json.data is Dictionary else {}, "")
 	)
+
+## Ensures the uploaded filename carries an extension RomM accepts. Android
+## content:// URIs resolve to names without one, so sniff magic bytes and
+## append the matching extension. Returns "" if the type is unsupported.
+func _screenshot_upload_filename(file_path: String, file_data: PackedByteArray) -> String:
+	const ALLOWED_EXTS := ["avif", "bmp", "gif", "jpeg", "jpg", "png", "tif", "tiff", "webp"]
+	var file_name := file_path.get_file()
+	if file_name == "":
+		file_name = "screenshot"
+	var ext := file_name.get_extension().to_lower()
+	if ALLOWED_EXTS.has(ext):
+		return file_name
+	var sniffed := _sniff_image_extension(file_data)
+	if sniffed == "":
+		return ""
+	return file_name + "." + sniffed
+
+func _sniff_image_extension(data: PackedByteArray) -> String:
+	if data.size() >= 8 and data.slice(0, 8) == PackedByteArray([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]):
+		return "png"
+	if data.size() >= 3 and data[0] == 0xFF and data[1] == 0xD8 and data[2] == 0xFF:
+		return "jpg"
+	if data.size() >= 6 and data.slice(0, 3) == PackedByteArray([0x47, 0x49, 0x46]):
+		return "gif"
+	if data.size() >= 12 and data.slice(0, 4).get_string_from_ascii() == "RIFF" and data.slice(8, 12).get_string_from_ascii() == "WEBP":
+		return "webp"
+	if data.size() >= 2 and data.slice(0, 2).get_string_from_ascii() == "BM":
+		return "bmp"
+	if data.size() >= 4 and (data.slice(0, 4) == PackedByteArray([0x49, 0x49, 0x2A, 0x00]) or data.slice(0, 4) == PackedByteArray([0x4D, 0x4D, 0x00, 0x2A])):
+		return "tif"
+	if data.size() >= 12 and data.slice(4, 8).get_string_from_ascii() == "ftyp" and ["avif", "avis"].has(data.slice(8, 12).get_string_from_ascii()):
+		return "avif"
+	return ""
+
+func _screenshot_upload_mime_type(ext: String) -> String:
+	match ext:
+		"png": return "image/png"
+		"jpg", "jpeg": return "image/jpeg"
+		"gif": return "image/gif"
+		"webp": return "image/webp"
+		"bmp": return "image/bmp"
+		"tif", "tiff": return "image/tiff"
+		"avif": return "image/avif"
+	return "application/octet-stream"
 
 
 ## Fetch remote saves for a ROM

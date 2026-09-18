@@ -31,6 +31,11 @@ var _sync_final_callback: Callable = Callable()
 var _sync_force_full: bool = false          # Force full sync flag
 var _sync_current_updated_after: String = ""  # updated_after timestamp for current platform
 
+# Server-deletion reconciliation state (full syncs only)
+var _sync_seen_ids: Array = []               # romm_ids seen in current platform's full sync
+var _sync_platform_fully_enumerated: bool = false  # Current platform enumerated without errors
+var _sync_total_removed: int = 0             # Games removed by reconciliation this sync
+
 # Progress tracking state
 var _sync_current: int = 0
 var _sync_total: int = 0
@@ -249,6 +254,9 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_final_callback = callback
 	_sync_force_full = force_full_sync
 	_sync_current_updated_after = ""
+	_sync_seen_ids = []
+	_sync_platform_fully_enumerated = false
+	_sync_total_removed = 0
 
 	# Reset cover download tracking
 	_sync_covers_mutex.lock()
@@ -415,6 +423,8 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		_sync_state = SyncState.PLATFORM_FETCHING
 		_sync_current_offset = 0
 		_sync_current_synced = 0
+		_sync_seen_ids = []
+		_sync_platform_fully_enumerated = false
 		_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 
 		var platform_complete = false
@@ -468,6 +478,10 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 					if _sync_current_updated_after != "":
 						_sync_current += _sync_precalc_platform_total
 						_defer_on_main("_update_sync_fg_service", [platform.name, _sync_current, _sync_total])
+					else:
+						# Full sync with zero server games is a complete
+						# enumeration: every local row for this platform is stale.
+						_sync_platform_fully_enumerated = true
 
 					var current_time = Time.get_datetime_string_from_system(true)
 					_set_last_sync_time_sync(platform.slug, current_time)
@@ -481,6 +495,14 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 			_sync_current_total = total
 			_sync_platform_total = total
+
+			# Full syncs enumerate every server-side romm_id for this platform;
+			# track them so reconciliation can delete locally-stale rows after
+			# the platform completes. Incremental syncs can't see deletions.
+			if _sync_current_updated_after == "":
+				for item in items:
+					if item is Dictionary:
+						_sync_seen_ids.append(int(item.get("id", 0)))
 
 			# Start fetching next batch in parallel while we process this one
 			var next_offset = _sync_current_offset + batch_size
@@ -526,6 +548,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 			if _sync_current_synced >= _sync_current_total:
 				var current_time = Time.get_datetime_string_from_system(true)
 				_set_last_sync_time_sync(platform.slug, current_time)
+				_sync_platform_fully_enumerated = true
 				platform_complete = true
 			else:
 				_sync_current_offset += batch_size
@@ -533,6 +556,12 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				OS.delay_usec(10000)  # 10ms yield to prevent blocking and reduce CPU
 
 		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
+
+		# Server-deletion reconciliation: only safe after a complete full
+		# enumeration of this platform (incremental syncs never see deletions,
+		# and a partial/failed sync must not delete anything).
+		if _sync_current_updated_after == "" and _sync_platform_fully_enumerated:
+			_sync_total_removed += _reconcile_platform_deletions(platform.slug)
 
 	# 7. Drain any covers still queued or in flight from the interleaved
 	#    dispatch. Silent (no visible phase) and timeout-guarded so a stalled
@@ -547,14 +576,14 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	var cache_stats = SystemManager.network.get_and_reset_cache_stats()
 	var games_from_cache = cache_stats.get("games_from_cache", 0)
 
-	print("[SyncThread] Sync complete: %d games synced, %d from cache" % [_sync_total_synced, games_from_cache])
+	print("[SyncThread] Sync complete: %d games synced, %d from cache, %d removed" % [_sync_total_synced, games_from_cache, _sync_total_removed])
 
 	# Defer the entire completion sequence to main thread
 	# This avoids calling scene-tree methods from the sync thread
-	_defer_on_main("_complete_sync_on_main_thread", [_sync_total_synced, games_from_cache])
+	_defer_on_main("_complete_sync_on_main_thread", [_sync_total_synced, games_from_cache, _sync_total_removed])
 
 
-func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
+func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int, total_removed: int = 0):
 	"""Complete sync on main thread - safe for UI operations."""
 	print("[Sync] Completing on main thread...")
 
@@ -570,6 +599,8 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int):
 	# Apply cover folding and emit completion
 	data_manager.cover.apply_cover_folding_to_database(func(folded_count: int):
 		var completion_msg = "Synced " + str(total_synced) + " games"
+		if total_removed > 0:
+			completion_msg += ", removed " + str(total_removed) + " deleted"
 		if games_from_cache > 0:
 			completion_msg += " (" + str(games_from_cache) + " checked from cache"
 			if folded_count > 0:
@@ -821,6 +852,137 @@ func _remove_platform_sync_threaded(platform_slug: String) -> bool:
 		print("[SyncThread] ERROR: Timeout removing platform %s" % platform_slug)
 		return false
 	return result if result is bool else false
+
+
+# ==================== SERVER-DELETION RECONCILIATION ====================
+
+func _reconcile_platform_deletions(platform_slug: String) -> int:
+	"""Sync thread: delete local rows whose romm_id the server no longer lists
+	for this platform. Only call after a COMPLETE full enumeration - partial or
+	incremental syncs must never trigger deletes. Returns the number removed."""
+	if not data_manager.database.is_database_ready():
+		return 0
+
+	var seen_ids = _sync_seen_ids.duplicate()
+	var result = _wait_for_async(func(callback: Callable):
+		MemorySubManager.queue_db_task(
+			func():
+				data_manager.database.lock()
+				var info = _delete_server_removed_games(platform_slug, seen_ids)
+				data_manager.database.unlock()
+				return info,
+			func(info: Dictionary):
+				callback.call(info)
+		)
+	, 120000)
+
+	if result == null or not (result is Dictionary):
+		print("[SyncThread] ERROR: Timeout reconciling platform %s - nothing deleted" % platform_slug)
+		return 0
+
+	var count: int = result.get("count", 0)
+	if count > 0:
+		_defer_on_main("_cleanup_reconciled_games", [platform_slug, count, result.get("cover_urls", [])])
+	return count
+
+
+func _delete_server_removed_games(platform_slug: String, seen_ids: Array) -> Dictionary:
+	"""DB thread (lock held): reconcile one platform against the seen-id set in
+	a single transaction. Related tables keyed by romm_id are cleaned alongside
+	games; a deleted sibling-group master promotes its lowest surviving sibling."""
+	var db = data_manager.database
+
+	# Temp tables are per-connection and the DB queue is single-threaded, so
+	# this only ever lives within this task.
+	db.query_bool_unlocked("CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (romm_id INTEGER PRIMARY KEY)")
+
+	if not db.query_bool_unlocked("BEGIN TRANSACTION"):
+		print("[SyncThread] ERROR: Failed to begin reconciliation transaction for %s" % platform_slug)
+		return {"count": 0, "cover_urls": []}
+
+	var chunk_size = 500
+	db.query_bool_unlocked("DELETE FROM sync_seen_ids")
+	for i in range(0, seen_ids.size(), chunk_size):
+		var chunk = seen_ids.slice(i, i + chunk_size)
+		var placeholders = ", ".join(chunk.map(func(_id): return "(?)"))
+		db.query_bool_unlocked("INSERT OR IGNORE INTO sync_seen_ids (romm_id) VALUES %s" % placeholders, chunk)
+
+	var doomed = db.query_array_unlocked(
+		"SELECT romm_id, cover_url, is_master_entry, siblings FROM games WHERE platform_slug = ? AND romm_id NOT IN (SELECT romm_id FROM sync_seen_ids)",
+		[platform_slug])
+
+	if doomed.is_empty():
+		db.query_bool_unlocked("COMMIT")
+		return {"count": 0, "cover_urls": []}
+
+	# Promote a surviving sibling before deleting a group master
+	for row in doomed:
+		if int(row.get("is_master_entry", 0)) != 1:
+			continue
+		var doomed_id := int(row.get("romm_id", 0))
+		var parsed = JSON.parse_string(str(row.get("siblings", "[]")))
+		if not (parsed is Array):
+			continue
+		var candidate_ids: Array = []
+		for sib in parsed:
+			if sib is Dictionary:
+				var sid := int(sib.get("id", 0))
+				if sid != 0 and sid != doomed_id:
+					candidate_ids.append(sid)
+		if candidate_ids.is_empty():
+			continue
+		var ph = ", ".join(candidate_ids.map(func(_id): return "?"))
+		var remaining = db.query_array_unlocked("SELECT romm_id FROM games WHERE romm_id IN (%s)" % ph, candidate_ids)
+		if remaining.is_empty():
+			continue
+		var new_master := int(remaining[0].get("romm_id", 0))
+		for r in remaining:
+			new_master = mini(new_master, int(r.get("romm_id", 0)))
+		db.query_bool_unlocked("UPDATE games SET is_master_entry = 1 WHERE romm_id = ?", [new_master])
+
+	var doomed_ids = doomed.map(func(r): return int(r.get("romm_id", 0)))
+	for i in range(0, doomed_ids.size(), chunk_size):
+		var chunk = doomed_ids.slice(i, i + chunk_size)
+		var ph = ", ".join(chunk.map(func(_id): return "?"))
+		db.query_bool_unlocked("DELETE FROM game_filter_values WHERE game_id IN (%s)" % ph, chunk)
+		db.query_bool_unlocked("DELETE FROM save_sync WHERE romm_id IN (%s)" % ph, chunk)
+		db.query_bool_unlocked("DELETE FROM collection_roms WHERE romm_id IN (%s)" % ph, chunk)
+		db.query_bool_unlocked("DELETE FROM pending_props_sync WHERE romm_id IN (%s)" % ph, chunk)
+
+	var success = db.query_bool_unlocked(
+		"DELETE FROM games WHERE platform_slug = ? AND romm_id NOT IN (SELECT romm_id FROM sync_seen_ids)",
+		[platform_slug])
+
+	if not success:
+		print("[SyncThread] ERROR: Reconciliation delete failed for %s, rolling back" % platform_slug)
+		db.query_bool_unlocked("ROLLBACK")
+		return {"count": 0, "cover_urls": []}
+
+	# Cover files are only safe to delete when no surviving game references them
+	var cover_urls: Array = []
+	for row in doomed:
+		var url := str(row.get("cover_url", ""))
+		if url == "":
+			continue
+		var still_used = db.query_array_unlocked("SELECT 1 FROM games WHERE cover_url = ? LIMIT 1", [url])
+		if still_used.is_empty():
+			cover_urls.append(url)
+
+	db.query_bool_unlocked("COMMIT")
+	return {"count": doomed.size(), "cover_urls": cover_urls}
+
+
+func _cleanup_reconciled_games(platform_slug: String, count: int, cover_urls: Array) -> void:
+	"""Main thread: delete cover cache files orphaned by reconciliation and
+	refresh cached counts. Local ROM files are intentionally left on disk."""
+	data_manager.database.invalidate_downloaded_games_count_cache()
+	var covers_deleted = 0
+	for url in cover_urls:
+		var cache_path = data_manager.cover.get_cached_image_path(url)
+		if FSM.file_exists(cache_path):
+			if FSM.delete_file(cache_path):
+				covers_deleted += 1
+	print("[Sync] Reconciled %s: removed %d server-deleted games (%d covers deleted)" % [platform_slug, count, covers_deleted])
 
 
 func _lookup_platform_id_sync(platform_slug: String) -> int:

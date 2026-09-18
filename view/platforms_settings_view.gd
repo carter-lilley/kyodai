@@ -748,6 +748,8 @@ func _exit_tree() -> void:
 		LaunchManager.emulator_extraction_completed.disconnect(_on_emulator_extraction_completed)
 	if LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
 		LaunchManager.firmware_download_completed.disconnect(_on_firmware_download_completed)
+	if LaunchManager.update and LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+		LaunchManager.update.update_session_finished.disconnect(_on_update_session_finished)
 	if DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.disconnect(_on_sync_completed)
 
@@ -764,6 +766,8 @@ func _enter_tree() -> void:
 		LaunchManager.emulator_extraction_completed.connect(_on_emulator_extraction_completed)
 	if not LaunchManager.firmware_download_completed.is_connected(_on_firmware_download_completed):
 		LaunchManager.firmware_download_completed.connect(_on_firmware_download_completed)
+	if LaunchManager.update and not LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+		LaunchManager.update.update_session_finished.connect(_on_update_session_finished)
 	if not DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.connect(_on_sync_completed)
 
@@ -901,6 +905,10 @@ func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 		card.refresh_ui()
 
 func _on_emulator_extraction_started(emulator_id: String):
+	# During an update-all session, per-step card refreshes flicker the whole
+	# grid - the session's update_session_finished signal refreshes once instead.
+	if LaunchManager.update and LaunchManager.update.is_session_active():
+		return
 	# Refresh UI to show "Installing..." state for all cards using this emulator
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
@@ -909,6 +917,9 @@ func _on_emulator_extraction_started(emulator_id: String):
 			card.refresh_ui()
 
 func _on_emulator_extraction_completed(emulator_id: String, _success: bool):
+	# See _on_emulator_extraction_started - deferred to update_session_finished.
+	if LaunchManager.update and LaunchManager.update.is_session_active():
+		return
 	# Refresh all cards that use this emulator (either explicitly or via auto)
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
@@ -919,6 +930,21 @@ func _on_emulator_extraction_completed(emulator_id: String, _success: bool):
 			var is_installed = progress["status"] == "complete"
 			var install_status = {emulator_id: is_installed}
 			card.set_emulator_install_status(install_status)
+			card.refresh_ui()
+
+func _on_update_session_finished(_succeeded: Array, _failed: Array):
+	# One refresh for the whole update session: recompute install statuses
+	# (validation cache may hold pre-update results) and repaint every card.
+	LaunchManager.clear_validation_cache()
+	var all_status := {}
+	for emulator in LaunchManager.get_all_emulators():
+		var emu_id: String = emulator.get("id", "")
+		if emu_id != "":
+			all_status[emu_id] = LaunchManager.get_install_progress(emu_id)["status"] == "complete"
+	for slug in _platform_cards.keys():
+		var card: PlatformCard = _platform_cards[slug]
+		if is_instance_valid(card):
+			card.set_emulator_install_status(all_status)
 			card.refresh_ui()
 
 func _on_firmware_download_completed(platform_slug: String, _success: bool):
@@ -949,6 +975,9 @@ func _refresh_all_card_status() -> void:
 			card.refresh_ui()
 
 func _on_check_updates_pressed():
+	if LaunchManager.update and LaunchManager.update.is_session_active():
+		SystemManager.notifications.show_notification("Emulator updates already in progress", SystemManager.notifications.Type.INFO)
+		return
 	if _check_updates_button:
 		_check_updates_button.disabled = true
 
@@ -964,8 +993,8 @@ func _on_check_updates_pressed():
 		if _check_updates_button:
 			_check_updates_button.disabled = false
 
-		if _updated.size() > 0:
-			SystemManager.notifications.show_notification("Updates found for %d emulator(s) - installing now..." % _updated.size(), SystemManager.notifications.Type.SUCCESS)
+		# When updates were found, the update session's own aggregate progress
+		# snackbar takes over from here - no per-emulator "installing" message.
 
 		if _failed.size() > 0:
 			var failure_parts: Array[String] = []

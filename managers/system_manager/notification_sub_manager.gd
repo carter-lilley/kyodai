@@ -131,7 +131,9 @@ func _spawn_message_snackbar(text: String, type: Type, duration: float) -> M3Sna
 	snackbar.set_leading_icon(TYPE_ICONS.get(type, "info"))
 	snackbar.set_hover_pauses_timer(false)
 	snackbar.dismissed.connect(_on_message_snackbar_dismissed.bind(snackbar))
-	get_tree().root.add_child(snackbar)
+	# Parent via the overlay parent (MainViewport in DS mode) so the snackbar
+	# renders on the active screen instead of the root window.
+	M3Overlay.get_overlay_parent().add_child(snackbar)
 	snackbar.show_overlay()
 	snackbar.start_timer(int(duration * 1000))
 	return snackbar
@@ -169,7 +171,7 @@ func _show_progress_snackbar(id: int, text: String, type: Type, progress_callabl
 	if pulsing:
 		snackbar.set_pulsing(true)
 	snackbar.dismissed.connect(_on_progress_snackbar_dismissed.bind(snackbar))
-	get_tree().root.add_child(snackbar)
+	M3Overlay.get_overlay_parent().add_child(snackbar)
 	snackbar.show_overlay()
 	_current_progress_snackbar = snackbar
 

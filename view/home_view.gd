@@ -116,6 +116,8 @@ func _connect_signals() -> void:
 			LaunchManager.gamenative_games_updated.connect(_on_gamenative_games_updated)
 		if not LaunchManager.game_launched.is_connected(_on_game_launched):
 			LaunchManager.game_launched.connect(_on_game_launched)
+		if LaunchManager.update and not LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+			LaunchManager.update.update_session_finished.connect(_on_update_session_finished)
 	if UIManager and not UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.connect(_on_modal_item_selected)
 
@@ -140,6 +142,8 @@ func _exit_tree() -> void:
 			LaunchManager.gamenative_games_updated.disconnect(_on_gamenative_games_updated)
 		if LaunchManager.game_launched.is_connected(_on_game_launched):
 			LaunchManager.game_launched.disconnect(_on_game_launched)
+		if LaunchManager.update and LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
+			LaunchManager.update.update_session_finished.disconnect(_on_update_session_finished)
 	if is_instance_valid(SystemManager) and SystemManager.download and SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.disconnect(_on_download_completed)
 	if is_instance_valid(UIManager) and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
@@ -516,11 +520,19 @@ func are_intro_animations_complete() -> bool:
 	return true
 
 func _on_download_completed(_item_id: String, success: bool, _message: String):
+	# During an update-all session, emulator downloads complete in bursts and
+	# each one would rebuild the whole grid - the session's
+	# update_session_finished signal triggers one rebuild at the end instead.
+	if LaunchManager and LaunchManager.update and LaunchManager.update.is_session_active():
+		return
 	# Refresh when a download completes (game may now show in home view).
 	# preserve_cache=false: a download changes the data model, so the merged
 	# DB+GameNative cache must be rebuilt or the new game never materializes.
 	if success:
 		_load_total_count(false, false)
+
+func _on_update_session_finished(_succeeded: Array, _failed: Array):
+	_load_total_count(false, false)
 
 func _on_database_ready():
 	print("[DEBUG] _on_database_ready called")

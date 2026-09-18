@@ -586,14 +586,22 @@ func _apply_display_mode() -> void:
 		0: # Standard
 			show_background = true
 			show_text_margin = true
+			text_centered_overlay = false
 			_media_container.edge_aa_enabled = false
 		1: # Transparent
 			show_background = false
 			show_text_margin = true
+			text_centered_overlay = false
 			_media_container.edge_aa_enabled = true
 		2: # Media Only
 			show_background = false
-			show_text_margin = false
+			# Cover-less games would render as blank unidentifiable panels, so
+			# they keep their title, centered over the whole card instead.
+			# Wrapped (unopened) games stay textless so the title doesn't draw
+			# over the present wrap.
+			var no_cover := game != null and not game.has_cover_art and not _is_present_wrapped()
+			show_text_margin = no_cover
+			text_centered_overlay = no_cover
 			_media_container.edge_aa_enabled = true
 
 	# Push the new AA flag to the shader immediately so the edge doesn't stay
@@ -603,6 +611,17 @@ func _apply_display_mode() -> void:
 
 	# Update text immediately so shadow state reflects the new display mode
 	_update_text()
+
+# Re-evaluates the cover-less title fallback when the game changes on a
+# recycled card, without paying for a full _apply_display_mode() when the
+# state is unchanged.
+func _sync_media_only_text_fallback() -> void:
+	if _display_mode != 2:
+		return
+	var no_cover := game != null and not game.has_cover_art and not _is_present_wrapped()
+	if show_text_margin == no_cover and text_centered_overlay == no_cover:
+		return
+	_apply_display_mode()
 
 func set_focus_scale(value: float) -> void:
 	focus_scale = maxf(value, 1.0)
@@ -777,6 +796,8 @@ func _try_unwrap_present() -> void:
 		return
 	game.unwrapped = true
 	_persist_unwrapped()
+	# Reveal the Media Only no-cover title now that the wrap is going away.
+	_sync_media_only_text_fallback()
 	_kill_present_tween()
 	var effect := _present_wrap
 	_present_tween = create_tween()
@@ -819,6 +840,7 @@ func _update_display():
 	_load_cover(false)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
+	_sync_media_only_text_fallback()
 
 func _update_display_with_priority(high_priority: bool):
 	if not game or not is_node_ready():
@@ -833,6 +855,7 @@ func _update_display_with_priority(high_priority: bool):
 		_load_cover(high_priority)
 	headline = game.title
 	supporting_text = game.platform if game.platform else ""
+	_sync_media_only_text_fallback()
 
 func _deferred_update_platform_badge():
 	_badge_update_pending = false

@@ -31,6 +31,18 @@ var _config_guard: Dictionary = {}
 var _validation_cache: Dictionary = {}
 var _cache_ttl_ms: int = 5000  # 5 second cache TTL
 
+## Emitted when an install step begins executing (step_index is 0-based).
+signal install_step_started(emulator_id: String, step_index: int, total_steps: int)
+## Emitted when the final install step completes successfully.
+signal install_steps_finished(emulator_id: String)
+## Emitted when the install chain aborts synchronously (async download/extract
+## failures surface via LaunchManager.emulator_extraction_completed instead).
+signal install_steps_failed(emulator_id: String, reason: String)
+
+## When true (an update-all session is active), per-step download/extraction
+## notifications are suppressed in favor of the session's aggregate snackbar.
+var suppress_step_notifications: bool = false
+
 var launch_manager: Node
 
 func _ready():
@@ -388,6 +400,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 			_save_emulator_version(emulator_id, _pending_emulator_version[emulator_id])
 			_pending_emulator_version.erase(emulator_id)
 		_end_force_install(emulator_id)
+		install_steps_finished.emit(emulator_id)
 		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
 		return true
 	
@@ -398,8 +411,11 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	if platform_config.is_empty():
 		push_error("[EmulatorManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
 		_end_force_install(emulator_id)
+		install_steps_failed.emit(emulator_id, "No platform config")
 		return false
-	
+
+	install_step_started.emit(emulator_id, step_index, install_steps.size())
+
 	var action_type = platform_config.get("action_type", "")
 	var step_success: bool = false
 	
@@ -433,6 +449,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	if not step_success:
 		_end_force_install(emulator_id)
+		install_steps_failed.emit(emulator_id, "Install step failed")
 
 	return step_success
 
@@ -607,19 +624,22 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	# Set progress text
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(total_cores) + ")"
 	
-	# Create a single batch progress notification
-	var batch_notification_id = SystemManager.notifications.show_notification(
-		step_display_name + " (0/" + str(total_cores) + ")",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return float(progress.completed) / float(total_cores),
-		func(_p: float) -> String:
-			return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")",
-		false,  # pulsing
-		true  # pinned
-	)
+	# Create a single batch progress notification (skipped during update-all
+	# sessions, which show their own aggregate snackbar instead)
+	var batch_notification_id = -1
+	if not suppress_step_notifications:
+		batch_notification_id = SystemManager.notifications.show_notification(
+			step_display_name + " (0/" + str(total_cores) + ")",
+			SystemManager.notifications.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				return float(progress.completed) / float(total_cores),
+			func(_p: float) -> String:
+				return step_display_name + " (" + str(progress.completed) + "/" + str(total_cores) + ")",
+			false,  # pulsing
+			true  # pinned
+		)
 	
 	# Queue all downloads
 	for core_name in cores:
@@ -673,6 +693,8 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 				if progress.failed > 0:
 					push_error("[EmulatorManager] Batch download failed: " + str(progress.failed) + "/" + str(total_cores) + " cores failed: " + ", ".join(failed_cores))
 					_emulator_install_progress[emulator_id] = "Batch download failed"
+					_end_force_install(emulator_id)
+					install_steps_failed.emit(emulator_id, "Batch download failed")
 				else:
 					_execute_install_step(emulator_id, step_index + 1)
 			
@@ -776,8 +798,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Notify UI that extraction has started
 	launch_manager.emulator_extraction_started.emit(emulator_id)
 	
-	# Queue extraction via SystemManager.download
-	var item_id = SystemManager.download.queue_extraction(archive_path, extract_dir, "emulator", step_display_name)
+	# Queue extraction via SystemManager.download (notification suppressed during
+	# update-all sessions, which show their own aggregate snackbar instead)
+	var item_id = SystemManager.download.queue_extraction(archive_path, extract_dir, "emulator", step_display_name, true, suppress_step_notifications)
 	if item_id == "":
 		push_error("[EmulatorManager] Failed to queue extraction for: " + emulator_id)
 		return false
@@ -877,19 +900,22 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	var progress = {"completed": 0, "failed": 0}
 	var extraction_ids = []
 	
-	# Create a single batch progress notification
-	var batch_notification_id = SystemManager.notifications.show_notification(
-		step_display_name + " (0/" + str(total_archives) + ")",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return float(progress.completed) / float(total_archives),
-		func(_p: float) -> String:
-			return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")",
-		false,  # pulsing
-		true  # pinned
-	)
+	# Create a single batch progress notification (skipped during update-all
+	# sessions, which show their own aggregate snackbar instead)
+	var batch_notification_id = -1
+	if not suppress_step_notifications:
+		batch_notification_id = SystemManager.notifications.show_notification(
+			step_display_name + " (0/" + str(total_archives) + ")",
+			SystemManager.notifications.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				return float(progress.completed) / float(total_archives),
+			func(_p: float) -> String:
+				return step_display_name + " (" + str(progress.completed) + "/" + str(total_archives) + ")",
+			false,  # pulsing
+			true  # pinned
+		)
 	
 	# Queue extraction for all archives
 	for archive_path in archive_paths:
@@ -1067,6 +1093,9 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 			if error != "":
 				push_error("[EmulatorManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = emulator_name + " - Failed to fetch release"
+				_end_force_install(emulator_id)
+				install_steps_failed.emit(emulator_id, "Failed to fetch release info")
+				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 				return
 			# Use the later of the release date and the matched asset's update date.
 			# Asset updated_at is more reliable for rolling/pinned releases where the
@@ -1115,6 +1144,9 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 			if error != "":
 				push_error("[EmulatorManager] Failed to scrape release: " + error)
 				_emulator_install_progress[emulator_id] = emulator_name + " - Failed to scrape release"
+				_end_force_install(emulator_id)
+				install_steps_failed.emit(emulator_id, "Failed to fetch release info")
+				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 				return
 			if version != "":
 				# Defer persistence until the entire install succeeds. Stashing it here
@@ -1142,7 +1174,10 @@ func _save_emulator_version(emulator_id: String, version: String, force: bool = 
 			# Only save if not already present (first download step wins), unless force is true
 			if not versions.has(emulator_id) or force:
 				versions[emulator_id] = version
-				DataManager.set_setting(versions, setting)
+				# force=true: versions IS setting.value (mutated in place above), so the
+				# changed-check inside set_setting would compare the Dictionary to itself
+				# and never mark settings dirty - the save would be silently dropped.
+				DataManager.set_setting(versions, setting, true)
 				DataManager.save_settings()
 				print("[EmulatorManager] Saved version for " + emulator_id + ": " + version)
 			else:
@@ -1156,7 +1191,8 @@ func _clear_emulator_version(emulator_id: String):
 			var versions = setting.value as Dictionary
 			if versions != null and versions.has(emulator_id):
 				versions.erase(emulator_id)
-				DataManager.set_setting(versions, setting)
+				# force=true: same in-place mutation trap as _save_emulator_version.
+				DataManager.set_setting(versions, setting, true)
 				DataManager.save_settings()
 
 ## Helper function for create_folders action
@@ -1582,11 +1618,16 @@ func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_
 		{},  # callbacks
 		0,  # romm_id
 		true,  # delete_after_extract
-		false,  # suppress_notification
+		suppress_step_notifications,  # suppress_notification (aggregate snackbar during update-all)
 		file_size  # expected_file_size from GitHub API
 	)
 	
 	if item_id == "":
+		push_error("[EmulatorManager] Failed to queue download for: " + emulator_id)
+		_emulator_install_progress[emulator_id] = "Failed to queue download"
+		_end_force_install(emulator_id)
+		install_steps_failed.emit(emulator_id, "Failed to queue download")
+		launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 		return
 	
 	# Track download with step info for sequential execution

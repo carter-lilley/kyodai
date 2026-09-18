@@ -232,6 +232,14 @@ func _setup_tab_badges() -> void:
 	if not bar:
 		return
 	var badge_px := M3Units.dpi(TAB_BADGE_SIZE_DP)
+	if is_instance_valid(_tab_badge_prev) and is_instance_valid(_tab_badge_next):
+		# Re-entry via refresh_scale: rescale and reposition, don't duplicate.
+		_tab_badge_prev.size = Vector2(badge_px, badge_px)
+		_tab_badge_next.size = Vector2(badge_px, badge_px)
+		_tab_badge_prev.refresh()
+		_tab_badge_next.refresh()
+		_position_tab_badges.call_deferred()
+		return
 	_tab_badge_prev = M3Badge.new()
 	_tab_badge_prev.icon_font = "ControllerIcons"
 	_tab_badge_prev.icon_name = "nintendo-left-shoulder"
@@ -438,6 +446,7 @@ func _update_related_tab_visibility() -> void:
 	# Never leave the current tab pointing at a hidden page.
 	if content_tabs.is_tab_hidden(RELATED_TAB_INDEX) and content_tabs.current_tab == RELATED_TAB_INDEX:
 		content_tabs.current_tab = 0
+	_position_tab_badges.call_deferred()
 
 ## Vertical space the Overview tab's VBox can occupy inside the STAMPED sheet
 ## height. Pure arithmetic over synchronous minimum sizes (theme/font metrics,
@@ -507,6 +516,7 @@ func _decide_screenshots_placement() -> void:
 	# Never leave the current tab pointing at a hidden page.
 	if content_tabs.is_tab_hidden(SCREENSHOTS_TAB_INDEX) and content_tabs.current_tab == SCREENSHOTS_TAB_INDEX:
 		content_tabs.current_tab = 0
+	_position_tab_badges.call_deferred()
 
 ## Budget-violation diagnostics: when the content's combined minimum exceeds
 ## the stamped shell, name the exact subtree responsible — every visible
@@ -629,6 +639,7 @@ func clear_content() -> void:
 		content_tabs.current_tab = 0
 		content_tabs.set_tab_hidden(RELATED_TAB_INDEX, true)
 		content_tabs.set_tab_hidden(SCREENSHOTS_TAB_INDEX, true)
+		_position_tab_badges.call_deferred()
 	if is_instance_valid(related_section):
 		related_section.visible = false
 	if is_instance_valid(related_row):
@@ -858,8 +869,17 @@ func _estimate_metadata_row_width() -> float:
 	if screen.x <= 0.0:
 		return 0.0
 	var stamped := minf(_get_sheet_width(screen.x), screen.x)
+	# The sheet chrome (ContentMargin inside _sheet_container) eats horizontal
+	# space before the content margins do; skip it and the chip rows budget
+	# ~40dp too much and their combined minimum clamps the sheet wider than
+	# its stamp. Read live so chrome changes can't desync the estimate.
+	var chrome := 0.0
+	var sheet_margin := _sheet_container.get_child(0) as MarginContainer
+	if sheet_margin:
+		chrome = float(sheet_margin.get_theme_constant("margin_left")) \
+			+ float(sheet_margin.get_theme_constant("margin_right"))
 	var edge := M3Units.dp(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
-	var content_w := stamped - edge * 2.0
+	var content_w := stamped - chrome - edge * 2.0
 	if not _small_layout and is_instance_valid(cover_container) and cover_container.visible:
 		# Cover column takes ~0.3 of the HBox (stretch ratio 0.3/0.7) plus the gap.
 		content_w = (content_w - edge) * 0.7

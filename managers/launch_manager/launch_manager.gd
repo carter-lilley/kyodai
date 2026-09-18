@@ -13,6 +13,7 @@ const CoreManager := preload("res://managers/launch_manager/core_sub_manager.gd"
 const ShufflerManager := preload("res://managers/launch_manager/shuffler_sub_manager.gd")
 const GameNativeManager := preload("res://managers/launch_manager/gamenative_sub_manager.gd")
 const M3UManager := preload("res://managers/launch_manager/m3u_sub_manager.gd")
+const UpdateManager := preload("res://managers/launch_manager/update_sub_manager.gd")
 
 # Pending-launch orchestration state
 # emulator_id -> {game: GameResource, callback: Callable}
@@ -72,6 +73,7 @@ signal gamenative_games_updated()
 @onready var process: ProcessManager = $ProcessSubManager
 @onready var core: CoreManager = $CoreSubManager
 @onready var m3u: M3UManager = $M3USubManager
+@onready var update: UpdateManager = $UpdateSubManager
 var shuffler: ShufflerManager
 var gamenative: GameNativeManager
 

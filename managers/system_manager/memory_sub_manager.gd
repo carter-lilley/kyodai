@@ -85,7 +85,7 @@ const MAX_OS_EXECUTE_QUEUE_SIZE = 100
 ## Returns the number of download threads for the current platform
 static func get_download_thread_count() -> int:
 	if OS.get_name() == "Android":
-		return 2  # Android: conservative for battery/heat
+		return 8  # Android: below desktop for battery/heat, enough for chunk concurrency caps
 	return 12  # Desktop: more threads for speed
 
 static var _instance: MemorySubManager = null
