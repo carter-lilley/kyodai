@@ -235,7 +235,7 @@ func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware
 		if emulator_id == "azahar":
 			_apply_identity_config(firmware_dir)
 
-	clear_firmware_cache(platform_slug, emulator_id)
+	clear_firmware_cache_for_platform(platform_slug)
 	launch_manager.firmware_download_completed.emit(platform_slug, true)
 	if callback.is_valid():
 		callback.call(true, "Firmware installed")

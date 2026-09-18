@@ -188,7 +188,7 @@
 	"nds": {
 		"name": "Nds",
 		"default_emulator": {
-			"_default": "melonds",
+			"_default": "retroarch",
 			"android": "melonds-android"
 		},
 		"firmware": {

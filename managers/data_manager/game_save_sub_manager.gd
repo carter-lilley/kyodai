@@ -2740,6 +2740,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
 		if local_saves.is_empty():
 			print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
+			SystemManager.notifications.show_notification("No local saves found for " + game.get_display_name() + " - nothing to upload", SystemManager.notifications.Type.INFO)
 			return
 
 		_begin_save_sync(sync_key)

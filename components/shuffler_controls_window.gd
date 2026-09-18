@@ -66,6 +66,10 @@ func _ready():
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 
+	# Hint the cursor-warp chord (hold LT + View/Select) on the pause button.
+	_pause_btn.badge_icon_font = "ControllerIcons"
+	_pause_btn.badge_icon_name = "xbox-left-trigger+xbox-view"
+
 func _process(delta: float) -> void:
 	_warp_cooldown = maxf(0.0, _warp_cooldown - delta)
 

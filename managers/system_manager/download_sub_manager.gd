@@ -38,6 +38,7 @@ class QueueItem:
 	var expected_file_size: int = 0  # Fallback if get_body_size() returns -1
 	var delete_after_extract: bool = false  # Whether to delete archive after extraction
 	var suppress_notification: bool = false  # If true, don't show per-item notifications
+	var suppress_sound: bool = false  # If true, don't play the download loop SFX
 	var update_game_resource: bool = true  # If false, skip DataManager.update_game() on completion
 	var extracted_count: int = 0  # Files extracted so far
 	var total_count: int = 0  # Total files in archive
@@ -637,7 +638,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true) -> String:
+func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true, suppress_sound: bool = false) -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 
@@ -666,6 +667,7 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	item.romm_id = romm_id if romm_id != 0 else (game.romm_id if game else 0)
 	item.delete_after_extract = delete_after_extract
 	item.suppress_notification = suppress_notification
+	item.suppress_sound = suppress_sound
 	item.update_game_resource = update_game_resource
 
 	# Store expected file size for progress tracking
@@ -742,7 +744,7 @@ func queue_game_download(game: GameResource, on_all_complete: Callable = Callabl
 ## Queues downloads for a set of disc entries (from GameResource.get_disc_entries)
 ## into dest_dir. on_entry_done(entry, success) fires per disc;
 ## on_all_done(success) fires once when every disc has settled.
-func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: String, update_game_resource: bool, suppress_notification: bool = false, on_entry_done: Callable = Callable(), on_all_done: Callable = Callable()) -> void:
+func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: String, update_game_resource: bool, suppress_notification: bool = false, on_entry_done: Callable = Callable(), on_all_done: Callable = Callable(), suppress_sound: bool = false) -> void:
 	if entries.is_empty():
 		if on_all_done.is_valid():
 			on_all_done.call(true)
@@ -757,15 +759,15 @@ func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: 
 				on_entry_done.call(entry, success)
 			if state.pending <= 0 and on_all_done.is_valid():
 				on_all_done.call(not state.failed)
-		_queue_disc_entry(game, entry, dest_dir, update_game_resource, suppress_notification, on_done)
+		_queue_disc_entry(game, entry, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
 
-func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable = Callable()) -> void:
+func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable = Callable(), suppress_sound: bool = false) -> void:
 	var disc_id: int = entry["id"]
 	var file_name: String = entry["file_name"]
 	# Sibling file names from sync lack an extension (fs_name_no_ext) until full
 	# details are fetched; resolve the real file name before queueing.
 	if file_name != "" and file_name.contains("."):
-		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done)
+		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
 		return
 	SystemManager.network.fetch_game_details(disc_id, func(data: Dictionary, error: String):
 		if error != "" or not data.has("fs_name"):
@@ -782,10 +784,10 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 				game.siblings[i]["file_size"] = file_size
 				DataManager.update_game_siblings(game.romm_id, game.siblings)
 				break
-		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done)
+		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
 	)
 
-func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable) -> void:
+func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable, suppress_sound: bool = false) -> void:
 	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
 	var destination_path = dest_dir + "/" + file_name
 	# Never blindly redownload: a complete archive already on disk only needs its
@@ -806,7 +808,7 @@ func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_si
 			download_completed.emit("ondisk_" + str(disc_id) + "_" + str(Time.get_ticks_msec()), true, destination_path)
 			on_done.call(true)
 			return
-	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource)
+	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource, suppress_sound)
 	if item_id == "":
 		if not suppress_notification:
 			SystemManager.notifications.show_notification("Failed to queue download: " + file_name, SystemManager.notifications.Type.ERROR)
@@ -1027,7 +1029,7 @@ func _start_download(item: QueueItem):
 
 	# Start looping sound while downloading (capped so long downloads don't
 	# loop the SFX forever; it still stops early when the download finishes)
-	if SystemManager.audio:
+	if SystemManager.audio and not item.suppress_sound:
 		SystemManager.audio.play_loop_while("loading_2", func():
 			var still_active = item.status == "downloading"
 			return still_active

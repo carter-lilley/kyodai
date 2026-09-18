@@ -161,6 +161,12 @@ func initialize(
 	if SystemManager.display:
 		SystemManager.display.dual_screen_mode_changed.connect(dual_screen._on_dual_screen_mode_changed)
 		SystemManager.display.ui_scale_changed.connect(_on_ui_scale_changed)
+		# Startup race: display can emit ui_scale_changed before this connects
+		# (e.g. the persisted user scale factor applying in _load_user_scale_factor),
+		# leaving nodes built before initialize() at the stale scale. Nav/views are
+		# built after the pending change, so a refresh walk is enough to reconcile.
+		if SystemManager.display.consume_pending_scale_refresh():
+			theme._do_refresh_scale()
 		if SystemManager.display.is_dual_screen_enabled():
 			dual_screen._on_dual_screen_mode_changed(true, SystemManager.display.get_second_screen_index())
 	print("[UIManager] initialize total elapsed_us=", Time.get_ticks_usec() - init_start_us)

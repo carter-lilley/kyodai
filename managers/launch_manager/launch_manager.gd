@@ -83,6 +83,7 @@ const SHUFFLER_DEFAULT_EMULATORS: Dictionary = {
 	"wii": {"emulator_id": "retroarch", "core_id": "dolphin_wii"},
 	"psp": {"emulator_id": "retroarch", "core_id": "ppsspp"},
 	"ps2": {"emulator_id": "retroarch", "core_id": "pcsx2"},
+	"nds": {"emulator_id": "retroarch", "core_id": "melondsds"},
 }
 
 func _enter_tree() -> void:

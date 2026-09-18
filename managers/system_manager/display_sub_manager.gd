@@ -34,6 +34,11 @@ const SMALL_VIEWPORT_DP := 600.0
 
 var _viewport_size: Vector2 = Vector2.ZERO
 var _ui_scale: float = -1.0
+
+# Set when ui_scale_changed fires with no listeners connected (startup race:
+# _load_user_scale_factor can run before UIManager.initialize connects).
+# UIManager consumes this after connecting and reconciles early-built nodes.
+var _scale_refresh_pending: bool = false
 var _user_scale_factor: float = 1.0
 var _current_screen: int = -1
 var _resize_debounce_timer: Timer = null
@@ -81,7 +86,7 @@ func _ready() -> void:
 
 	# Calculate initial UI scale and emit it so consumers can initialize.
 	_calculate_ui_scale()
-	ui_scale_changed.emit(_ui_scale)
+	_emit_ui_scale_changed()
 
 	# Diagnostic metrics for density/scaling issues (grep logcat for [Metrics]).
 	call_deferred("dump_display_metrics", "startup")
@@ -148,7 +153,7 @@ func _on_resize_debounced() -> void:
 		_calculate_ui_scale()
 		if not is_equal_approx(_ui_scale, old_scale):
 			M3Units.invalidate_cache()
-			ui_scale_changed.emit(_ui_scale)
+			_emit_ui_scale_changed()
 
 	viewport_size_changed.emit(_viewport_size)
 
@@ -167,6 +172,21 @@ func get_ui_scale() -> float:
 	if _ui_scale < 0:
 		_calculate_ui_scale()
 	return _ui_scale
+
+func _emit_ui_scale_changed() -> void:
+	"""Notify listeners, or flag the change when nobody is connected yet."""
+	if ui_scale_changed.get_connections().is_empty():
+		_scale_refresh_pending = true
+	else:
+		ui_scale_changed.emit(_ui_scale)
+
+func consume_pending_scale_refresh() -> bool:
+	"""UIManager calls this after connecting ui_scale_changed. Returns true (once)
+	when a scale change went out before any listener existed, so the caller can
+	reconcile nodes built with the stale scale."""
+	var was_pending := _scale_refresh_pending
+	_scale_refresh_pending = false
+	return was_pending
 
 
 ## Diagnostic dump of everything that feeds DP scaling and DS sizing.
@@ -323,7 +343,7 @@ func _on_scale_debounced() -> void:
 	_calculate_ui_scale()
 	if not is_equal_approx(_ui_scale, old_scale):
 		M3Units.invalidate_cache()
-		ui_scale_changed.emit(_ui_scale)
+		_emit_ui_scale_changed()
 
 func _load_user_scale_factor() -> void:
 	var ui_scale_setting = settings_man.get_setting("ui_scale")
@@ -336,7 +356,7 @@ func _load_user_scale_factor() -> void:
 	_calculate_ui_scale()
 	if not is_equal_approx(_ui_scale, old_scale):
 		M3Units.invalidate_cache()
-		ui_scale_changed.emit(_ui_scale)
+		_emit_ui_scale_changed()
 	M3Debug.geom("display", "user scale factor applied: factor=%.2f ui_scale=%.3f m3units=%.3f" % [
 		_user_scale_factor, _ui_scale, M3Units.get_scale()])
 

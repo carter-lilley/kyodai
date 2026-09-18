@@ -344,14 +344,7 @@
 		"name": "VICE x64",
 		"mapping": "vice_x64",
 		"android_mapping": "vice_x64",
-		"save_name": "VICE-x64"
-	  },
-	  {
-		"id": "puae",
-		"name": "PUAE",
-		"mapping": "puae",
-		"android_mapping": "puae",
-		"save_name": "PUAE",
+		"save_name": "VICE-x64",
 		"default": true
 	  }
 	],
@@ -362,21 +355,24 @@
 		"mapping": "dosbox_pure",
 		"android_mapping": "dosbox_pure",
 		"save_name": "DOSBox-pure",
-		"default": true
+		"default": true,
+		"suspend_method": "suspend"
 	  },
 	  {
 		"id": "dosbox_core",
 		"name": "DOSBox-core",
 		"mapping": "dosbox_core",
 		"android_mapping": "dosbox_core",
-		"save_name": "DOSBox-core"
+		"save_name": "DOSBox-core",
+		"suspend_method": "suspend"
 	  },
 	  {
 		"id": "dosbox_svn",
 		"name": "DOSBox SVN",
 		"mapping": "dosbox_svn",
 		"android_mapping": "dosbox_svn",
-		"save_name": "DOSBox-SVN"
+		"save_name": "DOSBox-SVN",
+		"suspend_method": "suspend"
 	  }
 	],
 	"dc": [
@@ -406,7 +402,8 @@
 		"mapping": "gw",
 		"android_mapping": "gw",
 		"save_name": "Game-&-Watch",
-		"default": true
+		"default": true,
+		"suspend_method": "suspend"
 	  }
 	],
 	"gb": [
@@ -582,15 +579,15 @@
 		"name": "melonDS",
 		"mapping": "melonds",
 		"android_mapping": "melonds",
-		"save_name": "melonDS",
-		"default": true
+		"save_name": "melonDS"
 	  },
 	  {
 		"id": "melondsds",
 		"name": "melonDS DS",
 		"mapping": "melondsds",
 		"android_mapping": "melondsds",
-		"save_name": "melonDS-DS"
+		"save_name": "melonDS-DS",
+		"default": true
 	  },
 	  {
 		"id": "desmume",
@@ -673,7 +670,8 @@
 		"mapping": "dosbox_pure",
 		"android_mapping": "dosbox_pure",
 		"save_name": "DOSBox-pure",
-		"default": true
+		"default": true,
+		"suspend_method": "suspend"
 	  }
 	],
 	"pico8": [
@@ -683,7 +681,8 @@
 		"mapping": "retro8",
 		"android_mapping": "retro8",
 		"save_name": "PICO-8",
-		"default": true
+		"default": true,
+		"suspend_method": "suspend"
 	  }
 	],
 	"psx": [
@@ -828,7 +827,18 @@
 		"mapping": "mednafen_saturn",
 		"android_mapping": "mednafen_saturn",
 		"save_name": "Beetle-Saturn",
-		"default": true
+		"default": true,
+		"paths": {
+		  "saves": {
+			"directories": {
+			  "windows": "{emulator_dir}/saves",
+			  "linux": "{emulator_dir}/saves",
+			  "android": "/storage/emulated/0/RetroArch/saves"
+			},
+			"extensions": [".bcr", ".bkr", ".smpc"],
+			"uses_folder_saves": false
+		  }
+		}
 	  },
 	  {
 		"id": "yabasanshiro",

@@ -38,6 +38,9 @@ const SUSPEND_AWAIT_TIMEOUT_SEC := 2.0
 # its window messages before pssuspend freezes the emulator, otherwise the
 # script wedges on a synchronous send to a suspended UI thread.
 const HIDE_AWAIT_TIMEOUT_SEC := 2.0
+# Max time to wait for a udp/tcp quit command to actually terminate the
+# emulator before falling back to a hard kill.
+const QUIT_CONFIRM_TIMEOUT_SEC := 5.0
 
 var _reroll_in_progress: bool = false
 # Slot being refilled by a reroll (-1 = none). The refill runs in the
@@ -307,17 +310,24 @@ func stop_session() -> void:
 
 	get_tree().root.gui_disable_input = false
 
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	if SystemManager.display:
-		var last_size: Vector2i = SystemManager.display.restore_last_window_size()
-		if last_size == Vector2i.ZERO:
-			var resolution_setting = SystemManager.display.settings_man.get_setting("resolution")
-			if resolution_setting:
-				var resolution_value = resolution_setting.value
-				if resolution_value is int and resolution_setting.options.size() > resolution_value:
-					resolution_value = resolution_setting.options[resolution_value]
-				SystemManager.display.set_resolution(resolution_value)
-			DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
+	# Restore the pre-session window mode from the "windowed" setting; the
+	# session minimizes the main window, so blindly forcing WINDOWED here
+	# would leave fullscreen users windowed until they retoggle the setting.
+	var windowed_setting = SystemManager.display.settings_man.get_setting("windowed") if SystemManager.display else null
+	if windowed_setting and not windowed_setting.value:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		if SystemManager.display:
+			var last_size: Vector2i = SystemManager.display.restore_last_window_size()
+			if last_size == Vector2i.ZERO:
+				var resolution_setting = SystemManager.display.settings_man.get_setting("resolution")
+				if resolution_setting:
+					var resolution_value = resolution_setting.value
+					if resolution_value is int and resolution_setting.options.size() > resolution_value:
+						resolution_value = resolution_setting.options[resolution_value]
+					SystemManager.display.set_resolution(resolution_value)
+				DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
 	DisplayServer.window_move_to_foreground()
 
 	_cleanup_temp_files()
@@ -416,6 +426,19 @@ func remove_game() -> void:
 	while _switch_in_progress:
 		await get_tree().process_frame
 
+	# stop_session may have run while we waited; never touch the bag during
+	# or after teardown.
+	if not can_reroll() or _current_game_index < 0 or _current_game_index >= _bag.size():
+		print("[ShufflerSubManager] remove_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
+		_reset_reroll_state()
+		return
+
+	# Hold the switch guard across the teardown so a skip or timer fire can't
+	# start a concurrent switch while the current game is being stopped; kill
+	# the round timer up front so it can't fire mid-suspend.
+	_switch_in_progress = true
+	_kill_round_timer()
+
 	var index = _current_game_index
 	var entry = _bag.entries[index]
 	print("[ShufflerSubManager] Rerolling slot " + str(index) + " (" + entry.game.title + ")")
@@ -424,6 +447,7 @@ func remove_game() -> void:
 
 	if not can_reroll():
 		_reset_reroll_state()
+		_switch_in_progress = false
 		return
 
 	if entry.pid != -1:
@@ -441,12 +465,17 @@ func remove_game() -> void:
 		_reroll_slot_index = -1
 		push_warning("[ShufflerSubManager] No alternative game found for reroll")
 		_reset_reroll_state()
-		_kill_round_timer()
-		_switch_to_next_game()
-		return
+	else:
+		print("[ShufflerSubManager] Reroll refill started for slot " + str(index))
 
-	_kill_round_timer()
-	_switch_to_next_game()
+	_switch_in_progress = false
+	if _pending_switch_index != -1:
+		# A skip landed during the teardown; honor it instead of picking anew.
+		var next = _pending_switch_index
+		_pending_switch_index = -1
+		_request_switch(next)
+	else:
+		_switch_to_next_game()
 
 # ============================================================================
 # LOGGING HELPERS
@@ -582,14 +611,27 @@ func _maybe_complete_reroll(index: int) -> void:
 
 func _complete_reroll_background(index: int) -> void:
 	_reset_reroll_state()
+	# Fill-switches must serialize with user switches: wait for any in-flight
+	# switch, then re-check everything (that switch may have moved the session
+	# to another game or torn it down while we waited).
+	while _switch_in_progress:
+		await get_tree().process_frame
 	if _state != State.ACTIVE and _state != State.PAUSED:
 		return
 	# Fill-switch: if the immediate skip found no other ready game, this slot
 	# is still "current" with nothing running - launch the refilled game now.
-	if _current_game_index == index and index >= 0 and index < _bag.size():
-		var entry = _bag.entries[index]
-		if entry.status == ShufflerBag.EntryStatus.READY and entry.pid == -1:
-			_switch_to_game(index)
+	if _current_game_index != index or index < 0 or index >= _bag.size():
+		return
+	var entry = _bag.entries[index]
+	if entry.status != ShufflerBag.EntryStatus.READY or entry.pid != -1:
+		return
+	_switch_in_progress = true
+	await _switch_to_game(index)
+	_switch_in_progress = false
+	if _pending_switch_index != -1:
+		var next = _pending_switch_index
+		_pending_switch_index = -1
+		_request_switch(next)
 
 ## Multi-disc games on m3u-capable platforms shuffle through an m3u playlist
 func _is_multi_disc_m3u(game: GameResource) -> bool:
@@ -618,6 +660,7 @@ func _download_discs_to_temp(game: GameResource, on_one_done: Callable, on_done:
 	if missing.is_empty():
 		on_done.call(_write_temp_m3u(game, temp_dir))
 		return
+	var is_mid_session := _state == State.ACTIVE or _state == State.PAUSED
 	SystemManager.download.queue_disc_files(game, missing, temp_dir, false, true,
 		func(_entry: Dictionary, success: bool):
 			if on_one_done.is_valid():
@@ -626,7 +669,8 @@ func _download_discs_to_temp(game: GameResource, on_one_done: Callable, on_done:
 			if not success:
 				on_done.call("")
 				return
-			on_done.call(_write_temp_m3u(game, temp_dir))
+			on_done.call(_write_temp_m3u(game, temp_dir)),
+		is_mid_session
 	)
 
 func _write_temp_m3u(game: GameResource, temp_dir: String) -> String:
@@ -680,6 +724,10 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 	var is_first_download := not _first_download_notification_shown
 	_first_download_notification_shown = true
 
+	# Mid-session downloads (reroll/replacement refills) stay fully silent:
+	# no download loop SFX while another game is already playing.
+	var is_mid_session := _state == State.ACTIVE or _state == State.PAUSED
+
 	var item_id = SystemManager.download.queue_download(
 		download_url,
 		temp_path,
@@ -693,7 +741,8 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		true,
 		not is_first_download,
 		file_size,
-		false
+		false,
+		is_mid_session
 	)
 
 	if item_id != "":
@@ -958,6 +1007,8 @@ func _launch_game(entry: Dictionary) -> void:
 
 	var emulator = LaunchManager.get_emulator(emulator_id)
 	entry.suspend_method = emulator.get("suspend_method", "suspend")
+	if emulator_id == "retroarch":
+		entry.suspend_method = _resolve_retroarch_suspend_method(entry)
 	print("[ShufflerSubManager] _launch_game: " + _format_entry(entry) + " emulator=" + emulator_id + " method=" + entry.suspend_method + " temp_path=" + entry.temp_path)
 
 	var on_pid_ready = func(pid: int):
@@ -1004,6 +1055,30 @@ func _launch_game(entry: Dictionary) -> void:
 
 	LaunchManager.launch_shuffler_game(game, entry.temp_path, on_pid_ready)
 
+## Resolves the suspend method for a RetroArch bag entry. Cores without
+## savestate support (dosbox_core, dosbox_svn, gw, pico8) declare
+## "suspend_method": "suspend" in retroarch.json so they freeze via pssuspend
+## instead of the udp quit+autosave flow. Additionally, a suspended RetroArch
+## keeps UDP port 55355 bound, so while another bag slot holds one, any udp
+## QUIT would be swallowed by the frozen instance's socket (never reaching
+## this game, and firing stale when the frozen one resumes) - this entry must
+## suspend too.
+func _resolve_retroarch_suspend_method(entry: Dictionary) -> String:
+	var method := entry.suspend_method as String
+	var core_id: String = LaunchManager.resolve_core_for_game(entry.game)
+	if core_id != "":
+		var core_cfg: Dictionary = LaunchManager.registry.get_core_config("retroarch", entry.game.platform_slug, core_id)
+		method = core_cfg.get("suspend_method", method)
+	if method == "suspend":
+		return method
+	for other in _bag.entries:
+		if other.game == entry.game:
+			continue
+		if other.get("emulator_id", "") == "retroarch" and other.get("suspend_method", "") == "suspend" and other.get("pid", -1) != -1:
+			print("[ShufflerSubManager] Suspended RetroArch in bag holds the UDP port; forcing suspend for " + entry.game.title)
+			return "suspend"
+	return method
+
 # ============================================================================
 # GAME STOP / SUSPEND / RESUME
 # ============================================================================
@@ -1021,12 +1096,31 @@ func _stop_game(entry: Dictionary) -> void:
 			_send_udp_command("localhost", 55355, "QUIT")
 			await get_tree().create_timer(0.5).timeout
 			_send_udp_command("localhost", 55355, "QUIT")
+			await _confirm_quit_or_kill(entry)
 		"tcp":
 			var save_hash = str(entry.game.romm_id)
 			await _send_tcp_command("localhost", 4444, "savevm " + save_hash)
 			await _send_tcp_command("localhost", 4444, "quit")
+			await _confirm_quit_or_kill(entry)
 		"suspend", _:
 			await _suspend_game(entry)
+
+## udp/tcp quit commands are fire-and-forget: if the emulator never received
+## or ignored the quit, it would keep running (and playing) alongside the next
+## game. Confirm death and fall back to a hard kill.
+func _confirm_quit_or_kill(entry: Dictionary) -> void:
+	var pid: int = entry.pid
+	if await LaunchManager.process.confirm_process_dead_async(pid, QUIT_CONFIRM_TIMEOUT_SEC):
+		entry.pid = -1
+		entry.started = false
+		entry.active = false
+		return
+	push_warning("[ShufflerSubManager] Quit command ignored by " + _format_entry(entry) + "; killing pid " + str(pid))
+	LaunchManager.process.kill_process_async(pid)
+	await LaunchManager.process.confirm_process_dead_async(pid, 3.0)
+	entry.pid = -1
+	entry.started = false
+	entry.active = false
 
 func _suspend_game(entry: Dictionary) -> void:
 	if entry.pid == -1:
@@ -1056,10 +1150,17 @@ func _suspend_game(entry: Dictionary) -> void:
 	while not done.complete and elapsed < SUSPEND_AWAIT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.05).timeout
 		elapsed = (Time.get_ticks_msec() - suspend_start) / 1000.0
-	if done.complete:
+	if done.complete and done.exit_code == 0:
 		print("[ShufflerSubManager] _suspend_game: pid " + str(entry.pid) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(done.exit_code) + ")")
 	else:
-		push_warning("[ShufflerSubManager] _suspend_game: timed out waiting for pssuspend (pid " + str(entry.pid) + "); continuing anyway")
+		# A failed/wedged suspend leaves the outgoing game running and playing
+		# alongside the next one. Kill it instead; the slot relaunches fresh
+		# the next time it is picked.
+		push_warning("[ShufflerSubManager] _suspend_game: pssuspend failed for pid " + str(entry.pid) + " (complete=" + str(done.complete) + " exit_code=" + str(done.exit_code) + "); killing to keep only one live game")
+		LaunchManager.process.kill_process_async(entry.pid)
+		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
+		entry.pid = -1
+		entry.started = false
 
 	entry.active = false
 
@@ -1126,6 +1227,12 @@ func _on_round_timer_timeout() -> void:
 	print("[ShufflerSubManager] _on_round_timer_timeout: state=" + str(_state) + " " + _format_bag())
 	if _state != State.ACTIVE:
 		print("[ShufflerSubManager] _on_round_timer_timeout ignored: state=" + str(_state))
+		return
+	if _switch_in_progress:
+		# A switch (skip/restart/reroll fill) is already in flight and starts a
+		# fresh round timer when it completes, so this timeout is stale; acting
+		# on it would only queue a jarring second switch right after.
+		print("[ShufflerSubManager] _on_round_timer_timeout ignored: switch in progress")
 		return
 	if _countdown_timer and is_instance_valid(_countdown_timer):
 		_countdown_timer.stop()

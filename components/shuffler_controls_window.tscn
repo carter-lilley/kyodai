@@ -304,9 +304,9 @@ icon_button_size = 1
 icon_button_variant = 1
 button_type = 1
 icon_name = "pause"
-m3_tooltip_text = "Pause / Resume"
+m3_tooltip_text = "Pause / Resume (hold LT + View to summon cursor)"
 metadata/_custom_type_script = "uid://ca1nbgxeetvm3"
-metadata/m3_tooltip_text = "Pause / Resume"
+metadata/m3_tooltip_text = "Pause / Resume (hold LT + View to summon cursor)"
 metadata/m3_tooltip_variant = 0
 
 [node name="SkipButton" type="Button" parent="Root/M3ButtonGroup" unique_id=1528243517]
