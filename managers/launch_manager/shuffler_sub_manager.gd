@@ -885,9 +885,10 @@ func _enter_shuffler_mode() -> void:
 	if SystemManager.display:
 		SystemManager.display.save_last_window_size()
 
+	_hide_main_window()
+
 	_create_controls_window()
 
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 	get_tree().root.gui_disable_input = true
 
 	_apply_emulator_configs()
@@ -901,6 +902,20 @@ func _enter_shuffler_mode() -> void:
 		stop_session()
 		return
 	_switch_to_game(first_index)
+
+## Minimizing directly from EXCLUSIVE_FULLSCREEN is unreliable on Windows (the
+## transition can bounce back to visible), so drop to windowed first, then
+## minimize, and re-issue once if the mode didn't stick. stop_session()
+## restores the real mode from the "windowed" setting.
+func _hide_main_window() -> void:
+	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		await get_tree().process_frame
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
+	await get_tree().create_timer(0.5).timeout
+	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_MINIMIZED:
+		print("[ShufflerSubManager] main window minimize did not stick; retrying")
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 
 func _apply_emulator_configs() -> void:
 	var needs_retroarch := false
@@ -1058,25 +1073,15 @@ func _launch_game(entry: Dictionary) -> void:
 ## Resolves the suspend method for a RetroArch bag entry. Cores without
 ## savestate support (dosbox_core, dosbox_svn, gw, pico8) declare
 ## "suspend_method": "suspend" in retroarch.json so they freeze via pssuspend
-## instead of the udp quit+autosave flow. Additionally, a suspended RetroArch
-## keeps UDP port 55355 bound, so while another bag slot holds one, any udp
-## QUIT would be swallowed by the frozen instance's socket (never reaching
-## this game, and firing stale when the frozen one resumes) - this entry must
-## suspend too.
+## instead of the udp quit+autosave flow. All other cores always keep the udp
+## quit+savestate flow, even while a suspended RetroArch in the bag still holds
+## UDP port 55355.
 func _resolve_retroarch_suspend_method(entry: Dictionary) -> String:
 	var method := entry.suspend_method as String
 	var core_id: String = LaunchManager.resolve_core_for_game(entry.game)
 	if core_id != "":
 		var core_cfg: Dictionary = LaunchManager.registry.get_core_config("retroarch", entry.game.platform_slug, core_id)
 		method = core_cfg.get("suspend_method", method)
-	if method == "suspend":
-		return method
-	for other in _bag.entries:
-		if other.game == entry.game:
-			continue
-		if other.get("emulator_id", "") == "retroarch" and other.get("suspend_method", "") == "suspend" and other.get("pid", -1) != -1:
-			print("[ShufflerSubManager] Suspended RetroArch in bag holds the UDP port; forcing suspend for " + entry.game.title)
-			return "suspend"
 	return method
 
 # ============================================================================

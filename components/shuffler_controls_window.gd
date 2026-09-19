@@ -35,14 +35,21 @@ func _ready():
 	transparent_bg = true
 	theme = Theme.new()
 
-	# Size the window to exactly fit the connected button column.
+	# Size the window to fit the connected button column, plus a margin so the
+	# pause button's hotkey badge (which overhangs the button's left edge) is
+	# not clipped by the window bounds.
+	var margin := int(M3Units.dp(10))
 	var count := _button_group.get_child_count()
 	if count > 0:
 		var btn := _button_group.get_child(0) as Control
 		var sep := _button_group.get_theme_constant("separation")
 		var width := int(btn.custom_minimum_size.x)
 		var height := int(btn.custom_minimum_size.y) * count + sep * (count - 1)
-		size = Vector2i(width, height)
+		size = Vector2i(width + margin * 2, height + margin * 2)
+	_button_group.offset_left = margin
+	_button_group.offset_top = margin
+	_button_group.offset_right = -margin
+	_button_group.offset_bottom = -margin
 
 	# Position the palette in the bottom-left of the desktop.
 	var screen_size := DisplayServer.screen_get_size()
@@ -67,6 +74,8 @@ func _ready():
 	tree_exiting.connect(_restore_default_cursor)
 
 	# Hint the cursor-warp chord (hold LT + View/Select) on the pause button.
+	# Smaller badge than the default so it doesn't dominate the palette button.
+	_pause_btn.badge_size_dp = 14
 	_pause_btn.badge_icon_font = "ControllerIcons"
 	_pause_btn.badge_icon_name = "xbox-left-trigger+xbox-view"
 
