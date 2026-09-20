@@ -1045,6 +1045,12 @@ func _launch_game(entry: Dictionary) -> void:
 			_maximize_with_retry(pid)
 		else:
 			push_error("[ShufflerSubManager] Failed to launch game: " + game.title)
+			# Skip immediately instead of idling out the round on a dead launch;
+			# deferred so we never re-enter the switch logic from inside a
+			# launch/firmware callback. skip_game() re-checks state and current.
+			if (_state == State.ACTIVE or _state == State.PAUSED) and _current_game_index >= 0 \
+				and _current_game_index < _bag.size() and _bag.entries[_current_game_index].game == game:
+				call_deferred("skip_game")
 
 		if emulator_id.begins_with("vita3k"):
 			var title_id = game.get_active_title_id()

@@ -413,7 +413,13 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 	# Vita3K and RPCS3 need TitleID extraction and ZIP extraction even in shuffler mode.
 	# Other emulators skip the normal preparation step.
 	var should_prepare = emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")
-	var is_ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override)
+	# Prep/firmware failures inside _ensure_prerequisites never reach on_ready,
+	# so report them as a failed pid or the shuffler idles out the round on a
+	# dead launch.
+	var on_failed = func():
+		if on_pid_ready.is_valid():
+			on_pid_ready.call(-1)
+	var is_ready = await _ensure_prerequisites(game, emulator_id, on_ready, should_prepare, true, rom_path_override, on_failed)
 	if not is_ready:
 		return  # Download pending, callback will handle it
 	# If ready, on_ready was already called
@@ -599,7 +605,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 ## Ensures emulator is installed, firmware is ready, and game is prepared.
 ## Returns true if everything is ready and on_ready was called.
 ## Returns false if a download was started (caller should return and wait for callback).
-func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true, is_shuffler: bool = false, rom_path_override: String = "") -> bool:
+func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true, is_shuffler: bool = false, rom_path_override: String = "", on_failed: Callable = Callable()) -> bool:
 	var emu = registry.get_emulator(emulator_id)
 	var emulator_name = emu.get("name", emulator_id)
 	
@@ -683,14 +689,14 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
 			SystemManager.notifications.show_notification("Firmware download in progress for " + game.platform_slug + "...", SystemManager.notifications.Type.INFO)
-			_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready})
+			_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready, "on_failed": on_failed, "prepare_game": prepare_game, "is_shuffler": is_shuffler, "rom_path_override": rom_path_override})
 			return false
 		
 		print("[LaunchManager] Firmware not ready for " + game.platform_slug + ", downloading...")
 		SystemManager.notifications.show_notification("Downloading firmware for " + game.platform_slug + "...", SystemManager.notifications.Type.INFO)
 		
 		_pending_firmware_downloads[game.platform_slug] = true
-		_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready})
+		_pending_firmware_launches.append({"game": game, "emulator_id": emulator_id, "core_id": core_id_for_firmware, "callback": on_ready, "on_failed": on_failed, "prepare_game": prepare_game, "is_shuffler": is_shuffler, "rom_path_override": rom_path_override})
 		
 		firmware.setup_platform_firmware(game.platform_slug, emulator_id, func(success: bool, message: String):
 			_pending_firmware_downloads.erase(game.platform_slug)
@@ -711,6 +717,9 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 				# and would perform the launch, so they must not be invoked here.
 				for i in matching_indices:
 					_end_launch((_pending_firmware_launches[i].game as GameResource).romm_id)
+					var failed_cb: Callable = _pending_firmware_launches[i].get("on_failed", Callable())
+					if failed_cb.is_valid():
+						failed_cb.call()
 				for i in range(matching_indices.size() - 1, -1, -1):
 					_pending_firmware_launches.remove_at(matching_indices[i])
 				return
@@ -722,7 +731,11 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 				var pending_callback = pending.callback
 				# Re-enter _ensure_prerequisites so game preparation (e.g. PS3 ZIP
 				# extraction) runs before on_ready performs the actual launch.
-				await _ensure_prerequisites(pending_game, pending.emulator_id, pending_callback)
+				# The original call's context travels with the pending entry:
+				# shuffler launches would otherwise re-enter with default args
+				# (prepare_game=true, is_shuffler=false, no rom override) and prep
+				# against the relative game.file_path instead of the temp copy.
+				await _ensure_prerequisites(pending_game, pending.emulator_id, pending_callback, pending.get("prepare_game", true), pending.get("is_shuffler", false), pending.get("rom_path_override", ""), pending.get("on_failed", Callable()))
 			for i in range(matching_indices.size() - 1, -1, -1):
 				_pending_firmware_launches.remove_at(matching_indices[i])
 		, core_id_for_firmware)
@@ -737,6 +750,8 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			SystemManager.notifications.show_notification("Failed to prepare game for launch", SystemManager.notifications.Type.ERROR)
 			_end_launch(game.romm_id)
+			if on_failed.is_valid():
+				on_failed.call()
 			return false
 		# Cache the prepared ROM path for shuffler launches so callers can update bag entries.
 		if is_shuffler:

@@ -124,6 +124,19 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 	
 	temp_intent.emulator_id = emulator_id
 
+	# game.file_path can be server-relative ("roms/<slug>/<file>") when the game
+	# has no normal local copy (e.g. shuffler sessions play from a temp dir).
+	# Downstream tools like sigil need a real path; map it onto the local
+	# library layout (games_root_folder/<slug>/<file>).
+	if not temp_intent.rom_path.is_absolute_path():
+		var library_root_setting = DataManager.get_setting("games_root_folder")
+		var library_root: String = library_root_setting.value if library_root_setting else "user://roms/"
+		var rel: String = temp_intent.rom_path
+		if rel.begins_with("roms/"):
+			rel = rel.substr(5)
+		temp_intent.rom_path = FSM.join_paths(library_root, rel)
+		print("[GameManager] _prepare_game_for_launch: Resolved relative ROM path -> " + temp_intent.rom_path)
+
 	# Generic ID pass: any launch whose save flow keys on the title ID gets one
 	# extraction attempt, regardless of emulator family. Per-family prep flows
 	# below keep their own semantics; this fills the gap for families without
