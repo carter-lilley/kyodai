@@ -890,9 +890,9 @@ func cancel(item_id: String) -> bool:
 		# Clean up chunked download resources if this was a chunked download
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 		queue_changed.emit()
 		download_completed.emit(item_id, false, "Cancelled")
+		_active_items.erase(item_id)
 		_process_queue()
 		return true
 
@@ -1069,8 +1069,8 @@ func _start_download(item: QueueItem):
 		item.status = "failed"
 		item.error_message = "Failed to start download"
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -1081,8 +1081,8 @@ func _start_download(item: QueueItem):
 		item.status = "failed"
 		item.error_message = "Failed to start download"
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -1191,8 +1191,8 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 				item.status = "failed"
 				item.error_message = "Failed to start download"
 				_cleanup_item(item)
-				_active_items.erase(item.id)
 				download_completed.emit(item.id, false, item.error_message)
+				_active_items.erase(item.id)
 				queue_changed.emit()
 				_process_queue()
 				return
@@ -1247,8 +1247,8 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		item.status = "failed"
 		item.error_message = "Failed to create temp directory"
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -1359,8 +1359,8 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 				item.status = "failed"
 				item.error_message = "Failed to create partial file"
 				_cleanup_item(item)
-				_active_items.erase(item.id)
 				download_completed.emit(item.id, false, item.error_message)
+				_active_items.erase(item.id)
 				queue_changed.emit()
 				_process_queue()
 				return
@@ -2181,8 +2181,8 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries"
 			_cleanup_chunked_download(item_id)
 			_cleanup_item(item)
-			_active_items.erase(item_id)
 			download_completed.emit(item_id, false, item.error_message)
+			_active_items.erase(item_id)
 			queue_changed.emit()
 			_process_queue()
 
@@ -2216,8 +2216,8 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 		item.status = "failed"
 		item.error_message = "Failed to start single-stream fallback"
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -2494,8 +2494,8 @@ func _fail_flush_download(item_id: String, error_msg: String) -> void:
 	item.error_message = error_msg
 	_cleanup_chunked_download(item_id)
 	_cleanup_item(item)
-	_active_items.erase(item_id)
 	download_completed.emit(item_id, false, error_msg)
+	_active_items.erase(item_id)
 	queue_changed.emit()
 	_process_queue()
 
@@ -2608,8 +2608,8 @@ func _reassemble_chunks(item_id: String):
 		item.error_message = "Chunk files missing or corrupted before reassembly"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 		download_completed.emit(item_id, false, item.error_message)
+		_active_items.erase(item_id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -2644,8 +2644,8 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		item.error_message = "Plugin not available for reassembly"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item_id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -2665,8 +2665,8 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		item.error_message = "Failed to reassemble chunks"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 		download_completed.emit(item.id, false, item.error_message)
+		_active_items.erase(item_id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -2755,8 +2755,8 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			item.error_message = "Failed to reassemble chunks"
 			_cleanup_chunked_download(item_id)
 			_cleanup_item(item)
-			_active_items.erase(item_id)
 			download_completed.emit(item.id, false, item.error_message)
+			_active_items.erase(item_id)
 			queue_changed.emit()
 			_process_queue()
 			return
@@ -2851,8 +2851,8 @@ func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_
 		item.error_message = "Plugin not available for copy"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 		download_completed.emit(item_id, false, item.error_message)
+		_active_items.erase(item_id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -2882,8 +2882,8 @@ func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_
 			item.error_message = "Failed to copy download to destination"
 			_cleanup_chunked_download(item_id)
 			_cleanup_item(item)
-			_active_items.erase(item_id)
 			download_completed.emit(item_id, false, item.error_message)
+			_active_items.erase(item_id)
 			queue_changed.emit()
 			_process_queue()
 			return
@@ -2919,8 +2919,8 @@ func _godot_copy_partial_to_final(item_id: String, partial_path: String, final_p
 				item.error_message = "Failed to copy download to destination"
 				_cleanup_chunked_download(item_id)
 				_cleanup_item(item)
-				_active_items.erase(item_id)
 				download_completed.emit(item_id, false, item.error_message)
+				_active_items.erase(item_id)
 				queue_changed.emit()
 				_process_queue()
 				return
@@ -2996,7 +2996,6 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 		item.error_message = "Download corrupted: size mismatch (expected " + str(item.expected_file_size) + ", got " + str(final_size) + ")"
 		_cleanup_chunked_download(item_id)
 		_cleanup_item(item)
-		_active_items.erase(item_id)
 
 		# Clean up the corrupted file
 		if FSM.file_exists(reassembly_temp_path):
@@ -3007,6 +3006,7 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 			item.notification_id = -1
 
 		download_completed.emit(item_id, false, item.error_message)
+		_active_items.erase(item_id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -3135,9 +3135,9 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		print("[SystemManager.download] Download failed for " + item.name + ": " + error_msg)
 		_notify_download_failed(item)
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, error_msg)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -3150,9 +3150,9 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		print("[SystemManager.download] Download file not found after completion: " + item.destination_path)
 		_notify_download_failed(item)
 		_cleanup_item(item)
-		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, "Download file not found")
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 		return
@@ -3213,11 +3213,11 @@ func _fail_download(item_id: String, error_msg: String):
 
 	_cleanup_download_tracking(item_id)
 	_cleanup_item(item)
-	_active_items.erase(item_id)
 	_stop_foreground_service()  # Stop foreground service on failure
 
 	_notify_download_failed(item)
 	download_completed.emit(item_id, false, error_msg)
+	_active_items.erase(item_id)
 	queue_changed.emit()
 	_process_queue()
 
@@ -3349,9 +3349,9 @@ func _finish_download_completion(item: QueueItem):
 		if item.notification_id != -1:
 			SystemManager.notifications.dismiss_notification(item.notification_id)
 			item.notification_id = -1
-		_active_items.erase(item.id)
 		_stop_foreground_service()  # Stop foreground service on completion (no extraction)
 		download_completed.emit(item.id, true, item.destination_path)
+		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
 

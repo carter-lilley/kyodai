@@ -685,6 +685,11 @@ func _populate_card(card: PlatformCard, payload: Dictionary, enabled_platforms: 
 		LaunchManager.launch_emulator_standalone(emu_id)
 	)
 
+	# Connect per-emulator update check button
+	card.update_check_requested.connect(func(emu_id: String):
+		_on_emulator_update_check_requested(emu_id, card)
+	)
+
 func _register_card(card: PlatformCard, slug: String) -> void:
 	"""Register a card in the slug map without adding it to a column yet."""
 	_platform_cards[slug] = card
@@ -903,6 +908,36 @@ func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 		var install_status = {emulator_id: LaunchManager.scan_emulator_install_state(emulator_id)}
 		card.set_emulator_install_status(install_status)
 		card.refresh_ui()
+	else:
+		var emulator_name = RegistrySubManager.get_emulator_display_name(LaunchManager.get_emulator(emulator_id), emulator_id)
+		SystemManager.notifications.show_notification(emulator_name + " is already downloading", SystemManager.notifications.Type.INFO)
+
+func _on_emulator_update_check_requested(emulator_id: String, card: PlatformCard):
+	if LaunchManager.update and LaunchManager.update.is_session_active():
+		SystemManager.notifications.show_notification("Emulator updates already in progress", SystemManager.notifications.Type.INFO)
+		return
+
+	# Track which platform initiated a possible update for focus restoration later
+	_last_active_platform_slug = card.platform_slug
+
+	var emulator_name = RegistrySubManager.get_emulator_display_name(LaunchManager.get_emulator(emulator_id), emulator_id)
+	var checking_notification = SystemManager.notifications.show_notification(
+		"Checking " + emulator_name + " for updates...", SystemManager.notifications.Type.INFO,
+		null, 999999.0,
+		Callable(), Callable(), false, true
+	)
+
+	LaunchManager.check_emulator_for_update(emulator_id, func(update_available: bool, error: String):
+		SystemManager.notifications.dismiss_notification(checking_notification)
+		if error != "":
+			SystemManager.notifications.show_notification("Failed to check " + emulator_name + ": " + error, SystemManager.notifications.Type.WARNING)
+		elif update_available:
+			# Reuse the update session machinery (aggregate snackbar, config
+			# guard, concurrency) for a single emulator.
+			LaunchManager.update.begin_session([emulator_id])
+		else:
+			SystemManager.notifications.show_notification(emulator_name + " is up to date", SystemManager.notifications.Type.INFO)
+	)
 
 func _on_emulator_extraction_started(emulator_id: String):
 	# During an update-all session, per-step card refreshes flicker the whole

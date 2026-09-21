@@ -392,6 +392,7 @@ func _connect_signals() -> void:
 	if studio_row:
 		studio_row.resized.connect(_on_content_row_resized)
 	SystemManager.download.download_completed.connect(_on_download_completed)
+	DataManager.game_updated.connect(_on_game_updated)
 
 const RELATED_TAB_INDEX := 2
 const SCREENSHOTS_TAB_INDEX := 3
@@ -1809,6 +1810,16 @@ func _queue_download() -> void:
 	if not _current_game:
 		return
 	SystemManager.download.queue_game_download(_current_game)
+
+func _on_game_updated(game: GameResource) -> void:
+	if not _current_game or not visible:
+		return
+	if game.romm_id != _current_game.romm_id:
+		return
+	_current_game = game
+	_update_action_button()
+	_update_file_info_display(_current_game)
+	_update_sync_ui()
 
 func _on_download_completed(item_id: String, success: bool, message: String) -> void:
 	# Check if this download is for our current game

@@ -112,7 +112,7 @@ func create_launch_intent(game: GameResource, rom_path_override: String = "") ->
 		return null
 	
 	var emulator = launch_manager.registry.get_emulator(intent.emulator_id)
-	intent.emulator_name = emulator.get("name", intent.emulator_id)
+	intent.emulator_name = RegistrySubManager.get_emulator_display_name(emulator, intent.emulator_id)
 	
 	# Resolve core if needed (for RetroArch)
 	var core_id = ""

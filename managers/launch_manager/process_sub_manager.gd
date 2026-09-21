@@ -478,7 +478,7 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 		return
 
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 
 	# Don't stack a second reminder if one is already open for this emulator
 	if launch_manager._open_install_reminders.has(emulator_id):

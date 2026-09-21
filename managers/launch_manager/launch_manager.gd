@@ -173,7 +173,7 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 	var emulator_info = get_emulator(emulator_id)
 	var intent = LaunchIntent.new()
 	intent.emulator_id = emulator_id
-	intent.emulator_name = emulator_info.get("meta", {}).get("name", emulator_id)
+	intent.emulator_name = RegistrySubManager.get_emulator_display_name(emulator_info, emulator_id)
 	var args: Array[String] = [exe_path]
 	intent.launch_args = args
 	if emulator_info.get("requires_working_dir", false) or emulator_id.begins_with("vita3k"):
@@ -221,6 +221,10 @@ func get_retroarch_core_name(platform_slug: String) -> String:
 
 func check_for_updates(callback: Callable, progress_callback: Callable = Callable()):
 	registry.check_for_updates(callback, progress_callback)
+
+## callback(update_available: bool, error: String)
+func check_emulator_for_update(emulator_id: String, callback: Callable):
+	registry.check_emulator_for_update(emulator_id, callback)
 
 # ============================================================================
 # Emulator install/update wrappers
@@ -607,7 +611,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 ## Returns false if a download was started (caller should return and wait for callback).
 func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Callable, prepare_game: bool = true, is_shuffler: bool = false, rom_path_override: String = "", on_failed: Callable = Callable()) -> bool:
 	var emu = registry.get_emulator(emulator_id)
-	var emulator_name = emu.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emu, emulator_id)
 	
 	# Check if emulator is fully installed
 	var is_actually_installed = true

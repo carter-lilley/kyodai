@@ -8,44 +8,26 @@ enum EntryStatus { QUEUED, DOWNLOADING, PREPARING, READY, FAILED }
 var entries: Array[Dictionary] = []
 var candidates: Array[GameResource] = []
 
-func build(platforms: Array[String], bag_size: int, filters: Dictionary = {}) -> void:
+# Candidate pool state. The pool is filled in the background by
+# ShufflerSubManager after the session starts; pickers must wait for
+# candidates_building to clear before drawing.
+var candidates_built: bool = false
+var candidates_building: bool = false
+
+func build(games: Array[GameResource], bag_size: int) -> void:
 	entries.clear()
-
-	var all_candidates: Array[GameResource] = []
-	for platform_slug in platforms:
-		all_candidates.append_array(DataManager.get_games_by_platform(platform_slug, filters))
-
-	if all_candidates.is_empty():
-		return
-
-	all_candidates.shuffle()
+	candidates.clear()
+	candidates_built = false
+	candidates_building = false
 
 	var added_ids: Array[int] = []
-	for game in all_candidates:
+	for game in games:
 		if game.romm_id in added_ids:
 			continue
 		added_ids.append(game.romm_id)
 		entries.append(_create_entry(game))
 		if entries.size() >= bag_size:
 			break
-
-
-func build_candidates(platforms: Array[String], filters: Dictionary = {}) -> void:
-	candidates.clear()
-	var all: Array[GameResource] = []
-	for platform_slug in platforms:
-		all.append_array(DataManager.get_games_by_platform(platform_slug, filters))
-
-	var bag_ids := get_bag_ids()
-	var seen_ids: Array[int] = []
-	for game in all:
-		if game.romm_id in bag_ids:
-			continue
-		if game.romm_id in seen_ids:
-			continue
-		seen_ids.append(game.romm_id)
-		candidates.append(game)
-	candidates.shuffle()
 
 
 func _create_entry(game: GameResource) -> Dictionary:

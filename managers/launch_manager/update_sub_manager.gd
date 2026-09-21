@@ -59,7 +59,7 @@ func begin_session(emulator_ids: Array) -> void:
 		if emulator.is_empty():
 			continue
 		_session[id] = {
-			"name": emulator.get("name", id),
+			"name": RegistrySubManager.get_emulator_display_name(emulator, id),
 			"total_steps": maxi((emulator.get("install", []) as Array).size(), 1),
 			"step_index": 0,
 			"step_label": "Queued",
@@ -189,9 +189,11 @@ func _start_next_if_idle() -> void:
 		if _session[next_id].status != "queued":
 			continue
 		_session[next_id].status = "running"
-		active += 1
 		print("[UpdateManager] Starting update: " + next_id)
-		launch_manager.registry.trigger_emulator_update(next_id)
+		if launch_manager.registry.trigger_emulator_update(next_id):
+			active += 1
+		else:
+			_mark_failed(next_id, "install already in progress")
 
 func _mark_done(emulator_id: String) -> void:
 	var state: Dictionary = _session[emulator_id]

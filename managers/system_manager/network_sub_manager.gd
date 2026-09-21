@@ -904,6 +904,23 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 		url = base_url + "/repos/" + repo + "/releases/latest"
 	var headers = ["Accept: application/vnd.github.v3+json", "User-Agent: Kyodai-Launcher"]
 
+	# Matches the asset pattern against a release dict and fires the callback
+	# with the first match. Returns true when a match was found.
+	var match_asset = func(data: Dictionary) -> bool:
+		var regex = RegEx.new()
+		regex.compile(asset_pattern)
+		var tag_name = data.get("tag_name", "")
+		var published_at = data.get("published_at", "")
+		for asset in data.get("assets", []):
+			var asset_name = asset.get("name", "")
+			if regex.search(asset_name) != null:
+				var download_url = asset.get("browser_download_url", "")
+				var asset_size = asset.get("size", 0)
+				var asset_updated_at = asset.get("updated_at", "")
+				callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at)
+				return true
+		return false
+
 	var http = _create_http_request()
 	http.timeout = 15.0
 	_active_request_count += 1
@@ -925,6 +942,13 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				callback.call("", "", "Request failed: " + str(result), 0, "", "")
 				return
 
+			if response_code == 404 and url.ends_with("/releases/latest"):
+				# /releases/latest ignores prereleases, so repos whose newest (or
+				# only) releases are prereleases 404 here. Fall back to the full
+				# releases list and take the newest non-draft entry.
+				_fetch_repo_release_from_list(base_url, repo, headers, match_asset, callback)
+				return
+
 			if response_code != 200:
 				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
 				return
@@ -942,21 +966,49 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				callback.call("", "", "No assets in release", 0, "", "")
 				return
 
-			var regex = RegEx.new()
-			regex.compile(asset_pattern)
+			if not match_asset.call(data):
+				callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "", "")
+			)
 
-			var tag_name = data.get("tag_name", "")
-			var published_at = data.get("published_at", "")
+## Fallback for repos with no stable release (GitHub's /releases/latest 404s
+## there): picks the newest non-draft release from the full list, prereleases
+## included, and runs the same asset matching.
+func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Array, match_asset: Callable, callback: Callable):
+	var http = _create_http_request()
+	http.timeout = 15.0
+	_active_request_count += 1
 
-			for asset in data.assets:
-				var asset_name = asset.get("name", "")
-				if regex.search(asset_name) != null:
-					var download_url = asset.get("browser_download_url", "")
-					var asset_size = asset.get("size", 0)
-					var asset_updated_at = asset.get("updated_at", "")
-					callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at)
+	var error = http.request(base_url + "/repos/" + repo + "/releases?per_page=10", headers)
+
+	if error != OK:
+		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
+		_finish_pooled_request(http)
+		return
+
+	http.request_completed.connect(func(result, response_code, _response_headers, body):
+			_finish_pooled_request(http)
+
+			if result == HTTPRequest.RESULT_TIMEOUT:
+				callback.call("", "", "Request timed out", 0, "", "")
+				return
+			if result != HTTPRequest.RESULT_SUCCESS:
+				callback.call("", "", "Request failed: " + str(result), 0, "", "")
+				return
+			if response_code != 200:
+				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
+				return
+
+			var json = JSON.new()
+			if json.parse(body.get_string_from_utf8()) != OK or not json.data is Array:
+				callback.call("", "", "Failed to parse releases list", 0, "", "")
+				return
+
+			for release in json.data:
+				if release.get("draft", false):
+					continue
+				if match_asset.call(release):
 					return
-			callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "", "")
+			callback.call("", "", "No release with a matching asset found", 0, "", "")
 			)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):

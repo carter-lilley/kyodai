@@ -132,7 +132,7 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 			# Extraction notifications are progress snackbars whose text starts with
 			# the emulator name (see _get_step_display_name); dismiss only that one.
 			if SystemManager.notifications:
-				var emulator_name: String = launch_manager.registry.get_emulator(emulator_id).get("name", emulator_id)
+				var emulator_name: String = RegistrySubManager.get_emulator_display_name(launch_manager.registry.get_emulator(emulator_id), emulator_id)
 				SystemManager.notifications.dismiss_progress_notification_by_prefix(emulator_name + " - ")
 			
 			return
@@ -386,7 +386,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 		return false
 	
 	var platform_name = SystemManager.platform.get_platform_name().to_lower()
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 	var install_steps = emulator.get("install", [])
 	
 	if step_index >= install_steps.size():
@@ -612,9 +612,9 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 	var step_display_name = _get_step_display_name(step_name, emulator_name)
-	
+
 	# Track batch progress using Dictionary for proper reference semantics in closures
 	var total_cores = cores.size()
 	var progress = {"completed": 0, "failed": 0}
@@ -790,9 +790,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 	var step_display_name = _get_step_display_name(step_name, emulator_name)
-	
+
 	_emulator_install_progress[emulator_id] = step_display_name + "..."
 	
 	# Notify UI that extraction has started
@@ -886,9 +886,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 	if step_index < install_steps.size():
 		step_name = install_steps[step_index].get("step", "")
 	
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 	var step_display_name = _get_step_display_name(step_name, emulator_name)
-	
+
 	# Show batch progress
 	_emulator_install_progress[emulator_id] = step_display_name + " (0/" + str(archive_paths.size()) + ")"
 	
@@ -1103,7 +1103,10 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 			var version_to_save = launch_manager.registry._latest_iso_date(published_at, asset_updated_at)
 			if version_to_save == "":
 				version_to_save = tag
-			if version_to_save != "":
+			if version_to_save != "" and not _pending_emulator_version.has(emulator_id):
+				# First download step wins: emulators with multiple download steps
+				# (e.g. shadPS4 core + Qt launcher) must store the first step's
+				# version, since update checks compare against that step's source.
 				# Defer persistence until the entire install succeeds. Stashing it here
 				# and saving it only after all steps complete prevents a failed download
 				# or extraction from leaving a falsely "up to date" stored version.
@@ -1148,7 +1151,10 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 				install_steps_failed.emit(emulator_id, "Failed to fetch release info")
 				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 				return
-			if version != "":
+			if version != "" and not _pending_emulator_version.has(emulator_id):
+				# First download step wins: emulators with multiple download steps
+				# (e.g. shadPS4 core + Qt launcher) must store the first step's
+				# version, since update checks compare against that step's source.
 				# Defer persistence until the entire install succeeds. Stashing it here
 				# and saving it only after all steps complete prevents a failed download
 				# or extraction from leaving a falsely "up to date" stored version.
@@ -1540,7 +1546,7 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 	}
 	
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
-	var emulator_name = emulator.get("name", emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 
 	if emulator.is_empty():
 		return result

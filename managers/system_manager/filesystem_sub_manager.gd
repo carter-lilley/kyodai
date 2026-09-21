@@ -1271,7 +1271,7 @@ static func format_bytes(byte_count: int) -> String:
 
 ## Extracts an archive using the bundled 7-Zip binary.
 ## Handles both ZIP and 7z archives on desktop platforms.
-## progress_callback(info: Dictionary) is called every ~500ms.
+## progress_callback(info: Dictionary) is called every ~250ms while extracting.
 ## total_files will be 0 (unknown) if counting the archive listing failed.
 ## Returns true on success
 static func _extract_with_7z(archive_path: String, extract_dir: String, progress_callback: Callable = Callable()) -> bool:
@@ -1279,67 +1279,110 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 	if binary_path == "":
 		push_error("[SystemManager.filesystem] 7-Zip binary not available for fallback extraction")
 		return false
-	
+
 	print("[SystemManager.filesystem] Using 7-Zip fallback for ZIP extraction: " + binary_path)
-	
+
 	var abs_archive = resolve_native_path(archive_path)
 	var abs_extract_dir = resolve_native_path(extract_dir)
-	
+
 	print("[SystemManager.filesystem] 7-Zip extracting: " + abs_archive + " -> " + abs_extract_dir)
-	
-	# Ensure extraction directory exists before polling
+
+	# Ensure extraction directory exists before extracting
 	if not dir_exists(abs_extract_dir):
 		make_dir_recursive(abs_extract_dir)
-	
+
 	# Count total files first for accurate progress
 	var total_files = _count_files_in_7z_archive(binary_path, abs_archive)
 	print("[SystemManager.filesystem] 7-Zip total files in archive: " + str(total_files))
-	
-	# Run 7z in a thread so we can poll directory progress while it runs
-	# We're already in a SystemManager.memory worker thread, but OS.execute blocks,
-	# so we use an inner thread for 7z and poll from the outer thread
-	var result = {"done": false, "success": false}
+
+	# Stream 7z's own progress output (-bsp1) instead of polling the extraction
+	# directory with recursive file counts (the old approach re-walked tens of
+	# thousands of files every 500ms, thrashing disk I/O against 7z itself).
+	var args: PackedStringArray = ["x", abs_archive, "-o" + abs_extract_dir, "-y", "-bsp1"]
+	var pipe: Dictionary = OS.execute_with_pipe(binary_path, args)
+	if pipe.is_empty():
+		return _extract_with_7z_blocking(binary_path, abs_archive, abs_extract_dir, total_files, progress_callback)
+
+	print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
+
+	var stdio: FileAccess = pipe["stdio"]
+	var pid: int = pipe["pid"]
+	var percent_regex := RegEx.new()
+	percent_regex.compile("(\\d+)%")
+
+	var last_percent := -1
+	var last_callback_ms := 0
+	# Keep a small tail between chunks so a percentage split across a chunk
+	# boundary is still matched.
+	var tail := ""
+
+	while true:
+		var chunk := stdio.get_buffer(4096)
+		if chunk.is_empty():
+			# No data right now; stop once the process has exited.
+			if not OS.is_process_running(pid):
+				break
+			OS.delay_msec(50)
+			continue
+		var text := tail + chunk.get_string_from_utf8()
+		tail = text.right(16)
+		var search_from := 0
+		while true:
+			var m := percent_regex.search(text, search_from)
+			if m == null:
+				break
+			last_percent = maxi(last_percent, int(m.get_string(1)))
+			search_from = m.get_end()
+		var now := Time.get_ticks_msec()
+		if last_percent >= 0 and progress_callback.is_valid() and now - last_callback_ms >= 250:
+			last_callback_ms = now
+			var extracted := int(round(maxi(total_files, 0) * last_percent / 100.0))
+			progress_callback.call(_make_extraction_progress_info(extracted, maxi(total_files, 0)))
+
+	stdio.close()
+	if pipe.get("stderr") is FileAccess:
+		pipe["stderr"].close()
+
+	var exit_code := OS.get_process_exit_code(pid)
+	print("[SystemManager.filesystem] 7-Zip exit code: " + str(exit_code))
+
+	var success := exit_code == 0
+	if success:
+		if progress_callback.is_valid():
+			progress_callback.call(_make_extraction_progress_info(maxi(total_files, 0), maxi(total_files, 0)))
+		print("[SystemManager.filesystem] 7-Zip extraction completed successfully, " + str(maxi(total_files, 0)) + " files extracted")
+	else:
+		push_error("[SystemManager.filesystem] 7-Zip extraction failed with exit code: " + str(exit_code))
+
+	return success
+
+## Fallback extraction when a progress pipe cannot be created: runs 7z blocking
+## on an inner thread and waits for completion with no incremental progress.
+static func _extract_with_7z_blocking(binary_path: String, abs_archive: String, abs_extract_dir: String, total_files: int, progress_callback: Callable = Callable()) -> bool:
+	var args: Array = ["x", abs_archive, "-o" + abs_extract_dir, "-y"]
+	print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
+
+	var result = {"done": false, "exit_code": -1}
 	var thread = Thread.new()
-	
 	var run_7z = func():
 		var output = []
-		var args = ["x", abs_archive, "-o" + abs_extract_dir, "-y"]
-		print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
-		var exit_code = OS.execute(binary_path, args, output, true)
-		
-		print("[SystemManager.filesystem] 7-Zip exit code: " + str(exit_code))
-		if exit_code != 0:
-			push_error("[SystemManager.filesystem] 7-Zip extraction failed with exit code: " + str(exit_code))
-			result.success = false
-		else:
-			result.success = true
+		result.exit_code = OS.execute(binary_path, args, output, true)
 		result.done = true
-	
 	thread.start(run_7z)
-	
-	# Poll directory file count every 500ms for faster progress updates
-	var last_count = 0
+
 	while not result.done:
-		OS.delay_msec(500)
-		
-		var current_count = count_files_recursive(abs_extract_dir)
-		if current_count != last_count and progress_callback.is_valid():
-			progress_callback.call(_make_extraction_progress_info(current_count, total_files))
-			last_count = current_count
-	
+		OS.delay_msec(250)
 	thread.wait_to_finish()
-	
-	# Final callback with actual file count
-	var final_count = count_files_recursive(abs_extract_dir)
-	if progress_callback.is_valid():
-		progress_callback.call(_make_extraction_progress_info(final_count, total_files))
-	
-	var success = result.success and final_count > 0
+
+	print("[SystemManager.filesystem] 7-Zip exit code: " + str(result.exit_code))
+	var success: bool = result.exit_code == 0
 	if success:
-		print("[SystemManager.filesystem] 7-Zip extraction completed successfully, " + str(final_count) + " files extracted")
+		if progress_callback.is_valid():
+			progress_callback.call(_make_extraction_progress_info(maxi(total_files, 0), maxi(total_files, 0)))
+		print("[SystemManager.filesystem] 7-Zip extraction completed successfully, " + str(maxi(total_files, 0)) + " files extracted")
 	else:
-		push_error("[SystemManager.filesystem] 7-Zip extraction failed - exit=" + str(result.success) + ", files=" + str(final_count))
-	
+		push_error("[SystemManager.filesystem] 7-Zip extraction failed with exit code: " + str(result.exit_code))
+
 	return success
 
 ## Counts total files in a 7z archive using "7z l" command.

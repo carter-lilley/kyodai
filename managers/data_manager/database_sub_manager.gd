@@ -1393,6 +1393,64 @@ func get_games_by_platform(platform_slug: String, filters: Dictionary = {}) -> A
 	return games
 
 
+## Columns for shuffle fetches: everything except the large description/
+## screenshots blobs, whose per-row JSON parsing dominates bag-prep cost.
+## _row_to_game tolerates the missing columns.
+const _SHUFFLE_COLUMNS := "id, romm_id, title, platform, platform_slug, cover_url, cover_path, file_name, file_path, file_size, has_local_copy, last_updated, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, status, now_playing, backlogged, hidden, is_favorite, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, unwrapped"
+
+## Shuffle-optimized platform fetch: same WHERE semantics as
+## get_games_by_platform, but skips description/screenshots and drops
+## ORDER BY (the bag shuffles anyway).
+func get_games_for_shuffle(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		return games
+	var filter_parts: Array = _get_filter_clause(filters)
+	var query = "SELECT " + _SHUFFLE_COLUMNS + " FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
+	var query_result = query_array(query, [platform_slug] + filter_parts[1])
+	for row in query_result:
+		games.append(_row_to_game(row))
+	return games
+
+
+## Chunked variant of get_games_for_shuffle: yields a frame every chunk_size
+## row conversions so building the full shuffler candidate pool (tens of
+## thousands of rows) never hitches the UI.
+func get_games_for_shuffle_async(platform_slug: String, filters: Dictionary = {}, chunk_size: int = 500) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready:
+		return games
+	var filter_parts: Array = _get_filter_clause(filters)
+	var query = "SELECT " + _SHUFFLE_COLUMNS + " FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
+	var query_result = query_array(query, [platform_slug] + filter_parts[1])
+	for i in range(query_result.size()):
+		games.append(_row_to_game(query_result[i]))
+		if i % chunk_size == chunk_size - 1:
+			await get_tree().process_frame
+	return games
+
+
+## SQL-side random sampling for the shuffler bag: one query across all
+## selected platforms returning only `limit` games. romm_id is globally
+## unique, so ORDER BY RANDOM() LIMIT N matches the old pool-shuffle-take-N
+## distribution without materializing the whole library in GDScript.
+func get_random_games_for_shuffle(platforms: Array[String], filters: Dictionary, limit: int) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready or platforms.is_empty() or limit <= 0:
+		return games
+	var placeholders := ", ".join(platforms.map(func(_p): return "?"))
+	var filter_parts: Array = _get_filter_clause(filters)
+	var query = "SELECT " + _SHUFFLE_COLUMNS + " FROM games WHERE platform_slug IN (" + placeholders + ")" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT ?"
+	var bindings: Array = []
+	bindings.append_array(platforms)
+	bindings.append_array(filter_parts[1])
+	bindings.append(limit)
+	var query_result = query_array(query, bindings)
+	for row in query_result:
+		games.append(_row_to_game(row))
+	return games
+
+
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:

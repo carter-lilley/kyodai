@@ -221,9 +221,12 @@ func start_session(config: Dictionary) -> void:
 		push_error("[ShufflerSubManager] No platforms selected for shuffler")
 		return
 
+	var fetch_start := Time.get_ticks_msec()
+	var sampled := DataManager.get_random_games_for_shuffle(platforms, filters, bag_size)
+	print("[ShufflerSubManager] Sampled " + str(sampled.size()) + " bag games in " + str(Time.get_ticks_msec() - fetch_start) + " ms")
+
 	_bag = ShufflerBag.new()
-	_bag.build(platforms, bag_size, filters)
-	_bag.build_candidates(platforms, filters)
+	_bag.build(sampled, bag_size)
 
 	if _bag.is_empty():
 		push_error("[ShufflerSubManager] No games found for selected platforms")
@@ -243,6 +246,7 @@ func start_session(config: Dictionary) -> void:
 
 	print("[ShufflerSubManager] Starting session with bag size " + str(_bag.size()) + ": " + _format_bag())
 	_start_bag_preparation()
+	_build_candidates_background(platforms, filters)
 	_await_first_ready()
 
 func stop_session() -> void:
@@ -461,7 +465,7 @@ func remove_game() -> void:
 	# (download/prep completion is detected via _maybe_complete_reroll), then
 	# immediately skip to another ready game instead of waiting for the refill.
 	_reroll_slot_index = index
-	if not _try_replace_with_candidate(index):
+	if not await _try_replace_with_candidate(index):
 		_reroll_slot_index = -1
 		push_warning("[ShufflerSubManager] No alternative game found for reroll")
 		_reset_reroll_state()
@@ -561,7 +565,7 @@ func _start_entry_acquisition(index: int) -> void:
 				_check_all_preparations_complete(),
 			func(m3u_path: String):
 				if m3u_path == "":
-					if not _try_replace_with_candidate(index):
+					if not await _try_replace_with_candidate(index):
 						_fail_entry(index, "[ShufflerSubManager] Disc download failed for " + game.title)
 					_check_all_preparations_complete()
 					return
@@ -577,6 +581,37 @@ func _start_entry_acquisition(index: int) -> void:
 		_total_download_bytes += game.get_active_file_size()
 		_download_entry(index, entry)
 
+## Fills the bag's reroll candidate pool in the background after session
+## start: full-platform fetches with chunked row conversion (frame yields
+## inside get_games_for_shuffle_async), so the work never hitches the UI.
+## Abandons silently if the session ends or the bag is replaced mid-build.
+func _build_candidates_background(platforms: Array[String], filters: Dictionary) -> void:
+	var bag := _bag
+	bag.candidates_building = true
+	var build_start := Time.get_ticks_msec()
+	var seen: Dictionary = {}
+	for id in bag.get_bag_ids():
+		seen[id] = true
+	var pool: Array[GameResource] = []
+	for platform_slug in platforms:
+		if _bag != bag or _state == State.IDLE:
+			bag.candidates_building = false
+			return
+		var games: Array[GameResource] = await DataManager.get_games_for_shuffle_async(platform_slug, filters)
+		for game in games:
+			if seen.has(game.romm_id):
+				continue
+			seen[game.romm_id] = true
+			pool.append(game)
+	if _bag != bag or _state == State.IDLE:
+		bag.candidates_building = false
+		return
+	pool.shuffle()
+	bag.candidates = pool
+	bag.candidates_building = false
+	bag.candidates_built = true
+	print("[ShufflerSubManager] Candidate pool built: " + str(pool.size()) + " games in " + str(Time.get_ticks_msec() - build_start) + " ms")
+
 ## Replaces a failed/refilling bag slot with a fresh candidate and starts
 ## acquiring it in the background. Returns false when out of candidates or
 ## out of retry attempts for this slot.
@@ -585,6 +620,12 @@ func _try_replace_with_candidate(index: int) -> bool:
 		return false
 	var attempts: int = _candidate_retry_attempts.get(index, 0)
 	if attempts >= MAX_CANDIDATE_RETRIES:
+		return false
+	# The candidate pool fills in the background at session start; a failure
+	# or reroll landing before that waits rather than failing outright.
+	while _bag.candidates_building and _state != State.IDLE:
+		await get_tree().process_frame
+	if _state == State.IDLE:
 		return false
 	var candidate = _bag.pick_reroll_candidate(_bag.get_bag_ids())
 	if candidate == null:
@@ -710,7 +751,7 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 			if success:
 				_prepare_entry(index, _bag.entries[index])
 			else:
-				if not _try_replace_with_candidate(index):
+				if not await _try_replace_with_candidate(index):
 					_fail_entry(index, "[ShufflerSubManager] Download failed for " + game.title)
 			_check_all_preparations_complete()
 	}
@@ -754,7 +795,7 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		entry.download_id = item_id
 	else:
 		_pending_downloads -= 1
-		if not _try_replace_with_candidate(index):
+		if not await _try_replace_with_candidate(index):
 			_fail_entry(index, "[ShufflerSubManager] Failed to queue download for " + game.title)
 		_check_all_preparations_complete()
 
@@ -784,7 +825,7 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 	if entry.temp_path == "":
 		push_warning("[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
 		_pending_preparations -= 1
-		if not _try_replace_with_candidate(index):
+		if not await _try_replace_with_candidate(index):
 			_fail_entry(index, "[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
 		return
 
@@ -801,7 +842,7 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 	else:
 		push_error("[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 		_pending_preparations -= 1
-		if not _try_replace_with_candidate(index):
+		if not await _try_replace_with_candidate(index):
 			_fail_entry(index, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 
 	print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))

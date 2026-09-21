@@ -8,6 +8,9 @@ signal download_requested(emulator_id: String)
 ## Emitted when the card's launch button is pressed, with the effective
 ## emulator (and core, for RetroArch) resolved from selection + defaults.
 signal launch_requested(emulator_id: String, core_id: String)
+## Emitted when the card's update-check button is pressed, with the effective
+## emulator resolved from selection + defaults.
+signal update_check_requested(emulator_id: String)
 
 ## When true, the card is being used in the shuffler config dialog.
 ## Status indicators, the download button, and the version label are hidden,
@@ -85,6 +88,7 @@ var _name_label: M3Label
 var _sync_toggle: M3Switch
 var _emulator_dropdown: M3OptionButton
 var _launch_button: M3IconButton
+var _update_button: M3IconButton
 var _status_indicator: Indicator
 var _download_button: M3Button
 var _version_label: M3Label
@@ -97,6 +101,7 @@ var _sync_toggle_connected: bool = false
 var _emulator_dropdown_connected: bool = false
 var _download_button_connected: bool = false
 var _launch_button_connected: bool = false
+var _update_button_connected: bool = false
 
 func _init():
 	# Cards are created from PlatformCard.new() both directly and from the pool.
@@ -227,17 +232,28 @@ func _build_ui():
 	emulator_row.add_child(_emulator_dropdown)
 	_connect_emulator_dropdown()
 
-	# Standalone launch button (test emulator configs without a game).
-	# Enabled only when the effective emulator is fully installed; see
-	# _update_status_indicator().
+	# Standalone launch button (test emulator configs without a game) with a
+	# per-emulator update-check button below it. Both are enabled only when the
+	# effective emulator is fully installed; see _update_status_indicator().
+	var launch_column = VBoxContainer.new()
+	launch_column.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	emulator_row.add_child(launch_column)
+
 	_launch_button = M3IconButton.new()
 	_launch_button.icon_name = "play"
 	_launch_button.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
 	_launch_button.tooltip_text = "Launch emulator"
 	_launch_button.disabled = true
-	_launch_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	emulator_row.add_child(_launch_button)
+	launch_column.add_child(_launch_button)
 	_connect_launch_button()
+
+	_update_button = M3IconButton.new()
+	_update_button.icon_name = "cloud-refresh"
+	_update_button.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
+	_update_button.tooltip_text = "Check for emulator updates"
+	_update_button.disabled = true
+	launch_column.add_child(_update_button)
+	_connect_update_button()
 
 	# Status row: Indicator + Download button + version label
 	_status_row = HBoxContainer.new()
@@ -366,7 +382,7 @@ func _update_emulator_dropdown():
 		# Skip the default standalone emulator; it's represented by Auto.
 		if emulator_id == registry_default_emulator:
 			continue
-		var emulator_name = emulator.get("name", emulator_id)
+		var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
 		var index = _dropdown_entries.size()
 		_emulator_dropdown.add_item(emulator_name, index)
 		_dropdown_entries.append({"type": "emulator", "emulator_id": emulator_id, "core_id": ""})
@@ -443,7 +459,7 @@ func _get_available_retroarch_cores() -> Array[Dictionary]:
 func _get_emulator_name(emulator_id: String) -> String:
 	for emu in _available_emulators:
 		if emu.get("id", "") == emulator_id:
-			return emu.get("name", emulator_id)
+			return RegistrySubManager.get_emulator_display_name(emu, emulator_id)
 	return emulator_id
 
 func _update_status_indicator():
@@ -459,6 +475,8 @@ func _update_status_indicator():
 			_download_button.visible = false
 		if _launch_button:
 			_launch_button.disabled = true
+		if _update_button:
+			_update_button.disabled = true
 		return
 
 	# Show whether this is using auto or manual selection
@@ -504,9 +522,12 @@ func _update_status_indicator():
 		else:
 			_version_label.visible = false
 
-	# The standalone launch button is only usable once the emulator is fully installed.
+	# The standalone launch and update-check buttons are only usable once the
+	# emulator is fully installed.
 	if _launch_button:
 		_launch_button.disabled = progress["status"] != "complete"
+	if _update_button:
+		_update_button.disabled = progress["status"] != "complete"
 
 	if progress["status"] == "complete":
 		_status_indicator.set_status(Indicator.Status.SUCCESS, "Installed%s" % mode_text, "Emulator is ready to use")
@@ -648,12 +669,18 @@ func reset_for_borrow() -> void:
 			_launch_button.pressed.disconnect(_on_launch_pressed)
 		_launch_button_connected = false
 
+	if _update_button_connected:
+		if _update_button.pressed.is_connected(_on_update_pressed):
+			_update_button.pressed.disconnect(_on_update_pressed)
+		_update_button_connected = false
+
 	# Disconnect any view-specific signal handlers so stale lambdas don't fire
 	# when this card is reused by a different consumer.
 	_disconnect_all("sync_toggled")
 	_disconnect_all("emulator_changed")
 	_disconnect_all("download_requested")
 	_disconnect_all("launch_requested")
+	_disconnect_all("update_check_requested")
 
 	# Clear per-view settings without triggering full display rebuilds
 	_bulk_reset = true
@@ -704,6 +731,9 @@ func reset_for_borrow() -> void:
 	if _launch_button:
 		_launch_button.disabled = true
 
+	if _update_button:
+		_update_button.disabled = true
+
 	if get_parent():
 		get_parent().remove_child(self)
 
@@ -714,6 +744,7 @@ func prepare_for_borrow() -> void:
 	_connect_emulator_dropdown()
 	_connect_download_button()
 	_connect_launch_button()
+	_connect_update_button()
 
 func _disconnect_all(signal_name: String) -> void:
 	var connections = get_signal_connection_list(signal_name)
@@ -746,12 +777,23 @@ func _connect_launch_button() -> void:
 		_launch_button.pressed.connect(_on_launch_pressed)
 		_launch_button_connected = true
 
+func _connect_update_button() -> void:
+	if not _update_button_connected and _update_button:
+		_update_button.pressed.connect(_on_update_pressed)
+		_update_button_connected = true
+
 func _on_launch_pressed():
 	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
 	if effective_emulator == "":
 		return
 	var effective_core = selected_core_id if effective_emulator == "retroarch" else ""
 	launch_requested.emit(effective_emulator, effective_core)
+
+func _on_update_pressed():
+	var effective_emulator = selected_emulator if selected_emulator != "" else registry_default_emulator
+	if effective_emulator == "":
+		return
+	update_check_requested.emit(effective_emulator)
 
 func _on_sync_toggled(enabled: bool):
 	sync_toggled.emit(enabled)
@@ -777,16 +819,10 @@ func _on_download_pressed():
 	if effective_emulator == "":
 		return
 
-	# Get install progress from registry
-	var progress = LaunchManager.get_install_progress(effective_emulator) if LaunchManager else {"status": "not_started", "completed_steps": 0, "total_steps": 0, "next_step_display": ""}
-
-	if progress["status"] == "partial":
-		# Resume installation from first incomplete step
-		LaunchManager.download_emulator(effective_emulator)
-		refresh_ui()
-	else:
-		# For not_started, complete, or any other state, request download/install
-		download_requested.emit(effective_emulator)
+	# Route everything (fresh installs and resumes of partial installs) through
+	# download_requested so the view tracks _last_active_platform_slug for
+	# Android focus restoration and refreshes install status in one place.
+	download_requested.emit(effective_emulator)
 
 func focus_sync_toggle() -> void:
 	if _sync_toggle and _sync_toggle.focus_mode != Control.FOCUS_NONE:

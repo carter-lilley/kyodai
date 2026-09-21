@@ -36,7 +36,7 @@ func _ready():
 	theme = Theme.new()
 
 	# Size the window to fit the connected button column, plus a margin so the
-	# pause button's hotkey badge (which overhangs the button's left edge) is
+	# pause button's hotkey badges (which overhang the button's side edges) are
 	# not clipped by the window bounds.
 	var margin := int(M3Units.dp(10))
 	var count := _button_group.get_child_count()
@@ -73,11 +73,15 @@ func _ready():
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 
-	# Hint the cursor-warp chord (hold LT + View/Select) on the pause button.
-	# Smaller badge than the default so it doesn't dominate the palette button.
+	# Hint the cursor-warp chord (hold LT + View/Select) on the pause button:
+	# an LT badge on the left corner and a View badge on the right corner.
+	# Smaller badges than the default so they don't dominate the palette button.
 	_pause_btn.badge_size_dp = 14
 	_pause_btn.badge_icon_font = "ControllerIcons"
-	_pause_btn.badge_icon_name = "xbox-left-trigger+xbox-view"
+	_pause_btn.badge_icon_name = "xbox-left-trigger"
+	_pause_btn.badge_corner = M3Button.BadgeCorner.BOTTOM_LEFT
+	_pause_btn.badge_icon_name_2 = "xbox-view"
+	_pause_btn.badge_corner_2 = M3Button.BadgeCorner.BOTTOM_RIGHT
 
 func _process(delta: float) -> void:
 	_warp_cooldown = maxf(0.0, _warp_cooldown - delta)
