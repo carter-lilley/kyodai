@@ -67,6 +67,9 @@ func show_notification_safe(
 
 func _show_notification_deferred(id: int, text: String, type: Type, _icon: Texture2D, min_duration: float, progress_callable: Callable, text_formatter: Callable, pulsing: bool, pinned: bool) -> void:
 	print("[SystemManager.notifications] _show_notification_deferred id=" + str(id))
+	if HeadlessLaunchRunner.is_active():
+		print("[notification] ", text)
+		return
 	if not progress_callable.is_null() or pulsing:
 		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing, pinned)
 	else:
@@ -89,6 +92,11 @@ func show_notification(
 ) -> int:
 	var id = _notification_id_counter
 	_notification_id_counter += 1
+
+	# Headless launch companions have no snackbar UI - log instead
+	if HeadlessLaunchRunner.is_active():
+		print("[notification] ", text)
+		return id
 
 	if not progress_callable.is_null() or pulsing:
 		_show_progress_snackbar(id, text, type, progress_callable, text_formatter, pulsing, pinned)

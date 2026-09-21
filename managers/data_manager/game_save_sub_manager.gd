@@ -32,6 +32,9 @@ var _dirty_sweep_ran: bool = false
 func _save_sync_key(game: GameResource, emulator_id: String) -> String:
 	return str(game.romm_id) + ":" + emulator_id
 
+func is_save_sync_in_flight(game: GameResource, emulator_id: String) -> bool:
+	return _save_sync_in_flight.has(_save_sync_key(game, emulator_id))
+
 func _begin_save_sync(key: String) -> void:
 	_save_sync_in_flight[key] = true
 
@@ -460,8 +463,44 @@ func resolve_active_save_directory(emulator_id: String, platform_slug: String = 
 	# If no candidate exists yet, fall back to the default (first candidate)
 	if best_dir == "":
 		best_dir = candidates[0]
-	
+
 	return best_dir
+
+## Opens the folder containing the game's save data in the OS file manager.
+## Prefers the exact folder holding the game's save file(s); falls back to the
+## emulator's save root when nothing has been written yet. Desktop only.
+func open_save_location(game: GameResource) -> void:
+	if game == null:
+		return
+	var emulator_id: String = LaunchManager.resolve_emulator_for_game(game)
+	if emulator_id == "":
+		SystemManager.notifications.show_notification("No emulator configured for " + game.get_display_name(), SystemManager.notifications.Type.WARNING)
+		return
+	var core_id: String = _get_core_id_for_save_resolution(emulator_id, game)
+	var save_dir := resolve_active_save_directory(emulator_id, game.platform_slug, core_id)
+	if save_dir == "":
+		SystemManager.notifications.show_notification("No save location known for " + game.get_display_name(), SystemManager.notifications.Type.WARNING)
+		return
+
+	var is_folder_save := uses_folder_saves(emulator_id, game.platform_slug, core_id)
+	var extensions := get_save_extensions(emulator_id, game.platform_slug, core_id)
+	var scan_work := func() -> Array[Dictionary]:
+		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
+			return _discover_emulator_saves(emulator_id, save_dir, game)
+		return _discover_game_saves(save_dir, game, extensions)
+	_run_io_task(save_dir, scan_work, func(found: Array[Dictionary]):
+		# Most precise target: the folder actually holding a save file. The
+		# emulator root is the fallback when the game has not saved yet.
+		var target_dir := save_dir
+		if not found.is_empty():
+			target_dir = found[0].file_path.get_base_dir()
+		if not FSM.dir_exists(target_dir):
+			SystemManager.notifications.show_notification("No save folder yet for " + game.get_display_name() + " - it appears after the first save", SystemManager.notifications.Type.INFO)
+			return
+		var result := OS.shell_open(FSM.resolve_path(target_dir, {"format": FSM.PathFormat.ABSOLUTE}))
+		if result != OK:
+			SystemManager.notifications.show_notification("Could not open save folder for " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+	)
 
 ## Backward-compatible alias that returns the default save directory.
 ## Install-time and directory-creation code should use this.
@@ -2088,6 +2127,12 @@ func _fetch_saves_with_device_retry(game: GameResource, on_result: Callable) -> 
 ## Shows the save conflict dialog and waits for user choice
 ## Returns: "local", "server", "cancel", or "" (on error)
 func _show_conflict_dialog(game: GameResource, local_time: int, server_time: int) -> String:
+	# Headless launches have no UI to ask with: resolve newest-wins (tie -> server)
+	if HeadlessLaunchRunner.is_active():
+		var headless_choice := "local" if local_time > server_time else "server"
+		push_warning("[GameSaveSubManager] headless: save conflict for " + game.get_display_name() + " - auto-resolving newest-wins (" + headless_choice + ")")
+		return headless_choice
+
 	# Serialize conflict dialogs: a second flow waits for the first dialog to close
 	while _conflict_dialog_open:
 		await _conflict_dialog_closed
@@ -2816,43 +2861,67 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 					conflict_pairs.append({"local": local, "remote": remote})
 
 			if not conflict_pairs.is_empty():
-				# Show conflict dialog
-				print("[GameSaveSubManager] Auto-upload detected conflict, showing dialog")
-				var first = conflict_pairs[0]
-				var choice = await _show_conflict_dialog(game, first.local.modified_time, parse_iso_timestamp(first.remote.get("updated_at", "")))
-
-				match choice:
-					"local":
-						# User chose to keep local, proceed with upload (force is
-						# legitimate only here: explicit user keep-local)
-						print("[GameSaveSubManager] User chose to keep local save, proceeding with upload")
-						for pair in conflict_pairs:
+				if HeadlessLaunchRunner.is_active():
+					# Headless newest-wins: local-newer force-uploads, remote-newer downloads
+					var headless_timestamp = Time.get_datetime_string_from_system(true, true)
+					var headless_downloads: Array = []
+					for pair in conflict_pairs:
+						var headless_local_mtime: int = pair.local.modified_time
+						var headless_remote_mtime: int = parse_iso_timestamp(pair.remote.get("updated_at", ""))
+						if headless_local_mtime > headless_remote_mtime:
+							push_warning("[GameSaveSubManager] headless: conflict on '" + pair.local.file_name + "' - local is newer, force uploading")
 							upload_ops.append({"local": pair.local, "force": true})
+						else:
+							push_warning("[GameSaveSubManager] headless: conflict on '" + pair.local.file_name + "' - server is newer, downloading")
+							headless_downloads.append(pair)
+					if headless_downloads.is_empty():
 						_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
-					"server":
-						# User chose the server copy: download it now so the
-						# choice takes effect immediately and the baseline is
-						# recorded for future syncs
-						print("[GameSaveSubManager] User chose server save, downloading now")
-						var current_timestamp = Time.get_datetime_string_from_system(true, true)
-						var dl_state = {"pending": conflict_pairs.size(), "failed": 0}
-						for pair in conflict_pairs:
-							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
-								if not success:
-									dl_state.failed += 1
-								dl_state.pending -= 1
-								if dl_state.pending <= 0:
-									if dl_state.failed > 0:
-										SystemManager.notifications.show_notification("Save sync: server download failed", SystemManager.notifications.Type.ERROR)
-									else:
-										SystemManager.notifications.show_notification("Save sync: server version applied", SystemManager.notifications.Type.INFO)
-									_end_save_sync(sync_key)
+					else:
+						var headless_dl_state = {"pending": headless_downloads.size()}
+						for pair in headless_downloads:
+							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, headless_timestamp, func(_success: bool):
+								headless_dl_state.pending -= 1
+								if headless_dl_state.pending <= 0:
+									_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
 							)
-					"cancel", "":
-						# User cancelled
-						print("[GameSaveSubManager] User cancelled auto-upload")
-						SystemManager.notifications.show_notification("Save sync cancelled", SystemManager.notifications.Type.INFO)
-						_end_save_sync(sync_key)
+				else:
+					# Show conflict dialog
+					print("[GameSaveSubManager] Auto-upload detected conflict, showing dialog")
+					var first = conflict_pairs[0]
+					var choice = await _show_conflict_dialog(game, first.local.modified_time, parse_iso_timestamp(first.remote.get("updated_at", "")))
+
+					match choice:
+						"local":
+							# User chose to keep local, proceed with upload (force is
+							# legitimate only here: explicit user keep-local)
+							print("[GameSaveSubManager] User chose to keep local save, proceeding with upload")
+							for pair in conflict_pairs:
+								upload_ops.append({"local": pair.local, "force": true})
+							_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
+						"server":
+							# User chose the server copy: download it now so the
+							# choice takes effect immediately and the baseline is
+							# recorded for future syncs
+							print("[GameSaveSubManager] User chose server save, downloading now")
+							var current_timestamp = Time.get_datetime_string_from_system(true, true)
+							var dl_state = {"pending": conflict_pairs.size(), "failed": 0}
+							for pair in conflict_pairs:
+								_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
+									if not success:
+										dl_state.failed += 1
+									dl_state.pending -= 1
+									if dl_state.pending <= 0:
+										if dl_state.failed > 0:
+											SystemManager.notifications.show_notification("Save sync: server download failed", SystemManager.notifications.Type.ERROR)
+										else:
+											SystemManager.notifications.show_notification("Save sync: server version applied", SystemManager.notifications.Type.INFO)
+										_end_save_sync(sync_key)
+								)
+						"cancel", "":
+							# User cancelled
+							print("[GameSaveSubManager] User cancelled auto-upload")
+							SystemManager.notifications.show_notification("Save sync cancelled", SystemManager.notifications.Type.INFO)
+							_end_save_sync(sync_key)
 			else:
 				# No conflict, upload only records gavel marked as changed
 				_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)
@@ -2896,6 +2965,10 @@ func _schedule_startup_dirty_sweep() -> void:
 	if _dirty_sweep_ran:
 		return
 	_dirty_sweep_ran = true
+	# Headless launch companions never prompt; drift is reconciled by the
+	# newest-wins conflict policy during the launch's own sync.
+	if HeadlessLaunchRunner.is_active():
+		return
 	# Let startup settle before touching disk: wait out the warmup window so
 	# the sweep can't collide with shader prewarm or the settings pre-creation
 	# (capped in case the home grid never settles), then a short buffer.
@@ -3254,13 +3327,18 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			# session (keep-local force-uploads post-launch without re-asking,
 			# cancel suppresses the post-launch sync entirely)
 			if not conflict_pairs.is_empty():
-				state.pending += 1  # the open dialog counts as a pending op
-				var first = conflict_pairs[0]
-				var local_mtime = first.local.modified_time if first.local else 0
-				var choice = await _show_conflict_dialog(game, local_mtime, parse_iso_timestamp(first.remote.get("updated_at", "")))
-				match choice:
-					"server":
-						for pair in conflict_pairs:
+				state.pending += 1  # conflict resolution counts as a pending op
+				if HeadlessLaunchRunner.is_active():
+					# Per-file newest-wins: server-newer downloads now; local-newer
+					# keeps local and force-uploads post-launch without re-asking
+					for pair in conflict_pairs:
+						var headless_local_mtime: int = pair.local.modified_time if pair.local else 0
+						var headless_remote_mtime: int = parse_iso_timestamp(pair.remote.get("updated_at", ""))
+						if headless_local_mtime > headless_remote_mtime:
+							push_warning("[GameSaveSubManager] headless: pre-launch conflict on '" + pair.remote.get("file_name", "save") + "' - local is newer, keeping local (uploads after play)")
+							_sync_choice_overrides[sync_key] = "local"
+						else:
+							push_warning("[GameSaveSubManager] headless: pre-launch conflict on '" + pair.remote.get("file_name", "save") + "' - server is newer, downloading")
 							state.pending += 1
 							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
 								if not success:
@@ -3268,10 +3346,24 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 								state.pending -= 1
 								check_complete.call()
 							)
-					"local":
-						_sync_choice_overrides[sync_key] = "local"
-					_:
-						_sync_choice_overrides[sync_key] = "cancel"
+				else:
+					var first = conflict_pairs[0]
+					var local_mtime = first.local.modified_time if first.local else 0
+					var choice = await _show_conflict_dialog(game, local_mtime, parse_iso_timestamp(first.remote.get("updated_at", "")))
+					match choice:
+						"server":
+							for pair in conflict_pairs:
+								state.pending += 1
+								_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, current_timestamp, func(success: bool):
+									if not success:
+										state.failed += 1
+									state.pending -= 1
+									check_complete.call()
+								)
+						"local":
+							_sync_choice_overrides[sync_key] = "local"
+						_:
+							_sync_choice_overrides[sync_key] = "cancel"
 				state.pending -= 1
 
 			# Fire completion once the conflict (if any) is resolved and no

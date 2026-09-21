@@ -465,46 +465,26 @@ static func add_game(game: GameResource) -> void:
 		return
 	
 	SystemManager.notifications.show_notification("Adding " + game.title + " to Steam...", SystemManager.notifications.Type.INFO)
-	
-	var launch_intent = LaunchManager.create_launch_intent(game)
-	if not launch_intent:
-		SystemManager.notifications.show_notification("Failed to create launch intent for " + game.title, SystemManager.notifications.Type.ERROR)
+
+	if not game.is_active_variant_downloaded():
+		SystemManager.notifications.show_notification(game.title + " is not downloaded - download it before adding to Steam", SystemManager.notifications.Type.ERROR)
 		if SystemManager.audio:
 			SystemManager.audio.play_sfx("error")
 		return
-	
-	var exe_path = LaunchManager.get_emulator_install_path(launch_intent.emulator_id)
-	if exe_path.is_empty():
-		SystemManager.notifications.show_notification("Could not find emulator executable for " + game.title, SystemManager.notifications.Type.ERROR)
-		if SystemManager.audio:
-			SystemManager.audio.play_sfx("error")
-		return
-	
-	exe_path = SystemManager.filesystem.resolve_native_path(exe_path)
-	var rom_path: String = SystemManager.filesystem.resolve_native_path(launch_intent.rom_path)
-	
-	var full_command: String = "\"" + exe_path + "\""
-	
-	if not launch_intent.launch_args.is_empty():
-		for i in range(launch_intent.launch_args.size()):
-			var arg: String = launch_intent.launch_args[i]
-			if i == 0 and (arg == exe_path or arg.ends_with(exe_path.get_file())):
-				continue
-			if arg == rom_path or arg.replace("/", "\\") == rom_path:
-				arg = "\"" + arg + "\""
-			full_command += " " + arg
-	
-	var working_dir: String = launch_intent.working_directory
-	if working_dir.is_empty():
-		working_dir = exe_path.get_base_dir()
-	working_dir = SystemManager.filesystem.resolve_native_path(working_dir)
-	
+
+	# The shortcut targets Kyodai itself in headless companion mode: the
+	# subprocess performs pre/post-launch save sync around the emulator, so
+	# Steam launches keep save sync. See HeadlessLaunchRunner.
+	var kyodai_exe: String = SystemManager.filesystem.resolve_native_path(OS.get_executable_path())
+	var full_command: String = "\"" + kyodai_exe + "\""
+	var working_dir: String = kyodai_exe.get_base_dir()
+
 	var game_data := {
 		"name": game.title,
 		"exe": full_command,
 		"start_dir": working_dir,
 		"icon": "",
-		"launch_options": "",
+		"launch_options": "--headless -- " + HeadlessLaunchRunner.ARG_LAUNCH + " " + str(game.romm_id),
 		"last_play_time": 0,
 		"cover_path": ""
 	}
@@ -616,7 +596,7 @@ static func _write_game_to_steam(game: GameResource, steam_path: String, game_da
 	if artwork_ok:
 		SystemManager.notifications.show_notification(game.title + " added to Steam! (" + "; ".join(notes) + ")", SystemManager.notifications.Type.SUCCESS)
 		if SystemManager.audio:
-			SystemManager.audio.play_sfx("success")
+			SystemManager.audio.play_sfx("affirm_00")
 	else:
 		SystemManager.notifications.show_notification(game.title + " added to Steam, but artwork failed - re-run Add to Steam once the cover is available", SystemManager.notifications.Type.ERROR)
 		if SystemManager.audio:

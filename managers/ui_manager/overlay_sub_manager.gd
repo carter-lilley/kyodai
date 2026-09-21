@@ -531,6 +531,10 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	if game and game.is_active_variant_downloaded() and (SystemManager.platform.is_windows() or SystemManager.platform.is_linux()):
 		items.append({"id": "add_to_steam", "text": "Add to Steam"})
 
+	# Save folder browsing only makes sense where the OS has a file manager
+	if game and (SystemManager.platform.is_windows() or SystemManager.platform.is_linux()):
+		items.append({"id": "open_save_location", "text": "Open Save Location", "icon": "folder-open"})
+
 	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})
 	items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
 

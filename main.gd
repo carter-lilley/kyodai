@@ -62,6 +62,17 @@ func _enter_tree():
 
 func _ready():
 	var main_ready_start_us := Time.get_ticks_usec()
+
+	# Headless companion mode: launched by Steam shortcuts written by
+	# SteamVDFWriter (kyodai --headless -- --kyodai-launch <romm_id>). Skips all
+	# UI init and runs save sync around the emulator process, then exits.
+	var headless_romm_id := HeadlessLaunchRunner.parse_launch_romm_id()
+	if headless_romm_id > 0:
+		var headless_runner := HeadlessLaunchRunner.new()
+		add_child(headless_runner)
+		headless_runner.run(headless_romm_id)
+		return
+
 	# Disable automatic quit so we can free the scene tree before the rendering
 	# server shuts down. Without this, get_tree().quit() exits without destroying
 	# nodes, which causes CanvasItem/Texture RID leaks.

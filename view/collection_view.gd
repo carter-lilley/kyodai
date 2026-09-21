@@ -348,6 +348,10 @@ func _on_modal_item_selected(item_id: String, context: Dictionary) -> void:
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				SteamVDFWriter.add_game(game)
+		"open_save_location":
+			var game = DataManager.get_game_by_id(romm_id)
+			if game:
+				DataManager.game_save.open_save_location(game)
 		"delete":
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
