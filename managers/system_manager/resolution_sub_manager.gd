@@ -39,6 +39,7 @@ const XemuToml = preload("res://utils/config_resolvers/xemu_toml.gd")
 ## thread while the main thread resolves for launches.
 static var _cache: Dictionary = {}
 static var _cache_mutex := Mutex.new()
+const CACHE_VERSION: int = 1  # Bump when resolver logic changes
 
 static func resolve_save_dir(emulator_id: String, platform_slug: String = "", core_id: String = "", allow_core_override: bool = true) -> Dictionary:
 	return _resolve("save", emulator_id, platform_slug, core_id, allow_core_override)
@@ -198,7 +199,7 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 	# mtime-keyed cache: re-resolve only when the config changed on disk.
 	# The no-override variant resolves through a different block, so it gets
 	# its own cache namespace.
-	var cache_key := "%s:%s:%s:%s%s" % [kind, emulator_id, platform_slug, core_id, "" if allow_core_override else ":nooverride"]
+	var cache_key := "%s:%s:%s:%s:%d%s" % [kind, emulator_id, platform_slug, core_id, CACHE_VERSION, "" if allow_core_override else ":nooverride"]
 	var mtime := 0
 	if config_status == CSM.Status.OK:
 		mtime = int(FileAccess.get_modified_time(config_path))

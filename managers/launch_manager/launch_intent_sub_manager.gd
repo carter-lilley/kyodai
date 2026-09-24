@@ -187,13 +187,21 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# Use native path resolution for external tools (converts user:// and handles Windows backslashes)
 		var global_install_path = FSM.resolve_native_path(install_path)
 		var global_rom_path = FSM.resolve_native_path(intent.rom_path)
-		
-		# Build absolute core path
 		var install_dir = global_install_path.get_base_dir()
 		install_dir = install_dir.replace("//", "/")
+		
+		# Absolute emulator directory for placeholder substitution
+		var global_emulator_dir = FSM.resolve_path(
+			launch_manager.registry._get_emulator_directory(intent.emulator_id),
+			{"format": FSM.PathFormat.ABSOLUTE}
+		).rstrip("/")
+		
+		# Build absolute core path. Cores live in {emulator_dir}/cores, not next to
+		# the executable (important for extracted AppImages where the executable is
+		# inside squashfs-root/).
 		var core_extension = "_libretro.dll" if SystemManager.platform.is_windows() else "_libretro.so"
 		var core_separator = "\\" if SystemManager.platform.is_windows() else "/"
-		var global_core_path = install_dir + core_separator + "cores" + core_separator + intent.core_name + core_extension
+		var global_core_path = global_emulator_dir + core_separator + "cores" + core_separator + intent.core_name + core_extension
 		global_core_path = global_core_path.replace("//", "/")
 		
 		# Set working directory only if emulator requires it (e.g., xemu) or for Vita3K
@@ -204,7 +212,18 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 			var formatted_arg = arg.replace("{exe}", global_install_path)
 			formatted_arg = formatted_arg.replace("{rom}", global_rom_path)
 			formatted_arg = formatted_arg.replace("{core}", global_core_path)
+			formatted_arg = formatted_arg.replace("{emulator_dir}", global_emulator_dir)
 			intent.launch_args.append(formatted_arg)
+		
+		# Apply per-platform environment variables (Linux/macOS only)
+		var env_config = platform_config.get("environment", {})
+		for var_name in env_config:
+			var formatted_value = str(env_config[var_name])
+			formatted_value = formatted_value.replace("{exe}", global_install_path)
+			formatted_value = formatted_value.replace("{rom}", global_rom_path)
+			formatted_value = formatted_value.replace("{core}", global_core_path)
+			formatted_value = formatted_value.replace("{emulator_dir}", global_emulator_dir)
+			intent.environment[var_name] = formatted_value
 		
 		# Vita3K special handling for desktop - replace ROM path with TitleID
 		var desktop_vita_title_id = intent.game.get_active_title_id() if intent.game else ""
@@ -223,9 +242,11 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		# RPCS3 special handling for desktop - replace ROM path with game folder path
 		var desktop_rpcs3_title_id = intent.game.get_active_title_id() if intent.game else ""
 		if launch_manager.registry.get_emulator_architecture(intent.emulator_id) == "rpcs3" and desktop_rpcs3_title_id != "":
-			# Check both disc and digital install locations
-			var disc_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "games", desktop_rpcs3_title_id))
-			var digital_path: String = FSM.resolve_native_path(FSM.join_paths(install_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
+			# Check both disc and digital install locations. Use the emulator root
+			# (not install_dir) so extracted AppImage installs still find games outside
+			# squashfs-root.
+			var disc_path: String = FSM.resolve_native_path(FSM.join_paths(global_emulator_dir, "games", desktop_rpcs3_title_id))
+			var digital_path: String = FSM.resolve_native_path(FSM.join_paths(global_emulator_dir, "dev_hdd0", "game", desktop_rpcs3_title_id))
 			
 			var game_path: String
 			if FSM.dir_exists(disc_path):

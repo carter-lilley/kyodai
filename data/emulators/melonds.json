@@ -57,7 +57,8 @@
 		"executable": "melonDS",
 		"template": [
 		  "{exe}",
-          "{rom}"
+		  "-f",
+		  "{rom}"
 		]
 	  }
 	}

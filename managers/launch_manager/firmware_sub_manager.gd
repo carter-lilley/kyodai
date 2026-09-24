@@ -123,12 +123,14 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 		_firmware_ready_cache.erase(cache_key)
 	
 	var firmware_dir = get_firmware_directory(emulator_id, platform_slug, core_id)
+	print("[FirmwareManager] is_platform_firmware_ready: firmware_dir=" + firmware_dir)
 	if firmware_dir == "":
 		# No firmware directory configured, assume not needed
 		_firmware_ready_cache[cache_key] = true
 		return true
 	
 	if not FSM.dir_exists(firmware_dir):
+		print("[FirmwareManager] is_platform_firmware_ready: firmware_dir does not exist")
 		_firmware_ready_cache[cache_key] = false
 		return false
 	
@@ -136,6 +138,8 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 	var platform_config = launch_manager.registry._platforms_data.get(platform_slug, {})
 	var firmware_config = platform_config.get("firmware", {})
 	var expected_files = firmware_config.get("expected_files", [])
+	
+	print("[FirmwareManager] is_platform_firmware_ready: expected_files=" + str(expected_files))
 	
 	# No expected files means no BIOS needed for this platform
 	if expected_files.is_empty():
@@ -148,9 +152,11 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 			if _is_force_pull_firmware(platform_slug) \
 					and not FSM.file_exists(_marker_path(firmware_dir)):
 				break
+			print("[FirmwareManager] is_platform_firmware_ready: found " + expected_file)
 			_firmware_ready_cache[cache_key] = true
 			return true
 	
+	print("[FirmwareManager] is_platform_firmware_ready: no expected files found")
 	_firmware_ready_cache[cache_key] = false
 	return false
 

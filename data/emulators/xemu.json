@@ -52,8 +52,9 @@
 		"executable": "xemu",
 		"template": [
 		  "{exe}",
+		  "-full-screen",
 		  "-dvd_path",
-          "{rom}"
+		  "{rom}"
 		]
 	  }
 	}

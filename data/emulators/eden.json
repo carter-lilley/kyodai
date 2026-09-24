@@ -1,163 +1,193 @@
 {
-  "suspend_method": "suspend",
-  "meta": {
-	"id": "eden",
-	"name": "Eden",
-	"platforms": [
-      "switch"
-	],
-	"os": [
-      "windows",
-      "linux",
-      "android"
-	]
-  },
-  "paths": {
-	"default_saves": {
-	  "_default": {
-		"directories": {
-		  "windows": "{emulator_dir}/user/nand/user/save",
-		  "linux": "{emulator_dir}/user/nand/user/save",
-		  "android": "{app_data}/nand/user/save"
-		},
-		"extensions": [
-          "*"
+	"suspend_method": "suspend",
+	"meta": {
+		"id": "eden",
+		"name": "Eden",
+		"platforms": [
+			"switch"
 		],
-		"uses_folder_saves": true
-	  }
-	},
-	"default_firmware": {
-	  "_default": {
-		"directories": {
-		  "windows": "{emulator_dir}/user",
-		  "linux": "{emulator_dir}/user",
-		  "android": "{app_data}"
-		}
-	  }
-	}
-  },
-  "resolution": {
-	"strategy": "eden_ini",
-	"config_candidates": {
-	  "windows": ["{emulator_dir}/user/config/qt-config.ini"],
-	  "linux": ["{emulator_dir}/user/config/qt-config.ini"],
-	  "android": ["{app_data}/config/config.ini"]
-	}
-  },
-  "launch": {
-	"platforms": {
-	  "windows": {
-		"type": "command",
-		"executable": "eden.exe",
-		"template": [
-		  "{exe}",
-		  "{rom}",
-          "-f"
+		"os": [
+			"windows",
+			"linux",
+			"android"
 		]
-	  },
-	  "linux": {
-		"type": "command",
-		"executable": "Eden-Linux-.*-amd64-clang-pgo.AppImage",
-		"template": [
-		  "{exe}",
-		  "{rom}",
-          "-f"
-		]
-	  },
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "dev.eden.eden_emulator",
-		"rom_delivery": "intent_data"
-	  }
-	}
-  },
-  "install": [
-	{
-	  "step": "download_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "download_repo",
-		  "github_repo": "eden-emu/eden",
-		  "api_base_url": "https://git.eden-emu.dev/api/v1",
-		  "asset_pattern": "Eden-Windows-.*-amd64-msvc.*\\.zip"
-		},
-		"linux": {
-		  "action_type": "download_repo",
-		  "github_repo": "eden-emu/eden",
-		  "api_base_url": "https://git.eden-emu.dev/api/v1",
-		  "asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "eden-emu/eden",
-		  "api_base_url": "https://git.eden-emu.dev/api/v1",
-		  "asset_pattern": "Eden-Android-.*-standard\\.apk"
-		}
-	  }
 	},
-	{
-	  "step": "install_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "extract",
-		  "extract_to": ".",
-		  "strip_top_directory": true,
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "eden.exe"
-		  }
+	"paths": {
+		"default_saves": {
+			"_default": {
+				"directories": {
+					"windows": "{emulator_dir}/user/nand/user/save",
+					"linux": "{emulator_dir}/user/nand/user/save",
+					"android": "{app_data}/nand/user/save"
+				},
+				"extensions": [
+					"*"
+				],
+				"uses_folder_saves": true
+			}
 		},
-		"linux": {
-		  "action_type": "none",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
-		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "dev.eden.eden_emulator",
-		  "expected_file": "Eden-Android-*-standard.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "dev.eden.eden_emulator"
-		  }
+		"default_firmware": {
+			"_default": {
+				"directories": {
+					"windows": "{emulator_dir}/user",
+					"linux": "{emulator_dir}/user",
+					"android": "{app_data}"
+				}
+			}
 		}
-	  }
 	},
-	{
-	  "step": "create_portable_file",
-	  "platforms": {
-		"windows": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "user/.keep",
-			  "content": ""
-			}
-		  ],
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "user/.keep"
-		  }
-		},
-		"linux": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "user/.keep",
-			  "content": ""
-			}
-		  ],
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "user/.keep"
-		  }
-		},
-		"android": {
-		  "action_type": "none"
+	"resolution": {
+		"strategy": "eden_ini",
+		"config_candidates": {
+			"windows": [
+				"{emulator_dir}/user/config/qt-config.ini"
+			],
+			"linux": [
+				"{emulator_dir}/user/config/qt-config.ini"
+			],
+			"android": [
+				"{app_data}/config/config.ini"
+			]
 		}
-	  }
-	}
-  ]
+	},
+	"launch": {
+		"platforms": {
+			"windows": {
+				"type": "command",
+				"executable": "eden.exe",
+				"template": [
+					"{exe}",
+					"{rom}",
+					"-f"
+				]
+			},
+			"linux": {
+				"type": "command",
+				"executable": "squashfs-root/AppRun",
+				"template": [
+					"{exe}",
+					"{rom}",
+					"-f"
+				]
+			},
+			"android": {
+				"action": "android.intent.action.VIEW",
+				"package": "dev.eden.eden_emulator",
+				"rom_delivery": "intent_data"
+			}
+		}
+	},
+	"install": [
+		{
+			"step": "download_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "download_repo",
+					"github_repo": "eden-emu/eden",
+					"api_base_url": "https://git.eden-emu.dev/api/v1",
+					"asset_pattern": "Eden-Windows-.*-amd64-msvc.*\\.zip"
+				},
+				"linux": {
+					"action_type": "download_repo",
+					"github_repo": "eden-emu/eden",
+					"api_base_url": "https://git.eden-emu.dev/api/v1",
+					"asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+				},
+				"android": {
+					"action_type": "download_repo",
+					"github_repo": "eden-emu/eden",
+					"api_base_url": "https://git.eden-emu.dev/api/v1",
+					"asset_pattern": "Eden-Android-.*-standard\\.apk"
+				}
+			}
+		},
+		{
+			"step": "install_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "extract",
+					"extract_to": ".",
+					"strip_top_directory": true,
+					"validate": {
+						"action_type": "file_exists",
+						"file": "eden.exe"
+					}
+				},
+				"linux": {
+					"action_type": "none",
+					"validate": {
+						"action_type": "files_exist",
+						"path": ".",
+						"pattern": "Eden-Linux-*.AppImage"
+					}
+				},
+				"android": {
+					"action_type": "apk_install",
+					"package_name": "dev.eden.eden_emulator",
+					"expected_file": "Eden-Android-*-standard.apk",
+					"validate": {
+						"action_type": "package_installed",
+						"package": "dev.eden.eden_emulator"
+					}
+				}
+			}
+		},
+		{
+			"step": "chmod_emulator",
+			"platforms": {
+				"linux": {
+					"action_type": "chmod",
+					"pattern": "Eden-Linux-*.AppImage"
+				}
+			}
+		},
+		{
+			"step": "extract_appimage",
+			"platforms": {
+				"linux": {
+					"action_type": "appimage_extract",
+					"pattern": "Eden-Linux-*.AppImage",
+					"validate": {
+						"action_type": "files_exist",
+						"path": "squashfs-root",
+						"pattern": "AppRun"
+					}
+				}
+			}
+		},
+		{
+			"step": "create_portable_file",
+			"platforms": {
+				"windows": {
+					"action_type": "create_files",
+					"files": [
+						{
+							"name": "user/.keep",
+							"content": ""
+						}
+					],
+					"validate": {
+						"action_type": "file_exists",
+						"file": "user/.keep"
+					}
+				},
+				"linux": {
+					"action_type": "create_files",
+					"files": [
+						{
+							"name": "user/.keep",
+							"content": ""
+						}
+					],
+					"validate": {
+						"action_type": "file_exists",
+						"file": "user/.keep"
+					}
+				},
+				"android": {
+					"action_type": "none"
+				}
+			}
+		}
+	]
 }

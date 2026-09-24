@@ -247,7 +247,31 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 			DirAccess.remove_absolute(single_entry_path)
 
 func download_emulator(emulator_id: String) -> bool:
-	# Check if already downloading/extracting
+	# Check if already downloading/extracting. Clean up stale entries that no
+	# longer correspond to an active or queued download item (can happen if a
+	# previous attempt crashed or the completion signal was missed).
+	var stale_ids: Array[String] = []
+	for item_id in _pending_emulator_downloads:
+		var task = _pending_emulator_downloads[item_id]
+		if task.emulator_id == emulator_id:
+			var still_live = false
+			for item in SystemManager.download.get_active():
+				if item.id == item_id:
+					still_live = true
+					break
+			if not still_live:
+				for item in SystemManager.download.get_queued():
+					if item.id == item_id:
+						still_live = true
+						break
+			if not still_live:
+				stale_ids.append(item_id)
+	
+	for stale_id in stale_ids:
+		push_warning("[EmulatorManager] Cleaning stale pending download entry: " + stale_id)
+		_pending_emulator_downloads.erase(stale_id)
+		_validation_cache.erase(emulator_id)
+	
 	for item_id in _pending_emulator_downloads:
 		if _pending_emulator_downloads[item_id].emulator_id == emulator_id:
 			return false
@@ -381,6 +405,7 @@ func _end_force_install(emulator_id: String) -> void:
 ## Executes a single install step by index
 func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	print("[EmulatorManager] _execute_install_step: emulator=%s step_index=%d" % [emulator_id, step_index])
 	if emulator.is_empty():
 		push_error("[EmulatorManager] Unknown emulator: " + emulator_id)
 		return false
@@ -441,6 +466,12 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 			step_success = _handle_create_pcsx2_superblock_step(emulator_id, step_name, step_index, platform_config)
 		"edit_file":
 			step_success = _handle_edit_file_step(emulator_id, step_name, step_index, platform_config)
+		"chmod":
+			step_success = _execute_chmod_step(emulator_id, step_index, platform_config)
+		"move":
+			step_success = _execute_move_step(emulator_id, step_index, platform_config)
+		"appimage_extract":
+			step_success = _execute_appimage_extract_step(emulator_id, step_index, platform_config)
 		"none":
 			step_success = _handle_none_step(emulator_id, step_name, step_index)
 		_:
@@ -729,14 +760,10 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Normalize the path to remove "." and ".." components
 	extract_dir = FSM.normalize_path(extract_dir)
 	
-	# Skip extraction only when resuming a partial install. During an update or
-	# reinstall the flag is set, so we re-extract the new archive over the old files.
-	if not _force_install_step.get(emulator_id, false):
-		if _validate_install_step(emulator_id, step_index, install_steps):
-			_execute_install_step(emulator_id, step_index + 1)
-			return true
-	
-	# Look for the archive file to extract
+	# Look for the archive file to extract before deciding whether to skip.
+	# This lets steps with no validation (e.g. Linux RetroArch cores) still extract
+	# when an archive is present, while completed steps whose archive has been
+	# cleaned up are correctly skipped.
 	var emulator_dir = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
 	var archive_path = ""
 	var is_batch_mode = extract_config.get("batch", false)
@@ -780,8 +807,17 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			if archive_path != "":
 				break
 	
+	var archive_exists = archive_path != "" and FSM.file_exists(archive_path)
+	
+	# Skip extraction only when the step is already validated AND no archive remains.
+	# During an update or reinstall the flag is set, so we re-extract the new archive.
+	if not _force_install_step.get(emulator_id, false):
+		if _validate_install_step(emulator_id, step_index, install_steps) and not archive_exists:
+			_execute_install_step(emulator_id, step_index + 1)
+			return true
+	
 	# Check if archive was found
-	if archive_path == "" or not FSM.file_exists(archive_path):
+	if not archive_exists:
 		# Go back to download step to re-download
 		return _retry_previous_step(emulator_id, step_index)
 	
@@ -828,6 +864,9 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			_emulator_install_progress[emulator_id] = "Validation failed"
 			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			return
+		
+		# Clear validation cache so UI doesn't show a stale Resume state
+		_validation_cache.erase(emulator_id)
 		
 		# Notify UI that extraction completed successfully
 		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
@@ -968,6 +1007,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 				_emulator_install_progress[emulator_id] = "Validation failed"
 				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 				return
+			
+			# Clear validation cache so UI doesn't show a stale Resume state
+			_validation_cache.erase(emulator_id)
 			
 			# Notify UI that extraction completed successfully
 			launch_manager.emulator_extraction_completed.emit(emulator_id, true)
@@ -1217,7 +1259,258 @@ func _handle_create_folders_step(emulator_id: String, _step_name: String, step_i
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
-## Helper function for create_files action
+## Helper function for chmod action (Linux/macOS/Android binary permissions)
+## Config keys:
+##   - file: specific file path relative to emulator_dir
+##   - files: array of file paths relative to emulator_dir
+##   - pattern: glob pattern matched against files in emulator_dir
+##   - recursive: if true, pattern is matched recursively (default false)
+##   - mode: chmod mode string (default "+x")
+func _execute_chmod_step(emulator_id: String, step_index: int, platform_config: Dictionary) -> bool:
+	# Windows does not use POSIX permissions; treat as no-op.
+	if SystemManager.platform.is_windows():
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	var mode: String = platform_config.get("mode", "+x")
+	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
+	var targets: Array[String] = []
+	
+	# Specific file
+	var file: String = platform_config.get("file", "")
+	if file != "":
+		targets.append(FSM.resolve_emulator_path(file, emulator_id))
+	
+	# Array of files
+	var files = platform_config.get("files", [])
+	if files is Array:
+		for f in files:
+			if f is String and f != "":
+				targets.append(FSM.resolve_emulator_path(f, emulator_id))
+	
+	# Pattern matching
+	var pattern: String = platform_config.get("pattern", "")
+	var recursive: bool = platform_config.get("recursive", false)
+	if pattern != "":
+		if recursive:
+			var recursive_targets = _chmod_find_files_matching(emulator_dir, pattern)
+			for found_path in recursive_targets:
+				if FSM.file_exists(found_path):
+					targets.append(found_path)
+		else:
+			for entry in FSM.list_dir(emulator_dir):
+				if entry == "." or entry == "..":
+					continue
+				if entry.match(pattern):
+					var full_path = FSM.join_paths(emulator_dir, entry)
+					if FSM.file_exists(full_path):
+						targets.append(full_path)
+	
+	if targets.is_empty():
+		push_warning("[EmulatorManager] chmod step has no targets for " + emulator_id)
+		return _execute_install_step(emulator_id, step_index + 1)
+	
+	var all_success: bool = true
+	for target in targets:
+		if not FSM.file_exists(target):
+			push_warning("[EmulatorManager] chmod target missing: " + target)
+			all_success = false
+			continue
+		
+		var abs_target: String = FSM.resolve_path(target, {"format": FSM.PathFormat.ABSOLUTE})
+		var output: Array = []
+		var exit_code: int = OS.execute("chmod", [mode, abs_target], output, true)
+		if exit_code != 0:
+			push_error("[EmulatorManager] chmod failed for " + abs_target + " with mode " + mode)
+			all_success = false
+		else:
+			print("[EmulatorManager] chmod " + mode + " " + abs_target)
+	
+	if not all_success:
+		return false
+	
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Recursively finds files under dir_path whose names match the Godot glob pattern.
+## Used by the chmod install step when "recursive": true.
+func _chmod_find_files_matching(dir_path: String, pattern: String) -> Array[String]:
+	var results: Array[String] = []
+	if dir_path.is_empty() or pattern.is_empty() or not FSM.dir_exists(dir_path):
+		return results
+	
+	for entry in FSM.list_dir(dir_path):
+		if entry == "." or entry == "..":
+			continue
+		var full_path = FSM.join_paths(dir_path, entry)
+		if FSM.is_dir(full_path):
+			results.append_array(_chmod_find_files_matching(full_path, pattern))
+		elif entry.match(pattern):
+			results.append(full_path)
+	
+	return results
+
+## Helper function for move action
+## Config keys:
+##   - source: source file or directory path relative to emulator_dir
+##   - destination: destination path relative to emulator_dir
+##   - source_pattern: optional Godot glob pattern; if set, all matching files are moved
+##   - recursive: if true, source_pattern is matched recursively (default false)
+func _execute_move_step(emulator_id: String, step_index: int, platform_config: Dictionary) -> bool:
+	var source: String = platform_config.get("source", "")
+	var destination: String = platform_config.get("destination", "")
+	var source_pattern: String = platform_config.get("source_pattern", "")
+	var recursive: bool = platform_config.get("recursive", false)
+	var replace: bool = platform_config.get("replace", false)
+	
+	if source == "" and source_pattern == "":
+		push_error("[EmulatorManager] move step has no source for " + emulator_id)
+		return false
+	
+	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
+	var all_success: bool = true
+	
+	if source_pattern != "":
+		# Move multiple files matching a glob pattern
+		var sources: Array[String] = []
+		if recursive:
+			sources = _chmod_find_files_matching(emulator_dir, source_pattern)
+		else:
+			for entry in FSM.list_dir(emulator_dir):
+				if entry == "." or entry == "..":
+					continue
+				if entry.match(source_pattern):
+					sources.append(FSM.join_paths(emulator_dir, entry))
+		
+		if sources.is_empty():
+			push_warning("[EmulatorManager] move step found no sources matching pattern '" + source_pattern + "' for " + emulator_id)
+			return _execute_install_step(emulator_id, step_index + 1)
+		
+		for src_path in sources:
+			var dest_path: String
+			if destination != "":
+				# Move into destination directory/preserve basename
+				if FSM.dir_exists(FSM.resolve_emulator_path(destination, emulator_id)):
+					dest_path = FSM.join_paths(destination, src_path.get_file())
+				else:
+					dest_path = destination
+			else:
+				push_error("[EmulatorManager] move step with source_pattern requires destination for " + emulator_id)
+				return false
+			
+			var full_src: String = src_path
+			var full_dest: String = FSM.resolve_emulator_path(dest_path, emulator_id)
+			if not FSM.move(full_src, full_dest):
+				push_error("[EmulatorManager] move failed: " + full_src + " -> " + full_dest)
+				all_success = false
+			else:
+				print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
+	else:
+		# Move a single file or directory
+		var full_src: String = FSM.resolve_emulator_path(source, emulator_id)
+		var full_dest: String = FSM.resolve_emulator_path(destination, emulator_id)
+		
+		if not FSM.file_exists(full_src) and not FSM.dir_exists(full_src):
+			# Source is gone; if destination already passes validation, treat the
+			# move as already completed (idempotent resume after interruption).
+			var validate_config = platform_config.get("validate", {})
+			if _validate_step(emulator_id, validate_config):
+				print("[EmulatorManager] move source missing but destination valid, skipping: " + full_src)
+				return _execute_install_step(emulator_id, step_index + 1)
+			push_error("[EmulatorManager] move source missing: " + full_src)
+			return false
+		
+		# If replace is requested and destination exists as a directory, remove it
+		# first so the move can succeed (used for re-installing core directories).
+		if replace and FSM.dir_exists(full_dest):
+			print("[EmulatorManager] move replace: removing existing destination " + full_dest)
+			FSM.delete_dir_recursive(full_dest)
+		
+		if not FSM.move(full_src, full_dest):
+			push_error("[EmulatorManager] move failed: " + full_src + " -> " + full_dest)
+			all_success = false
+		else:
+			print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
+	
+	if not all_success:
+		return false
+	
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Escapes a string for safe use inside Unix sh single quotes.
+func _escape_sh_arg(s: String) -> String:
+	return "'" + s.replace("'", "'\"'\"'") + "'"
+
+## Extracts an AppImage in-place using --appimage-extract.
+## Config keys:
+##   - pattern: Godot glob pattern to find the AppImage file (default "*.AppImage")
+##   - validate: standard validation block after extraction
+func _execute_appimage_extract_step(emulator_id: String, step_index: int, platform_config: Dictionary) -> bool:
+	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
+	var pattern: String = platform_config.get("pattern", "*.AppImage")
+
+	# Find AppImage matching pattern
+	var appimage_path: String = ""
+	for entry in FSM.list_dir(emulator_dir):
+		if entry == "." or entry == "..":
+			continue
+		if entry.match(pattern):
+			var full_path = FSM.join_paths(emulator_dir, entry)
+			if FSM.file_exists(full_path):
+				appimage_path = full_path
+				break
+
+	if appimage_path == "":
+		push_error("[EmulatorManager] appimage_extract step found no AppImage matching '" + pattern + "' for " + emulator_id)
+		return false
+
+	var abs_appimage = FSM.resolve_path(appimage_path, {"format": FSM.PathFormat.ABSOLUTE})
+	var abs_emulator_dir = FSM.resolve_path(emulator_dir, {"format": FSM.PathFormat.ABSOLUTE})
+
+	# Remove any existing squashfs-root to ensure clean extraction
+	var squashfs_dir = FSM.join_paths(emulator_dir, "squashfs-root")
+	if FSM.dir_exists(squashfs_dir):
+		print("[EmulatorManager] Removing existing squashfs-root before extraction: " + squashfs_dir)
+		FSM.delete_dir_recursive(squashfs_dir)
+
+	var step_name = ""
+	var install_steps = launch_manager.registry.get_emulator(emulator_id).get("install", [])
+	if step_index < install_steps.size():
+		step_name = install_steps[step_index].get("step", "")
+	var emulator_name = RegistrySubManager.get_emulator_display_name(launch_manager.registry.get_emulator(emulator_id), emulator_id)
+	var step_display_name = _get_step_display_name(step_name, emulator_name)
+	_emulator_install_progress[emulator_id] = step_display_name + "..."
+	launch_manager.emulator_extraction_started.emit(emulator_id)
+
+	var inner_cmd = 'cd %s && %s --appimage-extract' % [_escape_sh_arg(abs_emulator_dir), _escape_sh_arg(abs_appimage)]
+	print("[EmulatorManager] Extracting AppImage: sh -c ", inner_cmd)
+
+	var extract_callback = func(result: Dictionary):
+		if result.get("exit_code", -1) != 0:
+			push_error("[EmulatorManager] AppImage extraction failed for " + emulator_id + ": " + str(result.get("output", [])))
+			_emulator_install_progress[emulator_id] = "Extraction failed"
+			_end_force_install(emulator_id)
+			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
+			return
+
+		print("[EmulatorManager] AppImage extraction completed for " + emulator_id)
+
+		# Clear validation cache so UI doesn't show a stale Resume state
+		_validation_cache.erase(emulator_id)
+
+		# Validate extraction
+		var validate_config = platform_config.get("validate", {})
+		if not _validate_step(emulator_id, validate_config):
+			push_error("[EmulatorManager] Validation failed after AppImage extraction: " + emulator_id)
+			_emulator_install_progress[emulator_id] = "Validation failed"
+			_end_force_install(emulator_id)
+			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
+			return
+
+		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
+		_execute_install_step(emulator_id, step_index + 1)
+
+	MemorySubManager.queue_os_execute("sh", ["-c", inner_cmd], extract_callback)
+	return true
+
 func _handle_create_files_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
 	var files = platform_config.get("files", [])
 	if files.is_empty():
@@ -1500,12 +1793,28 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 	if platform_config.is_empty():
 		return false
 	
-	var _action_type = platform_config.get("action_type", "")
+	var action_type = platform_config.get("action_type", "")
 	var validate_config = platform_config.get("validate", {})
 	
-	# If no validation config, consider step complete (just move on)
-	# This handles download steps where the file gets deleted after extraction
+	# If no validation config, consider step complete (just move on).
+	# This handles download steps where the file gets deleted after extraction.
+	# For extract steps, only consider it complete if no archive remains in the
+	# emulator directory, otherwise a resume would skip extraction entirely.
 	if validate_config.is_empty():
+		if action_type == "extract":
+			var emulator_dir = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
+			var expected_file = platform_config.get("expected_file", "")
+			var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
+			var files = FSM.list_dir(emulator_dir)
+			for file_name in files:
+				if file_name == "." or file_name == "..":
+					continue
+				if expected_file != "" and file_name.match(expected_file):
+					return false
+				var lower_name = file_name.to_lower()
+				for ext in archive_extensions:
+					if lower_name.ends_with(ext):
+						return false
 		return true
 	
 	# Run validation
@@ -1679,6 +1988,7 @@ func get_emulator_active_download(emulator_id: String):
 
 ## Handles download completion
 func _on_unified_download_completed(item_id: String, success: bool, message: String):
+	print("[EmulatorManager] _on_unified_download_completed: item_id=%s success=%s" % [item_id, success])
 	if _pending_emulator_downloads.has(item_id):
 		var task_info = _pending_emulator_downloads[item_id]
 		var emulator_id = task_info.emulator_id
@@ -1711,7 +2021,11 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			task_info.callback.call(true, "")
 			return
 		
+		# Clear validation cache so the UI reflects the completed download
+		_validation_cache.erase(emulator_id)
+		
 		# For non-batch downloads, proceed to next step
+		print("[EmulatorManager] Download completed for %s, advancing to step %d" % [emulator_id, step_index + 1])
 		var step_success = _execute_install_step(emulator_id, step_index + 1)
 		if not step_success:
 			push_error("[EmulatorManager] Install step " + str(step_index + 1) + " failed for: " + emulator_id)

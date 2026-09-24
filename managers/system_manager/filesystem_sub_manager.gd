@@ -170,6 +170,13 @@ static func resolve_path(path: String, options: Dictionary = {}) -> String:
 	for key in placeholders:
 		result = result.replace(key, str(placeholders[key]))
 	
+	# Step 1b: Expand leading ~/ to $HOME on Linux so config paths like
+	# ~/.local/share/... resolve correctly.
+	if SystemManager.platform.is_linux() and result.begins_with("~/"):
+		var home = OS.get_environment("HOME")
+		if home != "":
+			result = home + result.substr(1)
+	
 	# Step 2: Handle relative paths
 	if not _is_absolute_path(result):
 		var base_dir = options.get("base_dir", "")

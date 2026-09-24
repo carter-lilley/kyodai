@@ -1,107 +1,131 @@
 {
-  "suspend_method": "suspend",
-  "meta": {
-	"id": "cemu",
-	"name": "Cemu",
-	"platforms": [
-      "wiiu"
-	],
-	"os": [
-      "windows",
-      "linux"
-	]
-  },
-  "paths": {
-	"default_saves": {
-	  "_default": {
-		"directories": {
-		  "windows": "{emulator_dir}/portable/mlc01/usr/save/00050000"
-		},
-		"extensions": [
-          "*"
+	"suspend_method": "suspend",
+	"meta": {
+		"id": "cemu",
+		"name": "Cemu",
+		"platforms": [
+			"wiiu"
 		],
-		"uses_folder_saves": true
-	  }
-	},
-	"default_firmware": {
-	  "_default": {
-		"directories": {}
-	  }
-	}
-  },
-  "resolution": {
-	"strategy": "cemu_xml",
-	"config_candidates": {
-	  "windows": [
-		"{emulator_dir}/portable/settings.xml",
-		"{emulator_dir}/settings.xml"
-	  ],
-	  "linux": [
-		"{emulator_dir}/portable/settings.xml",
-		"{emulator_dir}/settings.xml"
-	  ]
-	}
-  },
-  "launch": {
-	"platforms": {
-	  "windows": {
-		"type": "command",
-		"executable": "Cemu.exe",
-		"template": [
-		  "{exe}",
-		  "-g",
-		  "{rom}",
-          "-f"
+		"os": [
+			"windows",
+			"linux"
 		]
-	  },
-	  "linux": {
-		"type": "command",
-		"executable": "cemu.AppImage",
-		"template": [
-		  "{exe}",
-		  "-g",
-		  "{rom}",
-          "-f"
-		]
-	  }
-	}
-  },
-  "install": [
-	{
-	  "step": "download_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "download_repo",
-		  "github_repo": "cemu-project/Cemu",
-		  "asset_pattern": "cemu-.*-windows-x64\\.zip"
-		},
-		"linux": {
-		  "action_type": "download_repo",
-		  "github_repo": "cemu-project/Cemu",
-		  "asset_pattern": "cemu-.*-linux\\.AppImage"
-		}
-	  }
 	},
-	{
-	  "step": "install_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "extract",
-		  "extract_to": ".",
-		  "strip_top_directory": true,
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "Cemu.exe"
-		  }
+	"paths": {
+		"default_saves": {
+			"_default": {
+				"directories": {
+					"windows": "{emulator_dir}/portable/mlc01/usr/save/00050000"
+				},
+				"extensions": [
+					"*"
+				],
+				"uses_folder_saves": true
+			}
 		},
-		"linux": {
-		  "action_type": "none",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "cemu.AppImage"
-		  }
+		"default_firmware": {
+			"_default": {
+				"directories": {}
+			}
 		}
-	  }
-	}
-  ]
+	},
+	"resolution": {
+		"strategy": "cemu_xml",
+		"config_candidates": {
+			"windows": [
+				"{emulator_dir}/portable/settings.xml",
+				"{emulator_dir}/settings.xml"
+			],
+			"linux": [
+				"{emulator_dir}/portable/settings.xml",
+				"{emulator_dir}/settings.xml"
+			]
+		}
+	},
+	"launch": {
+		"platforms": {
+			"windows": {
+				"type": "command",
+				"executable": "Cemu.exe",
+				"template": [
+					"{exe}",
+					"-g",
+					"{rom}",
+					"-f"
+				]
+			},
+			"linux": {
+				"type": "command",
+				"executable": "squashfs-root/AppRun",
+				"template": [
+					"{exe}",
+					"-g",
+					"{rom}",
+					"-f"
+				]
+			}
+		}
+	},
+	"install": [
+		{
+			"step": "download_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "download_repo",
+					"github_repo": "cemu-project/Cemu",
+					"asset_pattern": "cemu-.*-windows-x64\\.zip"
+				},
+				"linux": {
+					"action_type": "download_repo",
+					"github_repo": "cemu-project/Cemu",
+					"asset_pattern": "Cemu-.*\\.AppImage"
+				}
+			}
+		},
+		{
+			"step": "install_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "extract",
+					"extract_to": ".",
+					"strip_top_directory": true,
+					"validate": {
+						"action_type": "file_exists",
+						"file": "Cemu.exe"
+					}
+				},
+				"linux": {
+					"action_type": "none",
+					"validate": {
+						"action_type": "files_exist",
+						"path": ".",
+						"pattern": "*.AppImage"
+					}
+				}
+			}
+		},
+		{
+			"step": "chmod_emulator",
+			"platforms": {
+				"linux": {
+					"action_type": "chmod",
+					"pattern": "*.AppImage"
+				}
+			}
+		},
+		{
+			"step": "extract_appimage",
+			"platforms": {
+				"linux": {
+					"action_type": "appimage_extract",
+					"pattern": "*.AppImage",
+					"validate": {
+						"action_type": "files_exist",
+						"path": "squashfs-root",
+						"pattern": "AppRun"
+					}
+				}
+			}
+		}
+	]
 }

@@ -12,6 +12,7 @@
 class_name RetroArchCfgResolver
 
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Resolves one placement ("save" or "firmware") from the context RSM built.
 ## context: {config_path, config_status, core_save_name}
@@ -55,6 +56,10 @@ static func resolve(kind: String, context: Dictionary) -> Dictionary:
 	if dir.begins_with(":"):
 		dir = config_path.get_base_dir() + "/" + dir.trim_prefix(":").trim_prefix("\\").trim_prefix("/")
 	dir = dir.replace("\\", "/").rstrip("/") + "/"
+
+	# Expand ~/ to $HOME on Linux and normalize the path so it matches the
+	# filesystem (the config value can be a literal RetroArch-style path).
+	dir = FSM.resolve_path(dir, {"format": FSM.PathFormat.DEFAULT})
 
 	if kind == "save":
 		var save_name: String = context.get("core_save_name", "")

@@ -57,8 +57,9 @@
 		"executable": "pcsx2-qt",
 		"template": [
 		  "{exe}",
+		  "-fullscreen",
 		  "-batch",
-          "{rom}"
+		  "{rom}"
 		]
 	  }
 	}

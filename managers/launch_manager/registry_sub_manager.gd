@@ -245,7 +245,8 @@ func _get_step_platform_config(step: Dictionary) -> Dictionary:
 	
 	return platform_config
 
-## Helper: Recursively searches for executable file up to max_depth (3 levels)
+## Helper: Recursively searches for executable file up to max_depth (3 levels).
+## executable_name may be an exact filename or a Godot glob pattern (* and ?).
 func _find_executable_recursive(dir_path: String, executable_name: String, max_depth: int = 3, current_depth: int = 0) -> String:
 	if current_depth >= max_depth:
 		return ""
@@ -253,6 +254,9 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 	var entries = FSM.list_dir(dir_path)
 	if entries.is_empty() and not FSM.dir_exists(dir_path):
 		return ""
+	
+	var is_glob: bool = executable_name.contains("*") or executable_name.contains("?")
+	var lower_executable := executable_name.to_lower()
 	
 	for file_name in entries:
 		if file_name == "." or file_name == "..":
@@ -265,8 +269,11 @@ func _find_executable_recursive(dir_path: String, executable_name: String, max_d
 			if result != "":
 				return result
 		else:
-			# Check if this is the executable we're looking for
-			if file_name.to_lower() == executable_name.to_lower():
+			# Exact match (case-insensitive)
+			if file_name.to_lower() == lower_executable:
+				return full_path
+			# Glob match (case-insensitive) for versioned AppImages etc.
+			if is_glob and file_name.to_lower().match(lower_executable):
 				return full_path
 	
 	return ""
@@ -294,18 +301,22 @@ func get_emulator_install_path(emulator_id: String) -> String:
 	if _install_path_cache.has(cache_key):
 		return _install_path_cache[cache_key]
 
-	# First check direct path
-	var direct_path = FSM.join_paths(_get_emulator_directory(emulator_id), executable_name)
 	var found_path := ""
-	if FSM.file_exists(direct_path):
-		found_path = direct_path
-	else:
-		# Search recursively up to 3 levels deep
+	var is_glob: bool = executable_name.contains("*") or executable_name.contains("?")
+	
+	if not is_glob:
+		# First check direct path for exact names
+		var direct_path = FSM.join_paths(_get_emulator_directory(emulator_id), executable_name)
+		if FSM.file_exists(direct_path):
+			found_path = direct_path
+	
+	if found_path == "":
+		# Search recursively up to 3 levels deep (also handles glob patterns)
 		var search_dir = _get_emulator_directory(emulator_id)
 		found_path = _find_executable_recursive(search_dir, executable_name, 3)
 
 	# Also check system PATH (for Linux system installs)
-	if found_path == "" and (SystemManager.platform.is_linux() or SystemManager.platform.is_windows()):
+	if found_path == "" and not is_glob and (SystemManager.platform.is_linux() or SystemManager.platform.is_windows()):
 		var output = []
 		var exit_code = OS.execute("which" if SystemManager.platform.is_linux() else "where", [executable_name], output, true)
 		if exit_code == 0 and output.size() > 0:

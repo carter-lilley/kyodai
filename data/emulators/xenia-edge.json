@@ -60,7 +60,8 @@
 		"executable": "xenia_edge",
 		"template": [
 		  "{exe}",
-          "{rom}"
+		  "--fullscreen=true",
+		  "{rom}"
 		]
 	  }
 	}

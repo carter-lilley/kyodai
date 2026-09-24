@@ -59,7 +59,8 @@
 		"executable": "Vita3K",
 		"template": [
 		  "{exe}",
-          "{rom}"
+		  "--fullscreen",
+		  "{rom}"
 		]
 	  },
 	  "android": {

@@ -28,6 +28,10 @@ var launch_args: Array[String] = []
 ## For Desktop: working directory for the process
 var working_directory: String = ""
 
+## For Desktop: environment variables to set for the emulator process.
+## Only applied on Linux/macOS via the env(1) wrapper.
+var environment: Dictionary = {}
+
 ## For Android: intent action
 var android_action: String = ""
 
