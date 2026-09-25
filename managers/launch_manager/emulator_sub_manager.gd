@@ -472,6 +472,8 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 			step_success = _execute_move_step(emulator_id, step_index, platform_config)
 		"appimage_extract":
 			step_success = _execute_appimage_extract_step(emulator_id, step_index, platform_config)
+		"validate_only":
+			step_success = _handle_validate_only_step(emulator_id, step_name, step_index, platform_config)
 		"none":
 			step_success = _handle_none_step(emulator_id, step_name, step_index)
 		_:
@@ -1382,7 +1384,13 @@ func _execute_move_step(emulator_id: String, step_index: int, platform_config: D
 		
 		if sources.is_empty():
 			push_warning("[EmulatorManager] move step found no sources matching pattern '" + source_pattern + "' for " + emulator_id)
-			return _execute_install_step(emulator_id, step_index + 1)
+			# If the destination already passes validation, the move is already done.
+			# Otherwise go back to the previous step (usually the download) so the
+			# source file can be fetched again, matching how extract steps recover.
+			var validate_config = platform_config.get("validate", {})
+			if _validate_step(emulator_id, validate_config):
+				return _execute_install_step(emulator_id, step_index + 1)
+			return _retry_previous_step(emulator_id, step_index)
 		
 		for src_path in sources:
 			var dest_path: String
@@ -1446,6 +1454,14 @@ func _escape_sh_arg(s: String) -> String:
 func _execute_appimage_extract_step(emulator_id: String, step_index: int, platform_config: Dictionary) -> bool:
 	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
 	var pattern: String = platform_config.get("pattern", "*.AppImage")
+
+	# Skip re-extraction if the output is already valid and this isn't a forced
+	# reinstall/update. This mirrors the Windows extract skip-if-valid guard.
+	if not _force_install_step.get(emulator_id, false):
+		var validate_config = platform_config.get("validate", {})
+		if _validate_step(emulator_id, validate_config):
+			print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
+			return _execute_install_step(emulator_id, step_index + 1)
 
 	# Find AppImage matching pattern
 	var appimage_path: String = ""
@@ -1653,6 +1669,23 @@ func _handle_edit_file_step(emulator_id: String, _step_name: String, step_index:
 
 ## Helper function for none action (skip)
 func _handle_none_step(emulator_id: String, _step_name: String, step_index: int) -> bool:
+	return _execute_install_step(emulator_id, step_index + 1)
+
+## Helper function for validate_only action.
+## Runs the platform config's validate block and advances only if it passes.
+## Useful when no managed install action exists (e.g. user-provided Linux binary).
+func _handle_validate_only_step(emulator_id: String, step_name: String, step_index: int, platform_config: Dictionary) -> bool:
+	var validate_config = platform_config.get("validate", {})
+	if validate_config.is_empty():
+		push_error("[EmulatorManager] validate_only step has no validate config: " + step_name)
+		return false
+	
+	print("[EmulatorManager] Validating step '%s' (index %d)" % [step_name, step_index])
+	if not _validate_step(emulator_id, validate_config):
+		print("[EmulatorManager] Validation failed for step '%s' (index %d)" % [step_name, step_index])
+		return false
+	print("[EmulatorManager] Validation passed for step '%s' (index %d)" % [step_name, step_index])
+	
 	return _execute_install_step(emulator_id, step_index + 1)
 
 ## Creates the save directory for an emulator if it doesn't exist

@@ -79,9 +79,11 @@
 		"strategy": "retroarch_cfg",
 		"config_candidates": {
 			"windows": [
+				"{home}/AppData/Roaming/RetroArch/retroarch.cfg",
 				"{emulator_dir}/retroarch.cfg"
 			],
 			"linux": [
+				"{home}/.config/retroarch/retroarch.cfg",
 				"{emulator_dir}/retroarch.cfg"
 			],
 			"android": [
@@ -89,6 +91,34 @@
 				"/storage/emulated/0/Android/data/com.retroarch.aarch64/files/retroarch.cfg",
 				"/storage/emulated/0/RetroArch/retroarch.cfg"
 			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"": {
+						"libretro_directory": "{emulator_dir}/cores",
+						"savefile_directory": "{emulator_dir}/saves",
+						"system_directory": "{emulator_dir}/system"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"": {
+						"libretro_directory": "{emulator_dir}/cores",
+						"savefile_directory": "{emulator_dir}/saves",
+						"system_directory": "{emulator_dir}/system"
+					}
+				}
+			},
+			"android": {
+				"sections": {
+					"": {
+						"savefile_directory": "/storage/emulated/0/RetroArch/saves",
+						"system_directory": "/storage/emulated/0/RetroArch/system"
+					}
+				}
+			}
 		}
 	},
 	"launch": {
@@ -109,8 +139,6 @@
 				"executable": "squashfs-root/AppRun",
 				"template": [
 					"{exe}",
-					"--config",
-					"{emulator_dir}/retroarch.cfg",
 					"-L",
 					"{core}",
 					"{rom}",
@@ -288,24 +316,6 @@
 						"action_type": "files_exist",
 						"path": "cores",
 						"pattern": "*.so"
-					}
-				}
-			}
-		},
-		{
-			"step": "create_portable_config",
-			"platforms": {
-				"linux": {
-					"action_type": "create_files",
-					"files": [
-						{
-							"name": "retroarch.cfg",
-							"content": "libretro_directory = \"{emulator_dir}/cores\"\nsavefile_directory = \"{emulator_dir}/saves\"\nsystem_directory = \"{emulator_dir}/system\"\nconfig_save_on_exit = \"false\"\n"
-						}
-					],
-					"validate": {
-						"action_type": "file_exists",
-						"file": "retroarch.cfg"
 					}
 				}
 			}

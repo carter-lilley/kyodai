@@ -43,11 +43,34 @@
 				"{emulator_dir}/user/config/qt-config.ini"
 			],
 			"linux": [
-				"{emulator_dir}/user/config/qt-config.ini"
+				"{emulator_dir}/user/config/qt-config.ini",
+				"{home}/.config/eden/qt-config.ini"
 			],
 			"android": [
 				"{app_data}/config/config.ini"
 			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"Data Storage": {
+						"use_custom_storage": "true",
+						"sdmc_directory": "{emulator_dir}/user/sdmc",
+						"use_custom_nand": "true",
+						"nand_directory": "{emulator_dir}/user/nand"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"Data Storage": {
+						"use_custom_storage": "true",
+						"sdmc_directory": "{emulator_dir}/user/sdmc",
+						"use_custom_nand": "true",
+						"nand_directory": "{emulator_dir}/user/nand"
+					}
+				}
+			}
 		}
 	},
 	"launch": {
@@ -64,6 +87,7 @@
 			"linux": {
 				"type": "command",
 				"executable": "squashfs-root/AppRun",
+				"working_directory": "{emulator_dir}",
 				"template": [
 					"{exe}",
 					"{rom}",
@@ -91,7 +115,12 @@
 					"action_type": "download_repo",
 					"github_repo": "eden-emu/eden",
 					"api_base_url": "https://git.eden-emu.dev/api/v1",
-					"asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage"
+					"asset_pattern": "Eden-Linux-.*-amd64-clang-pgo\\.AppImage",
+					"validate": {
+						"action_type": "files_exist",
+						"path": ".",
+						"pattern": "Eden-Linux-*.AppImage"
+					}
 				},
 				"android": {
 					"action_type": "download_repo",
@@ -114,12 +143,7 @@
 					}
 				},
 				"linux": {
-					"action_type": "none",
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "Eden-Linux-*.AppImage"
-					}
+					"action_type": "none"
 				},
 				"android": {
 					"action_type": "apk_install",

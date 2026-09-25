@@ -204,8 +204,17 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 		var global_core_path = global_emulator_dir + core_separator + "cores" + core_separator + intent.core_name + core_extension
 		global_core_path = global_core_path.replace("//", "/")
 		
-		# Set working directory only if emulator requires it (e.g., xemu) or for Vita3K
-		if emulator.get("requires_working_dir", false) or intent.emulator_id.begins_with("vita3k"):
+		# Set working directory from JSON template if provided; otherwise keep
+		# the legacy requires_working_dir behavior for backwards compatibility.
+		var working_dir_template = platform_config.get("working_directory", "")
+		if working_dir_template != "":
+			var resolved_working_dir = working_dir_template.replace("{exe}", global_install_path)
+			resolved_working_dir = resolved_working_dir.replace("{rom}", global_rom_path)
+			resolved_working_dir = resolved_working_dir.replace("{core}", global_core_path)
+			# resolve_emulator_path handles {emulator_dir}, {home}, {env.*}, etc.
+			resolved_working_dir = FSM.resolve_emulator_path(resolved_working_dir, intent.emulator_id, intent.platform_slug)
+			intent.working_directory = FSM.resolve_native_path(resolved_working_dir).rstrip("/")
+		elif emulator.get("requires_working_dir", false) or intent.emulator_id.begins_with("vita3k"):
 			intent.working_directory = install_dir
 		
 		for arg in template:

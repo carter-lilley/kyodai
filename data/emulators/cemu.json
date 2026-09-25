@@ -40,6 +40,22 @@
 				"{emulator_dir}/portable/settings.xml",
 				"{emulator_dir}/settings.xml"
 			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"": {
+						"mlc_path": "{emulator_dir}/portable/mlc01"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"": {
+						"mlc_path": "{emulator_dir}/portable/mlc01"
+					}
+				}
+			}
 		}
 	},
 	"launch": {
@@ -78,7 +94,12 @@
 				"linux": {
 					"action_type": "download_repo",
 					"github_repo": "cemu-project/Cemu",
-					"asset_pattern": "Cemu-.*\\.AppImage"
+					"asset_pattern": "Cemu-.*\\.AppImage",
+					"validate": {
+						"action_type": "files_exist",
+						"path": ".",
+						"pattern": "*.AppImage"
+					}
 				}
 			}
 		},
@@ -95,12 +116,7 @@
 					}
 				},
 				"linux": {
-					"action_type": "none",
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "*.AppImage"
-					}
+					"action_type": "none"
 				}
 			}
 		},

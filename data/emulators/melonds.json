@@ -34,11 +34,53 @@
 	}
   },
   "resolution": {
-	"strategy": "melonds_toml",
+	"strategy": "melonds_ini",
 	"anchor": "{emulator_dir}",
 	"config_candidates": {
-	  "windows": ["{emulator_dir}/melonDS.toml"],
-	  "linux": ["{emulator_dir}/melonDS.toml"]
+	  "windows": ["{emulator_dir}/melonDS.ini"],
+	  "linux": ["{emulator_dir}/melonDS.ini"]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "Emu": {
+			"ConsoleType": "1",
+			"DirectBoot": "true",
+			"ExternalBIOSEnable": "true"
+		  },
+		  "DS": {
+			"FirmwarePath": "{emulator_dir}/firmware.bin",
+			"BIOS9Path": "{emulator_dir}/bios9.bin",
+			"BIOS7Path": "{emulator_dir}/bios7.bin"
+		  },
+		  "DSi": {
+			"FirmwarePath": "{emulator_dir}/dsi_firmware.bin",
+			"BIOS9Path": "{emulator_dir}/dsi_bios9.bin",
+			"BIOS7Path": "{emulator_dir}/dsi_bios7.bin",
+			"NANDPath": "{emulator_dir}/dsi_nand.bin"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "Emu": {
+			"ConsoleType": "1",
+			"DirectBoot": "true",
+			"ExternalBIOSEnable": "true"
+		  },
+		  "DS": {
+			"FirmwarePath": "{emulator_dir}/firmware.bin",
+			"BIOS9Path": "{emulator_dir}/bios9.bin",
+			"BIOS7Path": "{emulator_dir}/bios7.bin"
+		  },
+		  "DSi": {
+			"FirmwarePath": "{emulator_dir}/dsi_firmware.bin",
+			"BIOS9Path": "{emulator_dir}/dsi_bios9.bin",
+			"BIOS7Path": "{emulator_dir}/dsi_bios7.bin",
+			"NANDPath": "{emulator_dir}/dsi_nand.bin"
+		  }
+		}
+	  }
 	}
   },
   "launch": {
@@ -46,6 +88,7 @@
 	  "windows": {
 		"type": "command",
 		"executable": "melonDS.exe",
+		"working_directory": "{emulator_dir}",
 		"template": [
 		  "{exe}",
 		  "{rom}",
@@ -55,6 +98,7 @@
 	  "linux": {
 		"type": "command",
 		"executable": "melonDS",
+		"working_directory": "{emulator_dir}",
 		"template": [
 		  "{exe}",
 		  "-f",
@@ -99,29 +143,6 @@
 			"action_type": "file_exists",
 			"file": "melonDS"
 		  }
-		}
-	  }
-	},
-	{
-	  "step": "create_config",
-	  "platforms": {
-		"windows": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "melonDS.toml",
-			  "content": "[Emu]\nConsoleType = 1\nDirectBoot = true\nExternalBIOSEnable = true\n\n[DS]\nFirmwarePath = \"{emulator_dir}/firmware.bin\"\nBIOS7Path = \"{emulator_dir}/bios7.bin\"\nBIOS9Path = \"{emulator_dir}/bios9.bin\"\n\n[DSi]\nExternalBIOSEnable = true\nFullBIOSBoot = false\nFirmwarePath = \"{emulator_dir}/dsi_firmware.bin\"\nBIOS9Path = \"{emulator_dir}/dsi_bios9.bin\"\nBIOS7Path = \"{emulator_dir}/dsi_bios7.bin\"\nNANDPath = \"{emulator_dir}/dsi_nand.bin\""
-			}
-		  ],
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "melonDS.toml"
-			]
-		  }
-		},
-		"linux": {
-		  "action_type": "none"
 		}
 	  }
 	}

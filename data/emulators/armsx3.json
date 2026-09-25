@@ -36,6 +36,16 @@
 	"anchor": "{app_data}/config",
 	"config_candidates": {
 	  "android": ["{app_data}/config/vfs.yml", "{app_data}/config/config.yml"]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "": {
+			"/dev_hdd0/": "{app_data}/config/dev_hdd0",
+			"/dev_flash/": "{app_data}/config/dev_flash"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

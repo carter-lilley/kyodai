@@ -103,3 +103,20 @@ static func _folders_dir(sections: Dictionary, key_names: Array, user_dir: Strin
 		"stated": false,
 		"key": "Folders." + str(key_names[0]),
 	}
+
+## Enforces PCSX2's INI config ([Folders] and [MemoryCards]).
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[Pcsx2IniResolver] enforce_paths called without config_path")
+		return false
+
+	for section_name in sections:
+		var section_data: Dictionary = sections[section_name]
+		for key in section_data:
+			if not CSM.set_value(config_path, key, section_data[key], section_name, CSM.Format.INI, true):
+				push_error("[Pcsx2IniResolver] Failed to enforce %s.%s" % [section_name, key])
+				return false
+
+	print("[Pcsx2IniResolver] Enforced paths in " + config_path)
+	return true

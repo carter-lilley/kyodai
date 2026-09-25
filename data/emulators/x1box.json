@@ -32,6 +32,18 @@
 	"strategy": "xemu_toml",
 	"config_candidates": {
 	  "android": ["{app_data}/x1box/xemu.toml"]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "sys.files": {
+			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
+			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
+			"eeprom_path": "{emulator_dir}/eeprom.bin",
+			"hdd_path": "{emulator_dir}/xbox_hdd.qcow2"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

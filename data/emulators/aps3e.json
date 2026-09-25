@@ -36,6 +36,16 @@
 	"anchor": "{app_data}/aps3e/config",
 	"config_candidates": {
 	  "android": ["{app_data}/aps3e/config/vfs.yml", "{app_data}/aps3e/config/config.yml"]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "": {
+			"/dev_hdd0/": "{app_data}/aps3e/config/dev_hdd0",
+			"/dev_flash/": "{app_data}/aps3e/config/dev_flash"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

@@ -48,6 +48,30 @@
 	  "windows": ["{emulator_dir}/User/Config/Dolphin.ini"],
 	  "linux": ["{emulator_dir}/User/Config/Dolphin.ini"],
 	  "android": ["{app_data}/Config/Dolphin.ini"]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "Core": {
+			"SlotA": "GCI Folder",
+			"GCIFolderAPath": "{emulator_dir}/User/GC"
+		  },
+		  "General": {
+			"NANDRootPath": "{emulator_dir}/User/Wii"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "Core": {
+			"SlotA": "GCI Folder",
+			"GCIFolderAPath": "{emulator_dir}/User/GC"
+		  },
+		  "General": {
+			"NANDRootPath": "{emulator_dir}/User/Wii"
+		  }
+		}
+	  }
 	}
   },
   "launch": {
@@ -123,7 +147,7 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none",
+		  "action_type": "validate_only",
 		  "validate": {
 			"action_type": "file_exists",
 			"file": ""

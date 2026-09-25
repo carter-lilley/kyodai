@@ -4,11 +4,18 @@ class_name ProcessSubManager
 ## Process launch and background-state management
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 
 # Background state tracking (desktop only)
 var _background_active_pid: int = -1
 var _background_active_game: GameResource = null
+var _background_active_signature: String = ""
+var _background_active_exe_signature: String = ""
 var _is_in_background_state: bool = false
+# Linux AppImage launches fork a runtime wrapper (comm=AppRun, exe under /tmp/.mount_*)
+# that outlives the actual emulator payload. We keep its PID so we can clean it up
+# once the real emulator process is gone.
+var _background_wrapper_pid: int = -1
 var _background_poll_timer: Timer = null
 var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
@@ -165,7 +172,7 @@ func get_background_game() -> GameResource:
 	return _background_active_game
 
 ## Enter background state with active PID
-func enter_background_state(pid: int, game: GameResource) -> void:
+func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent = null) -> void:
 	if _is_in_background_state:
 		print("[ProcessManager] Warning: Already in background state, ignoring new PID ", pid)
 		return
@@ -176,8 +183,23 @@ func enter_background_state(pid: int, game: GameResource) -> void:
 
 	print("[ProcessManager] Entering background state with PID: ", pid)
 	_background_active_pid = pid
+	_background_wrapper_pid = -1
 	_background_active_game = game
 	_is_in_background_state = true
+
+	# Build command-line signatures for /proc fallback scanning. The ROM path is
+	# the most reliable signature because it appears in the actual emulator's
+	# cmdline even when wrapper processes fork/reparent it away from us.
+	if game != null and game.file_path != "":
+		_background_active_signature = game.file_path
+	elif intent != null and not intent.launch_args.is_empty():
+		# Fallback: use the last launch argument, which is commonly the ROM path.
+		_background_active_signature = intent.launch_args[-1]
+	if intent != null and not intent.launch_args.is_empty():
+		var exe_name := str(intent.launch_args[0]).get_file().get_basename().to_lower()
+		if exe_name != "":
+			_background_active_exe_signature = exe_name
+	print("[ProcessManager] Background signatures: rom=\"", _background_active_signature, "\" exe=\"", _background_active_exe_signature, "\"")
 
 	if _background_poll_timer:
 		print("[ProcessManager] Starting poll timer, in_tree=", _background_poll_timer.is_inside_tree(), " active=", _background_poll_timer.is_stopped())
@@ -215,8 +237,16 @@ func exit_background_state(exit_code: int = 0) -> void:
 	if _background_poll_timer:
 		_background_poll_timer.stop()
 
+	# Clean up any Linux AppImage runtime wrapper that outlived the payload.
+	if _background_wrapper_pid > 0:
+		print("[ProcessManager] Terminating AppImage wrapper PID ", _background_wrapper_pid)
+		OS.kill(_background_wrapper_pid)
+		_background_wrapper_pid = -1
+
 	_background_active_pid = -1
 	_background_active_game = null
+	_background_active_signature = ""
+	_background_active_exe_signature = ""
 	_is_in_background_state = false
 
 	launch_manager.background_state_exited.emit(game, exit_code)
@@ -234,16 +264,105 @@ func _on_background_poll_timeout() -> void:
 	var pid = _background_active_pid
 	print("[ProcessManager] Polling PID ", pid)
 	_is_process_running_async(pid, func(running: bool):
-		_poll_in_flight = false
-		print("[ProcessManager] Poll result for PID ", pid, ": running=", running)
 		# Background state may have changed while the check was in flight
 		if not _is_in_background_state or _background_active_pid != pid:
+			_poll_in_flight = false
 			print("[ProcessManager] Poll result ignored: state changed")
 			return
-		if not running:
-			print("[ProcessManager] Process ", pid, " no longer running")
-			exit_background_state(0)
+		print("[ProcessManager] Poll result for PID ", pid, ": running=", running)
+		# Linux AppImage wrappers (comm=AppRun, exe under /tmp/.mount_*) stay alive
+		# after the real emulator payload exits. If we're tracking a wrapper, find
+		# and switch to the actual payload process instead.
+		if running and SystemManager.platform.is_linux() and _is_appimage_wrapper_pid(pid):
+			print("[ProcessManager] Tracked PID ", pid, " is an AppImage wrapper; searching for payload")
+			var payload_pid := _find_process_by_signature()
+			if payload_pid > 0 and payload_pid != pid:
+				print("[ProcessManager] AppImage payload found at PID ", payload_pid, "; wrapper PID ", pid, " will be cleaned up on exit")
+				_background_wrapper_pid = pid
+				_background_active_pid = payload_pid
+				_poll_in_flight = false
+				return
+		if running:
+			_poll_in_flight = false
+			return
+		# PID is gone or zombie. On Linux, fall back to scanning /proc by the
+		# ROM/cmdline signature in case the emulator process was reparented
+		# away from the wrapper we were tracking.
+		if SystemManager.platform.is_linux() and (_background_active_signature != "" or _background_active_exe_signature != ""):
+			print("[ProcessManager] PID ", pid, " not running; scanning /proc by signature")
+			var found_pid := _find_process_by_signature()
+			if found_pid > 0 and found_pid != pid:
+				print("[ProcessManager] Reparented emulator found at PID ", found_pid, "; updating tracker")
+				_background_active_pid = found_pid
+				_poll_in_flight = false
+				return
+			elif found_pid > 0:
+				print("[ProcessManager] Signature still matches PID ", pid, " (zombie?), keeping background state")
+				_poll_in_flight = false
+				return
+			else:
+				print("[ProcessManager] No signature match found in /proc")
+		_poll_in_flight = false
+		print("[ProcessManager] Process ", pid, " no longer running")
+		exit_background_state(0)
 	)
+
+## Scans /proc for a live (non-zombie) emulator process whose cmdline contains
+## the stored launch signature (usually the ROM path). This catches emulators
+## that were reparented away from the wrapper PID Kyodai was tracking.
+func _find_process_by_signature() -> int:
+	if _background_active_signature == "" and _background_active_exe_signature == "":
+		return -1
+
+	if not SystemManager.platform.is_linux():
+		return -1
+
+	var proc_dir := DirAccess.open("/proc")
+	if proc_dir == null:
+		return -1
+
+	var best_pid := -1
+	var filename_signature := ""
+	if _background_active_signature != "":
+		filename_signature = _background_active_signature.get_file()
+		if filename_signature == _background_active_signature:
+			filename_signature = ""
+
+	proc_dir.list_dir_begin()
+	var entry := proc_dir.get_next()
+	while entry != "":
+		if entry.is_valid_int():
+			var scan_pid := entry.to_int()
+			if scan_pid > 0:
+				var stat := _parse_proc_stat(scan_pid)
+				if stat.ok and stat.state != "Z" and not _is_appimage_wrapper_pid(scan_pid):
+					var cmdline := _get_process_cmdline(scan_pid)
+					if _background_active_signature != "" and cmdline.find(_background_active_signature) != -1:
+						print("[ProcessManager] Signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+						best_pid = scan_pid
+						break
+					if filename_signature != "" and cmdline.find(filename_signature) != -1:
+						print("[ProcessManager] Filename signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+						best_pid = scan_pid
+						break
+					if _background_active_exe_signature != "" and cmdline.to_lower().find(_background_active_exe_signature) != -1:
+						print("[ProcessManager] Exe-signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+						best_pid = scan_pid
+						break
+					if _background_active_exe_signature != "":
+						var exe_link := "/proc/" + str(scan_pid) + "/exe"
+						if FileAccess.file_exists(exe_link):
+							var exe_path := proc_dir.read_link(exe_link)
+							if exe_path != "":
+								var exe_base := exe_path.get_file().get_basename().to_lower()
+								if exe_base == _background_active_exe_signature or exe_base.contains(_background_active_exe_signature):
+									print("[ProcessManager] Exe-signature match for PID ", scan_pid, ": ", exe_path)
+									best_pid = scan_pid
+									break
+		entry = proc_dir.get_next()
+	proc_dir.list_dir_end()
+
+	return best_pid
 
 ## Async process liveness check; callback receives `running: bool` on the main thread.
 func _is_process_running_async(pid: int, callback: Callable) -> void:
@@ -255,21 +374,13 @@ func _is_process_running_async(pid: int, callback: Callable) -> void:
 	# Also parse /proc/{pid}/stat so we don't treat zombie (defunct) processes
 	# as still running — OS.create_process can leave children unreaped.
 	if SystemManager.platform.is_linux():
-		var stat_path = "/proc/" + str(pid) + "/stat"
-		var content = _read_proc_file(stat_path)
-		if content != "":
-			var close_paren = content.rfind(")")
-			if close_paren != -1:
-				var state_index = close_paren + 1
-				while state_index < content.length() and content[state_index] == " ":
-					state_index += 1
-				if state_index < content.length():
-					var state = content[state_index]
-					print("[ProcessManager] /proc/" + str(pid) + "/stat state=" + state)
-					if state == "Z":
-						print("[ProcessManager] PID " + str(pid) + " is a zombie, treating as not running")
-						callback.call(false)
-						return
+		var stat := _parse_proc_stat(pid)
+		if stat.ok:
+			print("[ProcessManager] /proc/" + str(pid) + "/stat state=" + stat.state)
+			if stat.state == "Z":
+				print("[ProcessManager] PID " + str(pid) + " is a zombie, treating as not running")
+				callback.call(false)
+				return
 			callback.call(true)
 			return
 		else:
@@ -396,7 +507,7 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 		return false
 
 	# Store PID and enter background state for desktop
-	enter_background_state(pid, intent.game)
+	enter_background_state(pid, intent.game, intent)
 
 	launch_manager.launch_completed.emit(true, "Game launched successfully")
 	return true
@@ -405,6 +516,50 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 ## Coroutine: returns the PID or -1 on failure.
 func _create_process_from_intent(intent: LaunchIntent) -> int:
 	return await _create_desktop_process(intent)
+
+## Removes a stale portable config that points to the wrong home directory
+## (e.g. /home/user/... on /home/carter). The file is backed up first so the
+## user can restore it if needed. Returns true if a stale config was reset.
+func _sanitize_portable_config(portable_root: String) -> bool:
+	var config_dir := FSM.join_paths(portable_root, "user", "config")
+	var candidates := ["qt-config.ini", "config.ini"]
+	var current_home := OS.get_environment("HOME")
+	if current_home == "":
+		return false
+	current_home = current_home.rstrip("/")
+	
+	for file_name in candidates:
+		var config_path := FSM.join_paths(config_dir, file_name)
+		if not FSM.file_exists(config_path):
+			continue
+		var text := FSM.read_file(config_path)
+		var stale := false
+		for line in text.split("\n"):
+			# Look for absolute Unix/macOS home paths that aren't the current home.
+			var idx := line.find("/home/")
+			if idx < 0:
+				idx = line.find("/Users/")
+			if idx < 0:
+				continue
+			var path_end := line.find(" ", idx)
+			if path_end < 0:
+				path_end = line.length()
+			var candidate := line.substr(idx, path_end - idx).strip_edges()
+			# Drop trailing slash/quote chars
+			while not candidate.is_empty() and candidate[-1] in ['"', "'", "/"]:
+				candidate = candidate.substr(0, candidate.length() - 1)
+			if candidate == current_home or candidate.begins_with(current_home + "/"):
+				continue
+			stale = true
+			break
+		
+		if stale:
+			var backup_path := config_path + ".kyodai-stale-backup"
+			FSM.write_file(backup_path, text)
+			FSM.delete_file(config_path)
+			print("[ProcessManager] Reset stale portable config: %s (backup: %s)" % [config_path, backup_path])
+			return true
+	return false
 
 ## Shared desktop process creation. Coroutine: returns the REAL emulator PID
 ## (never a shell-wrapper PID) or -1 on failure.
@@ -417,37 +572,77 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 	var arguments = intent.launch_args.slice(1)
 	var pid: int = -1
 
+	# Enforce Kyodai-managed data paths in the emulator config before launching.
+	# This is the writing side of the config resolver: the same strategy that
+	# reads save/firmware locations now writes them so managed and unmanaged
+	# installs use the same directories.
+	if not RSM.enforce_paths(intent.emulator_id, intent.platform_slug, intent.core_name):
+		push_warning("[ProcessManager] Could not enforce config paths for %s" % intent.emulator_id)
+
 	var linux_env_args = _build_linux_env_args(intent)
 	var use_env_wrapper = SystemManager.platform.is_linux() and not linux_env_args.is_empty()
+	
+	# Portable-mode handshake: emulators like Eden/Azahar trigger portable mode
+	# when their working directory contains a user/ folder. If the requested
+	# working directory does not contain user/, fall back to the executable's
+	# directory so unmanaged installs use their native config paths.
+	var effective_working_dir := intent.working_directory
+	if effective_working_dir != "":
+		if FSM.dir_exists(FSM.join_paths(effective_working_dir, "user")):
+			# We are forcing portable mode; reset any stale config that points
+			# to a different home directory so the emulator regenerates it.
+			_sanitize_portable_config(effective_working_dir)
+		else:
+			print("[ProcessManager] No user/ in requested working dir '%s'; falling back to exe dir" % effective_working_dir)
+			effective_working_dir = exe_path.get_base_dir().replace("//", "/")
+	
 	print("[ProcessManager] Creating desktop process for: ", exe_path)
 	print("[ProcessManager] launch args: ", arguments)
-	print("[ProcessManager] working directory: ", intent.working_directory)
+	print("[ProcessManager] working directory: ", effective_working_dir)
 	print("[ProcessManager] linux env args: ", linux_env_args, " use_env_wrapper=", use_env_wrapper)
 
-	if intent.working_directory == "" and not use_env_wrapper:
+	if effective_working_dir == "" and not use_env_wrapper:
 		# No working directory needed and no env sanitization: call executable directly
 		# (no shell, no injection risk)
 		print("[ProcessManager] Direct launch: exe=", exe_path, " args=", arguments)
 		pid = OS.create_process(exe_path, arguments, false)
 		print("[ProcessManager] Direct launch returned pid: ", pid)
-	elif intent.working_directory == "" and use_env_wrapper:
-		# Linux with env sanitization: use env(1) as the executable so the real
-		# emulator PID is returned directly, no shell involved.
-		var env_arguments: Array[String] = []
-		env_arguments.append_array(linux_env_args)
-		env_arguments.append(exe_path)
-		env_arguments.append_array(arguments)
-		print("[ProcessManager] env launch: env args=", env_arguments)
-		pid = OS.create_process("env", env_arguments, false)
-		print("[ProcessManager] env launch returned pid: ", pid)
+	elif effective_working_dir == "" and use_env_wrapper:
+		# Linux with env sanitization: wrap env(1) in sh -c with exec so the
+		# shell replaces itself with env, which then replaces itself with the
+		# emulator. Calling env directly as the OS.create_process executable
+		# can cause some AppRun scripts (e.g. Eden) to exit immediately when
+		# backgrounded, because the intermediate non-exec parent changes the
+		# process/session relationship the child sees.
+		var safe_args = _escape_args_for_shell(arguments)
+		var safe_exe = _escape_sh_arg(exe_path)
+		var env_prefix = _escape_env_args_for_shell(linux_env_args) + " "
+		# Capture stdout/stderr to a log file. This both gives us a diagnostic
+		# trace if the emulator crashes, and provides the child with real open
+		# file descriptors instead of whatever closed/socket fds the parent
+		# Godot process happens to have inherited.
+		var launch_log := FSM.resolve_path(
+			FSM.resolve_emulator_path("launch.log", intent.emulator_id),
+			{"format": FSM.PathFormat.ABSOLUTE}
+		)
+		var safe_log := _escape_sh_arg(launch_log)
+		var inner_cmd = 'exec env %s%s %s > %s 2>&1' % [env_prefix, safe_exe, " ".join(safe_args), safe_log]
+		print("[ProcessManager] env launch via sh: sh -c ", inner_cmd)
+		pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		print("[ProcessManager] env launch via sh returned pid: ", pid)
 	elif not SystemManager.platform.is_windows():
 		# Linux/macOS: sh -c with exec, so the shell REPLACES itself with the
 		# emulator and the returned PID is the emulator's own PID.
 		var safe_args = _escape_args_for_shell(arguments)
-		var safe_working_dir = _escape_sh_arg(intent.working_directory)
+		var safe_working_dir = _escape_sh_arg(effective_working_dir)
 		var safe_exe = _escape_sh_arg(exe_path)
 		var env_prefix = _escape_env_args_for_shell(linux_env_args) + " " if use_env_wrapper else ""
-		var inner_cmd = 'cd %s && exec env %s%s %s' % [safe_working_dir, env_prefix, safe_exe, " ".join(safe_args)]
+		var launch_log := FSM.resolve_path(
+			FSM.resolve_emulator_path("launch.log", intent.emulator_id),
+			{"format": FSM.PathFormat.ABSOLUTE}
+		)
+		var safe_log := _escape_sh_arg(launch_log)
+		var inner_cmd = 'cd %s && exec env %s%s %s > %s 2>&1' % [safe_working_dir, env_prefix, safe_exe, " ".join(safe_args), safe_log]
 		print("[ProcessManager] shell launch: sh -c ", inner_cmd)
 		pid = OS.create_process("sh", ["-c", inner_cmd], false)
 		print("[ProcessManager] shell launch returned pid: ", pid)
@@ -457,7 +652,7 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		var ps_arg_list: Array[String] = []
 		for arg in arguments:
 			ps_arg_list.append(_escape_ps_arg_quoted(arg))
-		var ps_command = "Start-Process -FilePath %s -WorkingDirectory %s" % [_escape_ps_arg(exe_path), _escape_ps_arg(intent.working_directory)]
+		var ps_command = "Start-Process -FilePath %s -WorkingDirectory %s" % [_escape_ps_arg(exe_path), _escape_ps_arg(effective_working_dir)]
 		if not ps_arg_list.is_empty():
 			ps_command += " -ArgumentList " + ",".join(ps_arg_list)
 		ps_command += " -PassThru | Select-Object -ExpandProperty Id"
@@ -484,7 +679,7 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 			# Fallback: cmd /c wrapper (tracks the wrapper PID, not the emulator)
 			push_warning("[ProcessManager] PowerShell launch failed, falling back to cmd wrapper (PID tracking will follow cmd.exe)")
 			var safe_args = _escape_args_for_shell(arguments)
-			var safe_working_dir = _escape_cmd_meta(intent.working_directory)
+			var safe_working_dir = _escape_cmd_meta(effective_working_dir)
 			var safe_exe = _escape_cmd_meta(exe_path)
 			var inner_cmd = 'cd /d "%s" && "%s" %s' % [safe_working_dir, safe_exe, " ".join(safe_args)]
 			print("[ProcessManager] Executing command: cmd /c ", inner_cmd)
@@ -521,6 +716,31 @@ func _read_proc_file(path: String) -> String:
 	f.close()
 	return bytes.get_string_from_utf8()
 
+## Parses /proc/<pid>/stat and returns a dictionary with commonly-needed
+## fields. The command name is wrapped in parentheses and may contain spaces
+## or closing parens, so we locate the last ')' and split the remaining
+## whitespace-delimited fields.
+func _parse_proc_stat(pid: int) -> Dictionary:
+	var result := {
+		"ok": false,
+		"state": "",
+	}
+	if pid <= 0:
+		return result
+	var content := _read_proc_file("/proc/" + str(pid) + "/stat")
+	if content == "":
+		return result
+	var close_paren := content.rfind(")")
+	if close_paren == -1:
+		return result
+	var tail := content.substr(close_paren + 1).strip_edges()
+	var fields := tail.split(" ", false)
+	# Field 0 after ')' is the process state.
+	if fields.size() >= 1:
+		result["ok"] = true
+		result["state"] = fields[0]
+	return result
+
 ## Reads immediate child PIDs of a process from /proc.
 func _get_process_children(pid: int) -> Array[int]:
 	var children: Array[int] = []
@@ -548,6 +768,28 @@ func _get_process_cmdline(pid: int) -> String:
 		if bytes[i] == 0:
 			bytes[i] = 32  # space
 	return bytes.get_string_from_utf8().strip_edges()
+
+## Reads the short command name (comm) of a process from /proc/<pid>/comm.
+func _get_process_comm(pid: int) -> String:
+	if pid <= 0:
+		return ""
+	return _read_proc_file("/proc/" + str(pid) + "/comm").strip_edges()
+
+## Returns true if the given PID is a Linux AppImage runtime wrapper.
+## These wrappers (commonly comm="AppRun", exe under /tmp/.mount_*) fork the
+## real emulator payload and stay alive to manage the FUSE mount, so they must
+## not be mistaken for the emulator process itself.
+func _is_appimage_wrapper_pid(pid: int) -> bool:
+	if pid <= 0 or not SystemManager.platform.is_linux():
+		return false
+	if _get_process_comm(pid) == "AppRun":
+		return true
+	var exe_link := "/proc/" + str(pid) + "/exe"
+	if FileAccess.file_exists(exe_link):
+		var exe_path := DirAccess.open("/proc").read_link(exe_link) if DirAccess.open("/proc") != null else ""
+		if exe_path != "" and exe_path.begins_with("/tmp/.mount_"):
+			return true
+	return false
 
 ## Reads the parent PID from /proc/<pid>/status.
 func _get_parent_pid(pid: int) -> int:
@@ -625,12 +867,41 @@ func _discover_emulator_pid(initial_pid: int, launch_args: Array) -> int:
 
 	if best_pid != initial_pid:
 		print("[ProcessManager] Discovered emulator PID ", best_pid, " (initial was ", initial_pid, ")")
-	else:
-		print("[ProcessManager] Could not match child cmdline, keeping initial PID ", initial_pid)
+		return best_pid
 
-	return best_pid
+	# Final fallback: the emulator may have already been reparented away from the
+	# wrapper (e.g. AppImage runtime). Scan all of /proc for a live process whose
+	# cmdline contains the launch argument signature.
+	if arg_signature != "":
+		var proc_dir := DirAccess.open("/proc")
+		if proc_dir != null:
+			proc_dir.list_dir_begin()
+			var entry := proc_dir.get_next()
+			while entry != "":
+				if entry.is_valid_int():
+					var scan_pid := entry.to_int()
+					if scan_pid > 0 and scan_pid != initial_pid:
+						var stat := _parse_proc_stat(scan_pid)
+						if stat.ok and stat.state != "Z":
+							var cmdline := _get_process_cmdline(scan_pid)
+							if cmdline.contains(arg_signature):
+								print("[ProcessManager] Discovered reparented emulator PID ", scan_pid, " via /proc scan")
+								proc_dir.list_dir_end()
+								return scan_pid
+				entry = proc_dir.get_next()
+			proc_dir.list_dir_end()
+
+	print("[ProcessManager] Could not match child cmdline, keeping initial PID ", initial_pid)
+	return initial_pid
 
 func _execute_android(intent: LaunchIntent) -> bool:
+	# Enforce Kyodai-managed data paths in the emulator's writable config, when
+	# the emulator exposes one (e.g. ARMSX2's armsx2-settings.json). Failures are
+	# logged but do not block the launch because many Android apps keep their
+	# settings inside private app data Kyodai cannot reach.
+	if not RSM.enforce_paths(intent.emulator_id, intent.platform_slug, intent.core_name):
+		push_warning("[ProcessManager] Could not enforce config paths for Android emulator %s" % intent.emulator_id)
+
 	var plugin = Engine.get_singleton("PackageChecker")
 	if plugin == null:
 		push_error("[ProcessManager] PackageChecker plugin not available for Android launch")

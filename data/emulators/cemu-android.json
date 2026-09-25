@@ -35,6 +35,15 @@
 	  "android": [
 		"{app_data}/settings.xml"
 	  ]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "": {
+			"mlc_path": "{app_data}/mlc01"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

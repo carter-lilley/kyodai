@@ -33,6 +33,15 @@
 	"strategy": "xenia_toml",
 	"config_candidates": {
 	  "android": ["{app_data}/compose/xenia-canary.config.toml"]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "Storage": {
+			"content_root": "{app_data}/compose/content"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

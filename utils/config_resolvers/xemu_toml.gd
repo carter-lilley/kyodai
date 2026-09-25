@@ -69,3 +69,32 @@ static func resolve(kind: String, context: Dictionary) -> Dictionary:
 
 	result.caveat = "emulator-default"
 	return result
+
+## Enforces Xemu's TOML config.
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[XemuTomlResolver] enforce_paths called without config_path")
+		return false
+
+	for section_name in sections:
+		var section_data: Dictionary = sections[section_name]
+		for key in section_data:
+			var value = _coerce_toml_value(section_data[key])
+			if not CSM.set_value(config_path, key, value, section_name, CSM.Format.TOML, true):
+				push_error("[XemuTomlResolver] Failed to enforce %s.%s" % [section_name, key])
+				return false
+
+	print("[XemuTomlResolver] Enforced paths in " + config_path)
+	return true
+
+static func _coerce_toml_value(value: String):
+	if value == "true":
+		return true
+	if value == "false":
+		return false
+	if value.is_valid_int():
+		return value.to_int()
+	if value.is_valid_float():
+		return value.to_float()
+	return value

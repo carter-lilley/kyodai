@@ -33,6 +33,34 @@
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/xemu.toml"],
 	  "linux": ["{emulator_dir}/xemu.toml"]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "general": {
+			"show_welcome": "false"
+		  },
+		  "sys.files": {
+			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
+			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
+			"eeprom_path": "{emulator_dir}/eeprom.bin",
+			"hdd_path": "{emulator_dir}/xbox_hdd.raw"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "general": {
+			"show_welcome": "false"
+		  },
+		  "sys.files": {
+			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
+			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
+			"eeprom_path": "{emulator_dir}/eeprom.bin",
+			"hdd_path": "{emulator_dir}/xbox_hdd.qcow2"
+		  }
+		}
+	  }
 	}
   },
   "launch": {
@@ -90,7 +118,10 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none",
+		  "action_type": "move",
+		  "source_pattern": "xemu-*.AppImage",
+		  "destination": "xemu",
+		  "replace": true,
 		  "validate": {
 			"action_type": "file_exists",
 			"file": "xemu"
@@ -99,36 +130,18 @@
 	  }
 	},
 	{
-	  "step": "create_config",
+	  "step": "chmod_executable",
 	  "platforms": {
 		"windows": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "xemu.toml",
-			  "content": "[general]\nshow_welcome = false\n\n[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.raw'"
-			}
-		  ],
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "xemu.toml"
-			]
-		  }
+		  "action_type": "none"
 		},
 		"linux": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "xemu.toml",
-			  "content": "[general]\nshow_welcome = false\n\n[sys.files]\nbootrom_path = '{emulator_dir}/mcpx_1.0.bin'\nflashrom_path = '{emulator_dir}/Complex_4627.bin'\neeprom_path = '{emulator_dir}/eeprom.bin'\nhdd_path = '{emulator_dir}/xbox_hdd.qcow2'"
-			}
-		  ],
+		  "action_type": "chmod",
+		  "file": "xemu",
+		  "mode": "+x",
 		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "xemu.toml"
-			]
+			"action_type": "file_exists",
+			"file": "xemu"
 		  }
 		}
 	  }

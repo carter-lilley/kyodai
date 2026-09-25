@@ -19,6 +19,7 @@
 class_name Vita3kYmlResolver
 
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Resolves one placement from the context RSM built.
 ## context: {config_path, config_status, anchor}
@@ -85,3 +86,50 @@ static func _yaml_scalar(raw: String) -> String:
 	if hash_idx >= 0:
 		raw = raw.substr(0, hash_idx)
 	return raw.strip_edges()
+
+## Enforces Vita3K's flat YAML config.yml.
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[Vita3kYmlResolver] enforce_paths called without config_path")
+		return false
+
+	var text := ""
+	if FSM.file_exists(config_path):
+		text = FSM.read_file(config_path)
+		var backup_path := config_path + ".kyodai-backup"
+		if not FSM.file_exists(backup_path):
+			FSM.write_file(backup_path, text)
+
+	var flat: Dictionary = sections.get("", {})
+	for key in flat:
+		var value: String = str(flat[key])
+		text = _set_yaml_scalar(text, key, value)
+
+	var parent_dir := config_path.get_base_dir()
+	if parent_dir != "" and not FSM.dir_exists(parent_dir):
+		FSM.make_dir_recursive(parent_dir)
+
+	if not FSM.write_file(config_path, text):
+		push_error("[Vita3kYmlResolver] Failed to write enforced config: " + config_path)
+		return false
+	print("[Vita3kYmlResolver] Enforced paths in " + config_path)
+	return true
+
+static func _set_yaml_scalar(text: String, key: String, value: String) -> String:
+	var lines := text.split("\n")
+	var key_idx := -1
+	for i in range(lines.size()):
+		var stripped := lines[i].strip_edges()
+		if stripped.begins_with(key + ":"):
+			key_idx = i
+			break
+	var quoted := value
+	if quoted.contains(" "):
+		quoted = "\"" + quoted + "\""
+	var new_line := "%s: %s" % [key, quoted]
+	if key_idx >= 0:
+		lines[key_idx] = new_line
+	else:
+		lines.append(new_line)
+	return "\n".join(lines)

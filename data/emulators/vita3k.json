@@ -42,6 +42,32 @@
 	  "windows": ["{emulator_dir}/config.yml"],
 	  "linux": ["{emulator_dir}/config.yml"],
 	  "android": ["{app_data}/config.yml"]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "": {
+			"pref-path": "{emulator_dir}",
+			"user-id": "00"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "": {
+			"pref-path": "{emulator_dir}",
+			"user-id": "00"
+		  }
+		}
+	  },
+	  "android": {
+		"sections": {
+		  "": {
+			"pref-path": "{app_data}/vita",
+			"user-id": "00"
+		  }
+		}
+	  }
 	}
   },
   "launch": {

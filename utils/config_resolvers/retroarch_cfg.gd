@@ -70,3 +70,19 @@ static func resolve(kind: String, context: Dictionary) -> Dictionary:
 	result.path = dir
 	result.source = "config"
 	return result
+
+## Enforces RetroArch's sectionless key = "value" config.
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[RetroArchCfgResolver] enforce_paths called without config_path")
+		return false
+
+	var global: Dictionary = sections.get("", {})
+	for key in global:
+		if not CSM.set_value(config_path, key, global[key], "", CSM.Format.CFG_KV, true):
+			push_error("[RetroArchCfgResolver] Failed to enforce " + key)
+			return false
+
+	print("[RetroArchCfgResolver] Enforced paths in " + config_path)
+	return true

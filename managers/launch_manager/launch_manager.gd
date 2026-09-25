@@ -176,7 +176,18 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 	intent.emulator_name = RegistrySubManager.get_emulator_display_name(emulator_info, emulator_id)
 	var args: Array[String] = [exe_path]
 	intent.launch_args = args
-	if emulator_info.get("requires_working_dir", false) or emulator_id.begins_with("vita3k"):
+	# Apply working directory from JSON template if present; otherwise keep
+	# the legacy requires_working_dir behavior.
+	var launch_cfg = emulator_info.get("launch", {}).get("platforms", {})
+	var platform_name = SystemManager.platform.get_platform_name().to_lower()
+	var platform_launch_cfg = launch_cfg.get(platform_name, {})
+	var working_dir_template = platform_launch_cfg.get("working_directory", "")
+	if working_dir_template != "":
+		var resolved = working_dir_template.replace("{exe}", exe_path)
+		# resolve_emulator_path handles {emulator_dir}, {home}, {env.*}, etc.
+		resolved = FSM.resolve_emulator_path(resolved, emulator_id, "")
+		intent.working_directory = FSM.resolve_native_path(resolved).rstrip("/")
+	elif emulator_info.get("requires_working_dir", false) or emulator_id.begins_with("vita3k"):
 		intent.working_directory = exe_path.get_base_dir().replace("//", "/")
 	var pid = await process._create_desktop_process(intent)
 	if pid > 0:

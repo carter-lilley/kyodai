@@ -37,8 +37,34 @@
 	"strategy": "rpcs3_vfs",
 	"anchor": "{emulator_dir}",
 	"config_candidates": {
-	  "windows": ["{emulator_dir}/config/vfs.yml", "{emulator_dir}/config/config.yml"],
-	  "linux": ["{emulator_dir}/config/vfs.yml", "{emulator_dir}/config/config.yml"]
+	  "windows": [
+		"{home}/AppData/Roaming/RPCS3/vfs.yml",
+		"{home}/AppData/Roaming/RPCS3/config.yml"
+	  ],
+	  "linux": [
+		"{emulator_dir}/vfs.yml",
+		"{emulator_dir}/config.yml",
+		"{home}/.config/rpcs3/vfs.yml",
+		"{home}/.config/rpcs3/config.yml"
+	  ]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "": {
+			"/dev_hdd0/": "{emulator_dir}/dev_hdd0",
+			"/dev_flash/": "{emulator_dir}/dev_flash"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "": {
+			"/dev_hdd0/": "{emulator_dir}/dev_hdd0",
+			"/dev_flash/": "{emulator_dir}/dev_flash"
+		  }
+		}
+	  }
 	}
   },
   "launch": {
@@ -54,7 +80,14 @@
 		"rom_delivery": "none"
 	  },
 	  "linux": {
-		"action_type": "none"
+		"type": "command",
+		"executable": "rpcs3",
+		"template": [
+		  "{exe}",
+		  "--no-gui",
+		  "{rom}"
+		],
+		"rom_delivery": "none"
 	  }
 	}
   },
@@ -68,7 +101,9 @@
 		  "asset_pattern": "rpcs3-.*_win64_msvc\\.7z"
 		},
 		"linux": {
-		  "action_type": "none"
+		  "action_type": "download_repo",
+		  "github_repo": "RPCS3/rpcs3-binaries-linux",
+		  "asset_pattern": "rpcs3-.*_linux64\\.AppImage"
 		}
 	  }
 	},
@@ -85,7 +120,52 @@
 		  }
 		},
 		"linux": {
+		  "action_type": "move",
+		  "source_pattern": "rpcs3-*.AppImage",
+		  "destination": "rpcs3",
+		  "replace": true,
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "rpcs3"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "chmod_executable",
+	  "platforms": {
+		"windows": {
 		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "chmod",
+		  "file": "rpcs3",
+		  "mode": "+x",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "rpcs3"
+		  }
+		}
+	  }
+	},
+	{
+	  "step": "create_portable_file",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "portable.txt",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "portable.txt"
+		  }
 		}
 	  }
 	}

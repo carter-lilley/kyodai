@@ -47,6 +47,29 @@
 				"{emulator_dir}/PSP/SYSTEM/ppsspp.ini",
 				"{app_data}/PSP/SYSTEM/ppsspp.ini"
 			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"General": {
+						"MemStickDirectory": "{emulator_dir}/memstick"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"General": {
+						"MemStickDirectory": "{emulator_dir}/memstick"
+					}
+				}
+			},
+			"android": {
+				"sections": {
+					"General": {
+						"MemStickDirectory": "{emulator_dir}"
+					}
+				}
+			}
 		}
 	},
 	"launch": {
@@ -89,7 +112,12 @@
 				"linux": {
 					"action_type": "download_repo",
 					"github_repo": "hrydgard/ppsspp",
-					"asset_pattern": "PPSSPP-.*-anylinux-x86_64\\.AppImage"
+					"asset_pattern": "PPSSPP-.*-anylinux-x86_64\\.AppImage",
+					"validate": {
+						"action_type": "files_exist",
+						"path": ".",
+						"pattern": "PPSSPP-*.AppImage"
+					}
 				},
 				"android": {
 					"action_type": "download_scrape",
@@ -113,12 +141,7 @@
 					}
 				},
 				"linux": {
-					"action_type": "none",
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "PPSSPP-*.AppImage"
-					}
+					"action_type": "none"
 				},
 				"android": {
 					"action_type": "apk_install",
@@ -169,6 +192,9 @@
 						"action_type": "file_exists",
 						"file": "portable.txt"
 					}
+				},
+				"linux": {
+					"action_type": "none"
 				},
 				"android": {
 					"action_type": "none"

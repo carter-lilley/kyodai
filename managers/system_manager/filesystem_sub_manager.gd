@@ -223,7 +223,8 @@ static func resolve_native_path(path: String) -> String:
 	return resolved
 
 ## Resolves emulator paths with full wildcard support
-## Handles {emulator_dir}, {app_data}, {games_dir}, and {core_name}
+## Handles {emulator_dir}, {app_data}, {games_dir}, {core_name}, {home},
+## and {env.VAR} environment placeholders.
 ## This is the preferred method for resolving emulator-related paths
 static func resolve_emulator_path(path: String, emulator_id: String, platform_slug: String = "", format: PathFormat = PathFormat.DEFAULT) -> String:
 	if path.is_empty():
@@ -253,7 +254,25 @@ static func resolve_emulator_path(path: String, emulator_id: String, platform_sl
 		var games_dir = games_folder_setting.value if games_folder_setting else "user://roms"
 		placeholders["{games_dir}"] = games_dir.rstrip("/")
 	
-	return resolve_path(path, {
+	# Resolve {home}
+	var home_dir = OS.get_environment("HOME")
+	if home_dir == "" or (is_instance_valid(SystemManager.platform) and SystemManager.platform.is_windows()):
+		home_dir = OS.get_environment("USERPROFILE")
+	if home_dir != "":
+		placeholders["{home}"] = home_dir.rstrip("/")
+	
+	# Resolve {env.VAR} environment placeholders
+	var result := path
+	var env_regex := RegEx.new()
+	env_regex.compile(r"\{env\.([^}]+)\}")
+	var env_match := env_regex.search(result)
+	while env_match != null:
+		var var_name := env_match.get_string(1)
+		var var_value := OS.get_environment(var_name)
+		result = result.substr(0, env_match.get_start()) + var_value + result.substr(env_match.get_end())
+		env_match = env_regex.search(result)
+	
+	return resolve_path(result, {
 		"base_dir": placeholders.get("{emulator_dir}", ""),
 		"placeholders": placeholders,
 		"format": format

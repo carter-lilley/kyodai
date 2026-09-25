@@ -101,3 +101,47 @@ static func _unescape(value: String) -> String:
 	value = value.replace("&lt;", "<").replace("&gt;", ">")
 	value = value.replace("&quot;", "\"").replace("&apos;", "'")
 	return value.replace("&amp;", "&")
+
+## Enforces Cemu's <mlc_path> element in settings.xml.
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[CemuXmlResolver] enforce_paths called without config_path")
+		return false
+
+	var flat: Dictionary = sections.get("", {})
+	var mlc_path: String = flat.get("mlc_path", "")
+	if mlc_path == "":
+		# Nothing to enforce for this resolver.
+		return true
+
+	var text := ""
+	if FSM.file_exists(config_path):
+		text = FSM.read_file(config_path)
+		var backup_path := config_path + ".kyodai-backup"
+		if not FSM.file_exists(backup_path):
+			FSM.write_file(backup_path, text)
+
+	var paired := RegEx.new()
+	paired.compile("<mlc_path[^>]*>(.*?)</mlc_path>")
+	if paired.search(text) != null:
+		text = paired.sub(text, "<mlc_path>" + _escape_xml(mlc_path) + "</mlc_path>", true)
+	else:
+		if not text.contains("<content>"):
+			text += "<content>\n</content>\n"
+		var content_open := RegEx.new()
+		content_open.compile("<content>")
+		text = content_open.sub(text, "<content>\n  <mlc_path>" + _escape_xml(mlc_path) + "</mlc_path>", true)
+
+	var parent_dir := config_path.get_base_dir()
+	if parent_dir != "" and not FSM.dir_exists(parent_dir):
+		FSM.make_dir_recursive(parent_dir)
+
+	if not FSM.write_file(config_path, text):
+		push_error("[CemuXmlResolver] Failed to write enforced config: " + config_path)
+		return false
+	print("[CemuXmlResolver] Enforced paths in " + config_path)
+	return true
+
+static func _escape_xml(value: String) -> String:
+	return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

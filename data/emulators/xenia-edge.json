@@ -42,6 +42,22 @@
 		"{emulator_dir}/xenia-edge.config.toml",
 		"{emulator_dir}/xenia.config.toml"
 	  ]
+	},
+	"enforce": {
+	  "windows": {
+		"sections": {
+		  "Storage": {
+			"content_root": "{emulator_dir}/content"
+		  }
+		}
+	  },
+	  "linux": {
+		"sections": {
+		  "Storage": {
+			"content_root": "{emulator_dir}/content"
+		  }
+		}
+	  }
 	}
   },
   "launch": {
@@ -57,7 +73,7 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "xenia_edge",
+		"executable": "xenia_edge_linux.AppImage",
 		"template": [
 		  "{exe}",
 		  "--fullscreen=true",
@@ -75,8 +91,14 @@
 		  "github_repo": "has207/xenia-edge",
 		  "asset_pattern": "xenia_edge_windows\\.zip"
 		},
-   		"linux": {
-		  "action_type": "none"
+		"linux": {
+		  "action_type": "download_repo",
+		  "github_repo": "has207/xenia-edge",
+		  "asset_pattern": "xenia_edge_linux\\.AppImage",
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "xenia_edge_linux.AppImage"
+		  }
 		}
 	  }
 	},
@@ -93,10 +115,23 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none",
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "chmod_executable",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "chmod",
+		  "file": "xenia_edge_linux.AppImage",
+		  "mode": "+x",
 		  "validate": {
 			"action_type": "file_exists",
-			"file": "xenia_edge"
+			"file": "xenia_edge_linux.AppImage"
 		  }
 		}
 	  }
@@ -118,7 +153,17 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "none"
+		  "action_type": "create_files",
+		  "files": [
+			{
+			  "name": "portable.txt",
+			  "content": ""
+			}
+		  ],
+		  "validate": {
+			"action_type": "file_exists",
+			"file": "portable.txt"
+		  }
 		}
 	  }
 	}

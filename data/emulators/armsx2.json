@@ -31,6 +31,22 @@
 	  }
 	}
   },
+  "resolution": {
+	"strategy": "json_kv",
+	"config_candidates": {
+	  "android": ["{app_data}/armsx2-settings.json"]
+	},
+	"enforce": {
+	  "android": {
+		"sections": {
+		  "global": {
+			"memoryCardSlot1Enabled": "true",
+			"memoryCardSlot1Filename": "main.ps2"
+		  }
+		}
+	  }
+	}
+  },
   "launch": {
 	"platforms": {
 	  "android": {
@@ -92,26 +108,6 @@
 			"action_type": "files_exist",
 			"files": [
               "{app_data}/memcards/main.ps2/_pcsx2_superblock"
-			]
-		  }
-		}
-	  }
-	},
-	{
-	  "step": "seed_settings",
-	  "platforms": {
-		"android": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "{app_data}/armsx2-settings.json",
-			  "content": "{\"global\":{\"memoryCardSlot1Enabled\":true,\"memoryCardSlot1Filename\":\"main.ps2\"}}"
-			}
-		  ],
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "{app_data}/armsx2-settings.json"
 			]
 		  }
 		}

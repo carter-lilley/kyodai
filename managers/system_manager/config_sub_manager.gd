@@ -97,13 +97,20 @@ static func set_value(path: String, key: String, value: Variant, section := "", 
 		if not create_if_missing:
 			push_error("[ConfigManager] File not found for set_value: " + path)
 			return false
+		var parent_dir := path.get_base_dir()
+		if parent_dir != "" and not FSM.dir_exists(parent_dir):
+			FSM.make_dir_recursive(parent_dir)
 		if not FSM.write_file(path, ""):
 			push_error("[ConfigManager] Failed to create file: " + path)
 			return false
 
 	var content := FSM.read_file(path)
-	var new_line := _format_key_line(key, value, fmt)
-	var updated := _set_key_sectioned(content, section, key, new_line)
+	# Preserve the existing key spelling when one is already present; emulator
+	# INI parsers are usually case-insensitive, but writing the same case avoids
+	# duplicate keys and keeps the file looking native.
+	var exact_key := _find_existing_key(content, section, key)
+	var new_line := _format_key_line(exact_key, value, fmt)
+	var updated := _set_key_sectioned(content, section, exact_key, new_line)
 	if not FSM.write_file(path, updated):
 		push_error("[ConfigManager] Failed to write file: " + path)
 		return false
@@ -116,6 +123,10 @@ static func write_config(path: String, content: String, only_if_missing := false
 		return false
 	if only_if_missing and FSM.file_exists(path):
 		return true
+	# Ensure parent directories exist, matching edit_text behavior.
+	var parent_dir := path.get_base_dir()
+	if parent_dir != "" and not FSM.dir_exists(parent_dir):
+		FSM.make_dir_recursive(parent_dir)
 	if not FSM.write_file(path, content):
 		push_error("[ConfigManager] Failed to write file: " + path)
 		return false
@@ -354,8 +365,6 @@ static func _format_toml_value(value: Variant) -> String:
 static func _set_key_sectioned(text: String, section: String, key: String, new_line: String) -> String:
 	var eol := "\r\n" if text.contains("\r\n") else "\n"
 	var lines := text.split(eol)
-	var key_regex := RegEx.new()
-	key_regex.compile("^[ \\t]*" + _regex_escape(key) + "[ \\t]*=")
 	var header_regex := RegEx.new()
 	header_regex.compile("^[ \\t]*\\[")
 
@@ -389,10 +398,29 @@ static func _set_key_sectioned(text: String, section: String, key: String, new_l
 			out += target_header + eol + new_line + eol
 			return out
 
-	for i in range(region_start, region_end):
-		if key_regex.search(lines[i]):
-			lines[i] = new_line
-			return eol.join(lines)
+	# Replace the first matching key and remove any later duplicates within
+	# the same section. Keys are matched case-insensitively so we don't leave
+	# stale variants like PCSX2's default "Bios" alongside our enforced "BIOS".
+	var key_lower := key.to_lower()
+	var replaced := false
+	var i := region_start
+	while i < region_end:
+		var line := lines[i]
+		var sep := line.find("=")
+		if sep >= 0:
+			var line_key := line.substr(0, sep).strip_edges()
+			if line_key.to_lower() == key_lower:
+				if not replaced:
+					lines[i] = new_line
+					replaced = true
+					i += 1
+				else:
+					lines.remove_at(i)
+					region_end -= 1
+				continue
+		i += 1
+	if replaced:
+		return eol.join(lines)
 
 	# Key absent: insert at the end of the region. For a global region bounded
 	# by a section header, insert just before it so the key stays global.
@@ -411,3 +439,34 @@ static func _regex_escape(text: String) -> String:
 			out += "\\"
 		out += c
 	return out
+
+## Returns the exact spelling of an existing key in the given section if it
+## matches case-insensitively, otherwise returns the requested key.
+static func _find_existing_key(text: String, section: String, key: String) -> String:
+	if text.is_empty():
+		return key
+	var eol := "\r\n" if text.contains("\r\n") else "\n"
+	var lines := text.split(eol)
+	var key_lower := key.to_lower()
+	var in_section := section == ""
+	var target_header := "[" + section + "]"
+	var header_regex := RegEx.new()
+	header_regex.compile("^[ \\t]*\\[")
+	for line in lines:
+		var stripped := line.strip_edges()
+		if section != "":
+			if stripped == target_header:
+				in_section = true
+				continue
+			if in_section and header_regex.search(stripped):
+				in_section = false
+				continue
+		if not in_section:
+			continue
+		var sep := stripped.find("=")
+		if sep < 0:
+			continue
+		var line_key := stripped.substr(0, sep).strip_edges()
+		if line_key.to_lower() == key_lower:
+			return line_key
+	return key

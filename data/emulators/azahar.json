@@ -42,8 +42,28 @@
 				"{emulator_dir}/user/config/qt-config.ini"
 			],
 			"linux": [
-				"{emulator_dir}/user/config/qt-config.ini"
+				"{emulator_dir}/user/config/qt-config.ini",
+				"{home}/.config/azahar-emu/qt-config.ini",
+				"{home}/.local/share/azahar-emu/config/qt-config.ini"
 			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"Data Storage": {
+						"use_custom_storage": "true",
+						"sdmc_directory": "{emulator_dir}/user/sdmc"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"Data Storage": {
+						"use_custom_storage": "true",
+						"sdmc_directory": "{emulator_dir}/user/sdmc"
+					}
+				}
+			}
 		}
 	},
 	"launch": {
@@ -60,6 +80,7 @@
 			"linux": {
 				"type": "command",
 				"executable": "squashfs-root/AppRun",
+				"working_directory": "{emulator_dir}",
 				"template": [
 					"{exe}",
 					"-f",
@@ -111,11 +132,7 @@
 					}
 				},
 				"linux": {
-					"action_type": "none",
-					"validate": {
-						"action_type": "file_exists",
-						"file": "azahar.AppImage"
-					}
+					"action_type": "none"
 				},
 				"android": {
 					"action_type": "apk_install",

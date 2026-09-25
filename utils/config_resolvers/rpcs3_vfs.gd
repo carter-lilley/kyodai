@@ -110,3 +110,49 @@ static func _expand(value: String, anchor: String) -> String:
 	if not dir.is_absolute_path():
 		dir = anchor + "/" + dir
 	return dir.simplify_path().rstrip("/")
+
+## Enforces RPCS3's flat VFS key map in vfs.yml (or legacy config.yml).
+static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:
+	var config_path: String = context.get("config_path", "")
+	if config_path == "":
+		push_error("[Rpcs3VfsResolver] enforce_paths called without config_path")
+		return false
+
+	var text := ""
+	if FSM.file_exists(config_path):
+		text = FSM.read_file(config_path)
+		var backup_path := config_path + ".kyodai-backup"
+		if not FSM.file_exists(backup_path):
+			FSM.write_file(backup_path, text)
+
+	var flat: Dictionary = sections.get("", {})
+	for key in flat:
+		var value: String = str(flat[key])
+		text = _set_vfs_entry(text, key, value)
+
+	var parent_dir := config_path.get_base_dir()
+	if parent_dir != "" and not FSM.dir_exists(parent_dir):
+		FSM.make_dir_recursive(parent_dir)
+
+	if not FSM.write_file(config_path, text):
+		push_error("[Rpcs3VfsResolver] Failed to write enforced config: " + config_path)
+		return false
+	print("[Rpcs3VfsResolver] Enforced paths in " + config_path)
+	return true
+
+static func _set_vfs_entry(text: String, key: String, value: String) -> String:
+	var lines := text.split("\n")
+	var key_idx := -1
+	for i in range(lines.size()):
+		var stripped := lines[i].strip_edges()
+		if stripped.begins_with(key):
+			var sep := stripped.find(":")
+			if sep >= 0 and stripped.substr(0, sep).strip_edges() == key:
+				key_idx = i
+				break
+	var new_line := "%s: \"%s\"" % [key, value]
+	if key_idx >= 0:
+		lines[key_idx] = new_line
+	else:
+		lines.append(new_line)
+	return "\n".join(lines)
