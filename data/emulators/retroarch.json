@@ -106,7 +106,9 @@
 					"": {
 						"libretro_directory": "{emulator_dir}/cores",
 						"savefile_directory": "{emulator_dir}/saves",
-						"system_directory": "{emulator_dir}/system"
+						"system_directory": "{emulator_dir}/system",
+						"assets_directory": "{emulator_dir}/RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/assets",
+						"joypad_autoconfig_dir": "{emulator_dir}/RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/autoconfig"
 					}
 				}
 			},
@@ -144,9 +146,7 @@
 					"-f"
 				],
 				"environment": {
-					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
-					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
-					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config"
 				}
 			},
 			"android": {

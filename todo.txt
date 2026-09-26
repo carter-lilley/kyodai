@@ -59,26 +59,6 @@ rework hero to also accept effect stacks
 ## performance & sync:
 	cache image colors on sync
 
-LINUX
-What needs to change
-🔴 Hard blockers (nothing works without these)
-Missing bin/7z/linux/7z binary — _get_7z_binary_path() at filesystem_sub_manager.gd:1467 already points to it, but the repo only ships Windows binaries. Blocks ALL extraction (emulators, firmware, RetroArch cores).
-Missing Linux godot-sqlite binaries — gdsqlite.gdextension declares linux .so entries but only Windows DLLs are committed in addons/godot-sqlite/bin/.
-No Linux export preset — export_presets.cfg has only Android + Windows. Need a Linux/X11 preset with include_filter for bin/7z/linux/7z, bin/sigil/linux/sigil, themes/*.tres.
-🟠 Data-file gaps (data/emulators/*.json)
-RetroArch — Linux download_cores step missing entirely; install chain hard-fails at emulator_sub_manager.gd:411. Buildbot has a Linux RetroArch_cores.7z.
-Stubs/mismatches: Dolphin (empty URL + empty exe), RPCS3 (all none, no launch template), PPSSPP (not declared for Linux), PCSX2 (pcsx2-qt vs downloaded AppImage filename), xemu (xemu vs AppImage name), Eden (regex glob as executable name).
-No chmod +x anywhere — downloaded AppImages/binaries won't be executable; launch will fail. No chmod action_type exists in the install-step vocabulary, so either add one or chmod post-install.
-🟡 Feature work (Windows-only features)
-Shuffler (shuffler_sub_manager.gd) — hard-gated to Windows; depends on AutoHotkey Win32 calls + Sysinternals pssuspend.exe. Linux equivalents: kill -STOP/-CONT for suspend (easy), xdotool/wmctrl for window management (X11 only — no universal Wayland solution).
-Status bar battery/Wi-Fi (status_bar.gd:287) — PowerShell-only; could read /sys/class/power_supply/ on Linux or stay hidden.
-Pinned shortcuts (navigation_sub_manager.gd:772) — only treats .exe/.bat/.cmd as executables; needs a Linux branch.
-🟢 Dev tooling / cleanup
-PowerShell dev scripts (sync-m3.ps1, tools/build_plugin.ps1, build_firmware_packs.ps1) — optional bash ports.
-gdcef — CEF browser extension is wired up (Linux artifacts complete) but never used in code. Decide: keep or remove (export size).
-Windows-only CI workflow (.github/workflows/export-windows.yml) — add a Linux export job.
-Config resolvers comment out %APPDATA% variants — verify XDG paths (~/.config, ~/.local/share) for system-installed emulators.
-
 	auto m3us
 	emulator repo downloads & updates
 	flexible user profile & emu config support

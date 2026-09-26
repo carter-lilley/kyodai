@@ -63,6 +63,7 @@ static func extract_all_binaries() -> void:
 		_extract_tools({
 			"res://bin/sigil/linux/sigil": "sigil",
 			"res://bin/7z/linux/7z": "7z",
+			"res://bin/linux/x11_windowctl": "x11_windowctl",
 		})
 	elif SystemManager.platform.is_macos():
 		_extract_tools({

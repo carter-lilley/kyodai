@@ -439,29 +439,41 @@ func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
 ## when pssuspend exits - callers that must not race the suspended process
 ## (e.g. launching a new emulator instance) should await it.
 func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
-	if pid <= 0 or pssuspend_path == "":
+	if pid <= 0:
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
 		return
-	if not SystemManager.platform.is_windows():
-		push_warning("[ProcessManager] suspend_process_async is only supported on Windows")
+	if SystemManager.platform.is_windows():
+		if pssuspend_path == "":
+			if on_done.is_valid():
+				on_done.call({"exit_code": -1, "output": []})
+			return
+		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)], on_done)
+	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
+		MemorySubManager.queue_os_execute("kill", ["-STOP", str(pid)], on_done)
+	else:
+		push_warning("[ProcessManager] suspend_process_async is only supported on Windows and Linux/BSD")
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
-		return
-	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)], on_done)
 
-## Resumes a suspended process via pssuspend (Windows only; path supplied by caller).
+## Resumes a suspended process via pssuspend (Windows) or kill -CONT (Linux/BSD).
 func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
-	if pid <= 0 or pssuspend_path == "":
+	if pid <= 0:
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
 		return
-	if not SystemManager.platform.is_windows():
-		push_warning("[ProcessManager] resume_process_async is only supported on Windows")
+	if SystemManager.platform.is_windows():
+		if pssuspend_path == "":
+			if on_done.is_valid():
+				on_done.call({"exit_code": -1, "output": []})
+			return
+		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)], on_done)
+	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
+		MemorySubManager.queue_os_execute("kill", ["-CONT", str(pid)], on_done)
+	else:
+		push_warning("[ProcessManager] resume_process_async is only supported on Windows and Linux/BSD")
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
-		return
-	MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)], on_done)
 
 ## Force exit background state (for crashes/emergencies)
 func force_exit_background_state() -> void:

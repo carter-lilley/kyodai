@@ -6,6 +6,7 @@ class_name ShufflerSubManager
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 enum State { IDLE, DOWNLOADING, ACTIVE, PAUSED, STOPPING }
+enum WindowBackend { NONE, WINDOWS_AHK, LINUX_KWIN, LINUX_X11 }
 
 signal session_started()
 signal session_stopped()
@@ -30,6 +31,8 @@ var _pending_preparations: int = 0
 var _tools_dir: String = ""
 var _ahk_path: String = ""
 var _pssuspend_path: String = ""
+var _qdbus_cmd: String = ""
+var _x11_windowctl_path: String = ""
 # Max time to wait for pssuspend to confirm a process is frozen before
 # launching the next emulator instance (defensive: a wedged pssuspend must
 # not stall switching forever).
@@ -65,6 +68,7 @@ var _total_download_bytes: int = 0
 var _active_download_item_id: String = ""
 var _shuffler_vita_apps: Array[Dictionary] = []
 var _maximize_token: int = 0  # incremented whenever the foreground game changes; in-flight maximize coroutines check it and bail
+var _window_backend: int = WindowBackend.NONE
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -89,20 +93,60 @@ const PCSX2_MEMORY_CARD_VALUES := {
 
 func _ready():
 	_main_window = get_tree().root
-	# Shuffler is Windows-only; skip tool extraction on other platforms
-	if not SystemManager.platform.is_windows():
-		return
+	if SystemManager.platform.is_windows():
+		_window_backend = WindowBackend.WINDOWS_AHK
+		if SystemManager.platform.is_packaged():
+			# Packaged builds cannot execute tools from inside the PCK; use extracted copies
+			_tools_dir = ProjectSettings.globalize_path(AndroidBinaryExtractor.BIN_DIR)
+			_ahk_path = AndroidBinaryExtractor.extract_binary("res://bin/ahk/AutoHotkey64.exe", "AutoHotkey64.exe")
+			AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/pssuspend.exe", "pssuspend.exe")
+			AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/minimize_window.ahk", "minimize_window.ahk")
+			AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/maximize_process.ahk", "maximize_process.ahk")
+		else:
+			_tools_dir = ProjectSettings.globalize_path("res://bin/shuffler_tools/")
+			_ahk_path = ProjectSettings.globalize_path("res://bin/ahk/AutoHotkey64.exe")
+		_pssuspend_path = _tools_dir + "pssuspend.exe"
+	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
+		_initialize_linux_window_backend()
+
+
+func _initialize_linux_window_backend() -> void:
+	var desktop := (OS.get_environment("XDG_CURRENT_DESKTOP") + ";" + OS.get_environment("XDG_SESSION_DESKTOP")).to_lower()
+	var session_type := OS.get_environment("XDG_SESSION_TYPE").to_lower()
+
+	# Prefer KDE KWin scripting on KDE sessions (works on both X11 and Wayland).
+	if desktop.contains("kde"):
+		_qdbus_cmd = _find_qdbus()
+		if _qdbus_cmd != "":
+			_window_backend = WindowBackend.LINUX_KWIN
+			print("[ShufflerSubManager] Linux window backend: KDE KWin scripting (" + _qdbus_cmd + ")")
+			return
+		else:
+			push_warning("[ShufflerSubManager] KDE session detected but qdbus/qdbus6 not found; falling back to X11")
+
+	# Fallback to X11 helper if we have an X session.
+	if session_type == "x11" or (OS.get_environment("DISPLAY") != "" and OS.get_environment("WAYLAND_DISPLAY") == ""):
+		_x11_windowctl_path = _resolve_x11_windowctl_path()
+		if _x11_windowctl_path != "" and FileAccess.file_exists(_x11_windowctl_path):
+			_window_backend = WindowBackend.LINUX_X11
+			print("[ShufflerSubManager] Linux window backend: X11 helper (" + _x11_windowctl_path + ")")
+			return
+
+	_window_backend = WindowBackend.NONE
+	push_warning("[ShufflerSubManager] No supported Linux window backend available; shuffler window switching will be unavailable")
+
+
+func _find_qdbus() -> String:
+	for cmd in ["qdbus6", "qdbus-qt6", "qdbus"]:
+		if OS.execute("which", [cmd], [], true) == 0:
+			return cmd
+	return ""
+
+
+func _resolve_x11_windowctl_path() -> String:
 	if SystemManager.platform.is_packaged():
-		# Packaged builds cannot execute tools from inside the PCK; use extracted copies
-		_tools_dir = ProjectSettings.globalize_path(AndroidBinaryExtractor.BIN_DIR)
-		_ahk_path = AndroidBinaryExtractor.extract_binary("res://bin/ahk/AutoHotkey64.exe", "AutoHotkey64.exe")
-		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/pssuspend.exe", "pssuspend.exe")
-		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/minimize_window.ahk", "minimize_window.ahk")
-		AndroidBinaryExtractor.extract_binary("res://bin/shuffler_tools/maximize_process.ahk", "maximize_process.ahk")
-	else:
-		_tools_dir = ProjectSettings.globalize_path("res://bin/shuffler_tools/")
-		_ahk_path = ProjectSettings.globalize_path("res://bin/ahk/AutoHotkey64.exe")
-	_pssuspend_path = _tools_dir + "pssuspend.exe"
+		return AndroidBinaryExtractor.extract_binary("res://bin/linux/x11_windowctl", "x11_windowctl")
+	return ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
 
 func _exit_tree():
 	if is_session_active():
@@ -209,8 +253,8 @@ func start_session(config: Dictionary) -> void:
 		push_error("[ShufflerSubManager] Already in a session")
 		return
 
-	if not SystemManager.platform.is_windows():
-		push_error("[ShufflerSubManager] Shuffler is only available on Windows")
+	if not SystemManager.platform.is_windows() and not (OS.get_name() == "Linux" or OS.get_name().ends_with("BSD")):
+		push_error("[ShufflerSubManager] Shuffler is only available on Windows and Linux/BSD")
 		return
 
 	var platforms = config.get("platforms", [])
@@ -303,7 +347,7 @@ func stop_session() -> void:
 				push_warning("[ShufflerSubManager] Processes still alive after kill timeout: " + str(alive))
 		print("[ShufflerSubManager] stop_session: process teardown took " + str(elapsed) + "s")
 
-	_restore_emulator_file_if_backed_up("retroarch", "{emulator_dir}/retroarch.cfg")
+	_restore_emulator_file_if_backed_up("retroarch", _retroarch_shuffler_cfg_path())
 	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
 
 	_cleanup_vita3k_shuffler_apps()
@@ -1310,11 +1354,20 @@ func _input(event: InputEvent) -> void:
 # ============================================================================
 
 func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callable()) -> void:
-	var ahk_script = _tools_dir + "minimize_window.ahk"
-	if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
-		MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name], callback)
-	elif callback.is_valid():
-		callback.call_deferred({"exit_code": -1, "output": []})
+	match _window_backend:
+		WindowBackend.WINDOWS_AHK:
+			var ahk_script = _tools_dir + "minimize_window.ahk"
+			if FileAccess.file_exists(ahk_script) and FileAccess.file_exists(_ahk_path):
+				MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid), exe_name], callback)
+			elif callback.is_valid():
+				callback.call_deferred({"exit_code": -1, "output": []})
+		WindowBackend.LINUX_KWIN:
+			_kwin_minimize_async(pid, callback)
+		WindowBackend.LINUX_X11:
+			_x11_minimize_async(pid, callback)
+		_:
+			if callback.is_valid():
+				callback.call_deferred({"exit_code": -1, "output": []})
 
 func _hide_window(pid: int, exe_name: String) -> void:
 	_hide_window_async(pid, exe_name)
@@ -1333,7 +1386,7 @@ func _hide_window_awaited(pid: int, exe_name: String) -> void:
 	if done.complete:
 		print("[ShufflerSubManager] _hide_window_awaited: pid " + str(pid) + " hidden in " + str(Time.get_ticks_msec() - hide_start) + "ms (exit_code=" + str(done.exit_code) + ")")
 	else:
-		push_warning("[ShufflerSubManager] _hide_window_awaited: timed out waiting for minimize_window.ahk (pid " + str(pid) + "); suspending anyway")
+		push_warning("[ShufflerSubManager] _hide_window_awaited: timed out waiting for window backend (pid " + str(pid) + "); suspending anyway")
 
 func _is_current_game_pid(pid: int) -> bool:
 	if _state != State.ACTIVE and _state != State.PAUSED:
@@ -1378,24 +1431,39 @@ func _delayed_remaximize(pid: int, token: int) -> void:
 	_raise_controls_window()
 
 func _maximize_window_async(pid: int, token: int = -1) -> bool:
-	var ahk_script = _tools_dir + "maximize_process.ahk"
-	if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
-		print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
-		return false
-
 	var os_state := {"completed": false, "success": false, "output_text": ""}
 
-	MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
-		os_state["completed"] = true
-		os_state["success"] = (result.get("exit_code", -1) == 0)
-		var output: Array = result.get("output", [])
-		os_state["output_text"] = "".join(output)
-		print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + os_state["output_text"].strip_edges() + "\"")
-	)
+	match _window_backend:
+		WindowBackend.WINDOWS_AHK:
+			var ahk_script = _tools_dir + "maximize_process.ahk"
+			if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
+				print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
+				return false
+			MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
+				os_state["completed"] = true
+				os_state["success"] = (result.get("exit_code", -1) == 0)
+				var output: Array = result.get("output", [])
+				os_state["output_text"] = "".join(output)
+				print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + os_state["output_text"].strip_edges() + "\"")
+			)
+		WindowBackend.LINUX_KWIN:
+			_kwin_raise_async(pid, func(result: Dictionary):
+				os_state["completed"] = true
+				os_state["success"] = (result.get("exit_code", -1) == 0)
+				print("[ShufflerSubManager] kwin raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
+			)
+		WindowBackend.LINUX_X11:
+			_x11_raise_async(pid, func(result: Dictionary):
+				os_state["completed"] = true
+				os_state["success"] = (result.get("exit_code", -1) == 0)
+				print("[ShufflerSubManager] x11 raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
+			)
+		_:
+			return false
 
 	while not os_state["completed"]:
 		if token != -1 and token != _maximize_token:
-			# Switched away mid-attempt; the AHK process finishes in the
+			# Switched away mid-attempt; the helper process finishes in the
 			# background and its result is discarded.
 			return false
 		await get_tree().process_frame
@@ -1404,6 +1472,101 @@ func _maximize_window_async(pid: int, token: int = -1) -> bool:
 
 func _maximize_window(pid: int) -> bool:
 	return await _maximize_window_async(pid)
+
+# ============================================================================
+# LINUX WINDOW BACKENDS
+# ============================================================================
+
+func _kwin_minimize_async(pid: int, callback: Callable = Callable()) -> void:
+	_kwin_run_script_async(pid, "minimize", callback)
+
+
+func _kwin_raise_async(pid: int, callback: Callable = Callable()) -> void:
+	_kwin_run_script_async(pid, "raise", callback)
+
+
+func _kwin_run_script_async(pid: int, action: String, callback: Callable = Callable()) -> void:
+	if _qdbus_cmd.is_empty():
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+
+	var script_name := "kyodai_shuffler_%s_%d_%d_%d" % [action, pid, Time.get_unix_time_from_system(), Time.get_ticks_msec()]
+	var package_root := ProjectSettings.globalize_path(TEMP_DIR + "kwin_" + script_name)
+	var code_dir := package_root + "/contents/code"
+	var script_path := code_dir + "/main.js"
+	if not DirAccess.dir_exists_absolute(code_dir):
+		DirAccess.make_dir_recursive_absolute(code_dir)
+
+	var body := ""
+	match action:
+		"minimize":
+			body = "for (const client of workspace.clientList()) { if (client.pid === %d) { client.minimized = true; } }" % pid
+		"raise":
+			body = "for (const client of workspace.clientList()) { if (client.pid === %d) { workspace.activeClient = client; workspace.raiseWindow(client); } }" % pid
+		_:
+			if callback.is_valid():
+				callback.call_deferred({"exit_code": -1, "output": []})
+			return
+
+	var metadata := '{"KPackageStructure":"KWin/Script","KPlugin":{"Authors":[{"Name":"Kyodai"}],"Id":"%s","Name":"Kyodai Shuffler","Version":"1.0"}}' % script_name
+	var meta_file := FileAccess.open(package_root + "/metadata.json", FileAccess.WRITE)
+	if not meta_file:
+		push_warning("[ShufflerSubManager] Failed to write KWin metadata")
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+	meta_file.store_string(metadata)
+	meta_file.close()
+
+	var file := FileAccess.open(script_path, FileAccess.WRITE)
+	if not file:
+		push_warning("[ShufflerSubManager] Failed to write KWin script: " + script_path)
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+	file.store_string(body)
+	file.close()
+
+	var sh_script_path := package_root + "/run.sh"
+	var sh_script := "#!/bin/sh\n"
+	sh_script += "%s org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript \"%s\" >/dev/null 2>&1 || true\n" % [_qdbus_cmd, script_name]
+	sh_script += "id=$(%s org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \"%s\" \"%s\")\n" % [_qdbus_cmd, script_path, script_name]
+	sh_script += "id=$(echo \"$id\" | tr -d '[:space:]')\n"
+	sh_script += "if [ -z \"$id\" ] || [ \"$id\" -lt 0 ] 2>/dev/null; then exit 1; fi\n"
+	sh_script += "%s org.kde.KWin /Scripting/Script${id} org.kde.kwin.Script.run\n" % _qdbus_cmd
+	sh_script += "rc=$?\n"
+	sh_script += "%s org.kde.KWin /Scripting/Script${id} org.kde.kwin.Script.stop >/dev/null 2>&1 || true\n" % _qdbus_cmd
+	sh_script += "%s org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript \"%s\" >/dev/null 2>&1 || true\n" % [_qdbus_cmd, script_name]
+	sh_script += "exit $rc\n"
+
+	var sh_file := FileAccess.open(sh_script_path, FileAccess.WRITE)
+	if not sh_file:
+		push_warning("[ShufflerSubManager] Failed to write KWin runner script: " + sh_script_path)
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+	sh_file.store_string(sh_script)
+	sh_file.close()
+
+	MemorySubManager.queue_os_execute("/bin/sh", [sh_script_path], callback)
+
+
+func _x11_minimize_async(pid: int, callback: Callable = Callable()) -> void:
+	if _x11_windowctl_path.is_empty():
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, ["minimize", str(pid)], callback)
+
+
+func _x11_raise_async(pid: int, callback: Callable = Callable()) -> void:
+	if _x11_windowctl_path.is_empty():
+		if callback.is_valid():
+			callback.call_deferred({"exit_code": -1, "output": []})
+		return
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, ["raise", str(pid)], callback)
+
 
 func _is_process_running_async(pid: int) -> bool:
 	return await LaunchManager.process.is_running_async(pid)
@@ -1519,6 +1682,18 @@ func _reassert_palette_tail() -> void:
 # RETROARCH CONFIG
 # ============================================================================
 
+func _retroarch_shuffler_cfg_path() -> String:
+	match SystemManager.platform.get_platform_name().to_lower():
+		"windows":
+			return "{home}/AppData/Roaming/RetroArch/retroarch.cfg"
+		"linux", "freebsd", "netbsd", "openbsd", "bsd":
+			return "{emulator_dir}/.config/retroarch/retroarch.cfg"
+		"android":
+			return "{app_data}/retroarch.cfg"
+		_:
+			return "{emulator_dir}/retroarch.cfg"
+
+
 func _ensure_retroarch_shuffler_config() -> void:
 	var edits: Array[Dictionary] = []
 	for key in RETROARCH_SHUFFLER_CFG:
@@ -1529,7 +1704,8 @@ func _ensure_retroarch_shuffler_config() -> void:
 			"regex": true,
 		})
 
-	if not LaunchManager.edit_emulator_file_with_backup("retroarch", "{emulator_dir}/retroarch.cfg", edits, true, RETROARCH_SHUFFLER_CFG, ""):
+	var cfg_path := _retroarch_shuffler_cfg_path()
+	if not LaunchManager.edit_emulator_file_with_backup("retroarch", cfg_path, edits, true, RETROARCH_SHUFFLER_CFG, ""):
 		push_error("[ShufflerSubManager] Failed to apply retroarch.cfg edits")
 
 # ============================================================================
