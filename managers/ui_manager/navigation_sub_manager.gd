@@ -665,9 +665,15 @@ func _on_platform_pin_selected(platform_slug: String, platform_name: String) -> 
 	ui_manager.switch_to_tab(pin.view)
 
 func _show_desktop_file_picker() -> void:
+	var filters := PackedStringArray(["*"])
+	match OS.get_name():
+		"Windows":
+			filters = PackedStringArray(["*.exe", "*.bat", "*.cmd"])
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			filters = PackedStringArray(["*.desktop", "*.sh", "*.AppImage", "*"])
 	UIManager.show_file_dialog(
 		"Select Shortcut",
-		PackedStringArray(["*.exe"]),
+		filters,
 		"",
 		_on_shortcut_file_selected
 	)
@@ -675,10 +681,15 @@ func _show_desktop_file_picker() -> void:
 func _on_shortcut_file_selected(path: String) -> void:
 	if path.is_empty():
 		return
+	var label := path.get_file().get_basename()
+	if path.to_lower().ends_with(".desktop"):
+		var desktop_name := _read_desktop_entry(path, "Name")
+		if not desktop_name.is_empty():
+			label = desktop_name
 	var pin := {
 		"id": _generate_shortcut_id(),
 		"type": "program",
-		"label": path.get_file().get_basename(),
+		"label": label,
 		"icon": "application",
 		"data": {"path": path}
 	}
@@ -769,10 +780,16 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 		if path.is_empty():
 			return
 		var resolved := FileSystemSubManager.resolve_native_path(path)
-		if resolved.to_lower().ends_with(".exe") or resolved.to_lower().ends_with(".bat") or resolved.to_lower().ends_with(".cmd"):
-			OS.create_process(resolved, [])
-		else:
-			OS.shell_open(resolved)
+		match OS.get_name():
+			"Windows":
+				if resolved.to_lower().ends_with(".exe") or resolved.to_lower().ends_with(".bat") or resolved.to_lower().ends_with(".cmd"):
+					OS.create_process(resolved, [])
+				else:
+					OS.shell_open(resolved)
+			"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+				_launch_linux_program(resolved)
+			_:
+				OS.shell_open(resolved)
 		return
 	
 	if type == "app":
@@ -787,6 +804,87 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 		if success and LaunchManager and LaunchManager.process:
 			LaunchManager.process.enter_background_state_android(null)
 		return
+
+func _launch_linux_program(path: String) -> void:
+	if path.to_lower().ends_with(".desktop"):
+		var exec_parts := _parse_desktop_exec(path)
+		if not exec_parts.is_empty():
+			var command := exec_parts[0]
+			var args := PackedStringArray()
+			for i in range(1, exec_parts.size()):
+				args.append(exec_parts[i])
+			OS.create_process(command, args)
+			return
+		push_warning("[NavigationManager] Could not parse Exec= from .desktop file: %s" % path)
+		OS.shell_open(path)
+		return
+
+	if path.to_lower().ends_with(".sh") or _has_shebang(path):
+		if _is_executable(path):
+			OS.create_process(path, [])
+		else:
+			OS.create_process("/bin/sh", [path])
+		return
+
+	if _is_executable(path):
+		OS.create_process(path, [])
+		return
+
+	OS.shell_open(path)
+
+
+func _is_executable(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var perms: int = FileAccess.get_unix_permissions(path)
+	# Any execute bit set (owner=64, group=8, other=1).
+	return (perms & 73) != 0
+
+
+func _has_shebang(path: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return false
+	return file.get_line().strip_edges().begins_with("#!")
+
+
+func _parse_desktop_exec(desktop_path: String) -> PackedStringArray:
+	var file := FileAccess.open(desktop_path, FileAccess.READ)
+	if not file:
+		return PackedStringArray()
+	while file.get_position() < file.get_length():
+		var line := file.get_line().strip_edges()
+		if line.begins_with("Exec="):
+			var exec_line := line.substr(5)
+			# Replace escaped percent, then remove field codes (%f, %u, etc.).
+			exec_line = exec_line.replace("%%", "__PERCENT__")
+			var raw_tokens := exec_line.split(" ", false)
+			var tokens := PackedStringArray()
+			for token in raw_tokens:
+				if token.begins_with("%"):
+					continue
+				tokens.append(token.strip_edges().replace("__PERCENT__", "%"))
+			if tokens.is_empty():
+				return PackedStringArray()
+			# Strip surrounding quotes from the command.
+			var command := tokens[0].trim_prefix("\"").trim_suffix("\"")
+			if command.is_empty():
+				return PackedStringArray()
+			tokens[0] = command
+			return tokens
+	return PackedStringArray()
+
+
+func _read_desktop_entry(desktop_path: String, key: String) -> String:
+	var file := FileAccess.open(desktop_path, FileAccess.READ)
+	if not file:
+		return ""
+	while file.get_position() < file.get_length():
+		var line := file.get_line().strip_edges()
+		if line.begins_with(key + "="):
+			return line.substr(key.length() + 1).strip_edges()
+	return ""
+
 
 func _get_all_nav_destinations() -> Array[M3NavigationDestination]:
 	"""Return all destination items from the current nav node."""

@@ -1019,13 +1019,19 @@ static func extract_archive(archive_path: String, extract_dir: String, progress_
 	# On Android, only ZIP is supported via native ExtractorService
 	if SystemManager.platform.is_android():
 		if ext == "zip":
-			return _extract_zip_native_streaming(archive_path, extract_dir, "", progress_callback)
+			var android_success := _extract_zip_native_streaming(archive_path, extract_dir, "", progress_callback)
+			if android_success:
+				_normalize_backslash_paths(extract_dir)
+			return android_success
 		else:
 			push_error("[SystemManager.filesystem] Only ZIP files supported on Android")
 			return false
 	
 	# On desktop, use 7-Zip for all archive types
-	return _extract_with_7z(archive_path, extract_dir, progress_callback)
+	var success := _extract_with_7z(archive_path, extract_dir, progress_callback)
+	if success:
+		_normalize_backslash_paths(extract_dir)
+	return success
 
 ## Async extraction with notification management.
 ## Queues to SystemManager.memory and handles progress notifications automatically.
@@ -1698,6 +1704,10 @@ static func normalize_extraction_root(target_dir: String, expected_names: Array,
 	if target_dir.is_empty() or expected_names.is_empty() or not dir_exists(target_dir):
 		return result
 
+	# Fix Windows-style backslash path separators first, so the expected-name
+	# check and hoisting logic work on real nested paths.
+	_normalize_backslash_paths(target_dir)
+
 	if _contains_any_expected(target_dir, expected_names):
 		return result
 
@@ -1751,3 +1761,149 @@ static func _contains_any_expected(dir: String, expected_names: Array) -> bool:
 		if file_exists(full) or is_dir(full):
 			return true
 	return false
+
+## Renames files and directories extracted with Windows-style backslash path
+## separators into real nested directories. Some archives (often firmware dumps
+## packed on Windows) store paths like os0\kd\foo.skprx; on Linux 7-Zip extracts
+## that as a single file named "os0\kd\foo.skprx" instead of a nested path.
+## This fixes those entries so the rest of Kyodai's path logic works.
+static func _normalize_backslash_paths(root_dir: String) -> void:
+	if root_dir.is_empty() or not dir_exists(root_dir):
+		return
+	
+	# Quick early-exit for the common case: no backslash in any root entry.
+	# If a normal ZIP was extracted, the top-level names are already correct
+	# and we can skip the full tree walk.
+	var needs_normalization := false
+	for entry in list_dir(root_dir):
+		if entry.contains("\\"):
+			needs_normalization = true
+			break
+	if not needs_normalization:
+		return
+	
+	var entries: Array[Dictionary] = []
+	_normalize_backslash_collect(root_dir, "", 0, entries)
+	if entries.is_empty():
+		return
+	
+	# Process deepest filesystem entries first so files/subdirectories are moved
+	# out of fake parent directories before those directories are handled.
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return a["depth"] > b["depth"]
+	)
+	
+	var moved_count := 0
+	for entry in entries:
+		var old_full: String = entry["full"]
+		var new_rel: String = entry["rel"].replace("\\", "/")
+		var is_dir := entry["is_dir"] as bool
+		
+		# Directory entries from Windows-style ZIPs often have trailing
+		# backslashes in their names. Strip that from the target path so we
+		# rename to the real directory instead of moving into it.
+		if is_dir and new_rel.ends_with("/"):
+			new_rel = new_rel.substr(0, new_rel.length() - 1)
+		
+		var new_full: String = join_paths(root_dir, new_rel)
+		if new_full == old_full:
+			continue
+		
+		if is_dir:
+			if dir_exists(new_full):
+				# Target directory already exists (created while moving a file
+				# or subdirectory into it). Remove the old empty fake directory.
+				if _delete_dir_literal(old_full):
+					moved_count += 1
+				else:
+					print("[SystemManager.filesystem] Failed to remove old fake dir: " + old_full)
+			elif _rename_literal(old_full, new_full):
+				moved_count += 1
+			else:
+				print("[SystemManager.filesystem] Failed to normalize dir: " + old_full + " -> " + new_full)
+		else:
+			if _rename_literal(old_full, new_full):
+				moved_count += 1
+			else:
+				print("[SystemManager.filesystem] Failed to normalize file: " + old_full + " -> " + new_full)
+	
+	if moved_count > 0:
+		print("[SystemManager.filesystem] Normalized " + str(moved_count) + " backslash path(s) in " + root_dir)
+
+static func _normalize_backslash_collect(full_path: String, rel_path: String, depth: int, out: Array[Dictionary]) -> void:
+	if rel_path != "" and rel_path.contains("\\"):
+		# Windows-style directory entries in ZIPs end with a backslash, and
+		# Godot's is_dir() normalizes backslashes so it can't tell. Use the
+		# stored path itself to decide.
+		out.append({
+			"full": full_path,
+			"rel": rel_path,
+			"is_dir": rel_path.ends_with("\\"),
+			"depth": depth,
+		})
+	
+	# Recurse even for backslash-named directories; children must be moved out
+	# before the parent can be removed/renamed.
+	for entry in list_dir(full_path):
+		if entry == "." or entry == "..":
+			continue
+		var child_rel := entry if rel_path == "" else rel_path + "\\" + entry
+		_normalize_backslash_collect(join_paths(full_path, entry), child_rel, depth + 1, out)
+
+## OS-level rename that preserves literal backslashes in filenames. Godot's
+## DirAccess.rename_absolute normalizes backslashes into path separators, which
+## breaks renaming entries extracted from Windows-style ZIPs on Linux/macOS.
+static func _rename_literal(old_full: String, new_full: String) -> bool:
+	if old_full.is_empty() or new_full.is_empty():
+		return false
+	
+	var parent := new_full.get_base_dir()
+	if not parent.is_empty() and not dir_exists(parent):
+		if not make_dir_recursive(parent):
+			return false
+	
+	# No literal backslash in the name: use the normal path.
+	if not old_full.contains("\\"):
+		return move(old_full, new_full)
+	
+	# On Unix-likes, filenames can contain '\' and Godot's built-in rename
+	# normalizes it away. Use mv through /bin/sh with single-quoted paths so
+	# the backslash stays literal. Convert Godot virtual paths (user://,
+	# res://) to absolute OS paths first because the shell doesn't understand
+	# them.
+	if OS.get_name() != "Windows":
+		var output: Array[String] = []
+		var abs_old := ProjectSettings.globalize_path(old_full)
+		var abs_new := ProjectSettings.globalize_path(new_full)
+		var cmd := "mv " + _shell_quote(abs_old) + " " + _shell_quote(abs_new)
+		return OS.execute("/bin/sh", ["-c", cmd], output, true) == 0
+	
+	# Windows filenames cannot contain backslashes, so this branch should not
+	# be reachable. Fall back to the built-in move just in case.
+	return move(old_full, new_full)
+
+static func _delete_dir_literal(path: String) -> bool:
+	if path.is_empty():
+		return false
+	
+	# No literal backslash: use the normal path.
+	if not path.contains("\\"):
+		return delete_dir_recursive(path)
+	
+	# On Unix-likes, use rmdir through /bin/sh so the backslash stays literal.
+	# rmdir only succeeds when the directory is empty, which is what we want
+	# after moving out all children first. Convert virtual paths to absolute
+	# OS paths because the shell doesn't understand user:// / res://.
+	if OS.get_name() != "Windows":
+		var output: Array[String] = []
+		var abs_path := ProjectSettings.globalize_path(path)
+		var cmd := "rmdir " + _shell_quote(abs_path)
+		return OS.execute("/bin/sh", ["-c", cmd], output, true) == 0
+	
+	return delete_dir_recursive(path)
+
+static func _shell_quote(s: String) -> String:
+	# POSIX single-quote quoting: everything inside is literal except ' itself,
+	# which is escaped by ending the quote, inserting an escaped quote, and
+	# resuming.
+	return "'" + s.replace("'", "'\\''") + "'"

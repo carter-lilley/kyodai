@@ -1,225 +1,244 @@
 {
-  "suspend_method": "suspend",
-  "meta": {
-	"id": "vita3k",
-	"name": "Vita3K",
-	"platforms": [
-      "psvita"
-	],
-	"os": [
-	  "windows",
-	  "linux",
-      "android"
-	]
-  },
-  "paths": {
-	"default_saves": {
-	  "_default": {
-		"directories": {
-		  "windows": "{emulator_dir}/ux0/user/00/savedata",
-		  "linux": "{emulator_dir}/ux0/user/00/savedata",
-		  "android": "{app_data}/vita/ux0/user/00/savedata"
-		},
-		"extensions": [
-          "*"
+	"suspend_method": "suspend",
+	"meta": {
+		"id": "vita3k",
+		"name": "Vita3K",
+		"platforms": [
+			"psvita"
 		],
-		"uses_folder_saves": true
-	  }
-	},
-	"default_firmware": {
-	  "_default": {
-		"directories": {
-		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}",
-		  "android": "{app_data}/vita"
-		}
-	  }
-	}
-  },
-  "resolution": {
-	"strategy": "vita3k_yml",
-	"config_candidates": {
-	  "windows": ["{emulator_dir}/config.yml"],
-	  "linux": ["{emulator_dir}/config.yml"],
-	  "android": ["{app_data}/config.yml"]
-	},
-	"enforce": {
-	  "windows": {
-		"sections": {
-		  "": {
-			"pref-path": "{emulator_dir}",
-			"user-id": "00"
-		  }
-		}
-	  },
-	  "linux": {
-		"sections": {
-		  "": {
-			"pref-path": "{emulator_dir}",
-			"user-id": "00"
-		  }
-		}
-	  },
-	  "android": {
-		"sections": {
-		  "": {
-			"pref-path": "{app_data}/vita",
-			"user-id": "00"
-		  }
-		}
-	  }
-	}
-  },
-  "launch": {
-	"platforms": {
-	  "windows": {
-		"type": "command",
-		"executable": "Vita3K.exe",
-		"template": [
-		  "{exe}",
-          "{rom}"
+		"os": [
+			"windows",
+			"linux",
+			"android"
 		]
-	  },
-	  "linux": {
-		"type": "command",
-		"executable": "Vita3K",
-		"template": [
-		  "{exe}",
-		  "--fullscreen",
-		  "{rom}"
-		]
-	  },
-	  "android": {
-		"action": "android.intent.action.MAIN",
-		"package": "org.vita3k.emulator",
-		"class": "org.vita3k.emulator.Emulator",
-		"rom_delivery": "none"
-	  }
-	}
-  },
-  "install": [
-	{
-	  "step": "download_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "download_repo",
-		  "github_repo": "Vita3K/Vita3K",
-		  "asset_pattern": "windows-latest\\.zip"
-		},
-		"linux": {
-		  "action_type": "download_repo",
-		  "github_repo": "Vita3K/Vita3K",
-		  "asset_pattern": "ubuntu-latest\\.zip"
-		},
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "Vita3K/Vita3K",
-		  "asset_pattern": "android-latest\\.apk"
-		}
-	  }
 	},
-	{
-	  "step": "install_emulator",
-	  "platforms": {
-		"windows": {
-		  "action_type": "extract",
-		  "extract_to": ".",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "Vita3K.exe"
-		  }
-		},
-		"linux": {
-		  "action_type": "extract",
-		  "extract_to": ".",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "Vita3K"
-		  }
-		},
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "org.vita3k.emulator",
-		  "expected_file": "android-latest.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "org.vita3k.emulator"
-		  }
-		}
-	  }
-	},
-	{
-	  "step": "create_ux0_app_folder",
-	  "platforms": {
-		"windows": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "ux0/app"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "ux0/app"
-		  }
-		},
-		"linux": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "ux0/app"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "ux0/app"
-		  }
-		},
-		"android": {
-		  "action_type": "create_folders",
-		  "folders": [
-            "{app_data}/vita/ux0/app"
-		  ],
-		  "validate": {
-			"action_type": "folder_exists",
-			"path": "{app_data}/vita/ux0/app"
-		  }
-		}
-	  }
-	},
-	{
-	  "step": "create_config",
-	  "platforms": {
-		"windows": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "config.yml",
-			  "content": "---\ninitial-setup: false\ngdbstub: false\nlog-active-shaders: false\nlog-uniforms: false\nlog-compat-warn: false\nvalidation-layer: true\npstv-mode: false\nshow-mode: false\ndemo-mode: false\napps-list-grid: false\nstretch_the_display_area: false\nfullscreen_hd_res_pixel_perfect: false\narchive-log: false\nbackend-renderer: Vulkan\ncustom-driver-name: \"\"\nturbo-mode: false\ngpu-idx: 0\nhigh-accuracy: false\nresolution-multiplier: 1\ndisable-surface-sync: true\nscreen-filter: Bilinear\nv-sync: true\nanisotropic-filtering: 1\ntexture-cache: true\nasync-pipeline-compilation: true\nshow-compile-shaders: true\nhashless-texture-cache: false\nimport-textures: false\nexport-textures: false\nexport-as-png: true\nmemory-mapping: double-buffer\nboot-apps-full-screen: true\nshow-live-area-screen: false\naudio-backend: SDL\naudio-volume: 100\nngs-enable: true\nsys-button: 1\nsys-lang: 1\nsys-date-format: 2\nsys-time-format: 0\ncpu-pool-size: 10\nmodules-mode: 0\ndelay-background: 4\ndelay-start: 30\nbackground-alpha: 0.3\nlog-level: 0\ncpu-opt: true\npref-path: .\\\ndiscord-rich-presence: true\nwait-for-debugger: false\ncolor-surface-debug: false\nperformance-overlay: false\nperformance-overlay-detail: 0\nperformance-overlay-position: 0\nscreenshot-format: 1\ndisable-motion: false\ncontroller-analog-multiplier: 1\nkeyboard-button-select: ShiftRight\nkeyboard-button-start: Enter\nkeyboard-button-up: ArrowUp\nkeyboard-button-right: ArrowRight\nkeyboard-button-down: ArrowDown\nkeyboard-button-left: ArrowLeft\nkeyboard-button-l1: KeyQ\nkeyboard-button-r1: KeyE\nkeyboard-button-l2: KeyU\nkeyboard-button-r2: KeyO\nkeyboard-button-l3: KeyF\nkeyboard-button-r3: KeyH\nkeyboard-button-triangle: KeyV\nkeyboard-button-circle: KeyC\nkeyboard-button-cross: KeyX\nkeyboard-button-square: KeyZ\nkeyboard-leftstick-left: KeyA\nkeyboard-leftstick-right: KeyD\nkeyboard-leftstick-up: KeyW\nkeyboard-leftstick-down: KeyS\nkeyboard-rightstick-left: KeyJ\nkeyboard-rightstick-right: KeyL\nkeyboard-rightstick-up: KeyI\nkeyboard-rightstick-down: KeyK\nkeyboard-button-psbutton: KeyP\nkeyboard-gui-fullscreen: F11\nkeyboard-gui-toggle-touch: KeyT\nkeyboard-toggle-texture-replacement: Unbound\nkeyboard-take-screenshot: Unbound\nkeyboard-pinch-modifier: Unbound\nkeyboard-alternate-pinch-in: Unbound\nkeyboard-alternate-pinch-out: Unbound\nkeyboard-button-select-alt: Unbound\nkeyboard-button-start-alt: Unbound\nkeyboard-button-up-alt: Unbound\nkeyboard-button-right-alt: Unbound\nkeyboard-button-down-alt: Unbound\nkeyboard-button-left-alt: Unbound\nkeyboard-button-l1-alt: Unbound\nkeyboard-button-r1-alt: Unbound\nkeyboard-button-l2-alt: Unbound\nkeyboard-button-r2-alt: Unbound\nkeyboard-button-l3-alt: Unbound\nkeyboard-button-r3-alt: Unbound\nkeyboard-button-triangle-alt: Unbound\nkeyboard-button-circle-alt: Unbound\nkeyboard-button-cross-alt: Unbound\nkeyboard-button-square-alt: Unbound\nkeyboard-leftstick-left-alt: Unbound\nkeyboard-leftstick-right-alt: Unbound\nkeyboard-leftstick-up-alt: Unbound\nkeyboard-leftstick-down-alt: Unbound\nkeyboard-rightstick-left-alt: Unbound\nkeyboard-rightstick-right-alt: Unbound\nkeyboard-rightstick-up-alt: Unbound\nkeyboard-rightstick-down-alt: Unbound\nkeyboard-button-psbutton-alt: Unbound\nkeyboard-gui-fullscreen-alt: Unbound\nkeyboard-gui-toggle-touch-alt: Unbound\nkeyboard-toggle-texture-replacement-alt: Unbound\nkeyboard-take-screenshot-alt: Unbound\nkeyboard-pinch-modifier-alt: Unbound\nkeyboard-alternate-pinch-in-alt: Unbound\nkeyboard-alternate-pinch-out-alt: Unbound\nuser-id: 00\nuser-auto-connect: false\nuser-lang: \"\"\nshow-welcome: true\nwarn-missing-firmware: true\ncheck-for-updates-mode: 1\nfile-loading-delay: 0\nshader-cache: true\nspirv-shader: false\nfps-hack: false\ncurrent-ime-lang: 4\npsn-signed-in: 0\nhttp-enable: true\nhttp-timeout-attempts: 50\nhttp-timeout-sleep-ms: 100\nhttp-read-end-attempts: 10\nhttp-read-end-sleep-ms: 250\nadhoc-addr: 0\nfront-camera-type: 2\nfront-camera-id: \"\"\nfront-camera-image: \"\"\nfront-camera-color: 0\nback-camera-type: 2\nback-camera-id: \"\"\nback-camera-image: \"\"\nback-camera-color: 0\ntracy-primitive-impl: false\ncontroller-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\n  - 6\n  - 7\n  - 8\n  - 9\n  - 10\n  - 11\n  - 12\n  - 13\n  - 14\ncontroller-axis-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\ncontroller-led-color:\n  []\nlle-modules:\n  []\nime-langs:\n  - 4\ntracy-advanced-profiling-modules:\n  []\n..."
+	"paths": {
+		"default_saves": {
+			"_default": {
+				"directories": {
+					"windows": "{emulator_dir}/ux0/user/00/savedata",
+					"linux": "{emulator_dir}/ux0/user/00/savedata",
+					"android": "{app_data}/vita/ux0/user/00/savedata"
+				},
+				"extensions": [
+					"*"
+				],
+				"uses_folder_saves": true
 			}
-		  ],
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "config.yml"
-			]
-		  }
 		},
-		"linux": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "config.yml",
-			  "content": "---\ninitial-setup: false\ngdbstub: false\nlog-active-shaders: false\nlog-uniforms: false\nlog-compat-warn: false\nvalidation-layer: true\npstv-mode: false\nshow-mode: false\ndemo-mode: false\napps-list-grid: false\nstretch_the_display_area: false\nfullscreen_hd_res_pixel_perfect: false\narchive-log: false\nbackend-renderer: Vulkan\ncustom-driver-name: \"\"\nturbo-mode: false\ngpu-idx: 0\nhigh-accuracy: false\nresolution-multiplier: 1\ndisable-surface-sync: true\nscreen-filter: Bilinear\nv-sync: true\nanisotropic-filtering: 1\ntexture-cache: true\nasync-pipeline-compilation: true\nshow-compile-shaders: true\nhashless-texture-cache: false\nimport-textures: false\nexport-textures: false\nexport-as-png: true\nmemory-mapping: double-buffer\nboot-apps-full-screen: true\nshow-live-area-screen: false\naudio-backend: SDL\naudio-volume: 100\nngs-enable: true\nsys-button: 1\nsys-lang: 1\nsys-date-format: 2\nsys-time-format: 0\ncpu-pool-size: 10\nmodules-mode: 0\ndelay-background: 4\ndelay-start: 30\nbackground-alpha: 0.3\nlog-level: 0\ncpu-opt: true\npref-path: ./\ndiscord-rich-presence: true\nwait-for-debugger: false\ncolor-surface-debug: false\nperformance-overlay: false\nperformance-overlay-detail: 0\nperformance-overlay-position: 0\nscreenshot-format: 1\ndisable-motion: false\ncontroller-analog-multiplier: 1\nkeyboard-button-select: ShiftRight\nkeyboard-button-start: Enter\nkeyboard-button-up: ArrowUp\nkeyboard-button-right: ArrowRight\nkeyboard-button-down: ArrowDown\nkeyboard-button-left: ArrowLeft\nkeyboard-button-l1: KeyQ\nkeyboard-button-r1: KeyE\nkeyboard-button-l2: KeyU\nkeyboard-button-r2: KeyO\nkeyboard-button-l3: KeyF\nkeyboard-button-r3: KeyH\nkeyboard-button-triangle: KeyV\nkeyboard-button-circle: KeyC\nkeyboard-button-cross: KeyX\nkeyboard-button-square: KeyZ\nkeyboard-leftstick-left: KeyA\nkeyboard-leftstick-right: KeyD\nkeyboard-leftstick-up: KeyW\nkeyboard-leftstick-down: KeyS\nkeyboard-rightstick-left: KeyJ\nkeyboard-rightstick-right: KeyL\nkeyboard-rightstick-up: KeyI\nkeyboard-rightstick-down: KeyK\nkeyboard-button-psbutton: KeyP\nkeyboard-gui-fullscreen: F11\nkeyboard-gui-toggle-touch: KeyT\nkeyboard-toggle-texture-replacement: Unbound\nkeyboard-take-screenshot: Unbound\nkeyboard-pinch-modifier: Unbound\nkeyboard-alternate-pinch-in: Unbound\nkeyboard-alternate-pinch-out: Unbound\nkeyboard-button-select-alt: Unbound\nkeyboard-button-start-alt: Unbound\nkeyboard-button-up-alt: Unbound\nkeyboard-button-right-alt: Unbound\nkeyboard-button-down-alt: Unbound\nkeyboard-button-left-alt: Unbound\nkeyboard-button-l1-alt: Unbound\nkeyboard-button-r1-alt: Unbound\nkeyboard-button-l2-alt: Unbound\nkeyboard-button-r2-alt: Unbound\nkeyboard-button-l3-alt: Unbound\nkeyboard-button-r3-alt: Unbound\nkeyboard-button-triangle-alt: Unbound\nkeyboard-button-circle-alt: Unbound\nkeyboard-button-cross-alt: Unbound\nkeyboard-button-square-alt: Unbound\nkeyboard-leftstick-left-alt: Unbound\nkeyboard-leftstick-right-alt: Unbound\nkeyboard-leftstick-up-alt: Unbound\nkeyboard-leftstick-down-alt: Unbound\nkeyboard-rightstick-left-alt: Unbound\nkeyboard-rightstick-right-alt: Unbound\nkeyboard-rightstick-up-alt: Unbound\nkeyboard-rightstick-down-alt: Unbound\nkeyboard-button-psbutton-alt: Unbound\nkeyboard-gui-fullscreen-alt: Unbound\nkeyboard-gui-toggle-touch-alt: Unbound\nkeyboard-toggle-texture-replacement-alt: Unbound\nkeyboard-take-screenshot-alt: Unbound\nkeyboard-pinch-modifier-alt: Unbound\nkeyboard-alternate-pinch-in-alt: Unbound\nkeyboard-alternate-pinch-out-alt: Unbound\nuser-id: 00\nuser-auto-connect: false\nuser-lang: \"\"\nshow-welcome: true\nwarn-missing-firmware: true\ncheck-for-updates-mode: 1\nfile-loading-delay: 0\nshader-cache: true\nspirv-shader: false\nfps-hack: false\ncurrent-ime-lang: 4\npsn-signed-in: 0\nhttp-enable: true\nhttp-timeout-attempts: 50\nhttp-timeout-sleep-ms: 100\nhttp-read-end-attempts: 10\nhttp-read-end-sleep-ms: 250\nadhoc-addr: 0\nfront-camera-type: 2\nfront-camera-id: \"\"\nfront-camera-image: \"\"\nfront-camera-color: 0\nback-camera-type: 2\nback-camera-id: \"\"\nback-camera-image: \"\"\nback-camera-color: 0\ntracy-primitive-impl: false\ncontroller-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\n  - 6\n  - 7\n  - 8\n  - 9\n  - 10\n  - 11\n  - 12\n  - 13\n  - 14\ncontroller-axis-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\ncontroller-led-color:\n  []\nlle-modules:\n  []\nime-langs:\n  - 4\ntracy-advanced-profiling-modules:\n  []\n..."
+		"default_firmware": {
+			"_default": {
+				"directories": {
+					"windows": "{emulator_dir}",
+					"linux": "{emulator_dir}",
+					"android": "{app_data}/vita"
+				}
 			}
-		  ],
-		  "validate": {
-			"action_type": "files_exist",
-			"files": [
-              "config.yml"
-			]
-		  }
-		},
-		"android": {
-		  "action_type": "none"
 		}
-	  }
-	}
-  ]
+	},
+	"resolution": {
+		"strategy": "vita3k_yml",
+		"config_candidates": {
+			"windows": [
+				"{emulator_dir}/config.yml"
+			],
+			"linux": [
+				"{emulator_dir}/.config/Vita3K/config.yml"
+			],
+			"android": [
+				"{app_data}/config.yml"
+			]
+		},
+		"enforce": {
+			"windows": {
+				"sections": {
+					"": {
+						"pref-path": "{emulator_dir}",
+						"user-id": "00",
+						"show-welcome": "false",
+						"warn-missing-firmware": "false",
+						"boot-apps-full-screen": "true",
+						"show-live-area-screen": "false"
+					}
+				}
+			},
+			"linux": {
+				"sections": {
+					"": {
+						"pref-path": "{emulator_dir}",
+						"user-id": "00",
+						"show-welcome": "false",
+						"warn-missing-firmware": "false",
+						"boot-apps-full-screen": "true",
+						"show-live-area-screen": "false"
+					}
+				}
+			},
+			"android": {
+				"sections": {
+					"": {
+						"pref-path": "{app_data}/vita",
+						"user-id": "00"
+					}
+				}
+			}
+		}
+	},
+	"launch": {
+		"platforms": {
+			"windows": {
+				"type": "command",
+				"executable": "Vita3K.exe",
+				"template": [
+					"{exe}",
+					"{rom}"
+				]
+			},
+			"linux": {
+				"type": "command",
+				"executable": "Vita3K",
+				"template": [
+					"{exe}",
+					"--fullscreen",
+					"{rom}"
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
+					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
+					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+				}
+			},
+			"android": {
+				"action": "android.intent.action.MAIN",
+				"package": "org.vita3k.emulator",
+				"class": "org.vita3k.emulator.Emulator",
+				"rom_delivery": "none"
+			}
+		}
+	},
+	"install": [
+		{
+			"step": "download_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "download_repo",
+					"github_repo": "Vita3K/Vita3K",
+					"asset_pattern": "windows-latest\\.zip"
+				},
+				"linux": {
+					"action_type": "download_repo",
+					"github_repo": "Vita3K/Vita3K",
+					"asset_pattern": "ubuntu-latest\\.zip"
+				},
+				"android": {
+					"action_type": "download_repo",
+					"github_repo": "Vita3K/Vita3K",
+					"asset_pattern": "android-latest\\.apk"
+				}
+			}
+		},
+		{
+			"step": "install_emulator",
+			"platforms": {
+				"windows": {
+					"action_type": "extract",
+					"extract_to": ".",
+					"validate": {
+						"action_type": "file_exists",
+						"file": "Vita3K.exe"
+					}
+				},
+				"linux": {
+					"action_type": "extract",
+					"extract_to": ".",
+					"validate": {
+						"action_type": "file_exists",
+						"file": "Vita3K"
+					}
+				},
+				"android": {
+					"action_type": "apk_install",
+					"package_name": "org.vita3k.emulator",
+					"expected_file": "android-latest.apk",
+					"validate": {
+						"action_type": "package_installed",
+						"package": "org.vita3k.emulator"
+					}
+				}
+			}
+		},
+		{
+			"step": "create_ux0_app_folder",
+			"platforms": {
+				"windows": {
+					"action_type": "create_folders",
+					"folders": [
+						"ux0/app"
+					],
+					"validate": {
+						"action_type": "folder_exists",
+						"path": "ux0/app"
+					}
+				},
+				"linux": {
+					"action_type": "create_folders",
+					"folders": [
+						"ux0/app"
+					],
+					"validate": {
+						"action_type": "folder_exists",
+						"path": "ux0/app"
+					}
+				},
+				"android": {
+					"action_type": "create_folders",
+					"folders": [
+						"{app_data}/vita/ux0/app"
+					],
+					"validate": {
+						"action_type": "folder_exists",
+						"path": "{app_data}/vita/ux0/app"
+					}
+				}
+			}
+		},
+		{
+			"step": "create_config",
+			"platforms": {
+				"windows": {
+					"action_type": "create_files",
+					"files": [
+						{
+							"name": "config.yml",
+							"content": "---\ninitial-setup: false\ngdbstub: false\nlog-active-shaders: false\nlog-uniforms: false\nlog-compat-warn: false\nvalidation-layer: true\npstv-mode: false\nshow-mode: false\ndemo-mode: false\napps-list-grid: false\nstretch_the_display_area: false\nfullscreen_hd_res_pixel_perfect: false\narchive-log: false\nbackend-renderer: Vulkan\ncustom-driver-name: \"\"\nturbo-mode: false\ngpu-idx: 0\nhigh-accuracy: false\nresolution-multiplier: 1\ndisable-surface-sync: true\nscreen-filter: Bilinear\nv-sync: true\nanisotropic-filtering: 1\ntexture-cache: true\nasync-pipeline-compilation: true\nshow-compile-shaders: true\nhashless-texture-cache: false\nimport-textures: false\nexport-textures: false\nexport-as-png: true\nmemory-mapping: double-buffer\nboot-apps-full-screen: true\nshow-live-area-screen: false\naudio-backend: SDL\naudio-volume: 100\nngs-enable: true\nsys-button: 1\nsys-lang: 1\nsys-date-format: 2\nsys-time-format: 0\ncpu-pool-size: 10\nmodules-mode: 0\ndelay-background: 4\ndelay-start: 30\nbackground-alpha: 0.3\nlog-level: 0\ncpu-opt: true\npref-path: .\\\ndiscord-rich-presence: true\nwait-for-debugger: false\ncolor-surface-debug: false\nperformance-overlay: false\nperformance-overlay-detail: 0\nperformance-overlay-position: 0\nscreenshot-format: 1\ndisable-motion: false\ncontroller-analog-multiplier: 1\nkeyboard-button-select: ShiftRight\nkeyboard-button-start: Enter\nkeyboard-button-up: ArrowUp\nkeyboard-button-right: ArrowRight\nkeyboard-button-down: ArrowDown\nkeyboard-button-left: ArrowLeft\nkeyboard-button-l1: KeyQ\nkeyboard-button-r1: KeyE\nkeyboard-button-l2: KeyU\nkeyboard-button-r2: KeyO\nkeyboard-button-l3: KeyF\nkeyboard-button-r3: KeyH\nkeyboard-button-triangle: KeyV\nkeyboard-button-circle: KeyC\nkeyboard-button-cross: KeyX\nkeyboard-button-square: KeyZ\nkeyboard-leftstick-left: KeyA\nkeyboard-leftstick-right: KeyD\nkeyboard-leftstick-up: KeyW\nkeyboard-leftstick-down: KeyS\nkeyboard-rightstick-left: KeyJ\nkeyboard-rightstick-right: KeyL\nkeyboard-rightstick-up: KeyI\nkeyboard-rightstick-down: KeyK\nkeyboard-button-psbutton: KeyP\nkeyboard-gui-fullscreen: F11\nkeyboard-gui-toggle-touch: KeyT\nkeyboard-toggle-texture-replacement: Unbound\nkeyboard-take-screenshot: Unbound\nkeyboard-pinch-modifier: Unbound\nkeyboard-alternate-pinch-in: Unbound\nkeyboard-alternate-pinch-out: Unbound\nkeyboard-button-select-alt: Unbound\nkeyboard-button-start-alt: Unbound\nkeyboard-button-up-alt: Unbound\nkeyboard-button-right-alt: Unbound\nkeyboard-button-down-alt: Unbound\nkeyboard-button-left-alt: Unbound\nkeyboard-button-l1-alt: Unbound\nkeyboard-button-r1-alt: Unbound\nkeyboard-button-l2-alt: Unbound\nkeyboard-button-r2-alt: Unbound\nkeyboard-button-l3-alt: Unbound\nkeyboard-button-r3-alt: Unbound\nkeyboard-button-triangle-alt: Unbound\nkeyboard-button-circle-alt: Unbound\nkeyboard-button-cross-alt: Unbound\nkeyboard-button-square-alt: Unbound\nkeyboard-leftstick-left-alt: Unbound\nkeyboard-leftstick-right-alt: Unbound\nkeyboard-leftstick-up-alt: Unbound\nkeyboard-leftstick-down-alt: Unbound\nkeyboard-rightstick-left-alt: Unbound\nkeyboard-rightstick-right-alt: Unbound\nkeyboard-rightstick-up-alt: Unbound\nkeyboard-rightstick-down-alt: Unbound\nkeyboard-button-psbutton-alt: Unbound\nkeyboard-gui-fullscreen-alt: Unbound\nkeyboard-gui-toggle-touch-alt: Unbound\nkeyboard-toggle-texture-replacement-alt: Unbound\nkeyboard-take-screenshot-alt: Unbound\nkeyboard-pinch-modifier-alt: Unbound\nkeyboard-alternate-pinch-in-alt: Unbound\nkeyboard-alternate-pinch-out-alt: Unbound\nuser-id: 00\nuser-auto-connect: false\nuser-lang: \"\"\nshow-welcome: true\nwarn-missing-firmware: true\ncheck-for-updates-mode: 1\nfile-loading-delay: 0\nshader-cache: true\nspirv-shader: false\nfps-hack: false\ncurrent-ime-lang: 4\npsn-signed-in: 0\nhttp-enable: true\nhttp-timeout-attempts: 50\nhttp-timeout-sleep-ms: 100\nhttp-read-end-attempts: 10\nhttp-read-end-sleep-ms: 250\nadhoc-addr: 0\nfront-camera-type: 2\nfront-camera-id: \"\"\nfront-camera-image: \"\"\nfront-camera-color: 0\nback-camera-type: 2\nback-camera-id: \"\"\nback-camera-image: \"\"\nback-camera-color: 0\ntracy-primitive-impl: false\ncontroller-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\n  - 6\n  - 7\n  - 8\n  - 9\n  - 10\n  - 11\n  - 12\n  - 13\n  - 14\ncontroller-axis-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\ncontroller-led-color:\n  []\nlle-modules:\n  []\nime-langs:\n  - 4\ntracy-advanced-profiling-modules:\n  []\n..."
+						}
+					],
+					"validate": {
+						"action_type": "files_exist",
+						"files": [
+							"config.yml"
+						]
+					}
+				},
+				"linux": {
+					"action_type": "create_files",
+					"files": [
+						{
+							"name": ".config/Vita3K/config.yml",
+							"content": "---\ninitial-setup: false\ngdbstub: false\nlog-active-shaders: false\nlog-uniforms: false\nlog-compat-warn: false\nvalidation-layer: true\npstv-mode: false\nshow-mode: false\ndemo-mode: false\napps-list-grid: false\nstretch_the_display_area: false\nfullscreen_hd_res_pixel_perfect: false\narchive-log: false\nbackend-renderer: Vulkan\ncustom-driver-name: \"\"\nturbo-mode: false\ngpu-idx: 0\nhigh-accuracy: false\nresolution-multiplier: 1\ndisable-surface-sync: true\nscreen-filter: Bilinear\nv-sync: true\nanisotropic-filtering: 1\ntexture-cache: true\nasync-pipeline-compilation: true\nshow-compile-shaders: true\nhashless-texture-cache: false\nimport-textures: false\nexport-textures: false\nexport-as-png: true\nmemory-mapping: double-buffer\nboot-apps-full-screen: true\nshow-live-area-screen: false\naudio-backend: SDL\naudio-volume: 100\nngs-enable: true\nsys-button: 1\nsys-lang: 1\nsys-date-format: 2\nsys-time-format: 0\ncpu-pool-size: 10\nmodules-mode: 0\ndelay-background: 4\ndelay-start: 30\nbackground-alpha: 0.3\nlog-level: 0\ncpu-opt: true\npref-path: ./\ndiscord-rich-presence: true\nwait-for-debugger: false\ncolor-surface-debug: false\nperformance-overlay: false\nperformance-overlay-detail: 0\nperformance-overlay-position: 0\nscreenshot-format: 1\ndisable-motion: false\ncontroller-analog-multiplier: 1\nkeyboard-button-select: ShiftRight\nkeyboard-button-start: Enter\nkeyboard-button-up: ArrowUp\nkeyboard-button-right: ArrowRight\nkeyboard-button-down: ArrowDown\nkeyboard-button-left: ArrowLeft\nkeyboard-button-l1: KeyQ\nkeyboard-button-r1: KeyE\nkeyboard-button-l2: KeyU\nkeyboard-button-r2: KeyO\nkeyboard-button-l3: KeyF\nkeyboard-button-r3: KeyH\nkeyboard-button-triangle: KeyV\nkeyboard-button-circle: KeyC\nkeyboard-button-cross: KeyX\nkeyboard-button-square: KeyZ\nkeyboard-leftstick-left: KeyA\nkeyboard-leftstick-right: KeyD\nkeyboard-leftstick-up: KeyW\nkeyboard-leftstick-down: KeyS\nkeyboard-rightstick-left: KeyJ\nkeyboard-rightstick-right: KeyL\nkeyboard-rightstick-up: KeyI\nkeyboard-rightstick-down: KeyK\nkeyboard-button-psbutton: KeyP\nkeyboard-gui-fullscreen: F11\nkeyboard-gui-toggle-touch: KeyT\nkeyboard-toggle-texture-replacement: Unbound\nkeyboard-take-screenshot: Unbound\nkeyboard-pinch-modifier: Unbound\nkeyboard-alternate-pinch-in: Unbound\nkeyboard-alternate-pinch-out: Unbound\nkeyboard-button-select-alt: Unbound\nkeyboard-button-start-alt: Unbound\nkeyboard-button-up-alt: Unbound\nkeyboard-button-right-alt: Unbound\nkeyboard-button-down-alt: Unbound\nkeyboard-button-left-alt: Unbound\nkeyboard-button-l1-alt: Unbound\nkeyboard-button-r1-alt: Unbound\nkeyboard-button-l2-alt: Unbound\nkeyboard-button-r2-alt: Unbound\nkeyboard-button-l3-alt: Unbound\nkeyboard-button-r3-alt: Unbound\nkeyboard-button-triangle-alt: Unbound\nkeyboard-button-circle-alt: Unbound\nkeyboard-button-cross-alt: Unbound\nkeyboard-button-square-alt: Unbound\nkeyboard-leftstick-left-alt: Unbound\nkeyboard-leftstick-right-alt: Unbound\nkeyboard-leftstick-up-alt: Unbound\nkeyboard-leftstick-down-alt: Unbound\nkeyboard-rightstick-left-alt: Unbound\nkeyboard-rightstick-right-alt: Unbound\nkeyboard-rightstick-up-alt: Unbound\nkeyboard-rightstick-down-alt: Unbound\nkeyboard-button-psbutton-alt: Unbound\nkeyboard-gui-fullscreen-alt: Unbound\nkeyboard-gui-toggle-touch-alt: Unbound\nkeyboard-toggle-texture-replacement-alt: Unbound\nkeyboard-take-screenshot-alt: Unbound\nkeyboard-pinch-modifier-alt: Unbound\nkeyboard-alternate-pinch-in-alt: Unbound\nkeyboard-alternate-pinch-out-alt: Unbound\nuser-id: 00\nuser-auto-connect: false\nuser-lang: \"\"\nshow-welcome: true\nwarn-missing-firmware: true\ncheck-for-updates-mode: 1\nfile-loading-delay: 0\nshader-cache: true\nspirv-shader: false\nfps-hack: false\ncurrent-ime-lang: 4\npsn-signed-in: 0\nhttp-enable: true\nhttp-timeout-attempts: 50\nhttp-timeout-sleep-ms: 100\nhttp-read-end-attempts: 10\nhttp-read-end-sleep-ms: 250\nadhoc-addr: 0\nfront-camera-type: 2\nfront-camera-id: \"\"\nfront-camera-image: \"\"\nfront-camera-color: 0\nback-camera-type: 2\nback-camera-id: \"\"\nback-camera-image: \"\"\nback-camera-color: 0\ntracy-primitive-impl: false\ncontroller-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\n  - 6\n  - 7\n  - 8\n  - 9\n  - 10\n  - 11\n  - 12\n  - 13\n  - 14\ncontroller-axis-binds:\n  - 0\n  - 1\n  - 2\n  - 3\n  - 4\n  - 5\ncontroller-led-color:\n  []\nlle-modules:\n  []\nime-langs:\n  - 4\ntracy-advanced-profiling-modules:\n  []\n..."
+						}
+					],
+					"validate": {
+						"action_type": "files_exist",
+						"files": [
+							".config/Vita3K/config.yml"
+						]
+					}
+				},
+				"android": {
+					"action_type": "none"
+				}
+			}
+		}
+	]
 }

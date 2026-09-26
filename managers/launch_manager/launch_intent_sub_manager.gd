@@ -234,12 +234,13 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 			formatted_value = formatted_value.replace("{emulator_dir}", global_emulator_dir)
 			intent.environment[var_name] = formatted_value
 		
-		# Vita3K special handling for desktop - replace ROM path with TitleID
+		# Vita3K special handling for desktop - pass TitleID via "-r" so the
+		# emulator boots the installed app. On Linux this only works once the
+		# emulator's VitaFS/config is redirected to the managed emulator dir
+		# (handled via XDG env in the JSON), otherwise "-r TitleID" fails with
+		# "not in {}" because the installed app lives in the wrong XDG path.
 		var desktop_vita_title_id = intent.game.get_active_title_id() if intent.game else ""
 		if intent.emulator_id.begins_with("vita3k"):
-			# Force fullscreen for all desktop Vita3K launches.
-			#intent.launch_args.insert(1, "-F")
-			#print("[LaunchIntentManager] Vita3K desktop launch: added -F fullscreen flag")
 			if desktop_vita_title_id != "":
 				# Replace the ROM path (ZIP) with the TitleID flag
 				for i in range(intent.launch_args.size()):

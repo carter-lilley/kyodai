@@ -83,8 +83,7 @@
 				"{emulator_dir}/retroarch.cfg"
 			],
 			"linux": [
-				"{home}/.config/retroarch/retroarch.cfg",
-				"{emulator_dir}/retroarch.cfg"
+				"{emulator_dir}/.config/retroarch/retroarch.cfg"
 			],
 			"android": [
 				"{app_data}/retroarch.cfg",
@@ -143,7 +142,12 @@
 					"{core}",
 					"{rom}",
 					"-f"
-				]
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
+					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
+					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+				}
 			},
 			"android": {
 				"action": "android.intent.action.VIEW",

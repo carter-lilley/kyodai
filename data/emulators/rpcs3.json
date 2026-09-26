@@ -42,10 +42,8 @@
 		"{home}/AppData/Roaming/RPCS3/config.yml"
 	  ],
 	  "linux": [
-		"{emulator_dir}/vfs.yml",
-		"{emulator_dir}/config.yml",
-		"{home}/.config/rpcs3/vfs.yml",
-		"{home}/.config/rpcs3/config.yml"
+		"{emulator_dir}/.config/rpcs3/vfs.yml",
+		"{emulator_dir}/.config/rpcs3/config.yml"
 	  ]
 	},
 	"enforce": {
@@ -84,10 +82,15 @@
 		"executable": "rpcs3",
 		"template": [
 		  "{exe}",
-		  "--no-gui",
-		  "{rom}"
+		  "{rom}",
+		  "--no-gui"
 		],
-		"rom_delivery": "none"
+		"rom_delivery": "none",
+		"environment": {
+		  "XDG_CONFIG_HOME": "{emulator_dir}/.config",
+		  "XDG_DATA_HOME": "{emulator_dir}/.local/share",
+		  "XDG_CACHE_HOME": "{emulator_dir}/.cache"
+		}
 	  }
 	}
   },
@@ -144,27 +147,6 @@
 		  "validate": {
 			"action_type": "file_exists",
 			"file": "rpcs3"
-		  }
-		}
-	  }
-	},
-	{
-	  "step": "create_portable_file",
-	  "platforms": {
-		"windows": {
-		  "action_type": "none"
-		},
-		"linux": {
-		  "action_type": "create_files",
-		  "files": [
-			{
-			  "name": "portable.txt",
-			  "content": ""
-			}
-		  ],
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "portable.txt"
 		  }
 		}
 	  }

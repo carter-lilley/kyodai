@@ -22,6 +22,10 @@ const ANDROID_BATTERY_STATUS_PATH := "/sys/class/power_supply/battery/status"
 const ANDROID_NET_IFACES_PATH := "/sys/class/net"
 const ANDROID_PROC_WIRELESS_PATH := "/proc/net/wireless"
 
+const LINUX_POWER_SUPPLY_PATH := "/sys/class/power_supply"
+const LINUX_NET_IFACES_PATH := "/sys/class/net"
+const LINUX_PROC_WIRELESS_PATH := "/proc/net/wireless"
+
 const CLOCK_FONT_WEIGHT: int = 850
 
 enum PowerState { UNKNOWN, ON_BATTERY, NO_BATTERY, CHARGING, CHARGED }
@@ -190,6 +194,9 @@ func _refresh_battery() -> void:
 		"Android":
 			_battery_query_running = true
 			WorkerThreadPool.add_task(_query_battery_android)
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			_battery_query_running = true
+			WorkerThreadPool.add_task(_query_battery_linux)
 		_:
 			_battery_icon.visible = false
 			_battery_label.visible = false
@@ -205,6 +212,9 @@ func _refresh_wifi() -> void:
 		"Android":
 			_wifi_query_running = true
 			WorkerThreadPool.add_task(_query_wifi_android)
+		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
+			_wifi_query_running = true
+			WorkerThreadPool.add_task(_query_wifi_linux)
 		_:
 			_wifi_icon.visible = false
 
@@ -246,6 +256,53 @@ func _query_wifi_android() -> void:
 		else:
 			state = WifiState.OFF
 	call_deferred("_on_wifi_queried", state, percent)
+
+
+func _query_wifi_linux() -> void:
+	var state := WifiState.UNKNOWN
+	var percent := -1
+
+	var wireless_iface := ""
+	var wired_iface := ""
+	var wired_up := false
+
+	var dir := DirAccess.open(LINUX_NET_IFACES_PATH)
+	if dir:
+		for entry in dir.get_directories():
+			if entry.begins_with("wlan") or entry.begins_with("wl"):
+				wireless_iface = entry
+			elif entry.begins_with("eth") or entry.begins_with("en"):
+				wired_iface = entry
+
+	if not wireless_iface.is_empty():
+		var operstate_file := FileAccess.open(LINUX_NET_IFACES_PATH + "/" + wireless_iface + "/operstate", FileAccess.READ)
+		if operstate_file:
+			var operstate := operstate_file.get_line().strip_edges()
+			if operstate == "up":
+				state = WifiState.CONNECTED
+				var wireless_file := FileAccess.open(LINUX_PROC_WIRELESS_PATH, FileAccess.READ)
+				if wireless_file:
+					while wireless_file.get_position() < wireless_file.get_length():
+						var line := wireless_file.get_line().strip_edges()
+						if line.begins_with(wireless_iface + ":"):
+							var tokens := line.split(" ", false)
+							if tokens.size() >= 3:
+								var quality := float(tokens[2].trim_suffix("."))
+								percent = int(round(quality / 70.0 * 100.0))
+							break
+			else:
+				state = WifiState.OFF
+	elif not wired_iface.is_empty():
+		var operstate_file := FileAccess.open(LINUX_NET_IFACES_PATH + "/" + wired_iface + "/operstate", FileAccess.READ)
+		if operstate_file:
+			var operstate := operstate_file.get_line().strip_edges()
+			if operstate == "up":
+				state = WifiState.ETHERNET_UP
+			else:
+				state = WifiState.ETHERNET_DOWN
+
+	if is_instance_valid(self):
+		call_deferred("_on_wifi_queried", state, percent)
 
 
 func _on_wifi_queried(state: int, percent: int) -> void:
@@ -385,6 +442,42 @@ func _query_battery_android() -> void:
 					state = PowerState.ON_BATTERY
 	else:
 		print("[StatusBar] android battery capacity not readable at ", ANDROID_BATTERY_CAPACITY_PATH)
+	if is_instance_valid(self):
+		call_deferred("_on_battery_queried", state, percent)
+
+
+func _query_battery_linux() -> void:
+	var state := PowerState.UNKNOWN
+	var percent := -1
+
+	var dir := DirAccess.open(LINUX_POWER_SUPPLY_PATH)
+	if dir:
+		for entry in dir.get_directories():
+			if entry.begins_with("BAT"):
+				var capacity_file := FileAccess.open(LINUX_POWER_SUPPLY_PATH + "/" + entry + "/capacity", FileAccess.READ)
+				if capacity_file:
+					var capacity_text := capacity_file.get_line().strip_edges()
+					if capacity_text.is_valid_int():
+						percent = int(capacity_text)
+					state = PowerState.ON_BATTERY
+
+					var status_file := FileAccess.open(LINUX_POWER_SUPPLY_PATH + "/" + entry + "/status", FileAccess.READ)
+					if status_file:
+						match status_file.get_line().strip_edges():
+							"Charging":
+								state = PowerState.CHARGING
+							"Full":
+								state = PowerState.CHARGED
+							_:
+								state = PowerState.ON_BATTERY
+					else:
+						state = PowerState.ON_BATTERY
+					break
+
+	if state == PowerState.UNKNOWN:
+		# No battery found: treat as desktop AC.
+		state = PowerState.NO_BATTERY
+
 	if is_instance_valid(self):
 		call_deferred("_on_battery_queried", state, percent)
 
