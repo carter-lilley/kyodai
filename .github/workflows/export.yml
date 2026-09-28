@@ -1,4 +1,13 @@
-name: Export Android
+name: Export All
+
+# Single-job release pipeline: one checkout, one Godot install, one import,
+# then Windows + Linux + Android exports in sequence - mirroring how local
+# exports are done from one Linux machine (Godot export templates are
+# self-contained, no Windows/macOS host required).
+#
+# Replaces the former export-windows.yml / export-linux.yml /
+# export-android.yml split, which triple-paid the checkout + editor +
+# templates + import cost and gave failures three places to hide.
 
 permissions:
   contents: write
@@ -15,14 +24,14 @@ on:
       - 'v*'
 
 jobs:
-  export-android:
+  export:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Setup JDK 17
+    - name: Setup JDK 17 (Android export)
       uses: actions/setup-java@v4
       with:
         distribution: temurin
@@ -41,7 +50,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: godot
-        # Shared with test-gavel.yml and export-linux.yml
+        # Shared with test-gavel.yml
         key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
 
     - name: Download Godot
@@ -88,6 +97,63 @@ jobs:
         ./godot/${GODOT_BIN} --headless --path . --import
         ./godot/${GODOT_BIN} --headless --path . --import
 
+    # --- Windows ---------------------------------------------------------
+    - name: Export Windows
+      run: |
+        mkdir -p build/windows
+        ./godot/${GODOT_BIN} --headless --path . --export-release "Windows Desktop" build/windows/Kyodai.exe
+
+    - name: Package Windows zip
+      run: |
+        # embed_pck=false: the exe is useless without its .pck and the
+        # GDExtension DLLs - the whole folder is the distributable
+        cd build/windows
+        zip -r "$GITHUB_WORKSPACE/Kyodai-windows-x64.zip" .
+
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kyodai-windows-x64
+        path: Kyodai-windows-x64.zip
+
+    # --- Linux -----------------------------------------------------------
+    - name: Export Linux
+      run: |
+        mkdir -p build/linux
+        ./godot/${GODOT_BIN} --headless --path . --export-release "Linux/X11" build/linux/Kyodai.x86_64
+        chmod +x build/linux/Kyodai.x86_64
+
+    - name: Build AppImage
+      env:
+        # FUSE is not guaranteed on runners; extract-and-run mode works everywhere
+        APPIMAGE_EXTRACT_AND_RUN: 1
+        OUTPUT: Kyodai-x86_64.AppImage
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y librsvg2-bin
+        mkdir -p "$HOME/.local/bin"
+        curl -L -o "$HOME/.local/bin/linuxdeploy" "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+        curl -L -o "$HOME/.local/bin/linuxdeploy-plugin-appimage" "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
+        chmod +x "$HOME/.local/bin/linuxdeploy" "$HOME/.local/bin/linuxdeploy-plugin-appimage"
+        export PATH="$HOME/.local/bin:$PATH"
+        rsvg-convert -w 256 -h 256 icon.svg -o kyodai.png
+        mkdir -p AppDir/usr/bin
+        # embed_pck=false: binary + pck must both ship in the AppDir
+        cp build/linux/Kyodai.x86_64 build/linux/Kyodai.pck AppDir/usr/bin/
+        linuxdeploy \
+          --appdir AppDir \
+          --executable AppDir/usr/bin/Kyodai.x86_64 \
+          --desktop-file dist/linux/kyodai.desktop \
+          --icon-file kyodai.png \
+          --output appimage
+
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kyodai-linux-x64
+        path: Kyodai-x86_64.AppImage
+
+    # --- Android ---------------------------------------------------------
     - name: Export Android APK
       run: |
         mkdir -p build/android
@@ -97,15 +163,19 @@ jobs:
         ./godot/${GODOT_BIN} --headless --path . --install-android-build-template \
           --export-debug "Android" build/android/Kyodai.apk
 
-    - name: Upload Artifact
+    - name: Upload Android artifact
       uses: actions/upload-artifact@v4
       with:
         name: kyodai-android-apk
         path: build/android/Kyodai.apk
 
+    # --- Release ----------------------------------------------------------
     - name: Attach to Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
-        files: build/android/Kyodai.apk
         prerelease: true
+        files: |
+          Kyodai-windows-x64.zip
+          Kyodai-x86_64.AppImage
+          build/android/Kyodai.apk
