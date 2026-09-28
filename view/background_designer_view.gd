@@ -30,6 +30,12 @@ func _exit_tree():
 		DataManager.setting_changed.disconnect(_on_setting_changed)
 
 func on_view_show():
+	# Pick up any custom shaders the user dropped in while the view was away.
+	EffectRegistry.rescan()
+	if _effects_designer:
+		_effects_designer.rediscover()
+	if _overlay_designer:
+		_overlay_designer.rediscover()
 	_load_current_config()
 
 func on_view_hide():
@@ -73,6 +79,7 @@ func _setup_ui():
 	_effects_designer.use_internal_scroll = false
 	_effects_designer.effect_registry = LibraryBackground.EFFECT_REGISTRY
 	_effects_designer.display_names = LibraryBackground.EFFECT_DISPLAY_NAMES
+	_effects_designer.custom_kind = "background"
 	_effects_designer.allow_reorder = true
 	_effects_designer.setup("Background Layers", "", "effects", false)
 	_effects_designer.config_changed.connect(_on_effects_config_changed)

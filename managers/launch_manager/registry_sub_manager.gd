@@ -4,6 +4,9 @@ class_name RegistrySubManager
 ## Read-only emulator registry lookup and update checking
 
 const REGISTRY_DIR := "res://data/emulators/"
+## User-provided emulator definitions. Loaded after built-ins; entries
+## override built-ins on meta.id collision.
+const USER_REGISTRY_DIR := "user://emulator_registry/"
 const PLATFORMS_PATH := "res://data/platforms.json"
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
@@ -97,6 +100,23 @@ func _load_registry():
 							_emulator_registry[emulator_id] = emulator_data
 			file_name = dir.get_next()
 
+		# User-provided emulator definitions. These may be resolver-free
+		# (no resolution block) and install-free (no install block = the user
+		# manages the binary); they override built-ins on meta.id collision.
+		var user_dir = DirAccess.open(USER_REGISTRY_DIR)
+		if user_dir:
+			user_dir.list_dir_begin()
+			var user_file = user_dir.get_next()
+			while user_file != "":
+				if user_file.ends_with(".json"):
+					var user_data = _load_user_emulator_json(USER_REGISTRY_DIR + user_file)
+					if not user_data.is_empty():
+						var user_id: String = user_data.get("meta", {}).get("id", "")
+						if _emulator_registry.has(user_id):
+							print("[RegistryManager] User emulator '%s' overrides built-in definition" % user_id)
+						_emulator_registry[user_id] = user_data
+				user_file = user_dir.get_next()
+
 		# Resolve platform defaults now that availability is known: drop
 		# defaults pointing at emulators unavailable on this OS, then fill
 		# gaps with the first available emulator claiming each platform.
@@ -117,6 +137,36 @@ func _load_registry():
 	else:
 		push_error("[RegistryManager] Failed to open emulators directory: " + REGISTRY_DIR)
 		launch_manager.emulator_registry_loaded.emit(false)
+
+## Loads and validates a user-provided emulator JSON file. Returns {} and logs
+## a warning when the file is unreadable or lacks required fields
+## (meta.id, meta.name, meta.platforms, launch).
+func _load_user_emulator_json(filepath: String) -> Dictionary:
+	var file = FileAccess.open(filepath, FileAccess.READ)
+	if not file:
+		push_warning("[RegistryManager] Cannot read user emulator file: " + filepath)
+		return {}
+	var json = JSON.new()
+	var error = json.parse(file.get_as_text())
+	file.close()
+	if error != OK or not json.data is Dictionary:
+		push_warning("[RegistryManager] Invalid JSON in user emulator file: " + filepath)
+		return {}
+	var data: Dictionary = json.data
+	var meta: Dictionary = data.get("meta", {})
+	var problems: Array[String] = []
+	if str(meta.get("id", "")) == "":
+		problems.append("meta.id")
+	if str(meta.get("name", "")) == "":
+		problems.append("meta.name")
+	if not meta.get("platforms") is Array or (meta.get("platforms") as Array).is_empty():
+		problems.append("meta.platforms")
+	if not data.get("launch") is Dictionary or (data.get("launch") as Dictionary).is_empty():
+		problems.append("launch")
+	if not problems.is_empty():
+		push_warning("[RegistryManager] User emulator file %s is missing required fields: %s" % [filepath, ", ".join(problems)])
+		return {}
+	return data
 
 ## One-time, idempotent migration for renamed emulator ids: moves install
 ## directories and remaps stored settings keys to the canonical ids.

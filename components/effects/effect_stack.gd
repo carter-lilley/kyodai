@@ -94,7 +94,7 @@ func update_effect_configs(effect_configs: Array, force_full_rebuild: bool = tru
 		for config in _effect_configs:
 			if config is Dictionary:
 				var effect_id = config.get("effect_id", "")
-				if effect_id and EFFECT_REGISTRY.has(effect_id):
+				if effect_id and EffectRegistry.card_effect_exists(effect_id):
 					active_effect_ids.append(effect_id)
 		if not "base" in active_effect_ids:
 			active_effect_ids.append("base")
@@ -134,7 +134,7 @@ func _rebuild_effects():
 	for config in _effect_configs:
 		if config is Dictionary:
 			var effect_id = config.get("effect_id", "")
-			if effect_id and EFFECT_REGISTRY.has(effect_id):
+			if effect_id and EffectRegistry.card_effect_exists(effect_id):
 				active_effect_ids.append(effect_id)
 
 	if not "base" in active_effect_ids:
@@ -159,8 +159,9 @@ func _rebuild_effects():
 			if id:
 				config_map[id] = config
 
-	for i in range(EFFECT_LAYER_ORDER.size()):
-		var effect_id = EFFECT_LAYER_ORDER[i]
+	var layer_order := _compute_layer_order(active_effect_ids)
+	for i in range(layer_order.size()):
+		var effect_id = layer_order[i]
 		if effect_id in active_effect_ids:
 			var config = config_map.get(effect_id, {})
 			var settings = config.get("settings", {})
@@ -207,8 +208,9 @@ func _update_effect_settings_only() -> void:
 			if id:
 				config_map[id] = config
 
-	for i in range(EFFECT_LAYER_ORDER.size()):
-		var effect_id = EFFECT_LAYER_ORDER[i]
+	var layer_order := _compute_layer_order(_effects.keys())
+	for i in range(layer_order.size()):
+		var effect_id = layer_order[i]
 		if _effects.has(effect_id):
 			var config = config_map.get(effect_id, {})
 			var settings = config.get("settings", {})
@@ -261,7 +263,7 @@ func _run_pipeline() -> void:
 	if not media_container:
 		return
 	var layers: Array = []
-	for effect_id in EFFECT_LAYER_ORDER:
+	for effect_id in _compute_layer_order(_effects.keys()):
 		if effect_id in _effects and _effects[effect_id].is_visible():
 			layers.append(_effects[effect_id])
 	media_container.run_pipeline(layers)
@@ -270,34 +272,34 @@ func _run_pipeline() -> void:
 		if effect and effect.is_visible():
 			effect._update_shader_params()
 
-static var _script_cache: Dictionary[String, Script] = {}
-
 func get_effects() -> Array:
 	var result: Array = []
-	for effect_id in EFFECT_LAYER_ORDER:
+	for effect_id in _compute_layer_order(_effects.keys()):
 		if _effects.has(effect_id):
 			result.append(_effects[effect_id])
 	return result
 
+## EFFECT_LAYER_ORDER with the active custom (user-shader) effects spliced
+## into the fixed custom slot: immediately above "base", below "hsl". Custom
+## effects keep their config-file order within the slot.
+func _compute_layer_order(active_ids: Array) -> Array:
+	var customs: Array = []
+	for id in active_ids:
+		if not id in EFFECT_LAYER_ORDER and EffectRegistry.card_effect_exists(id):
+			customs.append(id)
+	if customs.is_empty():
+		return EFFECT_LAYER_ORDER.duplicate()
+	var order: Array = []
+	for id in EFFECT_LAYER_ORDER:
+		order.append(id)
+		if id == "base":
+			order.append_array(customs)
+	return order
+
 func _create_effect(effect_id: String) -> EffectBase:
-	var script_path = EFFECT_REGISTRY.get(effect_id, "")
-	if script_path == "":
-		push_error("EffectStack: Unknown effect_id: " + effect_id)
-		return null
-
-	var script: Script = _script_cache.get(script_path, null)
-	if not script:
-		script = load(script_path)
-		if not script:
-			push_error("EffectStack: Failed to load script: " + script_path)
-			return null
-		_script_cache[script_path] = script
-
-	var effect = script.new()
-	if not effect is EffectBase:
-		push_error("EffectStack: Effect script does not extend EffectBase: " + script_path)
-		return null
-
+	var effect := EffectRegistry.create_card_effect(effect_id)
+	if not effect:
+		push_error("EffectStack: Unknown or invalid effect_id: " + effect_id)
 	return effect
 
 func get_effect(effect_id: String) -> EffectBase:
@@ -307,7 +309,7 @@ func has_effect(effect_id: String) -> bool:
 	return _effects.has(effect_id) and _effects[effect_id].is_visible()
 
 static func clear_script_cache() -> void:
-	_script_cache.clear()
+	EffectRegistry.clear_script_cache()
 	EffectBase.clear_shared_caches()
 
 func force_refresh() -> void:

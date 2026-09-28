@@ -19,6 +19,9 @@ var hide_disabled_effects: bool = false  # If true, dropdown omits already-activ
 var effect_registry: Dictionary = {}
 ## Display name overrides (effect_id -> name); falls back to capitalized id.
 var display_names: Dictionary = {}
+## Which kind of user-provided custom effects (user://effects/<kind>/) to
+## offer in the dropdown: "card", "background", or "" for none.
+var custom_kind: String = ""
 ## When true, per-effect rows get up/down buttons (config order = draw order).
 var allow_reorder: bool = false
 
@@ -48,6 +51,14 @@ func set_base_effects(base_effects: Array):
 	_base_effects = base_effects.duplicate(true)
 	if inherit_from_base:
 		_populate_option_button()  # Update to show overlap labels
+
+## Re-runs effect discovery, e.g. after EffectRegistry.rescan() picks up
+## newly added (or removed) custom shaders.
+func rediscover() -> void:
+	_effects_discovered = false
+	_discover_effects()
+	if _effects_list:
+		_rebuild_effects_ui()
 
 var _effects_discovered: bool = false
 
@@ -84,7 +95,18 @@ func _discover_effects():
 			_available_effects[effect_id] = display_name
 			_effect_id_map[dropdown_id] = effect_id
 			dropdown_id += 1
-	
+
+	# User-provided custom effects (user://effects/<kind>/). Their generic
+	# layers allow every context, so no context filtering is needed.
+	if custom_kind != "":
+		for descriptor in EffectRegistry.get_custom_descriptors(custom_kind):
+			var custom_id: String = descriptor.get("id", "")
+			if custom_id == "" or _available_effects.has(custom_id):
+				continue
+			_available_effects[custom_id] = descriptor.get("display_name", custom_id)
+			_effect_id_map[dropdown_id] = custom_id
+			dropdown_id += 1
+
 	_populate_option_button()
 
 func _ready():
@@ -336,6 +358,9 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		settings_menu.setting_changed.connect(func(value, setting): _on_effect_setting_changed(index, setting.property_name, value))
 
 func _get_effect_schema(effect_id: String) -> Array[SettingsVar]:
+	# Custom (user-shader) effects carry a pregenerated introspected schema.
+	if EffectRegistry.is_custom(effect_id):
+		return EffectRegistry.get_schema(effect_id)
 	# Load the effect class and get its schema
 	var registry: Dictionary = effect_registry if not effect_registry.is_empty() else EffectStack.EFFECT_REGISTRY
 	var script_path = registry.get(effect_id, "")

@@ -2998,6 +2998,11 @@ func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
 		# window are useless now. Prune them so stale DB results are ignored and
 		# queued DB tasks can skip themselves via is_load_pending().
 		_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
+		# Likewise, every queued low-priority image task is directional prefetch
+		# for the old window; draining them lets the workers decode the new
+		# window's covers at full throughput. High-priority loads (hero art,
+		# details sheets) are untouched.
+		MemorySubManager.clear_pending_low_priority_image_tasks()
 		_pending_buffer_expansion = false
 		structure_changed = true
 		for i in range(_buffer_target_start, _buffer_target_end):

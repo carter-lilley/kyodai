@@ -724,6 +724,44 @@ static func clear_pending_image_tasks(fire_callbacks: bool = true) -> int:
 			_instance.call_deferred("_execute_callback", cb, null)
 	return drained_count
 
+## Drain only the LOW-priority image queue: in-flight tasks and high-priority
+## loads (hero art, details sheets, visible cards) are untouched. Used on grid
+## teleports (random-game jump, focus restore), where every queued low task is
+## directional prefetch for a window nobody is looking at anymore - draining
+## frees the workers for the new window instead of spending a share of decode
+## throughput (and texture-cache slots) on stale covers. Drained waiters get a
+## null callback (same contract as cancellation); pass fire_callbacks = false
+## when the tree is being torn down. Returns the drain count.
+static func clear_pending_low_priority_image_tasks(fire_callbacks: bool = true) -> int:
+	if _instance == null:
+		return 0
+
+	_instance._image_mutex.lock()
+
+	var drained_callbacks: Array = []
+	var drained_count := 0
+	for task in _instance._image_low_priority_queue:
+		task.cancelled = true
+		_instance._image_tasks.erase(task.id)
+		if task.callback.is_valid():
+			drained_callbacks.append(task.callback)
+		# Drain coalesced waiters on this dedup_key so they aren't dropped silently
+		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+			for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
+				if waiting.callback.is_valid():
+					drained_callbacks.append(waiting.callback)
+			_instance._inflight_image_callbacks.erase(task.dedup_key)
+			_instance._dedup_task_ids.erase(task.dedup_key)
+		drained_count += 1
+	_instance._image_low_priority_queue.clear()
+
+	_instance._image_mutex.unlock()
+
+	if fire_callbacks:
+		for cb in drained_callbacks:
+			_instance.call_deferred("_execute_callback", cb, null)
+	return drained_count
+
 static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	if _instance == null or task_id <= 0:
 		return false

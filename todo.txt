@@ -1,13 +1,10 @@
 #TODO.TXT
 
 xemu raw hdd save sync
-prewarm covers on random jump
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-x user-added emu jsons, resolvers(?) and shader layers. 
 filter by letter/recent
 
-x removing nav shortcut doesnt actually remove it? <- cant reproduce?
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs
 	- user/identity profile resolver for emulator installs and saves
@@ -17,7 +14,7 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce?
 		- leaving 3ds in a weird spot. force pull user identity as bios
 	- online compat database scan perhaps?
 	- dolphin: controller inis
-	- all: optional hotkeys, graphics settings, confirm on exit, etc?
+	- all: optional hotkeys, x graphics settings, confirm on exit, etc?
 	- resolver: android - no way to resolve nethersx2 based configs (no/inaccessible inis)
 	- installer: android - armsx2 & 3 unskippable OOBE & bios selection (no drop bios)
 	- installer: android - azahar requires unskippable OOBE to select user folder
@@ -27,7 +24,7 @@ x removing nav shortcut doesnt actually remove it? <- cant reproduce?
 	- shadps4
 	
 ## romm
- - xtra romm metadata - HL2B, x guides, logos..
+ - xtra romm metadata - HL2B, guides, logos..
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)
@@ -60,9 +57,9 @@ rework hero to also accept effect stacks
 	cache image colors on sync
 
 	auto m3us
-	emulator repo downloads & updates
+	emulator repo downloads & updates, config resolvers
 	flexible user profile & emu config support
-	user-added jsons and fx
+	user-added jsons and fx, fleixble data driven
 	add to steam wit subprocess
 	romm firmware & save sync
 	gamenative support

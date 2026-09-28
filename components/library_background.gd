@@ -170,7 +170,7 @@ static func normalize_config(config: Dictionary) -> Dictionary:
 	var converted := _convert_legacy_settings(effect_id, settings)
 	if not converted.base_settings.is_empty():
 		out["base"]["settings"] = converted.base_settings
-	if effect_id != "gradient" and EFFECT_REGISTRY.has(effect_id):
+	if effect_id != "gradient" and EffectRegistry.background_effect_exists(effect_id):
 		out["effects"] = [{"effect_id": effect_id, "settings": converted.effect_settings}]
 
 	# Convert legacy light/dark variants (they held same-shape settings dicts)
@@ -306,16 +306,7 @@ func _build_overlays() -> void:
 		_overlays.append({"entry": entry, "effect": effect, "media": media})
 
 func _create_effect(effect_id: String) -> BackgroundEffect:
-	var script_path: String = EFFECT_REGISTRY.get(effect_id, "")
-	if script_path.is_empty():
-		return null
-	var script = load(script_path)
-	if not script:
-		return null
-	var effect = script.new()
-	if not effect is BackgroundEffect:
-		return null
-	return effect
+	return EffectRegistry.create_background_effect(effect_id)
 
 # Public API for updating background configuration
 func set_background_config(config: Dictionary) -> void:
@@ -349,13 +340,21 @@ func set_background_color(color: Color) -> void:
 static func get_available_effects() -> Array[String]:
 	var ids: Array[String] = []
 	ids.assign(EFFECT_REGISTRY.keys())
+	for descriptor in EffectRegistry.get_custom_descriptors("background"):
+		var custom_id: String = descriptor.get("id", "")
+		if custom_id != "" and not ids.has(custom_id):
+			ids.append(custom_id)
 	return ids
 
 static func get_effect_display_name(effect_id: String) -> String:
+	if EffectRegistry.is_custom(effect_id):
+		return EffectRegistry.get_display_name(effect_id)
 	return EFFECT_DISPLAY_NAMES.get(effect_id, effect_id.replace("_", " ").capitalize())
 
 # Get settings schema for an effect
 static func get_effect_schema(effect_id: String) -> Array[SettingsVar]:
+	if EffectRegistry.is_custom(effect_id):
+		return EffectRegistry.get_schema(effect_id)
 	var script_path: String = EFFECT_REGISTRY.get(effect_id, "")
 	if script_path.is_empty():
 		return []

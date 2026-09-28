@@ -33,6 +33,7 @@ const XeniaToml = preload("res://utils/config_resolvers/xenia_toml.gd")
 const Vita3kYml = preload("res://utils/config_resolvers/vita3k_yml.gd")
 const XemuToml = preload("res://utils/config_resolvers/xemu_toml.gd")
 const JsonKv = preload("res://utils/config_resolvers/json_kv.gd")
+const Generic = preload("res://utils/config_resolvers/generic.gd")
 
 ## Converts Godot virtual paths (user://, res://) to OS-native absolute paths
 ## so external emulators can read them. Other paths pass through unchanged.
@@ -141,6 +142,9 @@ static func enforce_paths(emulator_id: String, platform_slug: String = "", core_
 			return XemuToml.enforce_paths(context, sections)
 		"json_kv":
 			return JsonKv.enforce_paths(context, sections)
+		"none":
+			# Explicitly resolver-free (custom emulators): nothing to enforce.
+			return true
 		_:
 			# No writer implemented for this strategy yet; not an error.
 			return true
@@ -333,6 +337,9 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 		"config_path": config_path,
 		"config_status": config_status,
 		"anchor": FSM.resolve_emulator_path(anchor_raw, emulator_id, platform_slug).rstrip("/") if anchor_raw != "" else "",
+		# The raw resolution block; data-driven strategies ("generic") read
+		# their configuration (keys, format, sentinels) from here.
+		"block": block,
 	}
 
 	# mtime-keyed cache: re-resolve only when the config changed on disk.
@@ -378,6 +385,12 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 			result = XemuToml.resolve(kind, context)
 		"json_kv":
 			result = JsonKv.resolve(kind, context)
+		"generic":
+			result = Generic.resolve(kind, context)
+		"none":
+			# Explicitly resolver-free (custom emulators): fall back to the
+			# registry's declared paths with no caveat.
+			result.source = "default"
 		_:
 			result.caveat = "unknown-strategy"
 

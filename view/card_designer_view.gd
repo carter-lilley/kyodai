@@ -60,6 +60,12 @@ func on_view_hide():
 		_save_to_settings()
 
 func on_view_show():
+	# Pick up any custom shaders the user dropped in while the view was away.
+	EffectRegistry.rescan()
+	if _base_effect_designer:
+		_base_effect_designer.rediscover()
+	if _focus_effect_designer:
+		_focus_effect_designer.rediscover()
 	# Reload config from DataManager to ensure we have latest (including preset changes)
 	_load_current_config()
 	_setup_preview_card()
@@ -121,13 +127,15 @@ func _setup_ui():
 	_base_effect_designer = EffectDesignerUI.new()
 	_base_effect_designer.use_internal_scroll = false
 	_base_effect_designer.hide_disabled_effects = true
+	_base_effect_designer.custom_kind = "card"
 	_base_effect_designer.setup("Effects", "base_card", "effects", false)
 	_base_effect_designer.config_changed.connect(_on_base_config_changed)
 	left_vbox.add_child(_base_effect_designer)
-	
+
 	# Focus effects designer
 	_focus_effect_designer = EffectDesignerUI.new()
 	_focus_effect_designer.use_internal_scroll = false
+	_focus_effect_designer.custom_kind = "card"
 	_focus_effect_designer.setup("Focus Effects", "focus_card", "focus_effects", true)
 	_focus_effect_designer.config_changed.connect(_on_focus_config_changed)
 	left_vbox.add_child(_focus_effect_designer)
