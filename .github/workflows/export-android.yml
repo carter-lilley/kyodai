@@ -1,0 +1,111 @@
+name: Export Android
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GODOT_VERSION: 4.7
+  GODOT_BIN: Godot_v4.7-stable_linux.x86_64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  export-android:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install SDK packages
+      run: |
+        yes | sdkmanager --licenses >/dev/null || true
+        sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "platforms;android-34" "build-tools;34.0.0"
+
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        # Shared with test-gavel.yml and export-linux.yml
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/${GODOT_BIN}.zip"
+        unzip godot.zip -d godot
+        chmod +x godot/${GODOT_BIN}
+
+    - name: Cache export templates
+      id: cache-templates
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/share/godot/export_templates
+        key: godot-templates-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Install Export Templates
+      if: steps.cache-templates.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+        mkdir -p templates
+        unzip templates.tpz -d templates
+        dest="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$dest"
+        cp -r templates/templates/* "$dest"
+
+    - name: Configure Android SDK path + debug keystore
+      run: |
+        # Godot reads the SDK path from editor settings, not the environment
+        mkdir -p "$HOME/.config/godot"
+        printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android_sdk_path = "%s"\n' "$ANDROID_HOME" > "$HOME/.config/godot/editor_settings-4.tres"
+        # Alpha builds sign with the standard debug keystore (matches Godot's
+        # default debug credentials). Switch to a proper upload key via repo
+        # secrets before any stable release - key changes force reinstalls.
+        mkdir -p "$HOME/.android"
+        keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+          -alias androiddebugkey -storepass android -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
+    - name: Import Project
+      run: |
+        # Run twice: headless --import can exit before the first full scan completes
+        ./godot/${GODOT_BIN} --headless --path . --import
+        ./godot/${GODOT_BIN} --headless --path . --import
+
+    - name: Export Android APK
+      run: |
+        mkdir -p build/android
+        # The preset uses gradle_build=true, so this runs a full Gradle build.
+        # --install-android-build-template lays down android/build (gitignored)
+        # from the export templates before exporting.
+        ./godot/${GODOT_BIN} --headless --path . --install-android-build-template \
+          --export-debug "Android" build/android/Kyodai.apk
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kyodai-android-apk
+        path: build/android/Kyodai.apk
+
+    - name: Attach to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: build/android/Kyodai.apk
+        prerelease: true
