@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kyodai
+Comment=Game launcher with RomM save sync
+Exec=Kyodai.x86_64
+Icon=kyodai
+Categories=Game;
+Terminal=false

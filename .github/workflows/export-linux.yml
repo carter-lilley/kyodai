@@ -1,0 +1,108 @@
+name: Export Linux
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GODOT_VERSION: 4.7
+  GODOT_BIN: Godot_v4.7-stable_linux.x86_64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  export-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        # Shared with test-gavel.yml so both workflows hit the same editor cache
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/${GODOT_BIN}.zip"
+        unzip godot.zip -d godot
+        chmod +x godot/${GODOT_BIN}
+
+    - name: Cache export templates
+      id: cache-templates
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/share/godot/export_templates
+        key: godot-templates-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Install Export Templates
+      if: steps.cache-templates.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+        mkdir -p templates
+        unzip templates.tpz -d templates
+        dest="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$dest"
+        cp -r templates/templates/* "$dest"
+
+    - name: Import Project
+      run: |
+        # Run twice: headless --import can exit before the first full scan completes
+        ./godot/${GODOT_BIN} --headless --path . --import
+        ./godot/${GODOT_BIN} --headless --path . --import
+
+    - name: Export Linux/X11
+      run: |
+        mkdir -p build/linux
+        ./godot/${GODOT_BIN} --headless --path . --export-release "Linux/X11" build/linux/Kyodai.x86_64
+        chmod +x build/linux/Kyodai.x86_64
+
+    - name: Install AppImage tooling
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y librsvg2-bin
+        # linuxdeploy discovers plugins by exact name on PATH
+        mkdir -p "$HOME/.local/bin"
+        curl -L -o "$HOME/.local/bin/linuxdeploy" "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+        curl -L -o "$HOME/.local/bin/linuxdeploy-plugin-appimage" "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
+        chmod +x "$HOME/.local/bin/linuxdeploy" "$HOME/.local/bin/linuxdeploy-plugin-appimage"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Build AppImage
+      env:
+        # FUSE is not guaranteed on runners; extract-and-run mode works everywhere
+        APPIMAGE_EXTRACT_AND_RUN: 1
+        OUTPUT: Kyodai-x86_64.AppImage
+      run: |
+        rsvg-convert -w 256 -h 256 icon.svg -o kyodai.png
+        mkdir -p AppDir/usr/bin
+        # embed_pck=false: the export is binary + pck, and the binary looks for
+        # Kyodai.pck beside itself - both must ship in the AppDir
+        cp build/linux/Kyodai.x86_64 build/linux/Kyodai.pck AppDir/usr/bin/
+        linuxdeploy \
+          --appdir AppDir \
+          --executable AppDir/usr/bin/Kyodai.x86_64 \
+          --desktop-file dist/linux/kyodai.desktop \
+          --icon-file kyodai.png \
+          --output appimage
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kyodai-linux-x64
+        path: Kyodai-x86_64.AppImage
+
+    - name: Attach to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: Kyodai-x86_64.AppImage
