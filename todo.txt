@@ -7,6 +7,8 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 x user-added emu jsons, resolvers(?) and shader layers. 
 filter by letter/recent
 
+SHUFFLER PICK 3 SOMETIMES
+
 x removing nav shortcut doesnt actually remove it? <- cant reproduce?
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs

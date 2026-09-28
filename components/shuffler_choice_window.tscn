@@ -1,0 +1,53 @@
+[gd_scene format=3 uid="uid://cchoice0001x2"]
+
+[ext_resource type="Script" path="res://components/shuffler_choice_window.gd" id="1_choice"]
+[ext_resource type="Script" path="res://addons/m3/components/M3Card.gd" id="2_card"]
+
+[node name="ShufflerChoiceWindow" type="Window"]
+transparent_bg = true
+unresizable = true
+borderless = true
+always_on_top = true
+transparent = true
+script = ExtResource("1_choice")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="Root"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0.04, 0.04, 0.07, 0.8)
+
+[node name="CenterBox" type="CenterContainer" parent="Root"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Row" type="HBoxContainer" parent="Root/CenterBox"]
+layout_mode = 2
+
+[node name="CardA" type="Button" parent="Root/CenterBox/Row"]
+layout_mode = 2
+script = ExtResource("2_card")
+
+[node name="CardB" type="Button" parent="Root/CenterBox/Row"]
+layout_mode = 2
+script = ExtResource("2_card")
+
+[node name="CardC" type="Button" parent="Root/CenterBox/Row"]
+layout_mode = 2
+script = ExtResource("2_card")

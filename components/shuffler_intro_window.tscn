@@ -1,0 +1,106 @@
+[gd_scene format=3 uid="uid://bplinoosggscg"]
+
+[ext_resource type="Script" path="res://components/shuffler_intro_window.gd" id="1_intro"]
+[ext_resource type="FontFile" uid="uid://ckotp1w56fjn8" path="res://assets/fonts/MPLUS1-VariableFont_wght.ttf" id="2_font"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.1, 0.1, 0.12, 0.85)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="LabelSettings" id="LabelSettings_title"]
+font = ExtResource("2_font")
+font_size = 64
+
+[sub_resource type="LabelSettings" id="LabelSettings_info"]
+font = ExtResource("2_font")
+font_size = 42
+
+[node name="ShufflerIntroWindow" type="Window" unique_id=1657161573]
+transparent_bg = true
+oversampling_override = 1.0
+unresizable = true
+borderless = true
+always_on_top = true
+transparent = true
+script = ExtResource("1_intro")
+
+[node name="Root" type="Control" parent="." unique_id=157177875]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="TexturePivot" type="Control" parent="Root" unique_id=21968480]
+anchors_preset = 0
+
+[node name="TextureRect" type="TextureRect" parent="Root/TexturePivot" unique_id=32783190]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Root" unique_id=412418954]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+alignment = 1
+
+[node name="HBoxContainer" type="HBoxContainer" parent="Root/VBoxContainer" unique_id=368789743]
+layout_mode = 2
+alignment = 2
+
+[node name="Title_Pivot" type="Control" parent="Root/VBoxContainer/HBoxContainer" unique_id=1645505537]
+layout_mode = 2
+
+[node name="Panel" type="Panel" parent="Root/VBoxContainer/HBoxContainer/Title_Pivot" unique_id=641248111]
+clip_contents = true
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+grow_horizontal = 0
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="HBoxContainer" type="HBoxContainer" parent="Root/VBoxContainer/HBoxContainer/Title_Pivot/Panel" unique_id=721031915]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Root/VBoxContainer/HBoxContainer/Title_Pivot/Panel/HBoxContainer" unique_id=2145041694]
+layout_mode = 2
+alignment = 1
+
+[node name="Title" type="Label" parent="Root/VBoxContainer/HBoxContainer/Title_Pivot/Panel/HBoxContainer/VBoxContainer" unique_id=2057419049]
+layout_mode = 2
+text = "GAME TITLE"
+label_settings = SubResource("LabelSettings_title")
+horizontal_alignment = 1
+
+[node name="Info" type="Label" parent="Root/VBoxContainer/HBoxContainer/Title_Pivot/Panel/HBoxContainer/VBoxContainer" unique_id=2036684505]
+layout_mode = 2
+text = "Year / System / Etc."
+label_settings = SubResource("LabelSettings_info")
+horizontal_alignment = 1

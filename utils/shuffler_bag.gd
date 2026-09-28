@@ -41,6 +41,11 @@ func _create_entry(game: GameResource) -> Dictionary:
 		"suspend_method": "",
 		"status": EntryStatus.QUEUED,
 		"download_id": "",
+		# Set between _launch_game() and the pid callback firing. Restart/switch
+		# must wait for it to clear before relaunching, otherwise the per-game
+		# launch guard rejects the relaunch and the shuffler misreads that as a
+		# failed launch (spurious skip + late-pid kill).
+		"launch_pending": false,
 	}
 
 

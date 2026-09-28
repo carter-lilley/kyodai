@@ -5,7 +5,7 @@ class_name ShufflerSubManager
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
-enum State { IDLE, DOWNLOADING, ACTIVE, PAUSED, STOPPING }
+enum State { IDLE, DOWNLOADING, ACTIVE, PAUSED, STOPPING, CHOOSING }
 enum WindowBackend { NONE, WINDOWS_AHK, LINUX_KWIN, LINUX_X11 }
 
 signal session_started()
@@ -17,6 +17,7 @@ signal game_ready(index: int)
 
 var _state: State = State.IDLE
 var _switch_in_progress: bool = false
+var _restart_in_progress: bool = false  # extra guard: reject restarts queued while one is running
 var _pending_switch_index: int = -1  # latest requested target while a switch is in flight
 var _bag: ShufflerBag = ShufflerBag.new()
 var _current_game_index: int = -1
@@ -69,6 +70,17 @@ var _active_download_item_id: String = ""
 var _shuffler_vita_apps: Array[Dictionary] = []
 var _maximize_token: int = 0  # incremented whenever the foreground game changes; in-flight maximize coroutines check it and bail
 var _window_backend: int = WindowBackend.NONE
+
+# Balatro-style "choose 1 of 3" interstitial. Every 5-7 shuffles the current
+# game closes and the player picks one seen game to keep; the rejected games
+# are removed from the bag.
+const CHOICE_SCENE := "res://components/shuffler_choice_window.tscn"
+const CHOICE_MIN_CANDIDATES := 3
+const CHOICE_MIN_SHUFFLES := 5
+const CHOICE_MAX_SHUFFLES := 7
+var _games_until_choice: int = -1
+var _seen_entries: Array = []  # bag entries that have been the current game
+var _choice_window: Node = null
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -283,6 +295,8 @@ func start_session(config: Dictionary) -> void:
 	_pending_switch_index = -1
 	_reset_download_tracking()
 	_shuffler_vita_apps.clear()
+	_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+	_seen_entries.clear()
 
 	# Cut background music for the whole session (resumed in stop_session);
 	# per-game exit signals must not resume it mid-session.
@@ -312,6 +326,7 @@ func stop_session() -> void:
 
 	_reroll_in_progress = false
 	_reroll_slot_index = -1
+	_restart_in_progress = false
 	_pending_switch_index = -1
 	_maximize_token += 1
 
@@ -355,6 +370,10 @@ func stop_session() -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
 		_controls_window = null
+
+	if _choice_window and is_instance_valid(_choice_window):
+		_choice_window.queue_free()
+		_choice_window = null
 
 	get_tree().root.gui_disable_input = false
 
@@ -425,6 +444,14 @@ func restart_game() -> void:
 	if not can_restart():
 		print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
 		return
+	if _restart_in_progress:
+		# Input layers can deliver several requests per physical press
+		# (double-registered pads, raw + mapped action events). A restart is
+		# already tearing down and relaunching the game; a second one queued
+		# on top would just kill the fresh instance and loop forever.
+		print("[ShufflerSubManager] restart_game ignored: restart already in progress")
+		return
+	_restart_in_progress = true
 	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
 	# Wait for any in-flight switch, then hold the guard so skip/timer
 	# requests queue behind the restart instead of interleaving with it.
@@ -434,10 +461,12 @@ func restart_game() -> void:
 	# or after teardown.
 	if not can_restart() or _current_game_index < 0 or _current_game_index >= _bag.size():
 		print("[ShufflerSubManager] restart_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
+		_restart_in_progress = false
 		return
 	_switch_in_progress = true
 	_kill_round_timer()
 	var entry = _bag.entries[_current_game_index]
+	await _await_launch_settled(entry)
 	await _stop_game(entry)
 	if entry.pid != -1:
 		# Restart boots a fresh instance; the old process (suspended for
@@ -451,6 +480,7 @@ func restart_game() -> void:
 		_launch_game(entry)
 		_start_round_timer(_random_round_time())
 	_switch_in_progress = false
+	_restart_in_progress = false
 	if _pending_switch_index != -1:
 		var next = _pending_switch_index
 		_pending_switch_index = -1
@@ -491,6 +521,7 @@ func remove_game() -> void:
 	var entry = _bag.entries[index]
 	print("[ShufflerSubManager] Rerolling slot " + str(index) + " (" + entry.game.title + ")")
 
+	await _await_launch_settled(entry)
 	await _stop_game(entry)
 
 	if not can_reroll():
@@ -931,6 +962,13 @@ func _set_controls_reroll_enabled(enabled: bool) -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.set_reroll_enabled(enabled)
 
+## The shuffler force-raises the emulator window on launch/skip/restart, which
+## buries the controls panel. Reassert the panel's stacking whenever that
+## happens so it stays reachable with LT+Select.
+func _ensure_controls_on_top() -> void:
+	if _controls_window and is_instance_valid(_controls_window):
+		_controls_window.ensure_on_top()
+
 # ============================================================================
 # DOWNLOAD PROGRESS
 # ============================================================================
@@ -1029,7 +1067,114 @@ func _switch_to_next_game() -> void:
 		print("[ShufflerSubManager] No other ready game; extending current round")
 		_start_round_timer(_random_round_time())
 		return
+	# A real shuffle is about to happen: count it against the choice trigger.
+	if _games_until_choice > 0:
+		_games_until_choice -= 1
+	if _games_until_choice == 0:
+		var pool := _choice_pool()
+		if pool.size() >= CHOICE_MIN_CANDIDATES:
+			_offer_choice(pool)
+			return
+		# Not enough seen games to offer a choice (tiny bag); postpone.
+		_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
 	_request_switch(next_index)
+
+func _choice_pool() -> Array:
+	"""Seen entries that are still in the bag, in a random order."""
+	var pool: Array = []
+	for entry in _seen_entries:
+		if _bag.entries.has(entry):
+			pool.append(entry)
+	pool.shuffle()
+	return pool
+
+func _offer_choice(pool: Array) -> void:
+	print("[ShufflerSubManager] _offer_choice: pool=" + str(pool.size()) + " current=" + str(_current_game_index))
+	_state = State.CHOOSING
+	_kill_round_timer()
+	var prev_entry = null
+	if _current_game_index >= 0 and _current_game_index < _bag.size():
+		prev_entry = _bag.entries[_current_game_index]
+		await _await_launch_settled(prev_entry)
+		prev_entry.active = false
+		await _stop_game(prev_entry)
+	# stop_session may have raced the stop await; never show the picker during
+	# or after teardown.
+	if _state != State.CHOOSING:
+		print("[ShufflerSubManager] _offer_choice aborted: state=" + str(_state))
+		return
+	var candidates := pool.slice(0, CHOICE_MIN_CANDIDATES)
+	if candidates.size() < CHOICE_MIN_CANDIDATES:
+		_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+		_state = State.ACTIVE
+		_switch_to_next_game()
+		return
+	# The controls panel must not float above the choice screen.
+	if _controls_window and is_instance_valid(_controls_window) and _controls_window.has_method("hide_controls"):
+		_controls_window.hide_controls()
+	var scene := load(CHOICE_SCENE)
+	if not scene:
+		push_error("[ShufflerSubManager] Failed to load choice window scene: " + CHOICE_SCENE)
+		_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+		_state = State.ACTIVE
+		_switch_to_next_game()
+		return
+	_choice_window = scene.instantiate()
+	_choice_window.game_chosen.connect(_on_game_chosen)
+	get_tree().root.add_child(_choice_window)
+	_choice_window.present(candidates)
+
+func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
+	print("[ShufflerSubManager] _on_game_chosen: " + _format_entry(chosen))
+	# Snapshot the entry the (stopped) current index points at; removals below
+	# can shift indexes or remove it entirely.
+	var prev_entry = null
+	if _current_game_index >= 0 and _current_game_index < _bag.size():
+		prev_entry = _bag.entries[_current_game_index]
+	# Rejected games leave the bag (and the seen pool) for good. Their slots
+	# are refilled with fresh candidates so the bag stays at full size.
+	var rejected_slots: Array[int] = []
+	for entry in candidates:
+		if entry == chosen:
+			continue
+		_seen_entries.erase(entry)
+		var idx := _bag.entries.find(entry)
+		if idx != -1:
+			rejected_slots.append(idx)
+			# Suspend-method games keep a frozen process with a live pid when
+			# stopped; kill it before the slot is replaced/dropped so it can't
+			# leak (the reroll flow does the same).
+			if entry.pid != -1:
+				LaunchManager.process.kill_process_async(entry.pid)
+				entry.started = false
+				entry.active = false
+				entry.pid = -1
+	if _choice_window and is_instance_valid(_choice_window):
+		_choice_window.queue_free()
+		_choice_window = null
+	_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+	if _state != State.CHOOSING:
+		return
+	_state = State.ACTIVE
+	# Refill high-index-first: replace_entry keeps the slot in place, and a
+	# collapsed slot (candidate pool exhausted) then can't shift the lower
+	# slots still to process.
+	rejected_slots.sort()
+	rejected_slots.reverse()
+	for idx in rejected_slots:
+		if idx >= _bag.size():
+			continue
+		if not await _try_replace_with_candidate(idx):
+			_bag.entries.remove_at(idx)
+	# Re-find after mutations: removals can shift every index.
+	if prev_entry != null:
+		_current_game_index = _bag.entries.find(prev_entry)
+	var target := _bag.entries.find(chosen)
+	if target == -1:
+		# Should never happen; resume the normal flow defensively.
+		_switch_to_next_game()
+		return
+	_request_switch(target)
 
 ## Serializes game switches: while a switch coroutine is in flight, only the
 ## latest requested target is kept (skip-mashing degenerates to "last wins").
@@ -1067,9 +1212,12 @@ func _switch_to_game(index: int) -> void:
 	_maximize_token += 1
 	var entry = _bag.entries[index]
 	entry.active = true
+	if not _seen_entries.has(entry):
+		_seen_entries.append(entry)
 
 	var method := entry.suspend_method as String
 	print("[ShufflerSubManager] _switch_to_game: target=" + _format_entry(entry) + " method=" + method)
+	await _await_launch_settled(entry)
 	if method == "suspend" and entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
 		print("[ShufflerSubManager] _switch_to_game: resuming existing process")
 		await _resume_game(entry)
@@ -1100,6 +1248,17 @@ func _switch_to_game(index: int) -> void:
 # GAME LAUNCH
 # ============================================================================
 
+## Waits for a pending launch's pid callback so a stop/relaunch never collides
+## with LaunchManager's per-game launch guard (the collision reports pid -1,
+## which reads as a failed launch and triggers a spurious skip + late-pid kill).
+func _await_launch_settled(entry: Dictionary) -> void:
+	var wait := 0.0
+	while entry.get("launch_pending", false) and wait < 5.0:
+		await get_tree().create_timer(0.1).timeout
+		wait += 0.1
+	if entry.get("launch_pending", false):
+		push_warning("[ShufflerSubManager] _await_launch_settled timed out for " + _format_entry(entry))
+
 func _launch_game(entry: Dictionary) -> void:
 	var game = entry.game
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
@@ -1111,7 +1270,9 @@ func _launch_game(entry: Dictionary) -> void:
 		entry.suspend_method = _resolve_retroarch_suspend_method(entry)
 	print("[ShufflerSubManager] _launch_game: " + _format_entry(entry) + " emulator=" + emulator_id + " method=" + entry.suspend_method + " temp_path=" + entry.temp_path)
 
+	entry.launch_pending = true
 	var on_pid_ready = func(pid: int):
+		entry.launch_pending = false
 		print("[ShufflerSubManager] on_pid_ready for " + game.title + ": pid=" + str(pid))
 		if pid != -1:
 			# Prerequisites (downloads, prep) can delay this callback past a
@@ -1414,9 +1575,8 @@ func _maximize_with_retry(pid: int) -> void:
 		return
 	if not maximized:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
-	_raise_controls_window()
-	_reassert_palette_tail()
 	if maximized:
+		_ensure_controls_on_top()
 		_delayed_remaximize(pid, token)
 
 # Some emulators (e.g. Vita3K) recreate their game window seconds after the
@@ -1428,7 +1588,7 @@ func _delayed_remaximize(pid: int, token: int) -> void:
 		return
 	print("[ShufflerSubManager] _delayed_remaximize: re-maximizing pid " + str(pid))
 	await _maximize_window_async(pid, token)
-	_raise_controls_window()
+	_ensure_controls_on_top()
 
 func _maximize_window_async(pid: int, token: int = -1) -> bool:
 	var os_state := {"completed": false, "success": false, "output_text": ""}
@@ -1633,6 +1793,7 @@ func _create_controls_window() -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
 		_controls_window.queue_free()
+		_controls_window = null
 
 	var scene = load("res://components/shuffler_controls_window.tscn")
 	if not scene:
@@ -1648,35 +1809,7 @@ func _create_controls_window() -> void:
 	_controls_window.stop_requested.connect(stop_session)
 
 	get_tree().root.add_child(_controls_window)
-	_controls_window.popup()
-	_raise_controls_window()
-	_reassert_palette_tail()
 	print("[ShufflerSubManager] Controls palette created: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
-
-func _raise_controls_window() -> void:
-	if not _controls_window or not is_instance_valid(_controls_window):
-		return
-	var window_id: int = _controls_window.get_window_id()
-	if window_id == DisplayServer.INVALID_WINDOW_ID:
-		print("[ShufflerSubManager] _raise_controls_window: invalid window id")
-		return
-	DisplayServer.window_move_to_foreground(window_id)
-
-# Bounded reassert tail: some emulators grab the foreground once during load,
-# covering the palette. Re-raise at +2s and +5s after creation/switch, then
-# stop. Replaces the old 0.5s perpetual topmost timer, which re-activated the
-# transparent palette every tick and visibly flashed it in fullscreen games.
-func _reassert_palette_tail() -> void:
-	var token := _maximize_token
-	for delay in [2.0, 3.0]:
-		await get_tree().create_timer(delay).timeout
-		if token != _maximize_token:
-			return
-		if not _controls_window or not is_instance_valid(_controls_window):
-			return
-		if _state != State.ACTIVE and _state != State.PAUSED:
-			return
-		_raise_controls_window()
 
 # ============================================================================
 # RETROARCH CONFIG
