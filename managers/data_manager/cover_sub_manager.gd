@@ -20,6 +20,15 @@ const LRU_SIDECAR_PATH = "user://cache/covers_lru.json"
 const LRU_FLUSH_INTERVAL_SECONDS := 5.0
 # Used to size the cover download budget when the cache has no files yet.
 const ESTIMATED_COVER_BYTES := 150 * 1024
+# Eviction trims to this fraction of the cap (not the cap itself) so steady-state
+# browsing triggers an eviction pass per ~15% of cache growth instead of per
+# cover write (hysteresis).
+const EVICTION_LOW_WATER := 0.85
+# Sync prefetch stops once the live cache total reaches this fraction of the
+# cap, reserving the remainder for covers the user browses to.
+const CACHE_HEADROOM_FRACTION := 0.95
+# Returned by get_max_cache_bytes when the setting is Unlimited (stored as 0).
+const UNLIMITED_CACHE_BYTES: int = 1 << 62
 
 # Set while an eviction pass is in flight so concurrent triggers can't stack them.
 var _eviction_running: bool = false
@@ -107,59 +116,94 @@ func _cache_maintenance(run_validation: bool, max_bytes: int, lru_snapshot: Dict
 
 func get_max_cache_bytes() -> int:
 	var setting = DataManager.get_setting("cover_cache_max_mb")
-	var mb: int = int(setting.value) if setting and setting.value != null else 1024
+	var mb: int = int(setting.value) if setting and setting.value != null else 2048
+	if mb <= 0:
+		return UNLIMITED_CACHE_BYTES
 	return mb * 1024 * 1024
+
+
+## True while the disk cache has room for prefetched covers. Used by sync to
+## skip downloads that evict-on-insert would immediately swap out. Main thread.
+func has_cache_headroom() -> bool:
+	if _cache_bytes_total < 0:
+		# Accounting not built yet (startup pass in flight): allow downloads;
+		# the maintenance pass reconciles afterwards.
+		return true
+	return _cache_bytes_total < int(get_max_cache_bytes() * CACHE_HEADROOM_FRACTION)
 
 
 func enforce_cache_limit_async() -> void:
 	if _eviction_running:
 		return
 	_eviction_running = true
-	WorkerThreadPool.add_task(_enforce_cache_size_limit.bind(get_max_cache_bytes(), _lru_map.duplicate()))
+	# Steady-state passes run from the live size accounting instead of
+	# rescanning the directory (O(sort + delete) rather than O(open every
+	# file)). -1/empty means the startup pass hasn't built the accounting
+	# yet; the worker then falls back to a directory scan.
+	WorkerThreadPool.add_task(_enforce_cache_size_limit.bind(
+		get_max_cache_bytes(), _lru_map.duplicate(),
+		_cache_file_sizes.duplicate(), _cache_bytes_total))
 
 
-func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary) -> void:
+func _enforce_cache_size_limit(max_bytes: int, lru_snapshot: Dictionary, size_snapshot: Dictionary = {}, snapshot_total: int = -1) -> void:
 	"""Worker thread: evict least-recently-used covers until the cache folder
-	is under the configured byte cap. Recency comes from the LRU sidecar
-	snapshot, falling back to file mtime for files with no recorded access.
-	Files younger than RECENT_FILE_GRACE_SECONDS count toward the total but
-	are never victims, so in-flight downloads are protected. Uses raw
-	DirAccess/FileAccess for the same reason as _scan_cover_cache:
-	FSM reaches autoloads unsafely from workers."""
+	is under EVICTION_LOW_WATER * the configured byte cap (hysteresis, so
+	steady-state writes don't trigger a pass per cover). Recency comes from
+	the LRU sidecar snapshot, falling back to file mtime for files with no
+	recorded access. Files younger than RECENT_FILE_GRACE_SECONDS count toward
+	the total but are never victims, so in-flight downloads are protected.
+
+	When the main thread passes its live size accounting (snapshot_total >= 0)
+	the pass runs from that map instead of rescanning the directory; mtimes
+	are then stated lazily only for files missing from the LRU snapshot. The
+	startup maintenance pass passes no accounting and scans the directory,
+	which rebuilds the live map. Uses raw DirAccess/FileAccess for the same
+	reason as _scan_cover_cache: FSM reaches autoloads unsafely from
+	workers."""
 	var entries: Array = []
 	var total := 0
 	var now := int(Time.get_unix_time_from_system())
-	var dir := DirAccess.open(CACHE_FOLDER)
-	if dir:
-		dir.list_dir_begin()
-		var file_name := dir.get_next()
-		while file_name != "":
-			if not dir.current_is_dir():
-				var path := CACHE_FOLDER + file_name
-				var mtime := int(FileAccess.get_modified_time(path))
-				var file := FileAccess.open(path, FileAccess.READ)
-				if file:
-					var size := file.get_length()
-					file.close()
-					entries.append({"path": path, "name": file_name, "size": size, "mtime": mtime})
-					total += size
-			file_name = dir.get_next()
-		dir.list_dir_end()
+	if snapshot_total >= 0:
+		total = snapshot_total
+		for file_name in size_snapshot:
+			# LRU time doubles as the grace check: any file in the size map
+			# went through _note_cover_write, which stamps the LRU map, so a
+			# missing entry means an old file whose mtime predates the sidecar.
+			var time: int = lru_snapshot.get(file_name, -1)
+			if time < 0:
+				time = int(FileAccess.get_modified_time(CACHE_FOLDER + file_name))
+			entries.append({"path": CACHE_FOLDER + file_name, "name": file_name, "size": size_snapshot[file_name], "time": time})
+	else:
+		var dir := DirAccess.open(CACHE_FOLDER)
+		if dir:
+			dir.list_dir_begin()
+			var file_name := dir.get_next()
+			while file_name != "":
+				if not dir.current_is_dir():
+					var path := CACHE_FOLDER + file_name
+					var mtime := int(FileAccess.get_modified_time(path))
+					var file := FileAccess.open(path, FileAccess.READ)
+					if file:
+						var size := file.get_length()
+						file.close()
+						entries.append({"path": path, "name": file_name, "size": size, "time": lru_snapshot.get(file_name, mtime)})
+						total += size
+				file_name = dir.get_next()
+			dir.list_dir_end()
 
 	var deleted_count := 0
 	var freed := 0
 	var deleted_names: Array = []
 	if total > max_bytes:
+		var target := int(max_bytes * EVICTION_LOW_WATER)
 		entries.sort_custom(func(a, b):
-			var a_time: int = lru_snapshot.get(a.name, a.mtime)
-			var b_time: int = lru_snapshot.get(b.name, b.mtime)
-			return a_time < b_time
+			return a.time < b.time
 		)
 		for e in entries:
-			if total <= max_bytes:
+			if total <= target:
 				break
 			# Never evict a file an in-flight download may still be writing.
-			if now - e.mtime < RECENT_FILE_GRACE_SECONDS:
+			if now - e.time < RECENT_FILE_GRACE_SECONDS:
 				continue
 			if DirAccess.remove_absolute(e.path) == OK:
 				total -= e.size

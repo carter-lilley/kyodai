@@ -172,7 +172,11 @@ func update_control_value(property_name: String, value: Variant) -> void:
 					break
 			control.selected = matched_index
 	elif control is M3Slider:
-		control.value = value * control.get_meta("display_scale", 1.0)
+		# The unlimited tick stores 0 and parks the handle at max_value.
+		if control.get_meta("unlimited_tick", false) and value is int and value == 0:
+			control.value = control.max_value
+		else:
+			control.value = value * control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
 		control.text = str(value)
 		control.refresh_visuals()
@@ -199,6 +203,8 @@ func get_control_value(property_name: String) -> Variant:
 	elif control is M3OptionButton:
 		return control.selected
 	elif control is M3Slider:
+		if control.get_meta("unlimited_tick", false) and control.value >= control.max_value:
+			return 0
 		return control.value / control.get_meta("display_scale", 1.0)
 	elif control is M3TextField:
 		return control.text
@@ -393,15 +399,22 @@ func match_var_type(settingsvar : SettingsVar):
 		Type.FLOAT, Type.INT:
 			var display_scale = settingsvar.metadata.get("display_scale", 1.0)
 			var display_unit = settingsvar.metadata.get("display_unit", "")
+			# Appends one step past max_value that stores 0 and labels itself
+			# "Unlimited" (see M3Slider.max_value_label).
+			var unlimited_tick: bool = settingsvar.metadata.get("unlimited_tick", false)
 
 			var slider = M3Slider.new()
 			slider.slider_size = M3Slider.Size.EXTRA_SMALL
 			# Set cached properties before add_child so _ready() picks them up
 			slider.min_value = settingsvar.min_value * display_scale
 			slider.max_value = settingsvar.max_value * display_scale
+			if unlimited_tick:
+				slider.max_value += settingsvar.step * display_scale
+				slider.max_value_label = "Unlimited"
 			slider.step = settingsvar.step * display_scale
 			slider.show_stops = false
 			slider.set_meta("display_scale", display_scale)
+			slider.set_meta("unlimited_tick", unlimited_tick)
 			_set_trailing_width(slider, settingsvar, 220.0)
 			slider.size_flags_horizontal = Control.SIZE_SHRINK_END
 
@@ -410,17 +423,22 @@ func match_var_type(settingsvar : SettingsVar):
 
 			_add_setting_row(_make_label_block(settingsvar), [slider])
 			controls[settingsvar.property_name] = slider
-			
+
 			# Properties that need the internal slider to exist must be set after add_child
-			slider.value = settingsvar.value * display_scale
+			if unlimited_tick and settingsvar.value is int and settingsvar.value == 0:
+				slider.value = slider.max_value
+			else:
+				slider.value = settingsvar.value * display_scale
 			slider.editable = settingsvar.state == 0
 			_apply_metadata(slider, settingsvar.metadata)
 			_apply_accent(slider)
-			
+
 			slider.value_changed.connect(func(display_value: float):
 				var new_value: Variant = display_value / display_scale
 				if settingsvar.type == Type.INT:
 					new_value = int(round(new_value))
+				if unlimited_tick and display_value >= slider.max_value:
+					new_value = 0
 				emit_signal("setting_changed", new_value, settingsvar)
 			)
 		Type.STRING:

@@ -1,17 +1,26 @@
 [gd_scene format=3 uid="uid://cchoice0001x2"]
 
-[ext_resource type="Script" path="res://components/shuffler_choice_window.gd" id="1_choice"]
-[ext_resource type="Script" path="res://addons/m3/components/M3Card.gd" id="2_card"]
+[ext_resource type="Script" uid="uid://drxfl3114kaxo" path="res://components/shuffler_choice_window.gd" id="1_choice"]
+[ext_resource type="Script" uid="uid://cvgbxtf1hrqqc" path="res://addons/m3/components/M3Card.gd" id="2_card"]
+[ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="3_label"]
+[ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]
 
-[node name="ShufflerChoiceWindow" type="Window"]
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_dt2ug"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_yntbe"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_418yx"]
+
+[node name="ShufflerChoiceWindow" type="Window" unique_id=772988250]
 transparent_bg = true
+oversampling_override = 1.0
 unresizable = true
 borderless = true
 always_on_top = true
 transparent = true
 script = ExtResource("1_choice")
 
-[node name="Root" type="Control" parent="."]
+[node name="Root" type="Control" parent="." unique_id=824955221]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -19,17 +28,21 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Dim" type="ColorRect" parent="Root"]
+[node name="LibraryBackground" parent="Root" unique_id=1069129224 instance=ExtResource("4_libbg")]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Dim" type="ColorRect" parent="Root" unique_id=264400996]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-mouse_filter = 0
-color = Color(0.04, 0.04, 0.07, 0.8)
+color = Color(0.04, 0.04, 0.07, 0.55)
 
-[node name="CenterBox" type="CenterContainer" parent="Root"]
+[node name="CenterBox" type="CenterContainer" parent="Root" unique_id=1530835011]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -37,17 +50,39 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Row" type="HBoxContainer" parent="Root/CenterBox"]
+[node name="VBox" type="VBoxContainer" parent="Root/CenterBox" unique_id=594995664]
+layout_mode = 2
+theme_override_constants/separation = 48
+alignment = 1
+
+[node name="Title" type="Label" parent="Root/CenterBox/VBox" unique_id=1985647934]
+layout_mode = 2
+text = "CHOOSE 2 KEEP!"
+horizontal_alignment = 1
+uppercase = true
+script = ExtResource("3_label")
+label_style = 2
+
+[node name="Row" type="HBoxContainer" parent="Root/CenterBox/VBox" unique_id=2027906571]
 layout_mode = 2
 
-[node name="CardA" type="Button" parent="Root/CenterBox/Row"]
+[node name="CardA" type="Button" parent="Root/CenterBox/VBox/Row" unique_id=506578486]
+clip_children = 2
 layout_mode = 2
+theme_override_styles/focus = SubResource("StyleBoxEmpty_dt2ug")
+flat = true
 script = ExtResource("2_card")
 
-[node name="CardB" type="Button" parent="Root/CenterBox/Row"]
+[node name="CardB" type="Button" parent="Root/CenterBox/VBox/Row" unique_id=2065950020]
+clip_children = 2
 layout_mode = 2
+theme_override_styles/focus = SubResource("StyleBoxEmpty_yntbe")
+flat = true
 script = ExtResource("2_card")
 
-[node name="CardC" type="Button" parent="Root/CenterBox/Row"]
+[node name="CardC" type="Button" parent="Root/CenterBox/VBox/Row" unique_id=1854702158]
+clip_children = 2
 layout_mode = 2
+theme_override_styles/focus = SubResource("StyleBoxEmpty_418yx")
+flat = true
 script = ExtResource("2_card")

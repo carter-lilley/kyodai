@@ -177,7 +177,12 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 		saved_var.options = default_var.options.duplicate()
 		saved_var.encrypted = default_var.encrypted
 		saved_var.include_in_preset = default_var.include_in_preset
-		
+		# Pick up metadata keys added since the settings were saved (saved
+		# keys win, so stale serialized metadata can't clobber user state).
+		for key in default_var.metadata:
+			if not saved_var.metadata.has(key):
+				saved_var.metadata[key] = default_var.metadata[key]
+
 		# Clamp value to new valid range/options if needed
 		if default_var.type == SettingsVar.SettingType.ARRAY:
 			if old_value is Array:
@@ -189,7 +194,11 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 			else:
 				saved_var.value = default_var.value
 		elif default_var.type == SettingsVar.SettingType.INT or default_var.type == SettingsVar.SettingType.FLOAT:
-			saved_var.value = clamp(old_value, default_var.min_value, default_var.max_value)
+			# 0 is the stored sentinel for a slider's "Unlimited" tick; keep it.
+			if default_var.metadata.get("unlimited_tick", false) and (old_value is int or old_value is float) and old_value == 0:
+				saved_var.value = 0 if default_var.type == SettingsVar.SettingType.INT else 0.0
+			else:
+				saved_var.value = clamp(old_value, default_var.min_value, default_var.max_value)
 		elif default_var.type == SettingsVar.SettingType.VECTOR2I:
 			# Clamp each axis independently using the per-axis min/max from metadata.
 			var min_limit := int(default_var.min_value)

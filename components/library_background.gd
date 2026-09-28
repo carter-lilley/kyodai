@@ -7,6 +7,7 @@ extends Control
 
 const EFFECT_REGISTRY: Dictionary = {
 	"gradient": "res://effects/background/gradient_background_effect.gd",
+	"gradient_flow": "res://effects/background/gradient_flow_background_effect.gd",
 	"xmb": "res://effects/background/xmb_background_effect.gd",
 	"xmb_classic": "res://effects/background/xmb_classic_background_effect.gd",
 	"motes": "res://effects/background/motes_background_effect.gd",
@@ -20,6 +21,7 @@ const EFFECT_REGISTRY: Dictionary = {
 
 const EFFECT_DISPLAY_NAMES: Dictionary = {
 	"gradient": "Gradient",
+	"gradient_flow": "Gradient Flow",
 	"xmb": "XMB",
 	"xmb_classic": "XMB (Classic)",
 	"motes": "Motes",

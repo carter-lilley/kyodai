@@ -75,12 +75,14 @@ var _window_backend: int = WindowBackend.NONE
 # game closes and the player picks one seen game to keep; the rejected games
 # are removed from the bag.
 const CHOICE_SCENE := "res://components/shuffler_choice_window.tscn"
+const INTRO_SCENE := "res://components/shuffler_intro_window.tscn"
 const CHOICE_MIN_CANDIDATES := 3
-const CHOICE_MIN_SHUFFLES := 5
-const CHOICE_MAX_SHUFFLES := 7
+const CHOICE_MIN_SHUFFLES := 4
+const CHOICE_MAX_SHUFFLES := 6
 var _games_until_choice: int = -1
 var _seen_entries: Array = []  # bag entries that have been the current game
 var _choice_window: Node = null
+var _intro_window: Node = null
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -374,6 +376,10 @@ func stop_session() -> void:
 	if _choice_window and is_instance_valid(_choice_window):
 		_choice_window.queue_free()
 		_choice_window = null
+
+	if _intro_window and is_instance_valid(_intro_window):
+		_intro_window.queue_free()
+		_intro_window = null
 
 	get_tree().root.gui_disable_input = false
 
@@ -840,10 +846,9 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 	var is_first_download := not _first_download_notification_shown
 	_first_download_notification_shown = true
 
-	# Mid-session downloads (reroll/replacement refills) stay fully silent:
-	# no download loop SFX while another game is already playing.
-	var is_mid_session := _state == State.ACTIVE or _state == State.PAUSED
-
+	# All shuffler-session downloads stay silent: no download loop SFX, whether
+	# it's the initial prep batch or a mid-session reroll/replacement refill.
+	# The first download still shows the "Preparing Shuffle" notification.
 	var item_id = SystemManager.download.queue_download(
 		download_url,
 		temp_path,
@@ -858,7 +863,7 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		not is_first_download,
 		file_size,
 		false,
-		is_mid_session
+		true
 	)
 
 	if item_id != "":
@@ -1214,6 +1219,7 @@ func _switch_to_game(index: int) -> void:
 	entry.active = true
 	if not _seen_entries.has(entry):
 		_seen_entries.append(entry)
+		_show_intro(entry.game)
 
 	var method := entry.suspend_method as String
 	print("[ShufflerSubManager] _switch_to_game: target=" + _format_entry(entry) + " method=" + method)
@@ -1258,6 +1264,21 @@ func _await_launch_settled(entry: Dictionary) -> void:
 		wait += 0.1
 	if entry.get("launch_pending", false):
 		push_warning("[ShufflerSubManager] _await_launch_settled timed out for " + _format_entry(entry))
+
+## Intro notification for a game's first appearance this session (ported from
+## the old game_shuffler's notif_intro). Plays over the screen while the
+## emulator boots; unfocusable and click-through, so it never touches input.
+func _show_intro(game: GameResource) -> void:
+	var scene := load(INTRO_SCENE)
+	if not scene:
+		push_warning("[ShufflerSubManager] Failed to load intro window scene: " + INTRO_SCENE)
+		return
+	# Defensive: a previous intro should have freed itself by now.
+	if _intro_window and is_instance_valid(_intro_window):
+		_intro_window.queue_free()
+	_intro_window = scene.instantiate()
+	get_tree().root.add_child(_intro_window)
+	_intro_window.present(game)
 
 func _launch_game(entry: Dictionary) -> void:
 	var game = entry.game
@@ -1323,10 +1344,11 @@ func _launch_game(entry: Dictionary) -> void:
 	LaunchManager.launch_shuffler_game(game, entry.temp_path, on_pid_ready)
 
 ## Resolves the suspend method for a RetroArch bag entry. Cores without
-## savestate support (dosbox_core, dosbox_svn, gw, pico8) declare
+## reliable savestate support (dosbox_core, dosbox_svn, gw, pico8) declare
 ## "suspend_method": "suspend" in retroarch.json so they freeze via pssuspend
-## instead of the udp quit+autosave flow. All other cores always keep the udp
-## quit+savestate flow, even while a suspended RetroArch in the bag still holds
+## instead of the udp quit+autosave flow. dosbox_pure supports libretro save
+## states and rides the udp flow like every other core. All udp cores keep the
+## quit+savestate flow even while a suspended RetroArch in the bag still holds
 ## UDP port 55355.
 func _resolve_retroarch_suspend_method(entry: Dictionary) -> String:
 	var method := entry.suspend_method as String

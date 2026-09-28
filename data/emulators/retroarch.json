@@ -435,8 +435,7 @@
 				"mapping": "dosbox_pure",
 				"android_mapping": "dosbox_pure",
 				"save_name": "DOSBox-pure",
-				"default": true,
-				"suspend_method": "suspend"
+				"default": true
 			},
 			{
 				"id": "dosbox_core",
@@ -756,8 +755,7 @@
 				"mapping": "dosbox_pure",
 				"android_mapping": "dosbox_pure",
 				"save_name": "DOSBox-pure",
-				"default": true,
-				"suspend_method": "suspend"
+				"default": true
 			}
 		],
 		"pico8": [

@@ -17,6 +17,9 @@ enum SyncState {
 }
 
 var _sync_state: SyncState = SyncState.IDLE
+
+## Total plays of the sync loading SFX before it cuts itself off.
+const SYNC_LOOP_MAX_PLAYS: int = 4
 var _sync_platforms_list: Array = []        # Platforms to sync
 var _sync_current_platform_idx: int = 0     # Current platform index (0-based)
 var _sync_current_platform_data: Dictionary = {}  # Current platform info
@@ -61,6 +64,8 @@ var _sync_covers_processed_count: int = 0
 var _sync_covers_cached_count: int = 0
 var _sync_covers_downloaded_count: int = 0
 var _sync_covers_failed_count: int = 0
+# Covers skipped because the disk cache reached its headroom limit mid-sync
+var _sync_covers_skipped_count: int = 0
 
 # Interleaved cover dispatch: throttle and once-per-URL progress counting
 const COVER_DISPATCH_INTERVAL_MS: int = 2000
@@ -205,6 +210,11 @@ func _dismiss_removal_notification() -> void:
 
 # ==================== SYNC (ITERATIVE STATE MACHINE) ====================
 
+## Loop predicate for the sync loading SFX: keeps playing until the sync
+## state machine returns to IDLE (completion, failure, or teardown).
+func _is_sync_active() -> bool:
+	return _sync_state != SyncState.IDLE
+
 func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bool = false) -> void:
 	print("[Sync] ==========================================")
 	print("[Sync] sync_enabled_platforms called")
@@ -240,6 +250,12 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 			callback.call(false, "Sync already in progress", 0, 0)
 		return
 
+	# Loop the loading SFX while the sync runs (stops the moment the sync
+	# leaves IDLE-adjacent states; capped so long syncs don't loop forever).
+	# Placed after the guards above so no-op syncs stay silent.
+	if SystemManager.audio:
+		SystemManager.audio.play_loop_while("loading", _is_sync_active, 0.0, SYNC_LOOP_MAX_PLAYS)
+
 	# Reset sync state
 	_sync_current = 0
 	_sync_total = 0
@@ -267,6 +283,7 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_covers_cached_count = 0
 	_sync_covers_downloaded_count = 0
 	_sync_covers_failed_count = 0
+	_sync_covers_skipped_count = 0
 	_sync_last_cover_dispatch_ms = 0
 	_sync_covers_counted_set.clear()
 	_sync_covers_seen_set.clear()
@@ -646,7 +663,10 @@ func _compute_cover_download_budget(cap_bytes: int) -> int:
 	var avg_size: int = int(total_bytes / file_count) if file_count > 0 else CoverSubManager.ESTIMATED_COVER_BYTES
 	if avg_size <= 0:
 		avg_size = CoverSubManager.ESTIMATED_COVER_BYTES
-	return maxi(0, int((cap_bytes - total_bytes) / avg_size))
+	# Prefetch gets half the free space; the rest stays as headroom for covers
+	# the user browses to during/after the sync, so prefetch can't fill the
+	# cache and immediately start evicting what the user is looking at.
+	return maxi(0, int((cap_bytes - total_bytes) / 2 / avg_size))
 
 
 func _queue_backfill_covers() -> void:
@@ -758,7 +778,7 @@ func _wait_for_all_cover_downloads() -> void:
 	_sync_pending_downloads_mutex.unlock()
 	if remaining > 0:
 		push_warning("[SyncThread] Cover drain timed out with %d downloads still in flight; they finish after sync completes" % remaining)
-	print("[SyncThread] Cover downloads: %d cached, %d downloaded, %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count])
+	print("[SyncThread] Cover downloads: %d cached, %d downloaded, %d skipped (cache full), %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_skipped_count, _sync_covers_failed_count])
 
 
 func _dispatch_covers_to_main_thread():
@@ -808,6 +828,15 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 		if FSM.file_exists(cache_path):
 			# Already cached: no network wait.
 			_sync_covers_cached_count += 1
+			counted_cb.call()
+			continue
+
+		# Don't sink covers the cache can't hold: once the disk cache is
+		# effectively full, remaining prefetch would only feed evict-on-insert
+		# churn. Checked live per batch so a stale budget estimate can't
+		# overshoot; skipped URLs still count toward progress.
+		if not data_manager.cover.has_cache_headroom():
+			_sync_covers_skipped_count += 1
 			counted_cb.call()
 			continue
 
