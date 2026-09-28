@@ -1,13 +1,14 @@
-name: Export All
+name: Export
 
-# Single-job release pipeline: one checkout, one Godot install, one import,
-# then Windows + Linux + Android exports in sequence - mirroring how local
-# exports are done from one Linux machine (Godot export templates are
-# self-contained, no Windows/macOS host required).
+# One workflow, three platform jobs (parallel, independently re-runnable),
+# plus a release job that attaches all binaries together - a release is
+# all-or-nothing, never 2 of 3 platforms.
 #
-# Replaces the former export-windows.yml / export-linux.yml /
-# export-android.yml split, which triple-paid the checkout + editor +
-# templates + import cost and gave failures three places to hide.
+# All jobs run on ubuntu-latest: Godot export templates are self-contained
+# prebuilt binaries, so Windows/Linux/Android all export from one Linux
+# host, mirroring local exports. Shared Godot setup lives in
+# .github/actions/godot-setup and editor/template caches are shared across
+# jobs, so the ~1GB of downloads happens once, not per platform.
 
 permissions:
   contents: write
@@ -24,82 +25,15 @@ on:
       - 'v*'
 
 jobs:
-  export:
+  windows:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Setup JDK 17 (Android export)
-      uses: actions/setup-java@v4
-      with:
-        distribution: temurin
-        java-version: '17'
+    - uses: ./.github/actions/godot-setup
 
-    - name: Install SDK packages
-      run: |
-        # ubuntu-latest ships a preinstalled Android SDK at $ANDROID_HOME.
-        # (android-actions/setup-android was dropped: it installs the 'tools'
-        # package, which Google removed from the SDK repository, failing the
-        # step before our config even runs.)
-        SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-        yes | "$SDKMANAGER" --licenses >/dev/null || true
-        "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "platforms;android-34" "build-tools;34.0.0"
-
-    - name: Cache Godot editor
-      id: cache-godot
-      uses: actions/cache@v4
-      with:
-        path: godot
-        # Shared with test-gavel.yml
-        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
-
-    - name: Download Godot
-      if: steps.cache-godot.outputs.cache-hit != 'true'
-      run: |
-        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/${GODOT_BIN}.zip"
-        unzip godot.zip -d godot
-        chmod +x godot/${GODOT_BIN}
-
-    - name: Cache export templates
-      id: cache-templates
-      uses: actions/cache@v4
-      with:
-        path: ~/.local/share/godot/export_templates
-        key: godot-templates-v${{ env.GODOT_VERSION }}-stable-linux
-
-    - name: Install Export Templates
-      if: steps.cache-templates.outputs.cache-hit != 'true'
-      run: |
-        curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-        mkdir -p templates
-        unzip templates.tpz -d templates
-        dest="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-        mkdir -p "$dest"
-        cp -r templates/templates/* "$dest"
-
-    - name: Configure Android SDK path + debug keystore
-      run: |
-        # Godot reads the SDK path from editor settings, not the environment
-        mkdir -p "$HOME/.config/godot"
-        printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android_sdk_path = "%s"\n' "$ANDROID_HOME" > "$HOME/.config/godot/editor_settings-4.tres"
-        # Alpha builds sign with the standard debug keystore (matches Godot's
-        # default debug credentials). Switch to a proper upload key via repo
-        # secrets before any stable release - key changes force reinstalls.
-        mkdir -p "$HOME/.android"
-        keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
-          -alias androiddebugkey -storepass android -keypass android \
-          -keyalg RSA -keysize 2048 -validity 10000 \
-          -dname "CN=Android Debug,O=Android,C=US"
-
-    - name: Import Project
-      run: |
-        # Run twice: headless --import can exit before the first full scan completes
-        ./godot/${GODOT_BIN} --headless --path . --import
-        ./godot/${GODOT_BIN} --headless --path . --import
-
-    # --- Windows ---------------------------------------------------------
     - name: Export Windows
       run: |
         mkdir -p build/windows
@@ -118,7 +52,15 @@ jobs:
         name: kyodai-windows-x64
         path: Kyodai-windows-x64.zip
 
-    # --- Linux -----------------------------------------------------------
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - uses: ./.github/actions/godot-setup
+
     - name: Export Linux
       run: |
         mkdir -p build/linux
@@ -155,7 +97,44 @@ jobs:
         name: kyodai-linux-x64
         path: Kyodai-x86_64.AppImage
 
-    # --- Android ---------------------------------------------------------
+  android:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Install SDK packages
+      run: |
+        # ubuntu-latest ships a preinstalled Android SDK at $ANDROID_HOME.
+        # (android-actions/setup-android was dropped: it installs the 'tools'
+        # package, which Google removed from the SDK repository.)
+        SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$SDKMANAGER" --licenses >/dev/null || true
+        "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "platforms;android-34" "build-tools;34.0.0"
+
+    - uses: ./.github/actions/godot-setup
+
+    - name: Configure Android SDK path + debug keystore
+      run: |
+        # Godot reads the SDK path from editor settings, not the environment
+        mkdir -p "$HOME/.config/godot"
+        printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android_sdk_path = "%s"\n' "$ANDROID_HOME" > "$HOME/.config/godot/editor_settings-4.tres"
+        # Alpha builds sign with the standard debug keystore (matches Godot's
+        # default debug credentials). Switch to a proper upload key via repo
+        # secrets before any stable release - key changes force reinstalls.
+        mkdir -p "$HOME/.android"
+        keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+          -alias androiddebugkey -storepass android -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
     - name: Export Android APK
       run: |
         mkdir -p build/android
@@ -171,13 +150,21 @@ jobs:
         name: kyodai-android-apk
         path: build/android/Kyodai.apk
 
-    # --- Release ----------------------------------------------------------
+  release:
+    needs: [windows, linux, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
     - name: Attach to Release
-      if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
         prerelease: true
         files: |
-          Kyodai-windows-x64.zip
-          Kyodai-x86_64.AppImage
-          build/android/Kyodai.apk
+          artifacts/kyodai-windows-x64/Kyodai-windows-x64.zip
+          artifacts/kyodai-linux-x64/Kyodai-x86_64.AppImage
+          artifacts/kyodai-android-apk/Kyodai.apk

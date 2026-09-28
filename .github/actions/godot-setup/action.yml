@@ -1,0 +1,48 @@
+name: Setup Godot + import project
+description: >-
+  Downloads/caches the Godot editor and export templates, then imports the
+  project. Shared by all platform jobs in export.yml so the setup logic
+  lives in exactly one place. Expects GODOT_VERSION and GODOT_BIN in env.
+runs:
+  using: composite
+  steps:
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        # Shared with test-gavel.yml
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/${GODOT_BIN}.zip"
+        unzip godot.zip -d godot
+        chmod +x godot/${GODOT_BIN}
+
+    - name: Cache export templates
+      id: cache-templates
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/share/godot/export_templates
+        key: godot-templates-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Install Export Templates
+      if: steps.cache-templates.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+        mkdir -p templates
+        unzip templates.tpz -d templates
+        dest="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$dest"
+        cp -r templates/templates/* "$dest"
+
+    - name: Import Project
+      shell: bash
+      run: |
+        # Run twice: headless --import can exit before the first full scan completes
+        ./godot/${GODOT_BIN} --headless --path . --import
+        ./godot/${GODOT_BIN} --headless --path . --import
