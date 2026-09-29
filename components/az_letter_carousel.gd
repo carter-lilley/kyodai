@@ -38,6 +38,7 @@ const MAGNIFY_MAX_EXTRA_SCALE: float = 0.8
 const MAGNIFY_RADIUS_SLOTS: float = 2.0
 const MAGNIFY_SHIFT_DP: float = 7.0
 const MAGNIFY_DAMP: float = 14.0
+const MAGNIFY_HOLD_TIME: float = 0.3
 
 # letter -> first grid index (only letters that have games)
 var _letter_first_index: Dictionary = {}
@@ -61,6 +62,7 @@ var _last_emitted_letter: String = ""
 var _magnet_center: float = 0.0
 var _magnet_strength: float = 0.0
 var _magnet_target: float = 0.0
+var _magnet_hold: float = 0.0
 
 var _vbox: VBoxContainer
 var _labels: Dictionary = {}  # letter -> M3Label
@@ -193,6 +195,55 @@ func set_active_from_index(index: int) -> void:
 	_set_active_letter(letter)
 
 
+## The letter currently highlighted ("" when no map is loaded).
+func get_active_letter() -> String:
+	return _active_letter
+
+
+## Set the highlighted letter directly (jump-intent pinning).
+func set_active_letter(letter: String) -> void:
+	_set_active_letter(letter)
+
+
+## Letters that have games, in grid order (used for controller stepping).
+func get_ordered_letters() -> Array[String]:
+	return _ordered_letters
+
+
+## Briefly magnify the given letter without user input — feedback for
+## controller-driven letter stepping. Holds MAGNIFY_HOLD_TIME, then eases
+## back to rest in _process.
+func pulse_letter(letter: String) -> void:
+	var i := LETTERS.find(letter)
+	if i == -1:
+		return
+	_ensure_letter_visible(letter)
+	if not _window_mode:
+		_magnet_center = float(i)
+	else:
+		var slot_count := _window_letter_slots + 2
+		_magnet_center = clampf(float(i - _window_start + 1), 1.0, slot_count - 2.0)
+	_magnet_target = 1.0
+	_magnet_hold = MAGNIFY_HOLD_TIME
+	set_process(true)
+
+
+## Keep a letter inside the window (window mode) so a pulse is visible.
+func _ensure_letter_visible(letter: String) -> void:
+	if not _window_mode:
+		return
+	var pos := LETTERS.find(letter)
+	var new_start := _window_start
+	if pos < _window_start:
+		new_start = pos
+	elif pos >= _window_start + _window_letter_slots:
+		new_start = pos - _window_letter_slots + 1
+	if new_start != _window_start:
+		_window_start = new_start
+		_clamp_window()
+		_layout_slots()
+
+
 # ==================== LAYOUT ====================
 
 func _apply_responsive_layout() -> void:
@@ -302,6 +353,7 @@ func _gui_input(event: InputEvent) -> void:
 func _begin_scrub(pos: Vector2) -> void:
 	_scrubbing = true
 	_last_emitted_letter = ""
+	_magnet_hold = 0.0  # a pulse's hold must not outlive the scrub
 	_magnet_target = 1.0
 	set_process(true)
 	scrub_started.emit()
@@ -366,6 +418,11 @@ func _emit_letter(letter: String, from_drag: bool) -> void:
 # ==================== MAGNIFICATION ====================
 
 func _process(delta: float) -> void:
+	if not _scrubbing and _magnet_target > 0.0:
+		# A pulse (controller stepping) holds, then releases.
+		_magnet_hold -= delta
+		if _magnet_hold <= 0.0:
+			_magnet_target = 0.0
 	_magnet_strength = lerpf(_magnet_strength, _magnet_target, 1.0 - exp(-MAGNIFY_DAMP * delta))
 	if _magnet_strength < 0.01 and _magnet_target == 0.0:
 		_magnet_strength = 0.0

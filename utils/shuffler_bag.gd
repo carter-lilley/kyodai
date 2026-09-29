@@ -41,6 +41,11 @@ func _create_entry(game: GameResource) -> Dictionary:
 		"suspend_method": "",
 		"status": EntryStatus.QUEUED,
 		"download_id": "",
+		# How many times this slot has been swapped for a candidate so far.
+		# Tracked on the entry (not by slot number) so bag shifts - pick-3
+		# rejections remove entries and renumber slots - can't move the
+		# MAX_CANDIDATE_RETRIES budget to the wrong slot.
+		"retry_count": 0,
 		# Set between _launch_game() and the pid callback firing. Restart/switch
 		# must wait for it to clear before relaunching, otherwise the per-game
 		# launch guard rejects the relaunch and the shuffler misreads that as a

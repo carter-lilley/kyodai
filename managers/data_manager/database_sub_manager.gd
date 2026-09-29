@@ -122,6 +122,37 @@ func query_array(query: String, bindings: Array = []) -> Array:
 	return result
 
 
+## Timeout for query_array_async. Only reachable when the DB task queue
+## drops a task without invoking its callback (app-shutdown paths).
+const QUERY_ASYNC_TIMEOUT_MSEC := 5000
+
+## Materializes a query result on the DB worker thread and awaits it back on
+## the caller's (main) thread. Same locking as query_array, but building the
+## result set + duplicate() - tens of thousands of rows for shuffle queries -
+## never blocks a frame. Returns [] when the DB is not ready or the wait
+## times out.
+func query_array_async(query: String, bindings: Array = []) -> Array:
+	if not _is_db_ready:
+		return []
+	var holder := {"rows": [] as Array, "done": false}
+	MemorySubManager.queue_db_task(
+		func() -> Array:
+			return query_array(query, bindings),
+		func(result):
+			holder["rows"] = result if result is Array else []
+			holder["done"] = true
+	)
+	# The worker's callback is drained by MemorySubManager._process each frame;
+	# poll rather than block the main thread.
+	var deadline := Time.get_ticks_msec() + QUERY_ASYNC_TIMEOUT_MSEC
+	while not holder["done"]:
+		if Time.get_ticks_msec() > deadline:
+			push_error("[DatabaseManager] query_array_async timed out")
+			return []
+		await get_tree().process_frame
+	return holder["rows"]
+
+
 func query_bool(query: String, bindings: Array = []) -> bool:
 	_db_lock()
 	var success: bool
@@ -1413,28 +1444,37 @@ func get_games_for_shuffle(platform_slug: String, filters: Dictionary = {}) -> A
 	return games
 
 
-## Chunked variant of get_games_for_shuffle: yields a frame every chunk_size
-## row conversions so building the full shuffler candidate pool (tens of
-## thousands of rows) never hitches the UI.
-func get_games_for_shuffle_async(platform_slug: String, filters: Dictionary = {}, chunk_size: int = 500) -> Array[GameResource]:
+## Time budget for shuffle row conversion: a fixed row count doesn't bound
+## frame cost (every row can carry two JSON columns), so convert until the
+## frame has spent this many microseconds, then yield.
+const SHUFFLE_ROW_BUDGET_USEC := 3000
+
+## Shuffle candidate fetch: the query materializes on the DB worker thread
+## (query_array_async) and row conversion is time-budgeted per frame, so
+## building the full shuffler candidate pool (tens of thousands of rows)
+## never hitches the UI.
+func get_games_for_shuffle_async(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready:
 		return games
 	var filter_parts: Array = _get_filter_clause(filters)
 	var query = "SELECT " + _SHUFFLE_COLUMNS + " FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
-	var query_result = query_array(query, [platform_slug] + filter_parts[1])
+	var query_result = await query_array_async(query, [platform_slug] + filter_parts[1])
+	var frame_start := Time.get_ticks_usec()
 	for i in range(query_result.size()):
 		games.append(_row_to_game(query_result[i]))
-		if i % chunk_size == chunk_size - 1:
+		if Time.get_ticks_usec() - frame_start >= SHUFFLE_ROW_BUDGET_USEC:
 			await get_tree().process_frame
+			frame_start = Time.get_ticks_usec()
 	return games
 
 
 ## SQL-side random sampling for the shuffler bag: one query across all
 ## selected platforms returning only `limit` games. romm_id is globally
 ## unique, so ORDER BY RANDOM() LIMIT N matches the old pool-shuffle-take-N
-## distribution without materializing the whole library in GDScript.
-func get_random_games_for_shuffle(platforms: Array[String], filters: Dictionary, limit: int) -> Array[GameResource]:
+## distribution without materializing the whole library in GDScript. Runs on
+## the DB worker thread so session start never blocks a frame on the scan.
+func get_random_games_for_shuffle_async(platforms: Array[String], filters: Dictionary, limit: int) -> Array[GameResource]:
 	var games: Array[GameResource] = []
 	if not _is_db_ready or platforms.is_empty() or limit <= 0:
 		return games
@@ -1445,7 +1485,7 @@ func get_random_games_for_shuffle(platforms: Array[String], filters: Dictionary,
 	bindings.append_array(platforms)
 	bindings.append_array(filter_parts[1])
 	bindings.append(limit)
-	var query_result = query_array(query, bindings)
+	var query_result = await query_array_async(query, bindings)
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games

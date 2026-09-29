@@ -1475,7 +1475,7 @@ func _input(event: InputEvent):
 			get_viewport().set_input_as_handled()
 			return
 
-	# Handle zoom in/out with right stick - only on press, not hold
+	# Handle zoom in/out with right stick left/right - only on press, not hold
 	if event.is_action_pressed("zoom_in"):
 		if not _zoom_in_pressed:
 			if SystemManager.audio:

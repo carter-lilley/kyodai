@@ -5,6 +5,12 @@ class_name ShufflerSubManager
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
+# Gate per-download / per-preparation logging: these fire in bursts while
+# the session intro plays, and building _format_bag()/_format_entry() strings
+# for every completion hitches the intro animation. Lifecycle logs
+# (start/stop/switch) stay unconditional.
+const DEBUG_LOG: bool = false
+
 enum State { IDLE, DOWNLOADING, ACTIVE, PAUSED, STOPPING, CHOOSING }
 enum WindowBackend { NONE, WINDOWS_AHK, LINUX_KWIN, LINUX_X11 }
 
@@ -16,6 +22,11 @@ signal download_progress(current: int, total: int)
 signal game_ready(index: int)
 
 var _state: State = State.IDLE
+# Session start now awaits the bag sample on the DB worker thread; _starting
+# holds the double-start guard across that await (state is still IDLE there),
+# and _start_cancelled lets stop_session abort a start still in flight.
+var _starting: bool = false
+var _start_cancelled: bool = false
 var _switch_in_progress: bool = false
 var _restart_in_progress: bool = false  # extra guard: reject restarts queued while one is running
 var _pending_switch_index: int = -1  # latest requested target while a switch is in flight
@@ -47,12 +58,16 @@ const HIDE_AWAIT_TIMEOUT_SEC := 2.0
 const QUIT_CONFIRM_TIMEOUT_SEC := 5.0
 
 var _reroll_in_progress: bool = false
-# Slot being refilled by a reroll (-1 = none). The refill runs in the
+# Entry being refilled by a reroll ({} = none). The refill runs in the
 # background; completion is detected in _prepare_entry/_fail_entry outcomes.
+# Tracked by entry identity (not slot number): pick-3 rejections remove bag
+# entries and renumber slots while the refill is still in flight, and a stale
+# slot number would never match again - leaving the re-shuffle button stuck
+# disabled for the rest of the session.
+var _reroll_entry: Dictionary = {}
+# Slot _reroll_entry currently occupies (-1 = none); informational only,
+# always re-derived from _reroll_entry before use.
 var _reroll_slot_index: int = -1
-# Per-slot candidate replacement attempts (shared by initial bag fill and
-# rerolls; capped at MAX_CANDIDATE_RETRIES).
-var _candidate_retry_attempts: Dictionary = {}
 const MAX_CANDIDATE_RETRIES := 3
 var _shuffle_overrides: Dictionary = {}  # platform_slug -> {"emulator_id": String, "core_id": String}
 var _shuffle_session_active: bool = false
@@ -83,6 +98,9 @@ var _games_until_choice: int = -1
 var _seen_entries: Array = []  # bag entries that have been the current game
 var _choice_window: Node = null
 var _intro_window: Node = null
+# Prewarmed at session start so the first intro doesn't pay the scene load
+# cost mid-animation.
+var _intro_scene: PackedScene = null
 
 const TEMP_DIR := "user://shuffler_temp/"
 
@@ -263,7 +281,7 @@ func clear_shuffle_overrides() -> void:
 	_shuffle_session_active = false
 
 func start_session(config: Dictionary) -> void:
-	if _state != State.IDLE:
+	if _state != State.IDLE or _starting:
 		push_error("[ShufflerSubManager] Already in a session")
 		return
 
@@ -279,18 +297,32 @@ func start_session(config: Dictionary) -> void:
 		push_error("[ShufflerSubManager] No platforms selected for shuffler")
 		return
 
+	# Prewarm one-shot intro assets on the click frame so the first intro
+	# doesn't pay scene/font load costs while its animation runs.
+	_prewarm_intro_assets()
+
+	# _starting holds the double-start guard across the await below: state is
+	# still IDLE until the sample lands, so the plain _state check can't reject
+	# a second start in that window.
+	_starting = true
 	var fetch_start := Time.get_ticks_msec()
-	var sampled := DataManager.get_random_games_for_shuffle(platforms, filters, bag_size)
+	var sampled: Array[GameResource] = await DataManager.get_random_games_for_shuffle_async(platforms, filters, bag_size)
 	print("[ShufflerSubManager] Sampled " + str(sampled.size()) + " bag games in " + str(Time.get_ticks_msec() - fetch_start) + " ms")
+	if _start_cancelled:
+		_start_cancelled = false
+		_starting = false
+		return
 
 	_bag = ShufflerBag.new()
 	_bag.build(sampled, bag_size)
 
 	if _bag.is_empty():
 		push_error("[ShufflerSubManager] No games found for selected platforms")
+		_starting = false
 		return
 
 	_state = State.DOWNLOADING
+	_starting = false
 	_config = config
 	_current_game_index = -1
 	_switch_in_progress = false
@@ -311,7 +343,11 @@ func start_session(config: Dictionary) -> void:
 
 func stop_session() -> void:
 	if _state == State.IDLE or _state == State.STOPPING:
-		print("[ShufflerSubManager] stop_session called but state=" + str(_state) + ", ignoring")
+		if _starting:
+			print("[ShufflerSubManager] stop_session: session start still in flight; cancelling it")
+			_start_cancelled = true
+		else:
+			print("[ShufflerSubManager] stop_session called but state=" + str(_state) + ", ignoring")
 		return
 
 	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
@@ -327,6 +363,7 @@ func stop_session() -> void:
 		push_warning("[ShufflerSubManager] stop_session: switch still in progress after 3s; tearing down anyway")
 
 	_reroll_in_progress = false
+	_reroll_entry = {}
 	_reroll_slot_index = -1
 	_restart_in_progress = false
 	_pending_switch_index = -1
@@ -545,13 +582,18 @@ func remove_game() -> void:
 	# Replace the slot with a fresh candidate and refill it in the background
 	# (download/prep completion is detected via _maybe_complete_reroll), then
 	# immediately skip to another ready game instead of waiting for the refill.
-	_reroll_slot_index = index
-	if not await _try_replace_with_candidate(index):
-		_reroll_slot_index = -1
+	# The refill entry is registered BEFORE acquisition starts: a candidate
+	# that is already on disk finishes synchronously, and a completion missed
+	# before the state exists would strand the re-shuffle button disabled.
+	var refill := await _swap_slot_for_candidate(entry)
+	if refill.is_empty():
 		push_warning("[ShufflerSubManager] No alternative game found for reroll")
 		_reset_reroll_state()
 	else:
-		print("[ShufflerSubManager] Reroll refill started for slot " + str(index))
+		_reroll_entry = refill
+		_reroll_slot_index = _live_index(refill)
+		print("[ShufflerSubManager] Reroll refill started for slot " + str(_reroll_slot_index))
+		_start_entry_acquisition(_reroll_slot_index)
 
 	_switch_in_progress = false
 	if _pending_switch_index != -1:
@@ -606,6 +648,16 @@ func _format_bag() -> String:
 # BAG MANAGEMENT
 # ============================================================================
 
+## Re-resolves an entry's current slot index. Deferred callbacks (download /
+## disc / prep completions) capture their slot when they start, but pick-3
+## rejections remove bag entries and renumber every higher slot before those
+## callbacks fire, so a captured index can be stale - or past the end of the
+## array. Returns -1 when the entry has left the bag entirely.
+func _live_index(entry: Dictionary) -> int:
+	if entry == null or entry.is_empty():
+		return -1
+	return _bag.entries.find(entry)
+
 func _start_bag_preparation() -> void:
 	_reset_download_tracking()
 	print("[ShufflerSubManager] _start_bag_preparation: " + _format_bag())
@@ -627,7 +679,7 @@ func _start_entry_acquisition(index: int) -> void:
 	var library_m3u := _get_library_m3u(game)
 	if library_m3u != "":
 		entry.temp_path = library_m3u
-		_prepare_entry(index, entry)
+		_prepare_entry(entry)
 	elif _is_multi_disc_m3u(game):
 		# Multi-disc m3u game with an incomplete set: temp-download the
 		# missing discs and shuffle through a temp m3u playlist
@@ -646,25 +698,32 @@ func _start_entry_acquisition(index: int) -> void:
 				_check_all_preparations_complete(),
 			func(m3u_path: String):
 				if m3u_path == "":
-					if not await _try_replace_with_candidate(index):
-						_fail_entry(index, "[ShufflerSubManager] Disc download failed for " + game.title)
+					if not await _try_replace_with_candidate(entry):
+						_fail_entry(entry, "[ShufflerSubManager] Disc download failed for " + game.title)
 					_check_all_preparations_complete()
 					return
-				_bag.entries[index].temp_path = m3u_path
-				_prepare_entry(index, _bag.entries[index])
+				# The pick-3 screen can drop entries (renumbering slots) while
+				# this disc set downloads; only write back if we still have a slot.
+				if _live_index(entry) == -1:
+					print("[ShufflerSubManager] Disc-set slot for " + game.title + " left the bag; discarding temp m3u")
+					_maybe_complete_reroll(entry)
+					_check_all_preparations_complete()
+					return
+				entry.temp_path = m3u_path
+				_prepare_entry(entry)
 		)
 	elif game.is_active_variant_downloaded() and FileAccess.file_exists(game.file_path):
 		entry.temp_path = game.file_path
-		_prepare_entry(index, entry)
+		_prepare_entry(entry)
 	else:
 		_total_downloads += 1
 		_pending_downloads += 1
 		_total_download_bytes += game.get_active_file_size()
-		_download_entry(index, entry)
+		_download_entry(entry)
 
 ## Fills the bag's reroll candidate pool in the background after session
-## start: full-platform fetches with chunked row conversion (frame yields
-## inside get_games_for_shuffle_async), so the work never hitches the UI.
+## start: full-platform fetches with the query materialized on the DB worker
+## thread and time-budgeted row conversion, so the work never hitches the UI.
 ## Abandons silently if the session ends or the bag is replaced mid-build.
 func _build_candidates_background(platforms: Array[String], filters: Dictionary) -> void:
 	var bag := _bag
@@ -693,43 +752,83 @@ func _build_candidates_background(platforms: Array[String], filters: Dictionary)
 	bag.candidates_built = true
 	print("[ShufflerSubManager] Candidate pool built: " + str(pool.size()) + " games in " + str(Time.get_ticks_msec() - build_start) + " ms")
 
-## Replaces a failed/refilling bag slot with a fresh candidate and starts
-## acquiring it in the background. Returns false when out of candidates or
-## out of retry attempts for this slot.
-func _try_replace_with_candidate(index: int) -> bool:
-	if index < 0 or index >= _bag.size():
-		return false
-	var attempts: int = _candidate_retry_attempts.get(index, 0)
+## Swaps a bag slot for a fresh candidate WITHOUT starting acquisition.
+## Returns the new entry ({} when nothing was swapped: out of candidates or
+## out of retry attempts for this entry). Entry-based rather than index-based:
+## the slot is re-resolved after the candidate-pool wait, so pick-3 removals
+## that renumber slots can't redirect the swap onto a healthy entry.
+func _swap_slot_for_candidate(entry: Dictionary) -> Dictionary:
+	var index := _live_index(entry)
+	if index == -1:
+		return {}
+	var attempts: int = entry.get("retry_count", 0)
 	if attempts >= MAX_CANDIDATE_RETRIES:
-		return false
+		return {}
 	# The candidate pool fills in the background at session start; a failure
 	# or reroll landing before that waits rather than failing outright.
-	while _bag.candidates_building and _state != State.IDLE:
+	while _bag.candidates_building and _state != State.IDLE and _state != State.STOPPING:
 		await get_tree().process_frame
-	if _state == State.IDLE:
-		return false
+	if _state == State.IDLE or _state == State.STOPPING:
+		return {}
+	# Re-resolve after the wait: entries removed above us shift every slot.
+	index = _live_index(entry)
+	if index == -1:
+		return {}
 	var candidate = _bag.pick_reroll_candidate(_bag.get_bag_ids())
 	if candidate == null:
-		return false
-	_candidate_retry_attempts[index] = attempts + 1
+		return {}
 	print("[ShufflerSubManager] Replacing slot " + str(index) + " with candidate " + candidate.title + " (attempt " + str(attempts + 1) + "/" + str(MAX_CANDIDATE_RETRIES) + ")")
 	_bag.replace_entry(index, candidate, "")
+	_bag.entries[index]["retry_count"] = attempts + 1
+	return _bag.entries[index]
+
+## Replaces a failed/refilling bag slot with a fresh candidate and starts
+## acquiring it in the background. Returns false when out of candidates or
+## out of retry attempts for this entry.
+func _try_replace_with_candidate(entry: Dictionary) -> bool:
+	var replacement := await _swap_slot_for_candidate(entry)
+	if replacement.is_empty():
+		return false
+	# No await between the swap and here, so the fresh entry's slot is still
+	# valid - acquisition can then run (and even complete synchronously for a
+	# locally-present candidate) while callers do their own bookkeeping.
+	var index := _live_index(replacement)
+	if index == -1:
+		return false
 	_start_entry_acquisition(index)
 	return true
 
-## Marks a slot FAILED (retry exhausted) and completes a reroll if it owned the slot.
-func _fail_entry(index: int, reason: String) -> void:
-	if index < 0 or index >= _bag.size():
+## Marks an entry FAILED (retry exhausted) and completes a reroll if it was
+## the refill being awaited. Safe with stale entries: a slot removed while
+## this was queued is skipped (but still frees the reroll button if it was
+## the refill).
+func _fail_entry(entry: Dictionary, reason: String) -> void:
+	var index := _live_index(entry)
+	if index == -1:
+		print("[ShufflerSubManager] _fail_entry: entry left the bag, skipping: " + reason)
+		_maybe_complete_reroll(entry)
 		return
 	_bag.entries[index].status = ShufflerBag.EntryStatus.FAILED
 	push_error(reason)
-	_maybe_complete_reroll(index)
+	_maybe_complete_reroll(entry)
 
-func _maybe_complete_reroll(index: int) -> void:
-	if index != _reroll_slot_index:
+## Completes an in-flight reroll when the refill entry it is waiting on turns
+## READY or FAILED. Matched by entry identity, not slot number: pick-3
+## rejections renumber slots while the refill downloads, and a stale slot
+## number would never match again (stranding the re-shuffle button). If the
+## refill entry left the bag entirely, the reroll can never complete, so the
+## state is freed instead.
+func _maybe_complete_reroll(entry: Dictionary) -> void:
+	if _reroll_entry.is_empty() or entry != _reroll_entry:
 		return
-	_reroll_slot_index = -1
-	_complete_reroll_background(index)
+	var live := _live_index(entry)
+	if live == -1:
+		print("[ShufflerSubManager] Reroll refill entry left the bag; resetting reroll state")
+		_reset_reroll_state()
+		return
+	_reroll_slot_index = live
+	_reroll_entry = {}
+	_complete_reroll_background(live)
 
 func _complete_reroll_background(index: int) -> void:
 	_reset_reroll_state()
@@ -807,7 +906,7 @@ func _write_temp_m3u(game: GameResource, temp_dir: String) -> String:
 			lines.append(e["file_name"])
 	return M3USubManager.write_m3u(temp_dir, game.title, lines)
 
-func _download_entry(index: int, entry: Dictionary) -> void:
+func _download_entry(entry: Dictionary) -> void:
 	entry.status = ShufflerBag.EntryStatus.DOWNLOADING
 	var game = entry.game
 	var active_game_id = game.get_active_game_id()
@@ -828,16 +927,22 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 			var completed = _total_downloads - _pending_downloads
 			download_progress.emit(completed, _total_downloads)
 			_pending_downloads -= 1
-			print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
+			if DEBUG_LOG:
+				print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
+			# Resolved through the entry, never through a captured slot number:
+			# pick-3 rejections can remove entries (renumbering slots) while
+			# this download is in flight, which is exactly when the old
+			# `_bag.entries[index]` crashed with an out-of-bounds get.
 			if success:
-				_prepare_entry(index, _bag.entries[index])
+				_prepare_entry(entry)
 			else:
-				if not await _try_replace_with_candidate(index):
-					_fail_entry(index, "[ShufflerSubManager] Download failed for " + game.title)
+				if not await _try_replace_with_candidate(entry):
+					_fail_entry(entry, "[ShufflerSubManager] Download failed for " + game.title)
 			_check_all_preparations_complete()
 	}
 
-	print("[ShufflerSubManager] Queueing download for " + game.title + " to " + temp_path)
+	if DEBUG_LOG:
+		print("[ShufflerSubManager] Queueing download for " + game.title + " to " + temp_path)
 
 	# The session's first download shows the standard download notification
 	# (the same moving MB progress a main-UI download gets) labeled "Preparing
@@ -875,19 +980,30 @@ func _download_entry(index: int, entry: Dictionary) -> void:
 		entry.download_id = item_id
 	else:
 		_pending_downloads -= 1
-		if not await _try_replace_with_candidate(index):
-			_fail_entry(index, "[ShufflerSubManager] Failed to queue download for " + game.title)
+		if not await _try_replace_with_candidate(entry):
+			_fail_entry(entry, "[ShufflerSubManager] Failed to queue download for " + game.title)
 		_check_all_preparations_complete()
 
-func _prepare_entry(index: int, entry: Dictionary) -> void:
+func _prepare_entry(entry: Dictionary) -> void:
 	if entry.status == ShufflerBag.EntryStatus.READY or entry.status == ShufflerBag.EntryStatus.FAILED:
+		return
+
+	# Resolve the slot from the entry itself: the caller's index may already
+	# be stale (pick-3 rejections remove entries and renumber slots while
+	# downloads are still in flight).
+	var index := _live_index(entry)
+	if index == -1:
+		print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " is no longer in the bag; skipping")
+		_maybe_complete_reroll(entry)
+		_check_all_preparations_complete()
 		return
 
 	_pending_preparations += 1
 	entry.status = ShufflerBag.EntryStatus.PREPARING
 	var game = entry.game
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
-	print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
+	if DEBUG_LOG:
+		print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
 
 	# Only emulators whose launch can require prep (archive extraction /
 	# title-id-based launch paths) go through preparation. Xenia-family
@@ -897,39 +1013,52 @@ func _prepare_entry(index: int, entry: Dictionary) -> void:
 	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or prep_architecture in ["rpcs3", "xenia"]):
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
-		print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
+		if DEBUG_LOG:
+			print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
 		game_ready.emit(index)
-		_maybe_complete_reroll(index)
+		_maybe_complete_reroll(entry)
 		return
 
 	if entry.temp_path == "":
 		push_warning("[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
 		_pending_preparations -= 1
-		if not await _try_replace_with_candidate(index):
-			_fail_entry(index, "[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
+		if not await _try_replace_with_candidate(entry):
+			_fail_entry(entry, "[ShufflerSubManager] Skipping preparation for " + game.title + " - no temp_path")
 		return
 
 	var prep_success = await LaunchManager.prepare_game_for_shuffler(game, emulator_id, entry.temp_path)
+	# Prep is a long await: the pick-3 screen can remove entries and renumber
+	# slots while it runs. Re-resolve before touching bag bookkeeping.
+	index = _live_index(entry)
+	if index == -1:
+		print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " left the bag during prep; discarding result")
+		_pending_preparations -= 1
+		_maybe_complete_reroll(entry)
+		_check_all_preparations_complete()
+		return
 	if prep_success:
 		var prepared_path = LaunchManager.get_last_prepared_rom_path(game)
 		if prepared_path != "":
 			entry.temp_path = prepared_path
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
-		print("[ShufflerSubManager] Ready after prep: " + game.title)
+		if DEBUG_LOG:
+			print("[ShufflerSubManager] Ready after prep: " + game.title)
 		game_ready.emit(index)
-		_maybe_complete_reroll(index)
+		_maybe_complete_reroll(entry)
 	else:
 		push_error("[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 		_pending_preparations -= 1
-		if not await _try_replace_with_candidate(index):
-			_fail_entry(index, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
+		if not await _try_replace_with_candidate(entry):
+			_fail_entry(entry, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 
-	print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
+	if DEBUG_LOG:
+		print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
 	_check_all_preparations_complete()
 
 func _check_all_preparations_complete() -> void:
-	print("[ShufflerSubManager] _check_all_preparations_complete: state=" + str(_state) + " pending_downloads=" + str(_pending_downloads) + " pending_preparations=" + str(_pending_preparations) + " has_ready=" + str(_bag.has_any_ready()) + " " + _format_bag())
+	if DEBUG_LOG:
+		print("[ShufflerSubManager] _check_all_preparations_complete: state=" + str(_state) + " pending_downloads=" + str(_pending_downloads) + " pending_preparations=" + str(_pending_preparations) + " has_ready=" + str(_bag.has_any_ready()) + " " + _format_bag())
 	if _state != State.DOWNLOADING:
 		return
 	if _pending_downloads == 0 and _pending_preparations == 0 and not _bag.has_any_ready():
@@ -960,6 +1089,7 @@ func _random_round_time() -> float:
 func _reset_reroll_state() -> void:
 	print("[ShufflerSubManager] _reset_reroll_state")
 	_reroll_in_progress = false
+	_reroll_entry = {}
 	_reroll_slot_index = -1
 	_set_controls_reroll_enabled(true)
 
@@ -992,7 +1122,6 @@ func _reset_download_tracking() -> void:
 	_total_download_bytes = 0
 	_active_download_item_id = ""
 	_first_download_notification_shown = false
-	_candidate_retry_attempts.clear()
 
 # ============================================================================
 # SHUFFLER MODE
@@ -1138,14 +1267,17 @@ func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
 		prev_entry = _bag.entries[_current_game_index]
 	# Rejected games leave the bag (and the seen pool) for good. Their slots
 	# are refilled with fresh candidates so the bag stays at full size.
-	var rejected_slots: Array[int] = []
+	# Tracked as entries, not slot numbers: replacements resolve their own
+	# slot, and removals below renumber every higher slot - captured indexes
+	# would be stale the moment an earlier slot collapsed.
+	var rejected_entries: Array[Dictionary] = []
 	for entry in candidates:
 		if entry == chosen:
 			continue
 		_seen_entries.erase(entry)
 		var idx := _bag.entries.find(entry)
 		if idx != -1:
-			rejected_slots.append(idx)
+			rejected_entries.append(entry)
 			# Suspend-method games keep a frozen process with a live pid when
 			# stopped; kill it before the slot is replaced/dropped so it can't
 			# leak (the reroll flow does the same).
@@ -1161,16 +1293,12 @@ func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
 	if _state != State.CHOOSING:
 		return
 	_state = State.ACTIVE
-	# Refill high-index-first: replace_entry keeps the slot in place, and a
-	# collapsed slot (candidate pool exhausted) then can't shift the lower
-	# slots still to process.
-	rejected_slots.sort()
-	rejected_slots.reverse()
-	for idx in rejected_slots:
-		if idx >= _bag.size():
-			continue
-		if not await _try_replace_with_candidate(idx):
-			_bag.entries.remove_at(idx)
+	for rejected in rejected_entries:
+		if not await _try_replace_with_candidate(rejected):
+			# Candidate pool exhausted for this entry: collapse the slot.
+			var drop_idx := _bag.entries.find(rejected)
+			if drop_idx != -1:
+				_bag.entries.remove_at(drop_idx)
 	# Re-find after mutations: removals can shift every index.
 	if prev_entry != null:
 		_current_game_index = _bag.entries.find(prev_entry)
@@ -1265,11 +1393,21 @@ func _await_launch_settled(entry: Dictionary) -> void:
 	if entry.get("launch_pending", false):
 		push_warning("[ShufflerSubManager] _await_launch_settled timed out for " + _format_entry(entry))
 
+## Prewarms the intro scene and fonts at session start, so the first intro
+## of the run doesn't stall its animation on asset loading.
+func _prewarm_intro_assets() -> void:
+	if _intro_scene == null:
+		_intro_scene = load(INTRO_SCENE) as PackedScene
+	M3Theme.load_fonts()
+
 ## Intro notification for a game's first appearance this session (ported from
 ## the old game_shuffler's notif_intro). Plays over the screen while the
 ## emulator boots; unfocusable and click-through, so it never touches input.
 func _show_intro(game: GameResource) -> void:
-	var scene := load(INTRO_SCENE)
+	var scene := _intro_scene
+	if scene == null:
+		scene = load(INTRO_SCENE) as PackedScene
+		_intro_scene = scene
 	if not scene:
 		push_warning("[ShufflerSubManager] Failed to load intro window scene: " + INTRO_SCENE)
 		return
@@ -1344,12 +1482,11 @@ func _launch_game(entry: Dictionary) -> void:
 	LaunchManager.launch_shuffler_game(game, entry.temp_path, on_pid_ready)
 
 ## Resolves the suspend method for a RetroArch bag entry. Cores without
-## reliable savestate support (dosbox_core, dosbox_svn, gw, pico8) declare
-## "suspend_method": "suspend" in retroarch.json so they freeze via pssuspend
-## instead of the udp quit+autosave flow. dosbox_pure supports libretro save
-## states and rides the udp flow like every other core. All udp cores keep the
-## quit+savestate flow even while a suspended RetroArch in the bag still holds
-## UDP port 55355.
+## reliable savestate support (dosbox_core, dosbox_svn, dosbox_pure, gw,
+## pico8) declare "suspend_method": "suspend" in retroarch.json so they
+## freeze via pssuspend instead of the udp quit+autosave flow. All udp cores
+## keep the quit+savestate flow even while a suspended RetroArch in the bag
+## still holds UDP port 55355.
 func _resolve_retroarch_suspend_method(entry: Dictionary) -> String:
 	var method := entry.suspend_method as String
 	var core_id: String = LaunchManager.resolve_core_for_game(entry.game)

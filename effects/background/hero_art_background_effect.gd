@@ -39,6 +39,8 @@ func _setup_shader() -> void:
 
 func _apply_settings() -> void:
 	_set_shader_param("dim", _settings.get("dim", 0.35))
+	_set_shader_param("blur", _settings.get("blur", 0.3))
+	_set_shader_param("opacity", _settings.get("opacity", 1.0))
 	_set_shader_param("rect_size", size)
 
 func get_settings_schema() -> Array[SettingsVar]:
@@ -49,6 +51,14 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var dim_var = SettingsVar.new(Type.FLOAT, 0.35, State.ENABLED, "Dim", "Darken the artwork so the UI stays readable", 0.0, 1.0, 0.05)
 	dim_var.property_name = "dim"
 	schema.append(dim_var)
+
+	var blur_var = SettingsVar.new(Type.FLOAT, 0.3, State.ENABLED, "Blur", "Soften the artwork so the UI stays readable", 0.0, 1.0, 0.05)
+	blur_var.property_name = "blur"
+	schema.append(blur_var)
+
+	var opacity_var = SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "Opacity", "Fade the artwork so layers beneath show through", 0.0, 1.0, 0.05)
+	opacity_var.property_name = "opacity"
+	schema.append(opacity_var)
 
 	return schema
 

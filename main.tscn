@@ -48,7 +48,7 @@ shadow_offset = Vector2(0, 0)
 [sub_resource type="Resource" id="FontIconSettings_zoom_out"]
 script = ExtResource("fonticonsettings")
 icon_font = "ControllerIcons"
-icon_name = "analog-r-down"
+icon_name = "analog-r-left"
 icon_size = 32
 
 [sub_resource type="LabelSettings" id="LabelSettings_yaehf"]
@@ -61,7 +61,7 @@ shadow_offset = Vector2(0, 0)
 [sub_resource type="Resource" id="FontIconSettings_zoom_in"]
 script = ExtResource("fonticonsettings")
 icon_font = "ControllerIcons"
-icon_name = "analog-r-up"
+icon_name = "analog-r-right"
 icon_size = 32
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_w48qg"]

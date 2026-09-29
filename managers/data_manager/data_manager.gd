@@ -187,12 +187,12 @@ func get_games_for_shuffle(platform_slug: String, filters: Dictionary = {}) -> A
 	return database.get_games_for_shuffle(platform_slug, filters)
 
 
-func get_games_for_shuffle_async(platform_slug: String, filters: Dictionary = {}, chunk_size: int = 500) -> Array[GameResource]:
-	return await database.get_games_for_shuffle_async(platform_slug, filters, chunk_size)
+func get_games_for_shuffle_async(platform_slug: String, filters: Dictionary = {}) -> Array[GameResource]:
+	return await database.get_games_for_shuffle_async(platform_slug, filters)
 
 
-func get_random_games_for_shuffle(platforms: Array[String], filters: Dictionary, limit: int) -> Array[GameResource]:
-	return database.get_random_games_for_shuffle(platforms, filters, limit)
+func get_random_games_for_shuffle_async(platforms: Array[String], filters: Dictionary, limit: int) -> Array[GameResource]:
+	return await database.get_random_games_for_shuffle_async(platforms, filters, limit)
 
 
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:

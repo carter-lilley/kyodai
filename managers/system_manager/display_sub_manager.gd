@@ -380,7 +380,9 @@ func _emit_swap_resize_notification() -> void:
 
 func set_resolution(choice : Vector2i):
 	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]
-	DisplayServer.window_set_size(choice)
+	# Window API instead of DisplayServer.window_set_size — see
+	# restore_last_window_size() (X11 viewport-not-updating bug #105597).
+	get_window().size = choice
 	DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(choice) / 2.0))
 
 func _clamp_window_size(size: Vector2i) -> Vector2i:
@@ -398,7 +400,13 @@ func restore_last_window_size() -> Vector2i:
 		var last_size: Vector2i = last_size_setting.value
 		if last_size.x > 0 and last_size.y > 0:
 			last_size = _clamp_window_size(last_size)
-			DisplayServer.window_set_size(last_size)
+			# Use the Window API, not DisplayServer.window_set_size: on X11 the
+			# raw DisplayServer call resizes the OS window but never fires
+			# rect_changed_callback, so the viewport/render stays at the old
+			# size (black bars) until a manual window interaction snaps it
+			# (godotengine/godot#105597; fixed upstream for 4.8). Window.size
+			# triggers the update on all platforms.
+			get_window().size = last_size
 			print("[SystemManager.display] Restored last window size: ", last_size)
 			return last_size
 	return Vector2i.ZERO

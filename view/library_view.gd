@@ -31,6 +31,16 @@ var _active_filters: Dictionary = {}
 # A-Z letter navigation overlay (child of games_grid; does not affect layout)
 var _az_carousel: AZLetterCarousel = null
 var _letter_first_index: Dictionary = {}  # letter -> first grid index
+# Right-stick letter stepping: one step per flick (mirrors the zoom
+# press-guard so the stick's ramp doesn't multi-step).
+var _az_prev_engaged: bool = false
+var _az_next_engaged: bool = false
+# Jump intent: right after a letter jump, the active letter stays pinned to
+# the letter we jumped to instead of being re-derived from the viewport
+# (whose center resolves differently depending on focus-centering mode).
+const AZ_JUMP_INTENT_MS: int = 300
+var _az_jump_letter: String = ""
+var _az_jump_until_ms: int = 0
 
 func _exit_tree() -> void:
 	# Disconnect from autoload signals so the view can be freed when the tree tears down.
@@ -204,6 +214,7 @@ func _apply_letter_runs(runs: Array[Dictionary]) -> void:
 			ordered_indices.append(idx)
 		idx += int(run.get("count", 0))
 	_letter_first_index = first_index
+	_az_jump_letter = ""  # stale intent must not outlive the map it referenced
 	_az_carousel.set_letter_map(first_index, ordered_letters, ordered_indices)
 	_az_carousel.visible = idx > 0
 
@@ -216,14 +227,26 @@ static func _letter_key_for_char(ch: String) -> String:
 	return "#"
 
 func _on_az_letter_selected(letter: String, _from_drag: bool) -> void:
-	if not games_grid:
-		return
 	var idx: int = _letter_first_index.get(letter, -1)
 	if idx < 0:
 		return
-	# Always jump instantly: an animated cross-library jump smooth-scrolls
-	# through every intermediate row, recycling thousands of cards on the way.
-	games_grid.scroll_to_index(idx, false)
+	_jump_to_letter(letter, idx)
+
+## Jump the grid to a letter's section.
+## Uses scroll_to_index_and_focus — the grid's blessed jump path: it defocuses
+## the grid first so the currently focused card isn't recycled mid-jump and
+## doesn't hand focus to a temporary card, which would trigger a competing
+## follow-focus scroll that drags the grid back (the "jump does nothing"
+## symptom). Also pins the jump's letter as the active-letter intent so
+## stepping doesn't derive its basis from a partially-settled viewport.
+func _jump_to_letter(letter: String, idx: int) -> void:
+	if not games_grid:
+		return
+	_az_jump_letter = letter
+	_az_jump_until_ms = Time.get_ticks_msec() + AZ_JUMP_INTENT_MS
+	if _az_carousel:
+		_az_carousel.set_active_letter(letter)
+	games_grid.scroll_to_index_and_focus(idx, false)
 
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
@@ -444,6 +467,18 @@ func _load_platforms_list() -> void:
 
 func _input(event: InputEvent) -> void:
 	"""Handle platform cycling input using custom actions."""
+	# Clear the letter-step engaged flags first: releases must be seen even
+	# when a guard below (other view, search overlay) returns early, otherwise
+	# the flags stick and all subsequent flicks are ignored.
+	if event.is_action_released("az_letter_prev") and _az_prev_engaged:
+		_az_prev_engaged = false
+		accept_event()
+		return
+	if event.is_action_released("az_letter_next") and _az_next_engaged:
+		_az_next_engaged = false
+		accept_event()
+		return
+
 	# Only handle input when this view is active
 	if not UIManager.is_current_view(view_name):
 		return
@@ -470,6 +505,46 @@ func _input(event: InputEvent) -> void:
 	elif event.is_action_pressed("random_game"):
 		_focus_random_card()
 		accept_event()
+		return
+
+	# Letter stepping with right stick up/down (one step per flick)
+	if event.is_action_pressed("az_letter_prev"):
+		if not _az_prev_engaged:
+			_az_prev_engaged = true
+			_step_az_letter(-1)
+		accept_event()
+	elif event.is_action_pressed("az_letter_next"):
+		if not _az_next_engaged:
+			_az_next_engaged = true
+			_step_az_letter(1)
+		accept_event()
+
+## Step to the previous/next letter that has games (right stick up/down).
+## Stops at the first/last letter (no wrap); jumps and pulses the carousel.
+func _step_az_letter(direction: int) -> void:
+	if not _az_carousel or not _az_carousel.visible or not games_grid:
+		return
+	var order := _az_carousel.get_ordered_letters()
+	if order.is_empty():
+		return
+	var letter_count := order.size()
+	var pos := order.find(_az_carousel.get_active_letter())
+	var new_pos: int
+	if pos == -1:
+		# No active letter yet: enter at the nearest end.
+		new_pos = 0 if direction > 0 else letter_count - 1
+	else:
+		new_pos = clampi(pos + direction, 0, letter_count - 1)
+		if new_pos == pos:
+			return  # Already at the first/last letter.
+	var letter: String = order[new_pos]
+	var idx: int = _letter_first_index.get(letter, -1)
+	if idx < 0:
+		return
+	_jump_to_letter(letter, idx)
+	_az_carousel.pulse_letter(letter)
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx("click_04")
 
 func _focus_random_card() -> void:
 	"""Focus a random game card in the grid."""
@@ -694,9 +769,16 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 			var platform_name = _get_current_platform_name()
 			_update_status("%s: %d-%d of %d" % [platform_name, start_num, end_num, total_count])
 
-	# Highlight the current letter in the A-Z carousel
-	if _az_carousel and _az_carousel.visible:
-		_az_carousel.set_active_from_index(start_index)
+	# Highlight the current letter in the A-Z carousel. Right after one of our
+	# jumps, keep the highlight on the letter we jumped to (deterministic);
+	# once the intent expires, derive from the top of the viewport so manual
+	# scrolling keeps the strip in sync.
+	if _az_carousel and _az_carousel.visible and total_count > 0:
+		if _az_jump_letter != "" and Time.get_ticks_msec() <= _az_jump_until_ms:
+			_az_carousel.set_active_letter(_az_jump_letter)
+		else:
+			_az_jump_letter = ""
+			_az_carousel.set_active_from_index(start_index)
 
 func _get_current_platform_name() -> String:
 	"""Get the display name of the current platform."""
@@ -819,6 +901,8 @@ func _deferred_reload_after_sync():
 
 func on_view_show():
 	super.on_view_show()
+	_az_prev_engaged = false
+	_az_next_engaged = false
 	# Catch up if sync_completed fired while this view was disconnected.
 	_catch_up_missed_sync()
 	# Ensure search overlay is hidden when returning to this view
@@ -832,6 +916,10 @@ func on_view_show():
 
 func on_view_hide():
 	view_hidden.emit()
+	# A release during another view/search can't clear these here (the
+	# is_current_view guard returns early), so reset on the way out.
+	_az_prev_engaged = false
+	_az_next_engaged = false
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	# Only handle modal actions if this view is currently active

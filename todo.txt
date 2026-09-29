@@ -3,7 +3,8 @@
 xemu raw hdd save sync
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-x filter by letter/recent
+window resize on linux doesnt work
+custom toolbar?
 
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs

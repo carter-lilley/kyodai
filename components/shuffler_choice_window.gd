@@ -71,6 +71,14 @@ func _ready() -> void:
 		card.add_child(ring)
 		card.focus_entered.connect(ring.show)
 		card.focus_exited.connect(ring.hide)
+		# Mirror GameCard's hover-to-focus from the main UI: that focus pop is
+		# what makes normal M3 cards visibly respond to the mouse (M3Card's own
+		# hover tint hides under the cover art). FocusSubManager's ring can't
+		# reach this OS window, so hovering here just shows the child ring above.
+		# Grab directly rather than through UIManager.should_card_grab_focus_on_hover():
+		# NavigationSubManager only sees main-window input, so its mouse-activity
+		# check would never trip for this window.
+		card.mouse_entered.connect(_on_card_hovered.bind(card))
 
 	$Root/CenterBox/VBox/Row.add_theme_constant_override("separation", M3Units.dp(24))
 
@@ -170,6 +178,11 @@ func present(candidates: Array) -> void:
 
 func _focus_first_card() -> void:
 	_card_a.grab_focus()
+
+func _on_card_hovered(card: M3Card) -> void:
+	if _resolved or card.has_focus():
+		return
+	card.grab_focus()
 
 func _on_card_pressed(entry: Dictionary) -> void:
 	if _resolved:
