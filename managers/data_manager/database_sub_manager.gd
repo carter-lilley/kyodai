@@ -1478,6 +1478,41 @@ func get_games_paginated(offset: int, limit: int, sort_field: String = "title", 
 	return games
 
 
+## First-character run lengths for the library grid's A-Z letter navigation.
+## Titles sharing a first character form contiguous runs under
+## get_games_paginated's ORDER BY title (BINARY collation), so cumulative
+## counts over these rows yield each run's first grid index. Returns
+## [{letter: String, count: int}] in grid order. search_query mirrors the
+## title LIKE clause used by search_games_paginated (pass "" when inactive).
+func get_title_letter_runs(platform_slug: String = "", filters: Dictionary = {}, search_query: String = "") -> Array[Dictionary]:
+	var runs: Array[Dictionary] = []
+	if not _is_db_ready:
+		return runs
+
+	var filter_parts: Array = _get_filter_clause(filters)
+	var where: String
+	var bindings: Array = []
+	if platform_slug.is_empty():
+		where = " WHERE 1=1"
+	else:
+		where = " WHERE platform_slug = ?"
+		bindings.append(platform_slug)
+	where += _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1"
+	bindings.append_array(filter_parts[1])
+	if not search_query.is_empty():
+		where += " AND title LIKE ?"
+		bindings.append("%" + search_query + "%")
+
+	var query = "SELECT substr(title, 1, 1) AS first_char, COUNT(*) AS run_count FROM games" + where + " GROUP BY first_char ORDER BY first_char"
+	var query_result = query_array(query, bindings)
+	for row in query_result:
+		runs.append({
+			"letter": str(row.get("first_char", "")),
+			"count": int(row.get("run_count", 0)),
+		})
+	return runs
+
+
 func get_platforms_with_games() -> Array[Dictionary]:
 	"""Get list of platforms that have games, sorted alphabetically with game counts."""
 	if _platforms_with_games_cache_valid:

@@ -299,6 +299,15 @@ var _grid_trace_stuck_count: int = 0
 var _last_pass_scroll: float = -1.0
 var _last_pass_time_ms: int = 0
 var _scroll_velocity: float = 0.0
+
+# Cover-download suppression during fast scroll / A-Z scrubbing (Fix 4):
+# while suppressed, cards render the placeholder for covers that aren't on
+# disk instead of queueing network downloads; on release the visible
+# placeholders retry. Prevents fast traversal from flooding the download
+# queue (which manifests as queue-full drops and blank covers).
+const FAST_SCROLL_SUPPRESS_STRIDES: float = 4.0  # px/s threshold = 4 row pitches
+var _scrub_cover_suppressed: bool = false   # external: A-Z carousel drag
+var _cover_dl_suppressed: bool = false      # effective state last applied
 var _last_pass_buffer_start: int = -1
 var _last_pass_buffer_end: int = -1
 var _last_stamp_scroll: float = -1.0
@@ -1005,6 +1014,11 @@ func _process(_delta: float):
 	# Add off-screen buffer cards a few at a time so startup isn't blocked by
 	# creating the entire visual buffer in one frame.
 	_process_buffer_expansion()
+
+	# Settle detection for cover-download suppression: scroll passes stop once
+	# scrolling ends, so _process is where the stale velocity decays and
+	# suppressed cover loads resume (and visible placeholders retry).
+	_update_cover_dl_suppression()
 
 	# Top up the card pool a few per frame after zoom-out/resize grew the layout.
 	_process_pool_growth()
@@ -2874,6 +2888,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 			_scroll_velocity = lerpf(_scroll_velocity, (value - _last_pass_scroll) / dt, 0.3)
 	_last_pass_scroll = value
 	_last_pass_time_ms = now_ms
+	_update_cover_dl_suppression()
 
 	var available := _get_available_size()
 	var viewport_size = available.y if vertical else available.x
@@ -3003,6 +3018,12 @@ func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
 		# window's covers at full throughput. High-priority loads (hero art,
 		# details sheets) are untouched.
 		MemorySubManager.clear_pending_low_priority_image_tasks()
+		# Same story for the download queue: queued low-priority requests are
+		# covers for the window we just left. Drop them (DROPPED, no TTL) so
+		# they can't crowd out the new window and trigger queue-full drops.
+		# Bulk work (sync prefetch) and high-priority requests are spared.
+		if SystemManager.download:
+			SystemManager.download.clear_pending_low_priority_image_downloads()
 		_pending_buffer_expansion = false
 		structure_changed = true
 		for i in range(_buffer_target_start, _buffer_target_end):
@@ -3040,6 +3061,47 @@ func _reset_transient_scroll_state(reason: String) -> void:
 	_pending_buffer_expansion = false
 	if trace_verbose:
 		print("[GridTrace] reset-transient: reason=", reason, " t=", Time.get_ticks_msec())
+
+
+## External suppression (A-Z carousel scrub): turns network cover loads off
+## (cards render placeholders for uncached covers) and, when lifted, retries
+## the visible placeholders.
+func set_scrub_cover_suppressed(active: bool) -> void:
+	if _scrub_cover_suppressed == active:
+		return
+	_scrub_cover_suppressed = active
+	_update_cover_dl_suppression()
+
+
+## Recompute the effective cover-download suppression. Called from the scroll
+## pass (fresh velocity) and from _process (settle detection). On release,
+## visible cards stuck on the placeholder are nudged to retry - nothing else
+## re-triggers the download they skipped.
+func _update_cover_dl_suppression() -> void:
+	# Velocity only updates inside scroll passes; zero it once passes stop so
+	# a settled viewport doesn't keep suppression latched on a stale reading.
+	if _last_pass_time_ms > 0 and Time.get_ticks_msec() - _last_pass_time_ms > 150:
+		_scroll_velocity = 0.0
+	var stride := _get_normal_stride()
+	var fast := stride > 0.0 and absf(_scroll_velocity) > stride * FAST_SCROLL_SUPPRESS_STRIDES
+	var want := _scrub_cover_suppressed or fast
+	if want == _cover_dl_suppressed:
+		return
+	_cover_dl_suppressed = want
+	CardMediaLoader.downloads_suppressed = want
+	if not want:
+		_retry_visible_placeholder_covers()
+
+
+func _retry_visible_placeholder_covers() -> void:
+	for card in _active_cards:
+		if not is_instance_valid(card):
+			continue
+		var idx: int = card.get_meta("virtual_index", -1)
+		if idx < _visible_start_idx or idx >= _visible_end_idx:
+			continue
+		if card.has_method("retry_cover_if_placeholder"):
+			card.retry_cover_if_placeholder()
 
 func _recycle_card_at_index(index: int):
 	if index < 0 or index >= _active_cards.size():

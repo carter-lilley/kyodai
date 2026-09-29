@@ -16,10 +16,16 @@ var _loading_game_id: String = ""
 var _image_retry_count: int = 0
 var _current_image_task_id: int = -1
 var _download_retry_count: int = 0
+var _drop_retry_count: int = 0
 var _current_download_id: int = 0
 
 const MAX_IMAGE_RETRIES: int = 3
 const MAX_DOWNLOAD_RETRIES: int = 2
+# Backpressure (DROPPED) retries: bounded with a short delay so a viewport
+# settled after a scroll storm self-heals once the queue drains, without
+# hammering a full queue forever.
+const MAX_DROP_RETRIES: int = 5
+const DROP_RETRY_DELAY_SEC: float = 1.0
 const MAX_COVER_TEXTURE_SIZE: int = 512
 const FAILURE_RETRY_TTL_SEC: int = 300
 # Bound the static failure-TTL map so permanently-failing URLs don't grow it forever.
@@ -27,6 +33,10 @@ const MAX_FAILED_DOWNLOADS: int = 512
 const DEBUG_LOG: bool = false
 
 static var _failed_downloads: Dictionary = {}
+## While true (grid fast-scrolling or A-Z scrubbing), covers that aren't on
+## disk render the placeholder instead of queueing downloads; the grid lifts
+## the flag on settle and asks visible placeholder cards to retry.
+static var downloads_suppressed: bool = false
 
 static func clear_failed_downloads() -> void:
 	_failed_downloads.clear()
@@ -67,6 +77,10 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		_set_loading_texture()
 		return
 
+	# Drop-retry budget resets per game, not per call: drop retries re-enter
+	# through load_cover and must not refill their own budget.
+	if _loading_game_id != game.id:
+		_drop_retry_count = 0
 	_loading_game_id = game.id
 	_image_retry_count = 0
 	_download_retry_count = 0
@@ -79,6 +93,12 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		cover_url = game.cover_url
 		cache_path = DataManager.get_cached_image_path(cover_url)
 		if not FSM.file_exists(cache_path):
+			# Fast scroll/scrub suppression: placeholder now, retry on settle.
+			# No download, no failure TTL - the cover isn't being looked at
+			# long enough to be worth network contention.
+			if downloads_suppressed:
+				_set_loading_texture(false)
+				return
 			if DataManager.is_sync_in_progress():
 				if DEBUG_LOG: print("[CardMediaLoader] No cached cover, waiting for sync: %s" % cover_url)
 				_set_loading_texture(true)
@@ -113,6 +133,7 @@ func cancel() -> void:
 	_loading_game_id = ""
 	_image_retry_count = 0
 	_download_retry_count = 0
+	_drop_retry_count = 0
 	_current_download_id += 1
 	if _current_image_task_id > 0 and SystemManager.memory:
 		SystemManager.memory.cancel_image_task(_current_image_task_id)
@@ -175,19 +196,21 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
-	var target_game_id = _loading_game_id
-
 	_download_retry_count += 1
 	if _download_retry_count > MAX_DOWNLOAD_RETRIES:
 		_set_loading_texture()
 		return
+	_start_cover_download(cover_url, cache_path, high_priority)
+
+func _start_cover_download(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
+	var target_game_id = _loading_game_id
 
 	_set_loading_texture(true)
 
 	var download_id = _current_download_id + 1
 	_current_download_id = download_id
 
-	DataManager.load_image(cover_url, func(loaded_texture: Texture2D):
+	DataManager.load_image(cover_url, func(loaded_texture: Texture2D, result: int):
 		if not is_instance_valid(_card):
 			return
 		if download_id != _current_download_id:
@@ -204,6 +227,12 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 			_warm_card_cache_from_disk(cache_path)
 		elif FSM.file_exists(cache_path):
 			load_cover(_card.game, high_priority)
+		elif result == DownloadSubManager.ImageResult.DROPPED:
+			# Backpressure (queue full / a teleport pruned the queued request),
+			# not a content failure: no failure TTL - that's what used to leave
+			# covers blank for FAILURE_RETRY_TTL_SEC after a scroll storm.
+			# Bounded short-delay retry so a settled viewport self-heals.
+			_schedule_drop_retry(cover_url, cache_path, high_priority, target_game_id, download_id)
 		else:
 			# Insertion-ordered: front key is the oldest failure.
 			while _failed_downloads.size() >= MAX_FAILED_DOWNLOADS:
@@ -211,6 +240,34 @@ func _download_cover_and_retry(cover_url: String, cache_path: String, high_prior
 			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
 			_set_loading_texture()
 	, high_priority)
+
+## DROPPED (backpressure) recovery: retry through the download path after a
+## short delay, bounded so a persistently full queue can't loop forever.
+## Guards discard the retry if the card was recycled or reassigned meanwhile.
+func _schedule_drop_retry(cover_url: String, cache_path: String, high_priority: bool, target_game_id: String, download_id: int) -> void:
+	if not is_instance_valid(_card) or not _card.is_inside_tree():
+		return
+	if _drop_retry_count >= MAX_DROP_RETRIES:
+		_set_loading_texture()
+		return
+	_drop_retry_count += 1
+	var tree := _card.get_tree()
+	if tree == null:
+		return
+	await tree.create_timer(DROP_RETRY_DELAY_SEC).timeout
+	if not is_instance_valid(_card):
+		return
+	if download_id != _current_download_id or _loading_game_id != target_game_id:
+		return
+	if not _card.game or _card.game.id != target_game_id:
+		return
+	if downloads_suppressed:
+		_set_loading_texture(false)
+		return
+	if FSM.file_exists(cache_path):
+		load_cover(_card.game, high_priority)
+		return
+	_start_cover_download(cover_url, cache_path, high_priority)
 
 ## Decode the on-disk cover into the 512px card cache without touching the
 ## card's current texture. Used after a fresh download so subsequent recycles

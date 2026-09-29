@@ -203,6 +203,11 @@ func get_platforms_with_games() -> Array[Dictionary]:
 	return database.get_platforms_with_games()
 
 
+## First-character run lengths for A-Z letter navigation (see database).
+func get_title_letter_runs(platform_slug: String = "", filters: Dictionary = {}, search_query: String = "") -> Array[Dictionary]:
+	return database.get_title_letter_runs(platform_slug, filters, search_query)
+
+
 func get_total_games_count(platform_slug: String = "", filters: Dictionary = {}) -> int:
 	return database.get_total_games_count(platform_slug, filters)
 

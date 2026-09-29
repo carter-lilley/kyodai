@@ -148,6 +148,12 @@
 		{
 			"step": "chmod_emulator",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "chmod",
 					"file": "azahar.AppImage"
@@ -157,6 +163,12 @@
 		{
 			"step": "extract_appimage",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "appimage_extract",
 					"pattern": "azahar.AppImage",
@@ -171,6 +183,12 @@
 		{
 			"step": "create_azahar_config_dir",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "create_folders",
 					"folders": [
@@ -182,6 +200,12 @@
 		{
 			"step": "create_azahar_config",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "create_files",
 					"files": [

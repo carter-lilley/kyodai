@@ -1110,7 +1110,7 @@ func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1)
 	screenshots_row.add_child(card)
 	if at_position >= 0:
 		screenshots_row.move_child(card, at_position)
-	DataManager.load_image(url, func(texture):
+	DataManager.load_image(url, func(texture, _r: int):
 		if not is_instance_valid(card):
 			return
 		if texture and _current_game and _current_game.romm_id == for_romm_id:
@@ -1314,7 +1314,7 @@ func _add_related_card(entry: Dictionary) -> void:
 	if cover_url != "":
 		# Public IGDB CDN; t_cover_small keeps thumbs light.
 		var thumb_url := cover_url.replace("t_1080p", "t_cover_small")
-		DataManager.load_image(thumb_url, func(texture):
+		DataManager.load_image(thumb_url, func(texture, _r: int):
 			if is_instance_valid(card) and texture:
 				card.media_texture = texture
 		)
@@ -1657,7 +1657,7 @@ func _load_cover_remote(game: GameResource) -> void:
 	if game.cover_url and game.cover_url.begins_with("http"):
 		if is_instance_valid(cover_texture):
 			M3Shimmer.attach(cover_texture, 0.0)
-		DataManager.load_image(game.cover_url, func(texture):
+		DataManager.load_image(game.cover_url, func(texture, _r: int):
 			if not is_instance_valid(cover_texture):
 				return
 			M3Shimmer.detach(cover_texture)

@@ -3370,6 +3370,10 @@ const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 16
 # Bound the pending queue: an unbounded backlog pins recycled cards via
 # captured callbacks and delays fresh covers behind long-irrelevant ones.
 const MAX_PENDING_IMAGE_DOWNLOADS: int = 256
+## Result passed to image download callbacks. DROPPED means the request never
+## reached the network (queue-full backpressure or a teleport pruning stale
+## work) - callers must NOT treat it as a content failure (no retry TTLs).
+enum ImageResult { OK, FAILED, DROPPED }
 var _active_image_download_count: int = 0
 var _pending_image_downloads: Array = []
 var _pending_image_downloads_mutex: Mutex = Mutex.new()
@@ -3393,12 +3397,15 @@ func _log_image_drop(url: String) -> void:
 			push_warning("[SystemManager.download] %d further image downloads dropped (queue full)" % _image_drops_suppressed)
 
 ## Downloads an image with caching, deduplication, and limited concurrency.
-## callback(success: bool). High-priority downloads jump ahead of queued
-## low-priority downloads (FIFO order is kept within each tier).
-func download_image(url: String, cache_path: String, callback: Callable, high_priority: bool = false) -> bool:
+## callback(result: ImageResult). High-priority downloads jump ahead of queued
+## low-priority downloads (FIFO order is kept within each tier). Bulk marks
+## background batch work (sync prefetch): it queues at the given priority but
+## is spared by teleport pruning, which only drops user-facing low-priority
+## requests whose cards were just recycled.
+func download_image(url: String, cache_path: String, callback: Callable, high_priority: bool = false, bulk: bool = false) -> bool:
 	# Check if already cached
 	if FSM.file_exists(cache_path):
-		callback.call(true)
+		callback.call(ImageResult.OK)
 		return true
 
 	_pending_image_downloads_mutex.lock()
@@ -3408,7 +3415,7 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 		var state = _active_image_downloads[url]
 		if state.completed:
 			_pending_image_downloads_mutex.unlock()
-			callback.call(state.success)
+			callback.call(ImageResult.OK if state.success else ImageResult.FAILED)
 		else:
 			state.callbacks.append(callback)
 			_pending_image_downloads_mutex.unlock()
@@ -3430,24 +3437,26 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 					_pending_image_downloads_mutex.unlock()
 					_log_image_drop(evicted.url)
 					if evicted.callback.is_valid():
-						evicted.callback.call(false)
+						evicted.callback.call(ImageResult.DROPPED)
 					# Retry now that a slot freed up.
-					return download_image(url, cache_path, callback, high_priority)
+					return download_image(url, cache_path, callback, high_priority, bulk)
 				_pending_image_downloads_mutex.unlock()
 				_log_image_drop(url)
-				callback.call(false)
+				callback.call(ImageResult.DROPPED)
 				return true
 			_pending_image_downloads_mutex.unlock()
-			# Dropped low-priority request: report failure so the caller records
-			# its failure-TTL instead of waiting on a callback forever.
+			# Dropped low-priority request: report DROPPED (backpressure, not
+			# failure) so the caller doesn't record a retry-suppressing
+			# failure TTL for what was really a full queue.
 			_log_image_drop(url)
-			callback.call(false)
+			callback.call(ImageResult.DROPPED)
 			return true
 		var item = {
 			"url": url,
 			"cache_path": cache_path,
 			"callback": callback,
-			"high_priority": high_priority
+			"high_priority": high_priority,
+			"bulk": bulk
 		}
 		if high_priority:
 			# Insert after the last queued high-priority item
@@ -3486,7 +3495,7 @@ func _process_image_download_queue() -> void:
 			if state.completed:
 				var queued_success = state.success
 				_pending_image_downloads_mutex.unlock()
-				item.callback.call(queued_success)
+				item.callback.call(ImageResult.OK if queued_success else ImageResult.FAILED)
 			else:
 				state.callbacks.append(item.callback)
 				_pending_image_downloads_mutex.unlock()
@@ -3500,6 +3509,31 @@ func _process_image_download_queue() -> void:
 		}
 		_pending_image_downloads_mutex.unlock()
 		_start_image_download(item.url, item.cache_path)
+
+
+## Drop queued (not in-flight) low-priority image downloads, sparing bulk work
+## (sync prefetch) and anything high-priority. Used on grid teleports: queued
+## covers belong to the window the user just left, so clearing them frees the
+## queue for the new window instead of letting stale work crowd it out and
+## trigger queue-full drops. Dropped callbacks receive ImageResult.DROPPED, so
+## callers treat it as backpressure (no failure TTLs), and any card that
+## scrolls back into view simply re-requests its cover.
+func clear_pending_low_priority_image_downloads() -> int:
+	_pending_image_downloads_mutex.lock()
+	var dropped: Array = []
+	var kept: Array = []
+	for item in _pending_image_downloads:
+		if item.get("high_priority", false) or item.get("bulk", false):
+			kept.append(item)
+		else:
+			dropped.append(item)
+	_pending_image_downloads = kept
+	_pending_image_downloads_mutex.unlock()
+	for item in dropped:
+		_log_image_drop(item.url)
+		if item.callback.is_valid():
+			item.callback.call(ImageResult.DROPPED)
+	return dropped.size()
 
 
 static var _redact_regex: RegEx = null
@@ -3557,7 +3591,7 @@ func _start_image_download(url: String, cache_path: String) -> void:
 
 		for cb in callbacks:
 			if cb.is_valid():
-				cb.call(image_ok)
+				cb.call(ImageResult.OK if image_ok else ImageResult.FAILED)
 
 		_process_image_download_queue()
 	)

@@ -163,7 +163,7 @@ func _load_cover(game: GameResource) -> void:
 		# file-exists guard prevents a retry loop when the download fails.
 		if cover_url != "":
 			var self_ref_dl: WeakRef = weakref(self)
-			DataManager.load_image(cover_url, func(_t: Texture2D):
+			DataManager.load_image(cover_url, func(_t: Texture2D, _r: int):
 				var w = self_ref_dl.get_ref()
 				if w and FSM.file_exists(cache_path):
 					w._load_cover(game)

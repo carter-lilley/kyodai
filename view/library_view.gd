@@ -28,6 +28,10 @@ var _pre_search_platform_index: int = -1  # Remember platform before search
 # Filter state (IGDB metadata chips; kind -> Array of selected values)
 var _active_filters: Dictionary = {}
 
+# A-Z letter navigation overlay (child of games_grid; does not affect layout)
+var _az_carousel: AZLetterCarousel = null
+var _letter_first_index: Dictionary = {}  # letter -> first grid index
+
 func _exit_tree() -> void:
 	# Disconnect from autoload signals so the view can be freed when the tree tears down.
 	if DataManager:
@@ -126,7 +130,10 @@ func _ready():
 		platform_indicator.cycle_next_clicked.connect(_on_cycle_next_clicked)
 		platform_indicator.search_clicked.connect(_on_search_button_clicked)
 		platform_indicator.filter_clicked.connect(_on_filter_button_clicked)
-	
+
+	# A-Z letter carousel overlaying the grid's right edge
+	_setup_az_carousel()
+
 	# Filter sheet is created lazily on first open so it doesn't hold resources
 	# for the entire session.
 	
@@ -151,6 +158,72 @@ func _refresh_grid_dimensions() -> void:
 		games_grid.recalculate_layout_with_size(available_size)
 	else:
 		games_grid.refresh_dimensions()
+
+func _setup_az_carousel() -> void:
+	"""Create the A-Z letter carousel as a child of the grid Control.
+
+	The grid does not arrange its direct children (only _flow_container's),
+	so the carousel overlays the grid's right edge without affecting layout."""
+	_az_carousel = AZLetterCarousel.new()
+	_az_carousel.name = "AZLetterCarousel"
+	_az_carousel.visible = false  # Shown once the letter map loads.
+	_az_carousel.letter_selected.connect(_on_az_letter_selected)
+	# Scrubbing teleports through many letters per second; suppress network
+	# cover loads for the duration (cache-only) and fetch on finger-lift so
+	# the download queue only serves the position the user settles on.
+	_az_carousel.scrub_started.connect(func(): games_grid.set_scrub_cover_suppressed(true))
+	_az_carousel.scrub_ended.connect(func(): games_grid.set_scrub_cover_suppressed(false))
+	games_grid.add_child(_az_carousel)
+
+func _load_letter_index() -> void:
+	"""Query first-character run lengths and derive the letter -> index map."""
+	if not _az_carousel:
+		return
+	var platform_slug := _current_platform_slug
+	var filters := _active_filters.duplicate(true)
+	var search_query := _search_query if _is_search_active else ""
+	SystemManager.memory.queue_db_task(
+		func():
+			return DataManager.get_title_letter_runs(platform_slug, filters, search_query),
+		func(runs: Array[Dictionary]):
+			if not is_instance_valid(_az_carousel):
+				return
+			_apply_letter_runs(runs)
+	)
+
+func _apply_letter_runs(runs: Array[Dictionary]) -> void:
+	var first_index: Dictionary = {}
+	var ordered_letters: Array[String] = []
+	var ordered_indices: Array[int] = []
+	var idx := 0
+	for run in runs:
+		var key := _letter_key_for_char(str(run.get("letter", "")))
+		if not first_index.has(key):
+			first_index[key] = idx
+			ordered_letters.append(key)
+			ordered_indices.append(idx)
+		idx += int(run.get("count", 0))
+	_letter_first_index = first_index
+	_az_carousel.set_letter_map(first_index, ordered_letters, ordered_indices)
+	_az_carousel.visible = idx > 0
+
+static func _letter_key_for_char(ch: String) -> String:
+	if ch.is_empty():
+		return "#"
+	var up := ch.to_upper()
+	if up >= "A" and up <= "Z":
+		return up
+	return "#"
+
+func _on_az_letter_selected(letter: String, _from_drag: bool) -> void:
+	if not games_grid:
+		return
+	var idx: int = _letter_first_index.get(letter, -1)
+	if idx < 0:
+		return
+	# Always jump instantly: an animated cross-library jump smooth-scrolls
+	# through every intermediate row, recycling thousands of cards on the way.
+	games_grid.scroll_to_index(idx, false)
 
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
@@ -350,6 +423,9 @@ func _load_total_count_with_search(on_complete: Callable = Callable()):
 			# Refresh dimensions
 			_refresh_grid_dimensions()
 
+			# Refresh A-Z letter navigation for the new result set
+			_load_letter_index()
+
 			# Focus first card
 			call_deferred("_focus_first_card")
 
@@ -480,6 +556,9 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 			# Recalculate grid dimensions to fix layout after platform filter change
 			_refresh_grid_dimensions()
 			
+			# Refresh A-Z letter navigation for the new platform/filter set
+			_load_letter_index()
+			
 			# Focus the first card after platform switch
 			# Use call_deferred to ensure cards are created and ready
 			call_deferred("_focus_first_card")
@@ -554,6 +633,8 @@ func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Cal
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
 			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
+			# Refresh A-Z letter navigation for the new result set
+			_load_letter_index()
 			if on_complete.is_valid():
 				on_complete.call()
 	)
@@ -612,6 +693,10 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 		else:
 			var platform_name = _get_current_platform_name()
 			_update_status("%s: %d-%d of %d" % [platform_name, start_num, end_num, total_count])
+
+	# Highlight the current letter in the A-Z carousel
+	if _az_carousel and _az_carousel.visible:
+		_az_carousel.set_active_from_index(start_index)
 
 func _get_current_platform_name() -> String:
 	"""Get the display name of the current platform."""

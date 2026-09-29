@@ -434,6 +434,11 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var platform_config = launch_manager.registry._get_step_platform_config(step)
 	
 	if platform_config.is_empty():
+		# Step is scoped to another OS (e.g. the linux-only chmod step): skip it
+		# instead of failing the install on a platform where it never applies.
+		if not launch_manager.registry.step_applies_to_platform(step):
+			print("[EmulatorManager] Skipping step '" + step_name + "' - not applicable on " + platform_name)
+			return _execute_install_step(emulator_id, step_index + 1)
 		push_error("[EmulatorManager] No platform config for step '" + step_name + "' on platform: " + platform_name)
 		_end_force_install(emulator_id)
 		install_steps_failed.emit(emulator_id, "No platform config")
@@ -1824,6 +1829,11 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 	var platform_config = launch_manager.registry._get_step_platform_config(step)
 	
 	if platform_config.is_empty():
+		# A step scoped to another OS can never complete here: treat it as not
+		# applicable so the install doesn't stay "partial" forever (which would
+		# re-trigger an install on every launch).
+		if not launch_manager.registry.step_applies_to_platform(step):
+			return true
 		return false
 	
 	var action_type = platform_config.get("action_type", "")

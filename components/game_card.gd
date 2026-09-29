@@ -998,6 +998,15 @@ func _load_cover(high_priority: bool = false) -> void:
 	else:
 		_set_texture(_loading_texture)
 
+## Nudge for visible cards whose cover fetch was suppressed (fast scroll /
+## A-Z scrub) or dropped by queue backpressure: nothing else re-triggers the
+## download they skipped, so re-run the load path when suppression lifts.
+func retry_cover_if_placeholder() -> void:
+	if not game or not _media_loader:
+		return
+	if _current_texture == null or _current_texture == _loading_texture:
+		_media_loader.load_cover(game, true)
+
 func _on_media_texture_loaded(texture: Texture2D) -> void:
 	_set_texture(texture)
 

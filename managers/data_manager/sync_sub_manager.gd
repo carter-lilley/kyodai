@@ -849,12 +849,17 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 		# high priority is reserved for on/near-screen card loads, and dispatch
 		# throttling (COVER_DISPATCH_MAX_IN_FLIGHT) keeps the queue from
 		# dropping these.
-		data_manager.cover.download_cover(url, func(ok):
-			if ok:
+		# Bulk (true): sync prefetch is background batch work and must survive
+		# grid-teleport pruning of user-facing queue entries. DROPPED
+		# (backpressure) isn't logged as an error - the next sync's backfill
+		# refetches anything that didn't land.
+		data_manager.cover.download_cover(url, func(result):
+			if result == DownloadSubManager.ImageResult.OK:
 				_sync_covers_downloaded_count += 1
 			else:
 				_sync_covers_failed_count += 1
-				push_error("[SyncThread] Cover download FAILED: %s" % DownloadSubManager._redact_url(url))
+				if result == DownloadSubManager.ImageResult.FAILED:
+					push_error("[SyncThread] Cover download FAILED: %s" % DownloadSubManager._redact_url(url))
 			counted_cb.call()
 
 			_sync_pending_downloads_mutex.lock()
@@ -862,7 +867,7 @@ func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable 
 			# sync) must not drive the next sync's counter negative.
 			_sync_pending_downloads = maxi(0, _sync_pending_downloads - 1)
 			_sync_pending_downloads_mutex.unlock()
-		)
+		, false, true)
 
 	# Mark this dispatch batch as processed.
 	_sync_covers_mutex.lock()

@@ -183,9 +183,11 @@ func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> v
 		var cover_path = DataManager.get_cached_image_path(cover_url)
 		
 		# Download the cover image
-		SystemManager.download.download_image(cover_url, cover_path, func(success: bool):
+		# Bulk (true): sync prefetch is background batch work and must survive
+		# grid-teleport pruning of user-facing queue entries.
+		SystemManager.download.download_image(cover_url, cover_path, func(result):
 			var cover_path_ref = [cover_path]
-			if not success:
+			if result != DownloadSubManager.ImageResult.OK:
 				cover_path_ref[0] = ""  # Will fall back to placeholder
 			
 			# Add game to list with cover path
@@ -201,7 +203,7 @@ func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> v
 			
 			if callback.is_valid():
 				callback.call(true, game_name)
-		)
+		, false, true)
 		
 		http.queue_free()
 	)

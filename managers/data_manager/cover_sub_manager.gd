@@ -329,21 +329,21 @@ func get_cached_image_path(url: String) -> String:
 	return CACHE_FOLDER + url.md5_text() + "." + extension
 
 
-func _download_cover(url: String, callback: Callable, high_priority: bool = false):
+func _download_cover(url: String, callback: Callable, high_priority: bool = false, bulk: bool = false):
 	var cache_path = get_cached_image_path(url)
 
 	# Check if already cached
 	if FSM.file_exists(cache_path):
-		callback.call(true)
+		callback.call(DownloadSubManager.ImageResult.OK)
 		return
 
 	# Direct download - SystemManager.download handles deduplication.
 	# The callback (and therefore _note_cover_write) runs on the main thread.
-	SystemManager.download.download_image(url, cache_path, func(ok):
-		if ok:
+	SystemManager.download.download_image(url, cache_path, func(result):
+		if result == DownloadSubManager.ImageResult.OK:
 			_note_cover_write(cache_path)
-		callback.call(ok)
-	, high_priority)
+		callback.call(result)
+	, high_priority, bulk)
 
 
 ## Account for a freshly written cover and evict oldest-first if the cache now
@@ -362,8 +362,8 @@ func _note_cover_write(cache_path: String) -> void:
 		enforce_cache_limit_async()
 
 
-func download_cover(url: String, callback: Callable, high_priority: bool = false) -> void:
-	_download_cover(url, callback, high_priority)
+func download_cover(url: String, callback: Callable, high_priority: bool = false, bulk: bool = false) -> void:
+	_download_cover(url, callback, high_priority, bulk)
 
 
 func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
@@ -396,7 +396,7 @@ func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") 
 func load_image(url: String, callback: Callable = Callable(), high_priority: bool = false):
 	if url == "" or not url.begins_with("http"):
 		if callback.is_valid():
-			callback.call(null)
+			callback.call(null, DownloadSubManager.ImageResult.FAILED)
 		return
 
 	var cache_path = get_cached_image_path(url)
@@ -412,7 +412,7 @@ func load_image(url: String, callback: Callable = Callable(), high_priority: boo
 				var texture = MemorySubManager.create_texture_from_image(image)
 				if texture:
 					if callback.is_valid():
-						callback.call(texture)
+						callback.call(texture, DownloadSubManager.ImageResult.OK)
 					data_manager.image_loaded.emit(url, texture)
 				else:
 					# Cache file exists but failed to load, try downloading fresh
@@ -429,11 +429,14 @@ func load_image(url: String, callback: Callable = Callable(), high_priority: boo
 
 func _load_image_from_network(url: String, cache_path: String, callback: Callable, high_priority: bool = false):
 	"""Download and load image from network using background thread."""
-	_download_cover(url, func(_ok):
+	_download_cover(url, func(result):
 		# Check if file was downloaded successfully
 		if not FSM.file_exists(cache_path):
 			if callback.is_valid():
-				callback.call(null)
+				# OK-but-missing means the file was evicted between write and
+				# read: transient, so report DROPPED (retryable) not FAILED.
+				var out_result: int = result if result != DownloadSubManager.ImageResult.OK else DownloadSubManager.ImageResult.DROPPED
+				callback.call(null, out_result)
 			return
 
 		MemorySubManager.queue_image_task(
@@ -442,9 +445,26 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 		func(image):
 			if image and not image.is_empty():
 				var texture = MemorySubManager.create_texture_from_image(image)
+				if texture:
+					if callback.is_valid():
+						callback.call(texture, DownloadSubManager.ImageResult.OK)
+					data_manager.image_loaded.emit(url, texture)
+				else:
+					# Decode worked but texture creation failed (transient,
+					# e.g. memory pressure). Still must answer the callback:
+					# callers that never get a result stay in loading state
+					# forever.
+					if callback.is_valid():
+						callback.call(null, DownloadSubManager.ImageResult.FAILED)
+			else:
+				# Corrupt/partial cache file. Delete it so the next attempt
+				# re-downloads instead of decoding the same bad bytes forever
+				# (the download path reports "already cached" and would loop
+				# straight back here), and answer with FAILED so callers
+				# apply their normal retry/backoff policy.
+				FSM.delete_file(cache_path)
 				if callback.is_valid():
-					callback.call(texture)
-				data_manager.image_loaded.emit(url, texture)
+					callback.call(null, DownloadSubManager.ImageResult.FAILED)
 		, high_priority)
 	, high_priority)
 

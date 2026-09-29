@@ -15,6 +15,9 @@ const LEGACY_ID_ALIASES := {
 	"xenia": "xenia-edge",
 }
 
+## OS keys an install step's "platforms" dictionary is allowed to declare.
+const STEP_PLATFORM_KEYS := ["windows", "linux", "android", "macos"]
+
 ## Maps a possibly-legacy emulator id to its canonical id.
 func canonicalize_emulator_id(emulator_id: String) -> String:
 	return LEGACY_ID_ALIASES.get(emulator_id, emulator_id)
@@ -294,6 +297,24 @@ func _get_step_platform_config(step: Dictionary) -> Dictionary:
 		platform_config = platforms.get(platform_name, {})
 	
 	return platform_config
+
+## Returns true when an install step applies to the current OS.
+## A step that declares configs for other OSes but not the current one (e.g. a
+## linux-only chmod step running on Windows) is intentionally platform-scoped
+## and must be skipped rather than treated as a missing/broken config.
+## Steps with no "platforms" declaration, steps using the "all" catch-all, and
+## steps declaring unrecognised keys (likely typos) are reported as applying so
+## genuine authoring mistakes still surface through the normal error path.
+func step_applies_to_platform(step: Dictionary) -> bool:
+	var platforms = step.get("platforms", {})
+	if platforms is not Dictionary or platforms.is_empty():
+		return true
+	if platforms.has("all"):
+		return true
+	for key in platforms.keys():
+		if not (str(key) in STEP_PLATFORM_KEYS):
+			return true
+	return platforms.has(SystemManager.platform.get_platform_name().to_lower())
 
 ## Helper: Recursively searches for executable file up to max_depth (3 levels).
 ## executable_name may be an exact filename or a Godot glob pattern (* and ?).

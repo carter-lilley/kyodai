@@ -157,6 +157,12 @@
 		{
 			"step": "chmod_emulator",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "chmod",
 					"pattern": "PPSSPP-*.AppImage"
@@ -166,6 +172,12 @@
 		{
 			"step": "extract_appimage",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"android": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "appimage_extract",
 					"pattern": "PPSSPP-*.AppImage",

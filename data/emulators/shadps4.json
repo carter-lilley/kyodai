@@ -137,6 +137,9 @@
 		{
 			"step": "chmod_binaries",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "chmod",
 					"pattern": "*.AppImage"
@@ -146,6 +149,9 @@
 		{
 			"step": "extract_appimage",
 			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
 				"linux": {
 					"action_type": "appimage_extract",
 					"pattern": "Shadps4-*.AppImage",

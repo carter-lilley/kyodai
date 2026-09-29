@@ -3,7 +3,7 @@
 xemu raw hdd save sync
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-filter by letter/recent
+x filter by letter/recent
 
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs
@@ -28,7 +28,7 @@ filter by letter/recent
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)
-		- wifi, game title, etc
+		- game title, etc
 	focus color (glow, mirror)
 	see 'next page' faintly in pagination view
 	x "case wrap" card effect (spine + label, maybe varying by platform?)
@@ -60,7 +60,7 @@ rework hero to also accept effect stacks
 	emulator repo downloads & updates, config resolvers
 	flexible user profile & emu config support
 	user-added jsons and fx, fleixble data driven
-	add to steam wit subprocess
+	add to steam wit save sync subprocess
 	romm firmware & save sync
 	gamenative support
 	gavel & sigil support

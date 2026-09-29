@@ -502,9 +502,9 @@ static func add_game(game: GameResource) -> void:
 				"Downloading cover for " + game.title + "...",
 				SystemManager.notifications.Type.INFO,
 				null, 0.0, Callable(), Callable(), true, true)
-			DataManager.cover.download_cover(game.cover_url, func(ok: bool):
+			DataManager.cover.download_cover(game.cover_url, func(result):
 				SystemManager.notifications.dismiss_notification(download_notification)
-				if ok and FSM.file_exists(cache_path):
+				if result == DownloadSubManager.ImageResult.OK and FSM.file_exists(cache_path):
 					game_data.cover_path = FSM.resolve_path(cache_path, {"format": FSM.PathFormat.ABSOLUTE})
 				else:
 					push_warning("[SteamVDF] Cover download failed for " + game.title + "; adding shortcut without artwork")

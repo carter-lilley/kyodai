@@ -197,7 +197,7 @@ func _load_cover(card: M3Card, game: GameResource) -> void:
 		# guard prevents a retry loop when the download itself fails.
 		if cover_url != "":
 			var card_ref_dl: WeakRef = weakref(card)
-			DataManager.load_image(cover_url, func(_t: Texture2D):
+			DataManager.load_image(cover_url, func(_t: Texture2D, _r: int):
 				var c: M3Card = card_ref_dl.get_ref()
 				if c and FSM.file_exists(cache_path):
 					_load_cover(c, game)
