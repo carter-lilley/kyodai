@@ -14,14 +14,24 @@ signal dual_screen_lost()
 signal dual_screen_mode_changed(enabled: bool, second_screen_index: int)
 signal dual_screen_availability_changed(available: bool)
 signal initial_window_size_settled()
+## Emitted whenever the custom title bar chrome (borderless windowed frame)
+## becomes active or inactive. TitleBar/WindowResizeGrips show/hide on it.
+signal window_chrome_changed(active: bool)
 
-const RESIZE_DEBOUNCE_SECONDS := 0.25
+# Long enough that a brief pause mid-drag on the window resize grips doesn't
+# propagate a full rebuild into an active interactive resize; short enough
+# that the grid re-snap after releasing still feels immediate.
+const RESIZE_DEBOUNCE_SECONDS := 0.4
 const SCALE_DEBOUNCE_SECONDS := 0.2
 const BASE_HEIGHT := 1080.0
 const BASE_DPI := 160.0
 const DEFAULT_DPI := 96.0
 const MIN_UI_SCALE := 1.0
 const MAX_UI_SCALE := 5.0
+
+## Smallest windowed size while the native frame is stripped (the OS can no
+## longer enforce a minimum via the frame). Matches _clamp_window_size.
+const MIN_WINDOW_SIZE := Vector2i(400, 300)
 
 ## Shared layout tier breakpoints (viewport width in dp). Compact tightens
 ## margins; small additionally collapses secondary content (covers, setting
@@ -49,6 +59,17 @@ var _dual_screen_enabled: bool = false
 var _dual_screen_available: bool = false
 var _second_screen_index: int = -1
 var _android_plugin = null
+
+# Custom title bar chrome state (borderless frame in windowed mode, desktop).
+# _pre_maximize_rect: windowed rect captured before maximize, used to restore.
+# _manual_maximized: true when we sized the window to the work area ourselves
+# because the native borderless maximize overlapped the taskbar; mode stays
+# WINDOWED in that state, so remember it explicitly (also gates saving the
+# window size so the maximized rect never gets persisted as the windowed size).
+var _pre_maximize_rect: Rect2i = Rect2i()
+var _manual_maximized: bool = false
+var _manual_max_rect: Rect2i = Rect2i()
+var _max_verify_token: int = 0
 
 # Dual-screen SubViewports are always 1:1 (no size_2d_override): dp scaling is
 # applied inside them via M3Units (see _calculate_ui_scale). Never reintroduce
@@ -96,6 +117,12 @@ func _ready() -> void:
 
 	# Apply the saved windowed size once the OS window is ready.
 	call_deferred("_apply_initial_window_size")
+
+	# Watch window geometry so a manual work-area maximize can't go stale when
+	# something else resizes/moves the window (WM tiling, fullscreen, etc.).
+	var root_window := get_window()
+	if root_window:
+		root_window.size_changed.connect(_on_window_geometry_changed)
 
 	# Try to connect to AynThor screen swap signal (may not exist yet)
 	call_deferred("_connect_ayn_thor_signals")
@@ -265,21 +292,28 @@ func _apply_initial_window_size() -> void:
 	var viewport_before: Vector2i = viewport.size
 	var viewport_size_before := get_viewport_size()
 	var windowed_setting = settings_man.get_setting("windowed")
+	# Apply the borderless chrome BEFORE the mode/size changes below: the saved
+	# window size is a client-area size, so it must be restored against the
+	# final frame style (custom title bar vs. native title bar).
 	if windowed_setting and not windowed_setting.value:
-		# Fullscreen (windowed = false): restore exclusive fullscreen.
+		# Fullscreen (windowed = false): restore exclusive fullscreen. The
+		# borderless flag is ignored for fullscreen windows, so leave it alone.
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
 		print("[SystemManager.display] Restored fullscreen mode")
 	elif windowed_setting and windowed_setting.value:
-		# Windowed: restore last size if available; otherwise let the existing
+		# Windowed: strip the native frame (custom title bar on desktop), then
+		# restore last size if available; otherwise let the existing
 		# signal/resize path handle it.
+		apply_window_chrome(true)
 		var last_size := restore_last_window_size()
 		if last_size == Vector2i.ZERO:
 			print("[SystemManager.display] No saved window size, using resolution preset")
 		else:
 			print("[SystemManager.display] Restored saved window size: ", last_size)
 	else:
-		# Setting missing; leave default window mode alone.
-		pass
+		# Setting missing; leave default window mode alone, but match the
+		# chrome to the mode we actually ended up in.
+		apply_window_chrome(DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED)
 
 	# Wait for the OS window size and viewport size to stabilize. The OS may need
 	# a few frames to apply the new window size, and the Godot viewport can lag
@@ -412,6 +446,10 @@ func restore_last_window_size() -> Vector2i:
 	return Vector2i.ZERO
 
 func save_last_window_size() -> void:
+	# A manual work-area maximize runs in WINDOWED mode with the maximized rect
+	# applied; that rect must never be persisted as the windowed size.
+	if _manual_maximized:
+		return
 	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
 		return
 	# Use the OS window size directly; fall back to the root viewport size if
@@ -431,6 +469,7 @@ func save_last_window_size() -> void:
 func windowed_toggle(value : bool):
 	if value:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		apply_window_chrome(true)
 		var last_size := restore_last_window_size()
 		if last_size == Vector2i.ZERO:
 			var resolution_setting = settings_man.get_setting("resolution")
@@ -442,6 +481,7 @@ func windowed_toggle(value : bool):
 		settings_man.enable_setting("resolution")
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		apply_window_chrome(false)
 		settings_man.disable_setting("resolution")
 		# Force immediate cascade so consumers (zoom, popups, grid) get the
 		# new fullscreen resolution without waiting for the OS signal + debounce.
@@ -589,3 +629,157 @@ func force_check_displays() -> void:
 func get_android_plugin():
 	"""Returns the Android plugin instance for other managers to use."""
 	return _android_plugin
+
+# ============================================================================
+# Window chrome (borderless frame + custom title bar)
+# ============================================================================
+
+func supports_window_chrome() -> bool:
+	## Custom title bar only replaces the frame on the platforms we export to
+	## (Windows + Linux). Android has no decorations; macOS is not planned.
+	if SystemManager and SystemManager.platform:
+		return SystemManager.platform.is_windows() or SystemManager.platform.is_linux()
+	return false
+
+func apply_window_chrome(windowed: bool) -> void:
+	## Apply/notify the borderless chrome for the given window mode.
+	## Only the windowed side touches the flag: borderless is ignored for
+	## fullscreen windows anyway, and clearing it mid-fullscreen would churn
+	## the frame style for no benefit (windowed_toggle re-applies on return).
+	if not supports_window_chrome():
+		return
+	var window := get_window()
+	if window == null:
+		return
+	if windowed:
+		window.min_size = MIN_WINDOW_SIZE
+		window.borderless = true
+	var active := is_window_chrome_active()
+	print("[SystemManager.display] window chrome: windowed=", windowed, " borderless=", window.borderless, " active=", active)
+	window_chrome_changed.emit(active)
+
+func is_window_chrome_active() -> bool:
+	## True while the native frame is stripped and the custom title bar strip
+	## should be visible (windowed or maximized; never fullscreen).
+	if not supports_window_chrome():
+		return false
+	var mode := DisplayServer.window_get_mode()
+	if mode != DisplayServer.WINDOW_MODE_WINDOWED and mode != DisplayServer.WINDOW_MODE_MAXIMIZED:
+		return false
+	var window := get_window()
+	return window != null and window.borderless
+
+func is_window_maximized() -> bool:
+	if _manual_maximized:
+		return true
+	var window := get_window()
+	return window != null and window.mode == Window.MODE_MAXIMIZED
+
+func toggle_window_maximize() -> void:
+	if is_window_maximized():
+		restore_window_maximize()
+	else:
+		maximize_window()
+
+func maximize_window() -> void:
+	if not is_window_chrome_active():
+		return
+	var window := get_window()
+	if window == null or is_window_maximized():
+		return
+	_pre_maximize_rect = Rect2i(window.position, window.size)
+	window.mode = Window.MODE_MAXIMIZED
+	# Borderless maximize is known to cover the taskbar on some platforms
+	# (godotengine/godot#104663); verify against the work area and fall back
+	# to sizing there manually if the WM got it wrong.
+	_schedule_maximize_work_area_check()
+
+func restore_window_maximize() -> void:
+	var window := get_window()
+	if window == null:
+		return
+	_max_verify_token += 1  # cancel a pending work-area verification
+	if _manual_maximized:
+		_manual_maximized = false
+		if _pre_maximize_rect.size.x > 0 and _pre_maximize_rect.size.y > 0:
+			# The window manager never saw this maximize; restore it ourselves.
+			window.size = _pre_maximize_rect.size
+			window.position = _pre_maximize_rect.position
+	else:
+		# Native maximize: the WM remembers and restores the pre-maximize rect.
+		window.mode = Window.MODE_WINDOWED
+
+func minimize_window() -> void:
+	if not is_window_chrome_active():
+		return
+	var window := get_window()
+	if window:
+		window.mode = Window.MODE_MINIMIZED
+
+func begin_title_drag() -> void:
+	## Start an OS-level window move from the custom title bar. A manual
+	## work-area maximize is restored first (the WM doesn't know that state,
+	## so a native drag wouldn't shrink the window), keeping the grabbed point
+	## of the title bar under the cursor across the restore.
+	var window := get_window()
+	if window == null:
+		return
+	if _manual_maximized:
+		var mouse := Vector2(DisplayServer.mouse_get_position())
+		var rel := mouse - Vector2(window.position)
+		restore_window_maximize()
+		var new_rel := Vector2(
+			clampf(rel.x, 0.0, maxf(0.0, window.size.x - 1.0)),
+			clampf(rel.y, 0.0, maxf(0.0, window.size.y - 1.0)))
+		window.position = Vector2i(mouse - new_rel)
+	window.start_drag()
+
+func _schedule_maximize_work_area_check() -> void:
+	_max_verify_token += 1
+	_verify_maximize_work_area(_max_verify_token)
+
+func _verify_maximize_work_area(token: int) -> void:
+	# Give the window manager a couple of frames to settle the maximized rect.
+	for i in 2:
+		var tree := get_tree()
+		if tree == null:
+			return
+		await tree.process_frame
+	if token != _max_verify_token:
+		return
+	var window := get_window()
+	if window == null or window.mode != Window.MODE_MAXIMIZED:
+		return
+	var screen := DisplayServer.window_get_current_screen()
+	var usable := DisplayServer.screen_get_usable_rect(screen)
+	if usable.size.x <= 0 or usable.size.y <= 0:
+		return
+	# Borderless windows have no frame, so position/size is the outer rect.
+	if usable.encloses(Rect2i(window.position, window.size)):
+		return  # Fits the work area; the taskbar was respected.
+	print("[SystemManager.display] maximized rect ", Rect2i(window.position, window.size),
+		" exceeds work area ", usable, "; falling back to manual maximize")
+	# Overlap: size to the work area manually. Mode must go back to WINDOWED
+	# first, or the window manager keeps owning the rect.
+	window.mode = Window.MODE_WINDOWED
+	window.size = usable.size
+	window.position = usable.position
+	_manual_max_rect = Rect2i(window.position, window.size)
+	_manual_maximized = true
+
+func _on_window_geometry_changed() -> void:
+	# External changes (WM tiling shortcuts, fullscreen, snapping) invalidate
+	# the manual maximize state; otherwise we'd skip size persistence forever
+	# and the title bar icon would be wrong.
+	if not _manual_maximized:
+		return
+	var window := get_window()
+	if window == null or window.mode != Window.MODE_WINDOWED:
+		_manual_maximized = false
+		return
+	var rect := Rect2i(window.position, window.size)
+	var expected := _manual_max_rect
+	# Tolerate a pixel of WM adjustment; anything else is a real change.
+	if absi(rect.position.x - expected.position.x) > 2 or absi(rect.position.y - expected.position.y) > 2 \
+			or absi(rect.size.x - expected.size.x) > 2 or absi(rect.size.y - expected.size.y) > 2:
+		_manual_maximized = false

@@ -332,7 +332,7 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 
 		if response_code == 401:
 			authentication_failed.emit()
-			callback.call({}, "Authentication failed")
+			_invoke_callback(endpoint, callback, {}, "Authentication failed")
 			return
 
 		if result != HTTPRequest.RESULT_SUCCESS:
@@ -344,11 +344,11 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 					return
 				make_request(endpoint, callback, authenticated, use_cache, _retries_left - 1)
 				return
-			callback.call({}, "Request failed with result: " + str(result))
+			_invoke_callback(endpoint, callback, {}, "Request failed with result: " + str(result))
 			return
 
 		if response_code != 200:
-			callback.call({}, "HTTP error: " + str(response_code))
+			_invoke_callback(endpoint, callback, {}, "HTTP error: " + str(response_code))
 			return
 
 		var parse_start_us := Time.get_ticks_usec()
@@ -358,7 +358,7 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 		var parse_result = json.parse(body_text)
 
 		if parse_result != OK:
-			callback.call({}, "Failed to parse JSON: " + json.get_error_message())
+			_invoke_callback(endpoint, callback, {}, "Failed to parse JSON: " + json.get_error_message())
 			return
 
 		# Client-side hash-based caching: compute hash of sorted rom IDs
@@ -375,15 +375,29 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 				var cached_data = cached.get("data", {})
 				var game_count = _count_games_in_data(cached_data)
 				_games_from_cache += game_count
-				callback.call(cached_data, "")
+				_invoke_callback(endpoint, callback, cached_data, "")
 				return
 
 		if use_cache:
 			_cache_misses += 1
+			var store_start_us := Time.get_ticks_usec()
 			_store_cached_response(endpoint, body_hash, json.data)
+			var store_us := Time.get_ticks_usec() - store_start_us
+			if store_us > 10000:
+				print("[Network] cache store '", endpoint, "' elapsed_us=", store_us)
 
-		callback.call(json.data, "")
+		_invoke_callback(endpoint, callback, json.data, "")
 	)
+
+## Runs a response callback with timing so a slow handler is attributed to its
+## endpoint instead of showing up as an anonymous frame spike.
+func _invoke_callback(endpoint: String, callback: Callable, data: Variant, error: String) -> void:
+	var start_us := Time.get_ticks_usec()
+	callback.call(data, error)
+	var cb_us := Time.get_ticks_usec() - start_us
+	if cb_us > 16000:
+		var err_detail: String = "none" if error.is_empty() else error
+		print("[Network] slow callback '", endpoint, "' elapsed_us=", cb_us, " error=", err_detail)
 
 func _compute_content_hash(data: Variant) -> String:
 	"""Compute a stable hash of the response content (sorted rom IDs)."""

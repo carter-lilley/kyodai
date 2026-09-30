@@ -3,11 +3,28 @@ extends RefCounted
 
 ## Forces GPU pipeline compilation for all bundled canvas-item shaders at
 ## startup. Godot compiles pipelines lazily on first draw, so without this the
-## first grid paint, first scroll, and first focus each pay a compile hitch
+## first grid paint, first scroll, and the first focus each pay a compile hitch
 ## per shader. Every shader is drawn once into a tiny hidden SubViewport, one
 ## per frame so the prewarm never stalls the startup critical path.
+##
+## The set is tiered: everything outside shaders/background/ compiles during
+## startup, plus only the background shader(s) the active config actually
+## draws. Inactive backgrounds compile on demand when the user switches to
+## them, so boot doesn't pay for a dozen unused pipelines.
 
 const SCAN_DIRS := ["res://shaders", "res://addons/m3/shaders"]
+const BACKGROUND_DIR := "res://shaders/background/"
+## Always drawn: LibraryBackground bakes its base layer with this shader.
+const BASE_BACKGROUND_SHADER := BACKGROUND_DIR + "library_background_gradient.gdshader"
+
+## A render frame this long after kicking a compile means the compile stalled
+## the render thread; idle a few frames before the next one so stalls can't
+## stack onto settle/scroll/input frames.
+const SLOW_RENDER_US := 16000
+const BACKOFF_DIVISOR_US := 8000  # one extra idle frame per extra 8ms
+const MAX_BACKOFF_FRAMES := 4
+## Individual shaders that cost real time get their own log line (attribution).
+const LOG_SHADER_US := 8000
 
 # Prewarm is kicked early (autoload) with a fallback kick from Main; the
 # guard makes whichever runs second a no-op.
@@ -42,6 +59,9 @@ static func prewarm(tree: SceneTree) -> void:
 	var paths := collect_shader_paths()
 	if paths.is_empty():
 		return
+	var plan := _plan_paths(paths)
+	if plan.is_empty():
+		return
 
 	var viewport := SubViewport.new()
 	viewport.name = "ShaderPrewarmer"
@@ -52,14 +72,16 @@ static func prewarm(tree: SceneTree) -> void:
 	tree.root.add_child(viewport)
 
 	var compiled := 0
-	for path in paths:
+	for path in plan:
 		# Pipeline compilation is a frame-time spike by nature; skip frames
 		# where the warmup budget is already spent so compiles never stack
 		# onto grid settle or scroll work, and skip frames with recent input
 		# so a compile spike can't hitch an in-flight interaction.
 		while not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US, "shader_prewarm") or WarmupBudget.input_idle_ms() < 100:
 			await tree.process_frame
+		var load_start_us := Time.get_ticks_usec()
 		var shader: Shader = load(path)
+		var load_us := Time.get_ticks_usec() - load_start_us
 		if shader == null:
 			continue
 		var material := ShaderMaterial.new()
@@ -68,14 +90,88 @@ static func prewarm(tree: SceneTree) -> void:
 		rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 		rect.material = material
 		viewport.add_child(rect)
+		var render_start_us := Time.get_ticks_usec()
 		# UPDATE_ONCE renders on the next frame, then disables again.
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		await tree.process_frame
+		var render_us := Time.get_ticks_usec() - render_start_us
 		# With threaded rendering the compile stalls the render thread and
 		# surfaces a frame late; tag the render frame too so spikes attribute.
 		WarmupBudget.tag("shader_rendered")
 		rect.queue_free()
 		compiled += 1
+		if load_us > LOG_SHADER_US or render_us > LOG_SHADER_US:
+			print("[ShaderPrewarmer] shader='%s' load_us=%d render_frame_us=%d" % [path.get_file(), load_us, render_us])
+		# Real-cost pacing: a long render frame means this compile backed up
+		# the render queue — let frames breathe before compiling the next one.
+		if render_us > SLOW_RENDER_US:
+			var backoff := clampi(render_us / BACKOFF_DIVISOR_US, 1, MAX_BACKOFF_FRAMES)
+			for i in backoff:
+				await tree.process_frame
 
 	viewport.queue_free()
-	print("[ShaderPrewarmer] compiled %d shader pipelines, elapsed_us=%d" % [compiled, Time.get_ticks_usec() - start_us])
+	print("[ShaderPrewarmer] compiled %d shader pipelines (skipped %d inactive backgrounds), elapsed_us=%d" % [
+		compiled, paths.size() - plan.size(), Time.get_ticks_usec() - start_us])
+
+## Startup set: active background shader(s) + everything that isn't a
+## background shader. Sorted scan order puts addons/m3 first, then the active
+## backgrounds (they draw from the first frame), then card/UI shaders.
+static func _plan_paths(paths: Array[String]) -> Array[String]:
+	var active_bg := _active_background_paths()
+	var out: Array[String] = []
+	for path in paths:
+		if path.begins_with(BACKGROUND_DIR):
+			if active_bg.has(path):
+				out.append(path)
+		else:
+			out.append(path)
+	return out
+
+## Shader paths the active library background actually draws: the base
+## gradient (always present) plus each configured effect layer's shader.
+static func _active_background_paths() -> Array[String]:
+	var out: Array[String] = [BASE_BACKGROUND_SHADER]
+	var config: Dictionary = {}
+	if DataManager:
+		var setting = DataManager.get_setting("library_background_config")
+		if setting and setting.value is Dictionary:
+			config = setting.value
+	var ids: Array[String] = []
+	for entry in config.get("effects", []):
+		if entry is Dictionary:
+			ids.append(str(entry.get("effect_id", "")))
+	if ids.is_empty() and config.has("effect_id"):
+		# Legacy single-effect config shape.
+		ids.append(str(config.get("effect_id", "")))
+	for effect_id in ids:
+		if effect_id.is_empty() or effect_id == "none":
+			continue
+		var script_path: String = LibraryBackground.EFFECT_REGISTRY.get(effect_id, "")
+		if script_path.is_empty():
+			# Custom effect: user://effects/background/<id>.gdshader.
+			if EffectRegistry.is_custom(effect_id):
+				out.append("user://effects/background/%s.gdshader" % effect_id)
+			continue
+		var shader_path := _preloaded_shader_path(script_path)
+		if shader_path != "" and not out.has(shader_path):
+			out.append(shader_path)
+	return out
+
+## Resolves the .gdshader an effect script preloads without instantiating the
+## effect: tries the compiled script's constant map first (works in exported
+## builds), falling back to scanning readable script source.
+static func _preloaded_shader_path(script_path: String) -> String:
+	var script: Script = load(script_path)
+	if script != null:
+		for value in script.get_script_constant_map().values():
+			if value is Shader:
+				var sh := value as Shader
+				if sh.resource_path.ends_with(".gdshader"):
+					return sh.resource_path
+	var file := FileAccess.open(script_path, FileAccess.READ)
+	if file == null:
+		return ""
+	var re := RegEx.new()
+	re.compile('preload\\("(res://[^"]+\\.gdshader)"\\)')
+	var hit := re.search(file.get_as_text())
+	return hit.get_string(1) if hit != null else ""

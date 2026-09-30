@@ -78,6 +78,13 @@ static func clear_shared_caches() -> void:
 static func is_material_shareable() -> bool:
 	return false
 
+## Whether EffectThemeAdapter converts this effect's settings when dark mode
+## toggles. Theme-independent effects — shine's highlight band, which must
+## stay bright on any background — override this to return false; their
+## settings then stay identical in both modes and never gain mode caches.
+static func is_theme_adaptive() -> bool:
+	return true
+
 static func get_fallback_texture() -> Texture2D:
 	if _fallback_texture == null:
 		var img = Image.create(2, 2, false, Image.FORMAT_RGBA8)

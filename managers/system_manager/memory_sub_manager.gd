@@ -294,6 +294,11 @@ func _process(_delta):
 	_process_batches()
 	_drain_lp_callbacks()
 
+## Startup cap for the main-thread completion drain: a burst (everything
+## landing at once while the DB/sync wakes) must not monopolize a boot frame.
+## The remainder drains on the following frame(s).
+const MT_STARTUP_DRAIN_CAP := 8
+
 func _drain_mt_callbacks():
 	"""Run queued main-thread hops from worker threads. Drained before the
 	capped lp queue: these are rare, latency-critical completions (e.g. sync
@@ -304,7 +309,11 @@ func _drain_mt_callbacks():
 		return
 	WarmupBudget.tag("mt_cbs")
 	var batch := _mt_callbacks
-	_mt_callbacks = []
+	if WarmupBudget.is_startup_mode() and batch.size() > MT_STARTUP_DRAIN_CAP:
+		_mt_callbacks = batch.slice(MT_STARTUP_DRAIN_CAP)
+		batch = batch.slice(0, MT_STARTUP_DRAIN_CAP)
+	else:
+		_mt_callbacks = []
 	_mt_callback_mutex.unlock()
 
 	for item in batch:
@@ -1216,6 +1225,7 @@ func _process_batches():
 		# frame is always processed so no batch can starve). Fixed-count for
 		# everything else: async modes don't burn main-thread time per item.
 		if batch.mode == BatchMode.SYNC and batch.frame_budget_us > 0:
+			WarmupBudget.tag("batches")
 			var chunk_start_us := Time.get_ticks_usec()
 			var chunk_end := mini(batch.current_index + batch.batch_size, batch.items.size())
 			while batch.current_index < chunk_end:
@@ -1230,6 +1240,8 @@ func _process_batches():
 
 			if items_this_frame <= 0:
 				continue
+
+			WarmupBudget.tag("batches")
 
 			# Process this batch
 			for i in range(batch.current_index, end_index):

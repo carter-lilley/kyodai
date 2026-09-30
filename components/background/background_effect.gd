@@ -11,6 +11,12 @@ var render_scale: float = 1.0
 
 var _settings: Dictionary = {}
 
+## Mirror of EffectBase.is_theme_adaptive(): whether EffectThemeAdapter
+## converts this background effect's settings across dark/light swaps.
+## Backgrounds stay adaptive by default; override to lock one.
+static func is_theme_adaptive() -> bool:
+	return true
+
 func _ready():
 	material = ShaderMaterial.new()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE

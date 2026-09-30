@@ -7,6 +7,13 @@ static func get_allowed_contexts() -> Array[String]:
 static func is_material_shareable() -> bool:
 	return true
 
+## The shine band is a specular highlight: adapting its color to the theme
+## (crushing it toward black in dark mode, blowing it out in light mode)
+## reads as the effect breaking, so its settings never convert across
+## dark/light swaps — see EffectThemeAdapter.
+static func is_theme_adaptive() -> bool:
+	return false
+
 func _init():
 	super._init()
 	effect_id = "shine"

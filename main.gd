@@ -78,8 +78,9 @@ func _ready():
 	# nodes, which causes CanvasItem/Texture RID leaks.
 	get_tree().auto_accept_quit = false
 
-	# Set window title
-	DisplayServer.window_set_title("Kyodai - Game Launcher")
+	# Set window title (Window.title also feeds the custom title bar strip,
+	# which mirrors it via the title_changed signal).
+	get_window().title = "Kyodai - Game Launcher"
 
 	# Preload the Home view scene on a worker thread while the window settles
 	ResourceLoader.load_threaded_request("res://view/home_view.tscn")
@@ -88,6 +89,7 @@ func _ready():
 		await SystemManager.display.initial_window_size_settled
 
 	print("[Main] initial_window_size_settled elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
+	WarmupBudget.tag("main_ready")
 
 	# Get all nodes using get_node to ensure they're ready
 	tab_container = get_node("RootLayout/ContentWrapper/MainContentVBox/TabContainer")
@@ -100,6 +102,12 @@ func _ready():
 	_ui_layer = get_node_or_null("UILayer")
 	_keyboard = get_node_or_null("UILayer/OnscreenKeyboard")
 
+	# Reconcile a pending UI-scale change before building nav/views: the tree
+	# is only main.tscn + autoloads at this point, so the refresh walk is at
+	# its smallest, and everything built afterwards reads the already-updated
+	# M3Units values.
+	UIManager.reconcile_early_scale_change()
+
 	# Initialize UIManager with all the pre-built nodes
 	var phase_start_us := Time.get_ticks_usec()
 	UIManager.initialize(
@@ -110,6 +118,12 @@ func _ready():
 		root_layout
 	)
 	print("[Main] UIManager.initialize elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	WarmupBudget.tag("ui_init")
+
+	# Boot-frame split: initialize (nav/views build) and the rest of _ready
+	# (connects, theme, settle) no longer share one frame. Grid layout is
+	# still suppressed here, so nothing new paints during this frame.
+	await get_tree().process_frame
 
 	# Create debounced zoom save timer (replaces _process polling)
 	_zoom_save_timer = Timer.new()
@@ -213,6 +227,11 @@ func _ready():
 		else:
 			print("[Main] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn_thor_manager.is_swapped, ", ds_enabled=", ds_enabled, ")")
 	print("[Main] screen swap setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Second boot-frame split: the settle + zoom sync run in their own frame
+	# instead of stacking onto the connects/theme work above.
+	await get_tree().process_frame
+	WarmupBudget.tag("main_settle")
 
 	# Single final layout: settle the visible grid(s) now that the window size and
 	# screen swap state are final. This is the one layout pass that should happen
@@ -437,6 +456,10 @@ func _set_startup_zoom_sync_active(value: bool) -> void:
 	_startup_zoom_sync_active = value
 
 func _update_controlbar_mask_color() -> void:
+	# refresh_theme can arrive from an early scale/theme walk before the node
+	# refs are fetched; the mask gets its color again on the next refresh.
+	if content_wrapper == null:
+		return
 	var mask = content_wrapper.get_node_or_null("controlbar_mask")
 	if mask and mask.material:
 		var surface := M3Theme.get_surface()
@@ -492,6 +515,11 @@ func _pre_create_settings_dialog() -> void:
 	print("[Main] _pre_create_settings_dialog entered at ms=", Time.get_ticks_msec())
 	for i in range(3):
 		await get_tree().process_frame
+	# Hold off until the home grid has settled (capped) so the dialog's
+	# category build can't share a frame with boot-critical settle/paint work.
+	var settle_wait_ms := Time.get_ticks_msec()
+	while not WarmupBudget.home_grid_settled and Time.get_ticks_msec() - settle_wait_ms < 8000:
+		await get_tree().process_frame
 	var waited_ms := Time.get_ticks_msec()
 	while WarmupBudget.input_idle_ms() < 500 and Time.get_ticks_msec() - waited_ms < 5000:
 		await get_tree().process_frame
@@ -519,20 +547,30 @@ func _on_current_user_changed(user: Dictionary) -> void:
 	SystemManager.network.download_avatar(user_id, func(success: bool, body: PackedByteArray, _status: int, _err: String):
 		if not success or not is_instance_valid(_user_avatar) or body.size() < 16:
 			return
-		var image := Image.new()
-		var err := FAILED
-		match FSM.detect_image_format(body):
-			FSM.ImageFormat.JPEG:
-				err = image.load_jpg_from_buffer(body)
-			FSM.ImageFormat.PNG:
-				err = image.load_png_from_buffer(body)
-			FSM.ImageFormat.WEBP:
-				err = image.load_webp_from_buffer(body)
-			_:
-				return
-		if err != OK or image.is_empty():
-			return
-		_user_avatar.set_avatar_image(image)
+		# Decode on the image thread: a large avatar JPEG costs tens of ms of
+		# main-thread time and this callback can land mid-startup inside a
+		# net_handler frame. The completion hop runs back on the main thread.
+		MemorySubManager.queue_image_task(
+			func():
+				var image := Image.new()
+				var err := FAILED
+				match FSM.detect_image_format(body):
+					FSM.ImageFormat.JPEG:
+						err = image.load_jpg_from_buffer(body)
+					FSM.ImageFormat.PNG:
+						err = image.load_png_from_buffer(body)
+					FSM.ImageFormat.WEBP:
+						err = image.load_webp_from_buffer(body)
+					_:
+						return null
+				if err != OK or image.is_empty():
+					return null
+				return image,
+			func(image):
+				# image is null when the task was evicted or decode failed.
+				if image != null and is_instance_valid(_user_avatar):
+					_user_avatar.set_avatar_image(image)
+		)
 	)
 
 func _on_more_button_pressed() -> void:

@@ -3,6 +3,8 @@ extends Manager
 const DEBUG_LOG: bool = false
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const TITLE_BAR_SCRIPT := preload("res://components/title_bar.gd")
+const RESIZE_GRIPS_SCRIPT := preload("res://components/window_resize_grips.gd")
 
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.
@@ -35,6 +37,10 @@ var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
 var _content_wrapper: Control = null
 var _content_margin: MarginContainer = null
 var _status_bar: StatusBar = null
+# Desktop windowed chrome: custom title bar strip (above the status strip) and
+# the invisible edge resize grips on the root layout. Null on Android.
+var _title_bar: PanelContainer = null
+var _window_resize_grips: Control = null
 
 # Cached on-screen keyboard reference (survives reparenting in dual-screen mode)
 var _onscreen_keyboard: PanelContainer = null
@@ -71,6 +77,19 @@ signal tab_changed(view_name: String)
 signal layout_changed(position: String)
 @warning_ignore("unused_signal")
 signal settings_dialog_dismissed()
+
+## Consumes a UI-scale change that fired before initialize() connected the
+## signal, and reconciles the nodes built so far. Main calls this right after
+## the window settles, before initialize(): the tree is only main.tscn +
+## autoloads then, so the refresh walk is at its smallest, and everything
+## built afterwards reads the already-updated M3Units values.
+func reconcile_early_scale_change() -> void:
+	if SystemManager.display and SystemManager.display.consume_pending_scale_refresh():
+		var walk_start_us := Time.get_ticks_usec()
+		theme._do_refresh_scale()
+		# During startup the walk is chunked across frames; this logs the first
+		# chunk only, and [ThemeManager] startup scale walk logs the total.
+		print("[UIManager] early scale reconcile first-chunk_us=", Time.get_ticks_usec() - walk_start_us)
 
 func initialize(
 	tab_container: TabContainer,
@@ -116,17 +135,38 @@ func initialize(
 	# Dock the status strip (clock + battery) at the top edge, above the margin
 	# container so it is full-bleed and unaffected by the content margins.
 	# Stored as a member: compute_grid_available_size subtracts its height.
+	# The custom title bar sits above it as the first row (desktop windowed
+	# chrome only); it hides itself when the chrome is inactive (fullscreen).
+	if SystemManager and SystemManager.display and SystemManager.display.supports_window_chrome():
+		_title_bar = TITLE_BAR_SCRIPT.new()
+		_title_bar.name = "TitleBar"
 	_status_bar = StatusBar.new()
 	var status_layout := VBoxContainer.new()
 	status_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
 	status_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if _title_bar:
+		status_layout.add_child(_title_bar)
 	status_layout.add_child(_status_bar)
 	status_layout.add_child(content_margin)
 
 	_content_wrapper.add_child(status_layout)
 	_content_wrapper.move_child(status_layout, mcv_index)
 	print("[UIManager] content margin reparent elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Invisible edge resize grips: stripping the native frame also strips its
+	# resize borders. Anchored full-rect on the root layout (which spans the
+	# window), drawn above app content but below every CanvasLayer overlay.
+	if _title_bar:
+		_window_resize_grips = RESIZE_GRIPS_SCRIPT.new()
+		_window_resize_grips.name = "WindowResizeGrips"
+		_root_control.add_child(_window_resize_grips)
+		# A nav rebuild (bar<->rail switch) appends a fresh InnerLayout after the
+		# grips; GUI picking walks children in reverse tree order and ignores
+		# z_index, so the grips must be re-raised or the edge strips stop
+		# receiving hover. Re-assert on every layout rebuild.
+		if not layout_changed.is_connected(_raise_resize_grips):
+			layout_changed.connect(_raise_resize_grips)
 
 	# Ensure MainContentVBox fills the MarginContainer
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -251,6 +291,15 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 
 	return layout
 
+func _raise_resize_grips(_position: String = "") -> void:
+	# Keep the resize grips as the last RootLayout child: picking checks
+	# children in reverse tree order (z_index is ignored), so a later sibling
+	# (e.g. a rebuilt InnerLayout) would bury the edge strips.
+	if _window_resize_grips and is_instance_valid(_window_resize_grips) \
+			and _root_control and _window_resize_grips.get_parent() == _root_control:
+		_root_control.move_child(_window_resize_grips, _root_control.get_child_count() - 1)
+
+
 func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: Control = null) -> Vector2:
 	"""Compute the expected available rect for a grid from the active viewport.
 
@@ -286,6 +335,12 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 	if _status_bar and is_instance_valid(_status_bar) and _status_bar.visible:
 		var status_h := maxf(_status_bar.get_combined_minimum_size().y, _status_bar.size.y)
 		available_height -= status_h
+
+	# Subtract the custom title bar strip (desktop windowed chrome; sits above
+	# the status strip and hides itself in fullscreen).
+	if _title_bar and is_instance_valid(_title_bar) and _title_bar.visible:
+		var title_h := maxf(_title_bar.get_combined_minimum_size().y, _title_bar.size.y)
+		available_height -= title_h
 
 	# Subtract navigation bar/rail dimensions.
 	# Use the node's intended minimum size rather than its actual size, because

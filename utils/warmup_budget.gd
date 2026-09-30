@@ -44,7 +44,12 @@ static func begin_frame() -> void:
 		var prev_frame_us := now_us - _frame_start_us
 		var threshold: int = SPIKE_THRESHOLD_STARTUP_US if _startup_mode else SPIKE_THRESHOLD_STEADY_US
 		if prev_frame_us > threshold and Time.get_ticks_msec() - _app_start_ms < SPIKE_MONITOR_WINDOW_MS:
-			print("[FrameSpike] frame_us=", prev_frame_us, " tags=", _frame_tags, " idle_ms=", input_idle_ms(), " startup=", _startup_mode)
+			# proc_us = main-thread script/processing time for the frame (frame_us
+			# minus a large proc_us => the main thread was genuinely busy;
+			# proc_us far below frame_us => we blocked on the render thread or
+			# frame pacing, e.g. a GPU pipeline compile stalling the queue).
+			var proc_us := int(Performance.get_monitor(Performance.TIME_PROCESS) * 1_000_000.0)
+			print("[FrameSpike] frame_us=", prev_frame_us, " proc_us=", proc_us, " tags=", _frame_tags, " idle_ms=", input_idle_ms(), " startup=", _startup_mode)
 	_frame_start_us = now_us
 	_frame_id = Engine.get_process_frames()
 	_frame_tags.clear()

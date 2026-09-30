@@ -170,12 +170,21 @@ func _fetch_platforms():
 	var current_generation = _fetch_generation
 
 	# Load platforms from the local database first so the UI appears instantly,
-	# even on a slow or unavailable network.
+	# even on a slow or unavailable network. (Timed: a main-thread query can
+	# block on the DB worker's lock; that must not hide inside a net callback.)
+	var db_start_us := Time.get_ticks_usec()
 	var db_platforms = _get_platforms_from_database()
+	var db_us := Time.get_ticks_usec() - db_start_us
+	if db_us > 16000:
+		print("[PlatformsSettingsView] _get_platforms_from_database elapsed_us=", db_us)
 	if not db_platforms.is_empty():
 		_platforms_data = db_platforms
 		_platforms_data_loaded = true
+		var db_render_start_us := Time.get_ticks_usec()
 		_render_platform_cards_from_data(_platforms_data)
+		var db_render_us := Time.get_ticks_usec() - db_render_start_us
+		if db_render_us > 16000:
+			print("[PlatformsSettingsView] db render prefix elapsed_us=", db_render_us)
 	elif not _platforms_data_loaded:
 		# No DB platforms yet; show a loading indicator while the network request runs.
 		_show_loading_indicator()
@@ -219,16 +228,25 @@ func _fetch_platforms():
 
 		# Normalize the network response so it can be compared to the cached DB
 		# data without false positives from extra RomM fields.
+		var norm_start_us := Time.get_ticks_usec()
 		var normalized_data = _normalize_platforms_data(data)
+		var changed = not _platforms_data_equal(_platforms_data, normalized_data)
+		var norm_us := Time.get_ticks_usec() - norm_start_us
+		if norm_us > 16000:
+			print("[PlatformsSettingsView] normalize+compare elapsed_us=", norm_us)
 
 		# Only re-render if the platform list actually changed.
-		if not _platforms_data_equal(_platforms_data, normalized_data):
+		if changed:
 			_platforms_data = normalized_data
 			_platforms_data_loaded = true
+			var render_start_us := Time.get_ticks_usec()
 			_render_platform_cards_from_data(_platforms_data, func():
 				_is_fetching_platforms = false
 				_platforms_data_dirty = false
 			)
+			var render_us := Time.get_ticks_usec() - render_start_us
+			if render_us > 16000:
+				print("[PlatformsSettingsView] network render prefix elapsed_us=", render_us)
 		else:
 			_is_fetching_platforms = false
 			_platforms_data_dirty = false
@@ -1204,7 +1222,14 @@ func _on_sync_completed(success: bool, _message: String) -> void:
 
 func _on_network_status_changed(online: bool) -> void:
 	if online and not _is_fetching_platforms:
+		# This runs inside the /platforms connection-check callback via the
+		# signal emit — time it so a slow sync prefix (DB read, card render)
+		# is attributed instead of hiding inside the net_handler frame.
+		var start_us := Time.get_ticks_usec()
 		_fetch_platforms()
+		var elapsed_us := Time.get_ticks_usec() - start_us
+		if elapsed_us > 16000:
+			print("[PlatformsSettingsView] network-online _fetch_platforms sync elapsed_us=", elapsed_us)
 
 	# Keep the indicator in sync regardless of how we got here
 	if _romm_connection_panel:

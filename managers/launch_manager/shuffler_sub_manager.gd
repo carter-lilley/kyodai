@@ -429,6 +429,8 @@ func stop_session() -> void:
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		if SystemManager.display:
+			# Re-apply the borderless chrome before the size restore below.
+			SystemManager.display.apply_window_chrome(true)
 			var last_size: Vector2i = SystemManager.display.restore_last_window_size()
 			if last_size == Vector2i.ZERO:
 				var resolution_setting = SystemManager.display.settings_man.get_setting("resolution")
@@ -438,6 +440,10 @@ func stop_session() -> void:
 						resolution_value = resolution_setting.options[resolution_value]
 					SystemManager.display.set_resolution(resolution_value)
 				DisplayServer.window_set_position(Vector2i(Vector2(DisplayServer.screen_get_position()) + Vector2(DisplayServer.screen_get_size()) / 2.0 - Vector2(DisplayServer.window_get_size()) / 2.0))
+	if SystemManager.display:
+		# Notify the title bar chrome of the restored mode (fullscreen branch:
+		# apply_window_chrome(false) only emits the inactive state).
+		SystemManager.display.apply_window_chrome(DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_move_to_foreground()
 
 	_cleanup_temp_files()

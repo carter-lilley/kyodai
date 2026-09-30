@@ -1,6 +1,17 @@
 class_name EffectThemeAdapter
 extends RefCounted
 
+## Converts effect settings between dark and light variants when dark_mode
+## toggles: each entry keeps its canonical "settings" for the active mode and
+## caches the generated counterpart as light_settings / dark_settings.
+##
+## Effects opt out with `static func is_theme_adaptive() -> false` on their
+## script (declared on EffectBase, overridden per effect — currently shine).
+## Locked entries keep identical settings in both modes, never gain mode
+## caches, and have any existing ones erased on swap and on preset save.
+## Unknown ids (custom shader effects) and id-less holders (the background
+## base gradient) remain adaptive.
+
 const LIGHT_CACHE_KEY := "light_settings"
 const DARK_CACHE_KEY := "dark_settings"
 
@@ -46,9 +57,35 @@ static func adapt_settings_dict(d: Dictionary, to_dark: bool) -> Dictionary:
 		out[key] = adapt_value(out[key], to_dark)
 	return out
 
+## True when the entry's effect declares is_theme_adaptive() == false: its
+## settings are mode-invariant and must never be converted or cached per mode.
+static func is_theme_locked(holder: Dictionary) -> bool:
+	var effect_id: String = holder.get("effect_id", "")
+	if effect_id == "":
+		return false
+	var script := _effect_script(effect_id)
+	if script == null or not script.has_method("is_theme_adaptive"):
+		return false
+	return not script.call("is_theme_adaptive")
+
+static func _effect_script(effect_id: String) -> Script:
+	for registry in [EffectStack.EFFECT_REGISTRY, LibraryBackground.EFFECT_REGISTRY, LibraryBackground.OVERLAY_REGISTRY]:
+		var path: String = registry.get(effect_id, "")
+		if path != "":
+			var script = load(path)
+			return script if script is Script else null
+	return null
+
 static func swap_settings_mode(holder: Dictionary, to_dark: bool) -> Dictionary:
-	var settings: Dictionary = holder.get("settings", {})
 	var out := holder.duplicate(true)
+	if is_theme_locked(out):
+		# Mode-invariant: the canonical settings apply to both modes. Never
+		# generate per-mode variants, and drop any already present (including
+		# ones generated before the effect was declared locked).
+		out.erase(LIGHT_CACHE_KEY)
+		out.erase(DARK_CACHE_KEY)
+		return out
+	var settings: Dictionary = holder.get("settings", {})
 	var prev_key := LIGHT_CACHE_KEY if to_dark else DARK_CACHE_KEY
 	var next_key := DARK_CACHE_KEY if to_dark else LIGHT_CACHE_KEY
 	out[prev_key] = settings.duplicate(true)
@@ -101,7 +138,8 @@ static func on_dark_mode_changed(to_dark: bool) -> void:
 # that matches either the canonical settings or the deterministic conversion
 # of them is regenerated on demand by swap_settings_mode(), so it is stripped.
 # The canonical "settings" block (the mode active at save time) is never
-# converted or removed.
+# converted or removed. Locked effects (is_theme_adaptive() == false)
+# contribute no variants at all: both keys are dropped unconditionally.
 # ============================================================================
 
 static func strip_generated_from_config(config: Dictionary) -> Dictionary:
@@ -122,6 +160,11 @@ static func strip_generated_from_config(config: Dictionary) -> Dictionary:
 
 static func strip_generated_variants(holder: Dictionary) -> Dictionary:
 	var out := holder.duplicate(true)
+	if is_theme_locked(out):
+		# Locked entries carry no mode variants at all.
+		out.erase(LIGHT_CACHE_KEY)
+		out.erase(DARK_CACHE_KEY)
+		return out
 	var settings: Dictionary = out.get("settings", {})
 	for key in [LIGHT_CACHE_KEY, DARK_CACHE_KEY]:
 		if not out.has(key) or not out[key] is Dictionary:

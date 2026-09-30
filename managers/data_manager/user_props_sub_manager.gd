@@ -214,7 +214,13 @@ func _queue_fav(romm_id: int, favorite: bool) -> void:
 
 func _on_network_status_changed(online: bool) -> void:
 	if online:
+		# Runs inside the connection-check net callback via the signal emit;
+		# time the synchronous prefix (DB read) so it can't hide in a spike.
+		var start_us := Time.get_ticks_usec()
 		flush_pending()
+		var elapsed_us := Time.get_ticks_usec() - start_us
+		if elapsed_us > 16000:
+			print("[UserPropsSubManager] network-online flush_pending sync elapsed_us=", elapsed_us)
 
 
 func flush_pending() -> void:
@@ -222,12 +228,22 @@ func flush_pending() -> void:
 		return
 	if not data_manager.database.is_database_ready():
 		return
-	var pending = data_manager.database.get_pending_props_sync()
-	if pending.is_empty():
-		return
+	# Read the pending queue on the DB worker, not the main thread: this is
+	# reached from inside the connection-check net callback via the
+	# network_status_changed emit, and a main-thread query there blocks for
+	# hundreds of ms waiting on the worker's lock while startup writes
+	# (collection sync, cache warm) are still in flight.
 	_flushing = true
-	print("[UserPropsSubManager] Flushing %d pending prop writes" % pending.size())
-	_flush_next(pending, 0)
+	MemorySubManager.queue_db_task(
+		func(): return data_manager.database.get_pending_props_sync(),
+		func(pending):
+			# null = queue overflow/shutdown; either way, nothing to flush.
+			if pending == null or not (pending is Array) or pending.is_empty():
+				_flushing = false
+				return
+			print("[UserPropsSubManager] Flushing %d pending prop writes" % pending.size())
+			_flush_next(pending, 0)
+	)
 
 
 func _flush_next(pending: Array[Dictionary], index: int) -> void:

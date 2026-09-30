@@ -7,6 +7,16 @@ var _theme_refresh_pending: bool = false
 var _preset_in_progress: bool = false
 var _tab_container: TabContainer = null
 
+## Full-tree refresh walks cost hundreds of ms at startup (every M3 control
+## rebakes sizes/styles). During the startup window they are split into
+## per-frame chunks so they spread across frames instead of hitching boot;
+## in steady state they run synchronously exactly as before.
+const WALK_CHUNK_US := 5000
+const WALK_SCALE := 1
+const WALK_THEME := 2
+var _walk_queued: int = 0
+var _walk_running: bool = false
+
 func _ready():
 	ui_manager = get_parent()
 
@@ -36,7 +46,10 @@ func _apply_dark_mode(enabled: bool) -> void:
 func _do_refresh_theme() -> void:
 	_theme_refresh_pending = false
 	var saved_focus: WeakRef = ui_manager.capture_focus() if ui_manager else null
-	_refresh_theme_on_all_nodes(get_tree().root)
+	if WarmupBudget.is_startup_mode():
+		_queue_walk(WALK_THEME)
+	else:
+		_refresh_theme_on_all_nodes(get_tree().root)
 	if ui_manager:
 		ui_manager.restore_focus(saved_focus, ui_manager.get_focus_restore_fallback_to_home())
 
@@ -50,7 +63,10 @@ func _refresh_theme_on_all_nodes(node: Node) -> void:
 
 func _do_refresh_scale() -> void:
 	var saved_focus: WeakRef = ui_manager.capture_focus() if ui_manager else null
-	_refresh_scale_on_all_nodes(get_tree().root)
+	if WarmupBudget.is_startup_mode():
+		_queue_walk(WALK_SCALE)
+	else:
+		_refresh_scale_on_all_nodes(get_tree().root)
 	if ui_manager:
 		ui_manager.restore_focus(saved_focus, ui_manager.get_focus_restore_fallback_to_home())
 
@@ -63,6 +79,65 @@ func _refresh_scale_on_all_nodes(node: Node) -> void:
 		node.refresh_theme()
 	for child in node.get_children():
 		_refresh_scale_on_all_nodes(child)
+
+## Startup path: serialize scale/theme walks through one chunked driver so two
+## walks can't interleave on the same nodes. Focus capture/restore stays with
+## the caller (same timing as the old synchronous walk).
+func _queue_walk(kind: int) -> void:
+	_walk_queued |= kind
+	if _walk_running:
+		return
+	_walk_running = true
+	_run_queued_walks()
+
+func _run_queued_walks() -> void:
+	while _walk_queued != 0:
+		var kinds := _walk_queued
+		_walk_queued = 0
+		for kind: int in [WALK_SCALE, WALK_THEME]:
+			if kinds & kind:
+				var walk_start_us := Time.get_ticks_usec()
+				var visited := await _walk_tree_chunked(kind)
+				print("[ThemeManager] startup ", ("scale" if kind == WALK_SCALE else "theme"),
+						" walk nodes=", visited, " elapsed_us=", Time.get_ticks_usec() - walk_start_us)
+	_walk_running = false
+
+## Depth-first preorder walk of the whole tree in time-bounded chunks. Nodes
+## are validity-checked per pop: frames elapse between chunks and the tree can
+## change while a walk is in flight.
+func _walk_tree_chunked(kind: int) -> int:
+	var label := "scale_walk" if kind == WALK_SCALE else "theme_walk"
+	var visited := 0
+	var chunk_start_us := Time.get_ticks_usec()
+	WarmupBudget.tag(label)
+	var stack: Array[Node] = [get_tree().root]
+	while not stack.is_empty():
+		# Pop untyped and validate BEFORE the typed assignment: nodes freed by
+		# rebuilds between chunks are still in the stack, and assigning a
+		# freed instance to a typed Node var raises a script error.
+		var item: Variant = stack.pop_back()
+		if not is_instance_valid(item) or item == self:
+			continue
+		var node := item as Node
+		if kind == WALK_SCALE:
+			if node.has_method("refresh_scale"):
+				node.refresh_scale()
+			elif node.has_method("refresh_theme"):
+				node.refresh_theme()
+		elif node.has_method("refresh_theme"):
+			node.refresh_theme()
+		visited += 1
+		var children := node.get_children()
+		for i in range(children.size() - 1, -1, -1):
+			stack.append(children[i])
+		if Time.get_ticks_usec() - chunk_start_us >= WALK_CHUNK_US:
+			var tree := get_tree()
+			if tree == null:
+				return visited
+			await tree.process_frame
+			chunk_start_us = Time.get_ticks_usec()
+			WarmupBudget.tag(label)
+	return visited
 
 func refresh_theme() -> void:
 	_do_refresh_theme()
