@@ -89,7 +89,13 @@ func set_setting(value: Variant, setting: SettingsVar, force: bool = false):
 		SettingsVar.SettingType.FLOAT:
 			if value is float or value is int:
 				value = float(value)
-	var changed = force or setting.value != value
+	# SettingsVar.value is an untyped Variant and UI controls may emit a
+	# different representation than what's stored (the resolution OptionButton
+	# emits an int index while its default is a Vector2i); mismatched Variant
+	# types raise on !=, so differing types are always a change.
+	var changed = force
+	if not changed:
+		changed = typeof(setting.value) != typeof(value) or setting.value != value
 	setting.value = value
 	if changed:
 		_is_dirty = true

@@ -17,6 +17,15 @@ extends Control
 ## Grip thickness in dp; scales with the UI so it stays hittable on HiDPI.
 const GRIP_DP: float = 6
 
+## Wayland/KWin synthesizes a left-button release a few ms after the resize
+## grab starts (observed +6–8ms, physically impossible for a human), which
+## would end the gesture before the drag begins. Any end-trigger inside this
+## grace window after the press is ignored; the real release arrives at
+## ungrab, far outside it. X11 sends no such event, so it skips the grace.
+const WAYLAND_RELEASE_GRACE_MS: int = 150
+
+var _press_ms: int = 0
+
 var _active: bool = false
 
 var _left: Control = null
@@ -70,6 +79,10 @@ func _ready() -> void:
 		DisplayServer.WINDOW_EDGE_TOP_RIGHT, Control.CURSOR_FDIAGSIZE)
 
 	_apply_grip_geometry()
+
+	# _input runs before GUI picking; it watches for the end of the OS resize
+	# loop (see _input) while a gesture is active.
+	set_process_input(true)
 
 	if SystemManager and SystemManager.display:
 		if not SystemManager.display.window_chrome_changed.is_connected(_on_window_chrome_changed):
@@ -144,9 +157,36 @@ func _apply_grip_geometry() -> void:
 
 func _on_grip_input(event: InputEvent, edge: DisplayServer.WindowResizeEdge) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_press_ms = Time.get_ticks_msec()
 		var window := get_window()
 		if window:
+			# Gate the reflow cascade for the whole OS resize loop; it flushes
+			# from end_resize_gesture() the moment the button releases.
+			if SystemManager and SystemManager.display:
+				SystemManager.display.begin_resize_gesture()
 			window.start_resize(edge)
+
+
+func _input(event: InputEvent) -> void:
+	# The WM's interactive resize loop holds a pointer grab, so during the drag
+	# this node sees no input at all. Afterwards the first event that proves the
+	# button is up — a motion replayed on ungrab with the left mask clear, or
+	# any left-button event (a missed release is implied by the next press) —
+	# ends the gesture and flushes the held cascade. Motion reported mid-loop
+	# still carries the button mask, so it never ends the gesture early.
+	if not (SystemManager and SystemManager.display):
+		return
+	if not SystemManager.display.is_resize_gesture_active():
+		return
+	# Drop end-triggers inside the post-press grace window on Wayland only:
+	# that's where KWin's grab-start synthesis lands (see WAYLAND_* comment).
+	if DisplayServer.get_name().to_lower() == "wayland" \
+			and Time.get_ticks_msec() - _press_ms < WAYLAND_RELEASE_GRACE_MS:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		SystemManager.display.end_resize_gesture()
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+		SystemManager.display.end_resize_gesture()
 
 
 func _refresh_state() -> void:

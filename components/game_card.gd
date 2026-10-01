@@ -41,6 +41,8 @@ var _media_loading: bool = false
 # Track the last media bounds we refreshed effects against so we can skip
 # redundant force_refresh calls during fast scroll/recycling.
 var _last_refreshed_media_bounds: Rect2 = Rect2()
+# Layout-input signature for _update_media_panel_size's early-out gate.
+var _media_layout_sig := PackedFloat32Array()
 
 # Media effect stack rendered inside M3Card's media panel
 var _media_stack: EffectStack = null
@@ -1389,6 +1391,34 @@ func _update_focus_stack_bounds() -> void:
 	_update_effect_transforms()
 
 func _update_media_panel_size(force: bool = false) -> void:
+	# Layout-input signature: when every input the panel layout derives from is
+	# unchanged, every output (media/text bounds, control positions, draw rects,
+	# shader geometry) is unchanged too — skip the whole pass. This kills the
+	# duplicate full refresh that NOTIFICATION_RESIZED used to run right after
+	# the layout pass had already applied the same inputs. force=true (structural
+	# paths: canvas-item recreation, new media content, content rebind) bypasses.
+	var _sig_w := custom_minimum_size.x
+	if _sig_w <= 0.0:
+		_sig_w = size.x
+	var _sig_h := custom_minimum_size.y
+	if _sig_h <= 0.0:
+		_sig_h = size.y
+	var _sig := PackedFloat32Array([
+		maxf(_sig_w, M3Units.dp(40.0)),
+		maxf(_sig_h, M3Units.dp(40.0)),
+		float(card_layout_mode),
+		float(content_alignment),
+		media_aspect_ratio,
+		card_rounding_ratio,
+		1.0 if show_text_margin else 0.0,
+		1.0 if text_centered_overlay else 0.0,
+		1.0 if headline.is_empty() else 0.0,
+		1.0 if _uses_visual_layer() else 0.0,
+	])
+	if not force and _sig == _media_layout_sig:
+		return
+	_media_layout_sig = _sig
+
 	super._update_media_panel_size(force)
 	if _media_container and _media_bounds.size.x > 0.0 and _media_bounds.size.y > 0.0:
 		# The media stack is parented to _media_canvas_item, so its bounds are

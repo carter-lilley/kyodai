@@ -6,6 +6,14 @@ class_name DisplaySubManager
 ## Single source of truth for viewport size and UI scale.
 ## Emits debounced viewport_size_changed signals so consumers don't redo layout
 ## math on every pixel of a window resize.
+##
+## Resize-path model: all window-size-driven *layout* logic (grid, breakpoints,
+## tiers, compact re-eval, overlay broadcast) consumes viewport_size_changed —
+## this manager's single gated pipeline. Raw window/control resize listeners
+## elsewhere are deliberately reserved for (a) chrome/geometry bookkeeping that
+## must stay prompt and cheap (title bar, grips, maximize-state guard) and
+## (b) local rect maintenance where a control's rect tracks local state — not
+## for layout math. Don't fork a new window-resize path.
 
 signal viewport_size_changed(new_size: Vector2)
 signal ui_scale_changed(new_scale: float)
@@ -18,10 +26,12 @@ signal initial_window_size_settled()
 ## becomes active or inactive. TitleBar/WindowResizeGrips show/hide on it.
 signal window_chrome_changed(active: bool)
 
-# Long enough that a brief pause mid-drag on the window resize grips doesn't
-# propagate a full rebuild into an active interactive resize; short enough
-# that the grid re-snap after releasing still feels immediate.
-const RESIZE_DEBOUNCE_SECONDS := 0.4
+# Debounce for non-gesture resizes (fullscreen toggle, maximize/restore,
+# WM-driven, programmatic): one stable update instead of one per pixel.
+# Grip drags are gated separately: _resize_gesture_active suppresses the
+# cascade for the whole OS resize loop, and end_resize_gesture() flushes it
+# the moment the button releases — the grid never re-snaps mid-drag.
+const RESIZE_DEBOUNCE_SECONDS := 0.15
 const SCALE_DEBOUNCE_SECONDS := 0.2
 const BASE_HEIGHT := 1080.0
 const BASE_DPI := 160.0
@@ -40,6 +50,10 @@ const MIN_WINDOW_SIZE := Vector2i(400, 300)
 const COMPACT_VIEWPORT_DP := 700.0
 const SMALL_VIEWPORT_DP := 600.0
 
+## CanvasLayer.layer for the black resize-freeze overlay: above every app
+## overlay (LAUNCH_CRITICAL = 1101), so nothing peeks through mid-drag.
+const RESIZE_FREEZE_LAYER := 1200
+
 @onready var settings_man = $"/root/DataManager"
 
 var _viewport_size: Vector2 = Vector2.ZERO
@@ -53,6 +67,24 @@ var _user_scale_factor: float = 1.0
 var _current_screen: int = -1
 var _resize_debounce_timer: Timer = null
 var _scale_debounce_timer: Timer = null
+
+# OS resize gesture gating (see RESIZE_DEBOUNCE_SECONDS): while a
+# WindowResizeGrips drag runs, the debounced cascade is held back.
+# _resize_pending marks that raw size changes arrived since the last emitted
+# cascade, so a gesture that never resized (grip click, no drag) flushes nothing.
+var _resize_gesture_active: bool = false
+var _resize_pending: bool = false
+
+# Black freeze overlay shown for the whole OS resize gesture: the window keeps
+# resizing while the app re-lays-out underneath, and that mid-drag churn is
+# distracting — render solid black instead, then reveal the flushed layout the
+# moment the gesture ends. Nodes are created lazily and reused across gestures.
+var _freeze_layer: CanvasLayer = null
+var _freeze_rect: ColorRect = null
+# Window size at gesture press, to tell a real drag (window.size changed) from
+# a bare grip click — the viewport is frozen mid-gesture, so _resize_pending
+# can't make that distinction while the content-scale freeze is in effect.
+var _gesture_start_window_size: Vector2i = Vector2i.ZERO
 
 # Dual screen detection state
 var _dual_screen_enabled: bool = false
@@ -148,13 +180,23 @@ func _initialize_android_plugin() -> void:
 		_android_plugin = Engine.get_singleton("PackageChecker")
 
 func _on_viewport_size_changed() -> void:
-	"""Raw resize event: restart the debounce timer."""
+	"""Raw window resize event: restart the debounce timer.
+
+	Despite the name this is the Window's size_changed — it still fires per
+	OS configure while the content-scale freeze pins the logical viewport,
+	which is exactly what we want: it keeps _resize_pending tracking the drag
+	without touching layout (nothing downstream runs until the cascade)."""
+	_resize_pending = true
 	if _resize_debounce_timer:
 		_resize_debounce_timer.stop()
 		_resize_debounce_timer.start()
 
 func _on_resize_debounced() -> void:
 	"""Stable resize event: update cached viewport size and notify consumers."""
+	if _resize_gesture_active:
+		# Grip drag in progress: hold the cascade (pending stays set) until
+		# end_resize_gesture() flushes it with the final size.
+		return
 	# In dual-screen SubViewport mode the app lives in MainViewport, not the
 	# root window; cache the active SubViewport size so breakpoint consumers
 	# track the rectangle the UI actually occupies (mirrors
@@ -187,6 +229,105 @@ func _on_resize_debounced() -> void:
 	# Continuously save the windowed size so we don't rely solely on close-time
 	# reads, which can return stale/zero values during shutdown.
 	save_last_window_size()
+	_resize_pending = false
+
+func begin_resize_gesture() -> void:
+	"""WindowResizeGrips: grip pressed, OS resize loop starting.
+
+	Two things happen here so the drag is instant and quiet:
+	1. Content-scale freeze: pin the logical viewport at its current size
+	   (CONTENT_SCALE_MODE_CANVAS_ITEMS + content_scale_size) so the OS window
+	   can resize freely underneath while the app receives ZERO size events —
+	   no layout, no NOTIFICATION_RESIZED, no listeners, cheap repeat-frames.
+	2. Blackout overlay: shown immediately at press so the very first drag
+	   frame is already solid black.
+	3. Render cut: hide RootLayout so the frozen UI behind the blackout is
+	   never drawn — during the drag the app renders a single black rect, so
+	   the compositor gets each new-size buffer as fast as the platform
+	   allows. Release detection runs in _input, which hidden nodes still
+	   receive."""
+	if _resize_gesture_active:
+		return
+	_resize_gesture_active = true
+	var window := get_window()
+	var vp := get_viewport()
+	if window and vp:
+		_gesture_start_window_size = window.size
+		window.content_scale_size = vp.size
+		window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	_show_resize_freeze()
+	if UIManager:
+		UIManager.set_main_ui_visible(false)
+
+func is_resize_gesture_active() -> bool:
+	return _resize_gesture_active
+
+func end_resize_gesture() -> void:
+	"""WindowResizeGrips: first input event proving the resize button released.
+	Unfreeze the viewport (it snaps to the real window size), rebuild once it
+	has settled, then reveal. A bare grip click just drops the freeze."""
+	if not _resize_gesture_active:
+		return
+	_resize_gesture_active = false
+	var window := get_window()
+	if window and window.content_scale_mode != Window.CONTENT_SCALE_MODE_DISABLED:
+		window.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+	# Show the main UI now: the blackout still covers it until the drag path
+	# flushes (or the click path drops it this same frame).
+	if UIManager:
+		UIManager.set_main_ui_visible(true)
+	# Real drag = the OS window moved/resized, or the fallback path fired
+	# (viewport events got through because the freeze wasn't in effect).
+	var drag_resized := _resize_pending \
+		or (window != null and window.size != _gesture_start_window_size)
+	if drag_resized:
+		if _resize_debounce_timer:
+			_resize_debounce_timer.stop()
+		call_deferred("_finish_resize_gesture")
+	else:
+		if _freeze_rect:
+			_freeze_rect.visible = false
+		_resize_pending = false
+
+func _finish_resize_gesture() -> void:
+	# The unfreeze resizes the logical viewport to the real window size; wait
+	# until it (and any size_changed it queued) has settled so the cascade
+	# reads the final size, then flush and reveal — all before the next draw.
+	var window := get_window()
+	for i in 3:
+		if window == null or get_viewport() == null:
+			break
+		# .size may come through as Vector2i (Window); compare as Vector2.
+		if Vector2(get_viewport().size) == Vector2(window.size):
+			break
+		await get_tree().process_frame
+	_on_resize_debounced()
+	if _freeze_rect:
+		_freeze_rect.visible = false
+
+func _show_resize_freeze() -> void:
+	if _freeze_rect:
+		_freeze_rect.visible = true
+		return
+	_freeze_layer = CanvasLayer.new()
+	_freeze_layer.layer = RESIZE_FREEZE_LAYER
+	_freeze_rect = ColorRect.new()
+	_freeze_rect.color = Color.BLACK
+	# Input must keep flowing to the grips (_input) so release detection works.
+	_freeze_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Explicit anchors AND offsets: set_anchors_preset(PRESET_FULL_RECT) on a
+	# fresh 0x0 node preserves the degenerate rect instead of snapping to the
+	# parent (same gotcha documented in WindowResizeGrips._ready).
+	_freeze_rect.anchor_left = 0.0
+	_freeze_rect.anchor_top = 0.0
+	_freeze_rect.anchor_right = 1.0
+	_freeze_rect.anchor_bottom = 1.0
+	_freeze_rect.offset_left = 0.0
+	_freeze_rect.offset_top = 0.0
+	_freeze_rect.offset_right = 0.0
+	_freeze_rect.offset_bottom = 0.0
+	_freeze_layer.add_child(_freeze_rect)
+	add_child(_freeze_layer)
 
 func get_viewport_size() -> Vector2:
 	if _viewport_size == Vector2.ZERO:

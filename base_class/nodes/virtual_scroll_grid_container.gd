@@ -2217,10 +2217,12 @@ func _recalculate_layout():
 			card.set_focus_scale(focus_scale)
 		if update_card_geometry:
 			_configure_card_size_flags(card)
-			# Force immediate media-panel refresh so the effect stack picks up the
-			# new bounds without waiting for Godot's deferred layout pass.
+			# Media-panel refresh (force=false): when card geometry changed the
+			# derived media bounds change too, so the bounds check inside the
+			# card still triggers the immediate stack refresh. force=true here
+			# rebuilt the full shader pipeline even when bounds were unchanged.
 			if _card_has_update_media_panel_size:
-				card._update_media_panel_size(true)
+				card._update_media_panel_size(false)
 
 	_finish_recalculate()
 	_update_visual_draw_order()

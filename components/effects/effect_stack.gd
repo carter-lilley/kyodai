@@ -270,6 +270,10 @@ func _run_pipeline() -> void:
 	for effect_id in _effects:
 		var effect = _effects[effect_id]
 		if effect and effect.is_visible():
+			# Params are pushed right now, so a deferred flush queued earlier in
+			# this frame for the same state would push them a second time at
+			# frame end. Clear the flag; the flush checks it before updating.
+			effect._shader_params_dirty = false
 			effect._update_shader_params()
 
 func get_effects() -> Array:

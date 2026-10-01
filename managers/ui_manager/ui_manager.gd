@@ -91,6 +91,16 @@ func reconcile_early_scale_change() -> void:
 		# chunk only, and [ThemeManager] startup scale walk logs the total.
 		print("[UIManager] early scale reconcile first-chunk_us=", Time.get_ticks_usec() - walk_start_us)
 
+func set_main_ui_visible(value: bool) -> void:
+	"""Show/hide the entire main UI tree (RootLayout: library background, nav,
+	grid, control bar, title bar, grips). Used by the display manager's
+	resize-gesture freeze: while the window is dragged, the app draws only the
+	black freeze overlay, so per-frame cost collapses and the compositor gets
+	new buffers immediately. Hidden nodes still receive _input, so grip release
+	detection keeps working."""
+	if _root_control:
+		_root_control.visible = value
+
 func initialize(
 	tab_container: TabContainer,
 	library_background: LibraryBackground,

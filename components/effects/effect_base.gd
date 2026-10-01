@@ -381,6 +381,10 @@ func _mark_shader_params_dirty() -> void:
 func _flush_shader_params() -> void:
 	if not is_instance_valid(self):
 		return
+	if not _shader_params_dirty:
+		# A direct update (e.g. EffectStack._run_pipeline during a resize
+		# rebuild) already pushed the params after this flush was queued.
+		return
 	_shader_params_dirty = false
 	_update_shader_params()
 
