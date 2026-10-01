@@ -443,9 +443,6 @@ func _load_total_count_with_search(on_complete: Callable = Callable()):
 			# Reset scroll to top
 			games_grid.scroll_to_index(0, false)
 
-			# Refresh dimensions
-			_refresh_grid_dimensions()
-
 			# Refresh A-Z letter navigation for the new result set
 			_load_letter_index()
 
@@ -627,9 +624,6 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 			
 			# Reset scroll to top when switching platforms
 			games_grid.scroll_to_index(0, false)
-			
-			# Recalculate grid dimensions to fix layout after platform filter change
-			_refresh_grid_dimensions()
 			
 			# Refresh A-Z letter navigation for the new platform/filter set
 			_load_letter_index()

@@ -350,9 +350,11 @@ func _compute_material_share_key() -> String:
 		else:
 			parts.append(str(k) + "=" + str(v))
 	if media_container:
-		parts.append(str(media_container.size))
-		parts.append(str(media_container.get_corner_radius_pixels()))
-		parts.append(str(media_container.get_total_inset_pixels()))
+		# Round geometry to the nearest pixel so sub-pixel differences between
+		# otherwise-identical cards don't fragment the shared material cache.
+		parts.append(str(media_container.size.round()))
+		parts.append(str(round(media_container.get_corner_radius_pixels())))
+		parts.append(str(round(media_container.get_total_inset_pixels())))
 		parts.append(str(media_container.edge_aa_enabled))
 	return "|".join(parts)
 

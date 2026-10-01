@@ -53,6 +53,18 @@ func _ready():
 	_initialize_background()
 	resized.connect(_on_resized)
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_update_layer_viewport_activity()
+
+func _update_layer_viewport_activity() -> void:
+	"""Pause scaled background SubViewports when the background itself is hidden
+	(e.g. dual-screen reparent, resize-gesture freeze, tab teardown)."""
+	var active := is_visible_in_tree()
+	for layer in _layers:
+		if layer.viewport:
+			layer.viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active else SubViewport.UPDATE_DISABLED
+
 func _on_resized() -> void:
 	for layer in _layers:
 		if layer.viewport:

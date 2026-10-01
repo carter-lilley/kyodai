@@ -584,11 +584,9 @@ func _on_game_launched(game: GameResource):
 			# Clear GameNative indices since the order changed
 			_gamenative_indices.clear()
 	
-	# Reload data to get new sort order (don't preserve cache), then refresh dimensions
+	# Reload data to get new sort order (don't preserve cache)
 	# Don't reload GameNative games - we just updated the cache with new timestamps
-	_load_total_count(false, false, func():
-		_refresh_grid_dimensions()
-	, false)
+	_load_total_count(false, false, Callable(), false)
 
 func _on_gamenative_games_updated():
 	"""Called when GameNative games are added or removed - refresh grid."""
@@ -711,8 +709,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 					
 					# Force refresh the grid (don't preserve cache to remove the deleted game)
 					_load_total_count(false, false, func():
-						_refresh_grid_dimensions()
-						
 						# Re-enable grid interaction
 						if games_grid:
 							games_grid.mouse_filter = Control.MOUSE_FILTER_PASS

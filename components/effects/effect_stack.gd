@@ -148,10 +148,6 @@ func _rebuild_effects():
 				effect.free_rid()
 			_effects.erase(effect_id)
 
-	if media_container and _context != "focus_card":
-		media_container.border_inset_ratio = 0.0
-		media_container.glass_inset_ratio = 0.0
-
 	var config_map: Dictionary = {}
 	for config in _effect_configs:
 		if config is Dictionary:
@@ -182,25 +178,15 @@ func _rebuild_effects():
 					effect.effect_stack = self
 					effect.initialize(media_container, settings)
 
-			if _context != "focus_card":
-				match effect_id:
-					"border":
-						if media_container:
-							media_container.border_inset_ratio = settings.get("border_size", 0.0)
-					"glass":
-						if media_container:
-							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
-
 			_effects[effect_id].set_z_index(i)
+
+	if _context != "focus_card":
+		EffectStack.apply_insets_from_configs(media_container, _effect_configs)
 
 	_update_effect_draw_rects()
 	_run_pipeline()
 
 func _update_effect_settings_only() -> void:
-	if media_container and _context != "focus_card":
-		media_container.border_inset_ratio = 0.0
-		media_container.glass_inset_ratio = 0.0
-
 	var config_map: Dictionary = {}
 	for config in _effect_configs:
 		if config is Dictionary:
@@ -220,19 +206,33 @@ func _update_effect_settings_only() -> void:
 			effect.effect_stack = self
 			effect.update_settings(settings)
 
-			if _context != "focus_card":
-				match effect_id:
-					"border":
-						if media_container:
-							media_container.border_inset_ratio = settings.get("border_size", 0.0)
-					"glass":
-						if media_container:
-							media_container.glass_inset_ratio = settings.get("additional_inset_ratio", 0.0)
-
 			effect.set_z_index(i)
+
+	if _context != "focus_card":
+		EffectStack.apply_insets_from_configs(media_container, _effect_configs)
 
 	_update_effect_draw_rects()
 	_run_pipeline()
+
+## Scan effect configs and apply border/glass insets to a MediaContainer.
+## Owned here so GameCard and EffectStack share one implementation.
+static func apply_insets_from_configs(media_container: MediaContainer, configs: Array) -> void:
+	if not media_container:
+		return
+	var border_inset: float = 0.0
+	var glass_inset: float = 0.0
+	for config in configs:
+		if not config is Dictionary:
+			continue
+		var effect_id = config.get("effect_id", "")
+		var settings = config.get("settings", {})
+		match effect_id:
+			"border":
+				border_inset = settings.get("border_size", 0.0)
+			"glass":
+				glass_inset = settings.get("additional_inset_ratio", 0.0)
+	media_container.border_inset_ratio = border_inset
+	media_container.glass_inset_ratio = glass_inset
 
 func update_draw_rects() -> void:
 	_update_effect_draw_rects()

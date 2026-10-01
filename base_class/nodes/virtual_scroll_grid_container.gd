@@ -3552,14 +3552,6 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 	if _card_has_refresh_settings:
 		card.refresh_settings()
 
-	# Recompute content bounds before applying data. Cards created before the
-	# FlowContainer has sized them can have zero text/media bounds from _ready(),
-	# which causes _update_text() and _update_media() to draw nothing.
-	if _card_has_update_media_panel_size:
-		if debug_mode:
-			print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " updating media panel size, size=", card.size, " min=", card.custom_minimum_size)
-		card._update_media_panel_size(true)
-
 	var card_visible = _is_index_visible(virtual_index)
 	if _card_has_set_game_with_priority:
 		card.set_game_with_priority(_data_cache[virtual_index], card_visible)
@@ -4782,6 +4774,9 @@ func _update_debug_mode():
 		if _debug_flow_panel:
 			_debug_flow_panel.queue_free()
 			_debug_flow_panel = null
+		# Clear draw-audit dedup state so it cannot grow unbounded while debug
+		# mode is on and never leaks across debug sessions.
+		_drawaudit_last_deltas.clear()
 		# Clean debug panels from both active cards and pool cards
 		for card in _active_cards:
 			var debug_panel = card.get_meta("_debug_panel_ref", null)
@@ -4837,6 +4832,16 @@ func _update_debug_flow_panel_position():
 	_debug_flow_panel.position = flow_pos - parent_pos
 	_debug_flow_panel.size = _flow_container.size
 
+func _refresh_card_visuals(card: Control, force_full_rebuild: bool = false) -> void:
+	"""Single helper for the card visual refresh used by effect/config refresh
+	and pending drains. Media bounds are updated inside the card's refresh path."""
+	if not is_instance_valid(card):
+		return
+	if _card_has_refresh_effects:
+		card.refresh_effects(force_full_rebuild)
+	elif _card_has_refresh_settings:
+		card.refresh_settings()
+
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	"""Refresh effects on active cards. Cards in the visible zone plus a small
 	buffer are rebuilt immediately; the rest are queued and drained over frames
@@ -4864,12 +4869,7 @@ func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 		var idx = card.get_meta("virtual_index", -1)
 		var in_sync_zone = idx >= sync_start and idx < sync_end
 		if in_sync_zone:
-			if _card_has_update_media_panel_size:
-				card._update_media_panel_size(true)
-			if _card_has_refresh_effects:
-				card.refresh_effects(force_full_rebuild)
-			elif _card_has_refresh_settings:
-				card.refresh_settings()
+			_refresh_card_visuals(card, force_full_rebuild)
 		else:
 			if not _pending_effect_rebuild_set.has(card):
 				_pending_effect_rebuilds.append(card)
@@ -4895,12 +4895,7 @@ func _drain_pending_effect_rebuilds() -> void:
 		# Make sure bounds and stack parenting are current before rebuilding;
 		# cards that were queued during a layout change can otherwise rebuild
 		# against stale/zero media bounds and stay blank.
-		if _card_has_update_media_panel_size:
-			card._update_media_panel_size(true)
-		if _card_has_refresh_effects:
-			card.refresh_effects(force_full_rebuild)
-		elif _card_has_refresh_settings:
-			card.refresh_settings()
+		_refresh_card_visuals(card, force_full_rebuild)
 		processed += 1
 
 func _flush_pending_effect_rebuilds_for_visible_zone() -> void:
@@ -4934,12 +4929,7 @@ func _flush_pending_effect_rebuilds_for_visible_zone() -> void:
 		if idx >= sync_start and idx < sync_end:
 			_pending_effect_rebuilds.remove_at(i)
 			_pending_effect_rebuild_set.erase(card)
-			if _card_has_update_media_panel_size:
-				card._update_media_panel_size(true)
-			if _card_has_refresh_effects:
-				card.refresh_effects(_pending_effect_rebuild_force_full)
-			elif _card_has_refresh_settings:
-				card.refresh_settings()
+			_refresh_card_visuals(card, _pending_effect_rebuild_force_full)
 			continue
 		i += 1
 

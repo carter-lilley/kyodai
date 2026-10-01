@@ -15,6 +15,7 @@ const RESIZE_GRIPS_SCRIPT := preload("res://components/window_resize_grips.gd")
 @onready var theme = $ThemeSubManager
 @onready var dual_screen = $DualScreenSubManager
 @onready var focus: FocusSubManager = $FocusSubManager
+@onready var toolbar: ToolbarSubManager = $ToolbarSubManager
 
 func _ready() -> void:
 	PlatformCardPool.process(0.0)
@@ -181,6 +182,12 @@ func initialize(
 	# Ensure MainContentVBox fills the MarginContainer
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_main_content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	# Initialize the toolbar sub-manager with the controls-bar nodes before views
+	# are built so it can sync zoom/view-mode state during startup.
+	phase_start_us = Time.get_ticks_usec()
+	toolbar.initialize(_main_content_vbox, _content_wrapper)
+	print("[UIManager] toolbar init elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Create and sync the centralized card/grid settings state BEFORE views are
 	# instantiated so that HomeView/LibraryView and their grids can read the
@@ -448,6 +455,46 @@ func is_current_view(view_name: String) -> bool:
 
 func get_view(view_name: String) -> View:
 	return view.get_view(view_name)
+
+## True for views that host a VirtualScrollGridContainer (Home, Library, Favorites,
+## Collection_*, Platform_*).
+func _is_grid_view_name(view_name: String) -> bool:
+	return view_name == "Home" or view_name == "Library" or view_name == "Favorites" \
+		or view_name.begins_with("Collection_") or view_name.begins_with("Platform_")
+
+## Resolve the VirtualScrollGridContainer inside a view, if present.
+func get_view_grid(target_view: View) -> VirtualScrollGridContainer:
+	if not target_view:
+		return null
+	if target_view.has_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer"):
+		return target_view.get_node("MarginContainer/VBoxContainer/VirtualScrollGridContainer") as VirtualScrollGridContainer
+	return null
+
+## Apply a callable to every instantiated grid view.
+func apply_to_all_grids(callable: Callable) -> void:
+	if not view:
+		return
+	for view_name in view._views.keys():
+		if not _is_grid_view_name(view_name):
+			continue
+		var v = view.get_view(view_name)
+		if not v:
+			continue
+		var grid = get_view_grid(v)
+		if grid:
+			callable.call(grid)
+
+## Find the View that owns a given grid, if any.
+func get_view_for_grid(grid: VirtualScrollGridContainer) -> View:
+	if not view or not grid:
+		return null
+	for view_name in view._views.keys():
+		if not _is_grid_view_name(view_name):
+			continue
+		var v = view.get_view(view_name)
+		if v and get_view_grid(v) == grid:
+			return v
+	return null
 
 func rebuild_game_grid() -> void:
 	view.rebuild_game_grid()

@@ -92,6 +92,7 @@ const PLATFORM_ICON_MAP := {
 }
 static var _platform_icon_cache: Dictionary = {}
 static var _platform_icon_missing_warnings: Dictionary = {}
+const _MAX_PLATFORM_ICON_WARNINGS: int = 64
 
 static func clear_platform_icon_cache() -> void:
 	_platform_icon_cache.clear()
@@ -534,7 +535,7 @@ func _update_card_state_from_settings():
 
 		# Apply insets immediately so the base card shader pushes the image inward
 		# even if the effect-stack rebuild is delayed or skipped.
-		_apply_effect_insets_to_media_container(_media_container.effect_settings)
+		EffectStack.apply_insets_from_configs(_media_container, _media_container.effect_settings)
 
 		_display_mode = state.display_mode
 	elif DataManager:
@@ -556,7 +557,7 @@ func _update_card_state_from_settings():
 			else:
 				_media_container.corner_radius_ratio = corner_value
 			card_rounding_ratio = _media_container.corner_radius_ratio
-			_apply_effect_insets_to_media_container(_media_container.effect_settings)
+			EffectStack.apply_insets_from_configs(_media_container, _media_container.effect_settings)
 
 		var display_setting = DataManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
@@ -564,23 +565,6 @@ func _update_card_state_from_settings():
 
 	_apply_display_mode()
 	_sync_focus_container_properties()
-
-func _apply_effect_insets_to_media_container(effects: Array) -> void:
-	"""Scan base effects and set media-container insets from their settings."""
-	var border_inset: float = 0.0
-	var glass_inset: float = 0.0
-	for effect in effects:
-		if not effect is Dictionary:
-			continue
-		var effect_id = effect.get("effect_id", "")
-		var settings = effect.get("settings", {})
-		match effect_id:
-			"border":
-				border_inset = settings.get("border_size", 0.0)
-			"glass":
-				glass_inset = settings.get("additional_inset_ratio", 0.0)
-	_media_container.border_inset_ratio = border_inset
-	_media_container.glass_inset_ratio = glass_inset
 
 func _apply_display_mode() -> void:
 	# Map display mode to background/text visibility and edge AA
@@ -630,29 +614,14 @@ func set_focus_scale(value: float) -> void:
 	_sync_focus_visuals()
 
 func refresh_settings() -> void:
-	if not _ready_called:
-		return
-	_update_card_state_from_settings()
-	# Sync focus state first so _build_media_stack sees the correct _is_focused
-	# and builds the focus stack for focused cards.
-	_sync_focus_state_from_viewport()
-	_ensure_media_stack_parent()
-	# Hot-reload configs instead of fully rebuilding; the stack only fully
-	# rebuilds when effect IDs actually change, which saves a lot of work when
-	# cards are recycled during fast scroll.
-	_build_media_stack(false)
-	_update_platform_badge()
-	_update_card_text()
-	# Now that both media and focus stacks exist, run the focus tween.
-	if _focus_stack:
-		_show_focus_effects(_is_focused)
-	# If the card has no valid cached texture for the current game, trigger a
-	# cover load as a safety net so cards don't stay blank after a rebuild.
-	if game and (not _current_texture or _current_texture_game_id != game.id):
-		_load_cover(false)
+	_refresh_card_visuals(false)
 
 func refresh_effects(force_full_rebuild: bool = false) -> void:
-	"""Rebuild or hot-reload effects and re-apply card state (display mode, rounding, etc.)."""
+	_refresh_card_visuals(force_full_rebuild)
+
+func _refresh_card_visuals(force_full_effects_rebuild: bool) -> void:
+	"""Single card-refresh path: state -> focus sync -> media bounds -> effects ->
+	badge/text -> focus tween -> cover safety net."""
 	if not _ready_called:
 		return
 	_update_card_state_from_settings()
@@ -660,7 +629,12 @@ func refresh_effects(force_full_rebuild: bool = false) -> void:
 	# and builds the focus stack for focused cards.
 	_sync_focus_state_from_viewport()
 	_ensure_media_stack_parent()
-	_build_media_stack(force_full_rebuild)
+	# Recompute media bounds before rebuilding the effect stack so effects are
+	# created against final geometry instead of stale/zero bounds.
+	_update_media_panel_size(true)
+	# Hot-reload configs when possible; full rebuild only when the caller forces
+	# it or the effect ID set actually changed.
+	_build_media_stack(force_full_effects_rebuild)
 	_update_platform_badge()
 	_update_card_text()
 	# Now that both media and focus stacks exist, run the focus tween.
@@ -985,6 +959,9 @@ func _update_platform_badge():
 		icon_texture = _get_platform_icon_texture(platform_slug, badge_type == 1)
 
 		if not icon_texture and not _platform_icon_missing_warnings.has(platform_slug):
+			# Bound the warning cache so repeated unknown slugs can't grow it forever.
+			if _platform_icon_missing_warnings.size() >= _MAX_PLATFORM_ICON_WARNINGS:
+				_platform_icon_missing_warnings.erase(_platform_icon_missing_warnings.keys()[0])
 			_platform_icon_missing_warnings[platform_slug] = true
 			push_warning("GameCard: No platform icon found for slug '%s' (looked in %s)" % [platform_slug, PLATFORM_ICON_DIR])
 
