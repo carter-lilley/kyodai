@@ -1315,27 +1315,47 @@ func _execute_chmod_step(emulator_id: String, step_index: int, platform_config: 
 	if targets.is_empty():
 		push_warning("[EmulatorManager] chmod step has no targets for " + emulator_id)
 		return _execute_install_step(emulator_id, step_index + 1)
-	
+
+	# Async: chmod runs on the OS-execute worker pool so installing an emulator
+	# with many chmod targets doesn't stall the main thread. The step returns
+	# "accepted" and the next step chains from _on_chmod_target_done once every
+	# target has completed.
+	var abs_targets: Array = []
 	var all_success: bool = true
 	for target in targets:
 		if not FSM.file_exists(target):
 			push_warning("[EmulatorManager] chmod target missing: " + target)
 			all_success = false
 			continue
-		
-		var abs_target: String = FSM.resolve_path(target, {"format": FSM.PathFormat.ABSOLUTE})
-		var output: Array = []
-		var exit_code: int = OS.execute("chmod", [mode, abs_target], output, true)
-		if exit_code != 0:
-			push_error("[EmulatorManager] chmod failed for " + abs_target + " with mode " + mode)
-			all_success = false
-		else:
-			print("[EmulatorManager] chmod " + mode + " " + abs_target)
-	
-	if not all_success:
+		abs_targets.append(FSM.resolve_path(target, {"format": FSM.PathFormat.ABSOLUTE}))
+
+	if abs_targets.is_empty():
+		# Every target was missing - same failure as the synchronous path.
 		return false
-	
-	return _execute_install_step(emulator_id, step_index + 1)
+
+	# Callbacks run on the main thread, so mutating this shared state is safe.
+	var state := {"pending": abs_targets.size(), "all_success": all_success}
+	for abs_target in abs_targets:
+		MemorySubManager.queue_os_execute("chmod", [mode, abs_target],
+			_on_chmod_target_done.bind(emulator_id, step_index, mode, abs_target, state))
+	return true
+
+## Main thread: one chmod target finished. Chains the next install step after
+## the last target; any failure fails the install like the synchronous path.
+func _on_chmod_target_done(result: Dictionary, emulator_id: String, step_index: int, mode: String, abs_target: String, state: Dictionary) -> void:
+	if int(result.get("exit_code", -1)) != 0:
+		push_error("[EmulatorManager] chmod failed for " + abs_target + " with mode " + mode)
+		state.all_success = false
+	else:
+		print("[EmulatorManager] chmod " + mode + " " + abs_target)
+	state.pending -= 1
+	if state.pending > 0:
+		return
+	if not state.all_success:
+		_end_force_install(emulator_id)
+		install_steps_failed.emit(emulator_id, "Install step failed")
+	else:
+		_execute_install_step(emulator_id, step_index + 1)
 
 ## Recursively finds files under dir_path whose names match the Godot glob pattern.
 ## Used by the chmod install step when "recursive": true.
@@ -1944,7 +1964,9 @@ func scan_emulator_install_state(emulator_id: String):
 	else:
 		_emulator_install_progress[emulator_id] = ""
 
-## Legacy unified download - kept for reference but not used
+## Queues a direct emulator download for install steps that provide an
+## explicit URL. Used by download_url, download_repo, and download_scrape
+## handlers once they have resolved the final URL and display name.
 func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}, file_size: int = 0):
 	# Use explicit filename from config if provided, otherwise extract from URL
 	var filename = step_config.get("filename", "")

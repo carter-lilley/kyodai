@@ -1543,18 +1543,34 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 	print("[GameSaveSubManager] discover_local_xenia_save: no save found for " + title_id)
 	return results
 
+## Recursion depth cap for _get_folder_mtime. Real save trees are shallow
+## (title/profile/savefile); the cap bounds pathological emulator content
+## trees. Directory mtimes are included at every level, so file creation or
+## deletion at the cap depth still moves the result.
+const FOLDER_MTIME_MAX_DEPTH := 6
+
 func _get_folder_mtime(dir_path: String) -> int:
 	var latest = 0
-	var dirs_to_check: Array[String] = [dir_path]
+	# (path, depth) pairs; depth 0 is the root dir.
+	var dirs_to_check: Array = [[dir_path, 0]]
 	while not dirs_to_check.is_empty():
-		var current = dirs_to_check.pop_back()
+		var entry = dirs_to_check.pop_back()
+		var current: String = entry[0]
+		var depth: int = entry[1]
+		# A directory's own mtime moves when its direct children are added,
+		# removed, or renamed — this keeps structural changes visible even at
+		# the depth cap.
+		var dir_mtime = FSM.get_modified_time(current)
+		if dir_mtime > latest:
+			latest = dir_mtime
 		var items = FSM.list_dir(current)
 		for item in items:
 			if item == "." or item == "..":
 				continue
 			var full = FSM.join_paths(current, item)
 			if FSM.dir_exists(full):
-				dirs_to_check.append(full)
+				if depth < FOLDER_MTIME_MAX_DEPTH:
+					dirs_to_check.append([full, depth + 1])
 			elif FSM.file_exists(full):
 				var mtime = FSM.get_modified_time(full)
 				if mtime > latest:

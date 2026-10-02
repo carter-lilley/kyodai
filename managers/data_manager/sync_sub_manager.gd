@@ -38,6 +38,9 @@ var _sync_current_updated_after: String = ""  # updated_after timestamp for curr
 var _sync_seen_ids: Array = []               # romm_ids seen in current platform's full sync
 var _sync_platform_fully_enumerated: bool = false  # Current platform enumerated without errors
 var _sync_total_removed: int = 0             # Games removed by reconciliation this sync
+# Above-threshold deletion batches held for user confirmation.
+# platform_slug -> Array of doomed rows (romm_id, cover_url, is_master_entry, siblings)
+var _pending_server_deletions: Dictionary = {}
 
 # Progress tracking state
 var _sync_current: int = 0
@@ -273,6 +276,9 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_seen_ids = []
 	_sync_platform_fully_enumerated = false
 	_sync_total_removed = 0
+	# A fresh enumeration supersedes any deletion batches held from a
+	# previous sync - the server state they were validated against is stale.
+	_pending_server_deletions.clear()
 
 	# Reset cover download tracking
 	_sync_covers_mutex.lock()
@@ -690,8 +696,10 @@ func _queue_backfill_covers() -> void:
 					GROUP BY cover_url
 					ORDER BY fav DESC, lp DESC, lu DESC, cover_url ASC"""
 				),
-			func(result: Array):
-				callback.call(result)
+			func(result):
+				# null when the queue dropped the task (overflow); pass through
+				# so the outer null check can bail cleanly.
+				callback.call(result if result is Array else null)
 		)
 	, 120000)
 
@@ -890,66 +898,181 @@ func _remove_platform_sync_threaded(platform_slug: String) -> bool:
 
 # ==================== SERVER-DELETION RECONCILIATION ====================
 
+## Guardrail: if the server's enumeration returns fewer than this fraction of
+## the local platform rows, it is assumed partial/corrupt and reconciliation
+## is aborted. A platform legitimately emptied server-side must go through
+## the confirmation path instead of auto-deleting.
+const RECONCILE_MIN_SEEN_FRACTION := 0.5
+
+## Deletion batches at or below this size commit automatically. Larger ones
+## are held in _pending_server_deletions until confirm_server_deletions().
+const RECONCILE_AUTO_DELETE_THRESHOLD := 5
+
+
 func _reconcile_platform_deletions(platform_slug: String) -> int:
 	"""Sync thread: delete local rows whose romm_id the server no longer lists
 	for this platform. Only call after a COMPLETE full enumeration - partial or
-	incremental syncs must never trigger deletes. Returns the number removed."""
+	incremental syncs must never trigger deletes. Returns the number removed.
+
+	Guardrails: the enumeration must cover at least RECONCILE_MIN_SEEN_FRACTION
+	of the local rows, and batches above RECONCILE_AUTO_DELETE_THRESHOLD wait
+	for explicit user confirmation (server_deletions_detected signal)."""
 	if not data_manager.database.is_database_ready():
 		return 0
 
 	var seen_ids = _sync_seen_ids.duplicate()
-	var result = _wait_for_async(func(callback: Callable):
+
+	# Guard 1: the enumeration must plausibly cover the local platform. A
+	# truncated/failed enumeration looks exactly like a mass server deletion.
+	var local_count = _wait_for_async(func(callback: Callable):
+		MemorySubManager.queue_db_task(
+			func():
+				return data_manager.database.count_platform_rows(platform_slug),
+			func(count):
+				# null when the queue dropped the task (overflow).
+				callback.call(count if count is int else null)
+		)
+	, 60000)
+	if local_count == null or not (local_count is int):
+		print("[SyncThread] ERROR: could not count local rows for %s - skipping reconciliation" % platform_slug)
+		return 0
+	if local_count == 0:
+		return 0
+	if seen_ids.size() < int(ceil(local_count * RECONCILE_MIN_SEEN_FRACTION)):
+		print("[SyncThread] Reconciliation aborted for %s: server enumeration (%d) is suspiciously small vs %d local rows - nothing deleted" % [platform_slug, seen_ids.size(), local_count])
+		return 0
+
+	# Dry run: compute the doomed set without deleting anything.
+	var doomed = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
 				data_manager.database.lock()
-				var info = _delete_server_removed_games(platform_slug, seen_ids)
+				var rows = _find_server_removed_games(platform_slug, seen_ids)
 				data_manager.database.unlock()
-				return info,
-			func(info: Dictionary):
-				callback.call(info)
+				return rows,
+			func(rows):
+				# null when the queue dropped the task (overflow).
+				callback.call(rows if rows is Array else null)
 		)
 	, 120000)
-
-	if result == null or not (result is Dictionary):
-		print("[SyncThread] ERROR: Timeout reconciling platform %s - nothing deleted" % platform_slug)
+	if doomed == null or not (doomed is Array):
+		print("[SyncThread] ERROR: Timeout/overflow computing doomed set for %s - nothing deleted" % platform_slug)
+		return 0
+	if doomed.is_empty():
+		# A fresh enumeration supersedes any older pending batch.
+		_pending_server_deletions.erase(platform_slug)
 		return 0
 
-	var count: int = result.get("count", 0)
-	if count > 0:
-		_defer_on_main("_cleanup_reconciled_games", [platform_slug, count, result.get("cover_urls", [])])
-	return count
+	# Guard 2: large batches need explicit user confirmation. The sync thread
+	# must not block on UI, so the batch is held and the signal asks a view to
+	# confirm (confirm_server_deletions) or decline (decline_server_deletions).
+	if doomed.size() > RECONCILE_AUTO_DELETE_THRESHOLD:
+		_pending_server_deletions[platform_slug] = doomed
+		print("[SyncThread] %d server deletions detected for %s - held for user confirmation" % [doomed.size(), platform_slug])
+		_defer_on_main("_emit_server_deletions_detected", [platform_slug, doomed.size()])
+		return 0
+
+	var committed = _wait_for_async(func(callback: Callable):
+		_queue_reconciliation_commit(platform_slug, doomed, callback)
+	, 120000)
+	if committed == null or not (committed is int):
+		print("[SyncThread] ERROR: Timeout/overflow committing reconciliation for %s" % platform_slug)
+		return 0
+	return committed
 
 
-func _delete_server_removed_games(platform_slug: String, seen_ids: Array) -> Dictionary:
-	"""DB thread (lock held): reconcile one platform against the seen-id set in
-	a single transaction. Related tables keyed by romm_id are cleaned alongside
-	games; a deleted sibling-group master promotes its lowest surviving sibling."""
+func _find_server_removed_games(platform_slug: String, seen_ids: Array) -> Array:
+	"""DB thread (lock held): local rows absent from the server's complete
+	enumeration of this platform. Read-only - deleting is a separate step."""
 	var db = data_manager.database
 
 	# Temp tables are per-connection and the DB queue is single-threaded, so
 	# this only ever lives within this task.
 	db.query_bool_unlocked("CREATE TEMP TABLE IF NOT EXISTS sync_seen_ids (romm_id INTEGER PRIMARY KEY)")
+	db.query_bool_unlocked("DELETE FROM sync_seen_ids")
+
+	var chunk_size = 500
+	for i in range(0, seen_ids.size(), chunk_size):
+		var chunk = seen_ids.slice(i, i + chunk_size)
+		var placeholders = ", ".join(chunk.map(func(_id): return "(?)"))
+		db.query_bool_unlocked("INSERT OR IGNORE INTO sync_seen_ids (romm_id) VALUES %s" % placeholders, chunk)
+
+	return db.query_array_unlocked(
+		"SELECT romm_id, cover_url, is_master_entry, siblings FROM games WHERE platform_slug = ? AND romm_id NOT IN (SELECT romm_id FROM sync_seen_ids)",
+		[platform_slug])
+
+
+func _queue_reconciliation_commit(platform_slug: String, doomed: Array, on_done: Callable = Callable()) -> void:
+	"""Any thread: queue the transactional delete on the DB worker.
+	on_done(count: int) runs on the main thread after cover cleanup."""
+	MemorySubManager.queue_db_task(
+		func():
+			data_manager.database.lock()
+			var info = _delete_server_removed_games(platform_slug, doomed)
+			data_manager.database.unlock()
+			return info,
+		func(info):
+			# null when the queue dropped the task (overflow).
+			if info == null or not (info is Dictionary):
+				push_warning("[Sync] Reconciliation commit dropped for %s (DB queue overflow)" % platform_slug)
+				if on_done.is_valid():
+					on_done.call(0)
+				return
+			var count: int = info.get("count", 0)
+			if count > 0:
+				_cleanup_reconciled_games(platform_slug, count, info.get("cover_urls", []))
+			if on_done.is_valid():
+				on_done.call(count)
+	)
+
+
+func confirm_server_deletions(platform_slug: String) -> bool:
+	"""Main thread: commit a held above-threshold deletion batch. Returns false
+	when no batch is pending for the platform."""
+	if not _pending_server_deletions.has(platform_slug):
+		return false
+	var doomed: Array = _pending_server_deletions[platform_slug]
+	_pending_server_deletions.erase(platform_slug)
+	print("[Sync] User confirmed %d server deletions for %s" % [doomed.size(), platform_slug])
+	_queue_reconciliation_commit(platform_slug, doomed)
+	return true
+
+
+func decline_server_deletions(platform_slug: String) -> void:
+	"""Main thread: discard a held deletion batch; local rows stay as-is."""
+	if _pending_server_deletions.erase(platform_slug):
+		print("[Sync] User declined pending server deletions for %s" % platform_slug)
+
+
+func has_pending_server_deletions(platform_slug: String) -> bool:
+	return _pending_server_deletions.has(platform_slug)
+
+
+func _emit_server_deletions_detected(platform_slug: String, count: int) -> void:
+	data_manager.server_deletions_detected.emit(platform_slug, count)
+
+
+func _delete_server_removed_games(platform_slug: String, doomed: Array) -> Dictionary:
+	"""DB thread (lock held): delete the given doomed rows in a single
+	transaction. Related tables keyed by romm_id are cleaned alongside games,
+	and every deleted romm_id is written to reconciliation_log (inside the
+	transaction, so a rollback leaves no log rows).
+
+	Sibling handling: when a deleted row was its group's master, every
+	surviving sibling is unfolded (is_master_entry = 1). The next sync's
+	_assign_sibling_masters re-folds each group onto its canonical master -
+	simpler than computing the correct surviving master here."""
+	var db = data_manager.database
+	if doomed.is_empty():
+		return {"count": 0, "cover_urls": []}
 
 	if not db.query_bool_unlocked("BEGIN TRANSACTION"):
 		print("[SyncThread] ERROR: Failed to begin reconciliation transaction for %s" % platform_slug)
 		return {"count": 0, "cover_urls": []}
 
 	var chunk_size = 500
-	db.query_bool_unlocked("DELETE FROM sync_seen_ids")
-	for i in range(0, seen_ids.size(), chunk_size):
-		var chunk = seen_ids.slice(i, i + chunk_size)
-		var placeholders = ", ".join(chunk.map(func(_id): return "(?)"))
-		db.query_bool_unlocked("INSERT OR IGNORE INTO sync_seen_ids (romm_id) VALUES %s" % placeholders, chunk)
 
-	var doomed = db.query_array_unlocked(
-		"SELECT romm_id, cover_url, is_master_entry, siblings FROM games WHERE platform_slug = ? AND romm_id NOT IN (SELECT romm_id FROM sync_seen_ids)",
-		[platform_slug])
-
-	if doomed.is_empty():
-		db.query_bool_unlocked("COMMIT")
-		return {"count": 0, "cover_urls": []}
-
-	# Promote a surviving sibling before deleting a group master
+	# Unfold sibling groups whose master is being deleted.
 	for row in doomed:
 		if int(row.get("is_master_entry", 0)) != 1:
 			continue
@@ -966,15 +1089,20 @@ func _delete_server_removed_games(platform_slug: String, seen_ids: Array) -> Dic
 		if candidate_ids.is_empty():
 			continue
 		var ph = ", ".join(candidate_ids.map(func(_id): return "?"))
-		var remaining = db.query_array_unlocked("SELECT romm_id FROM games WHERE romm_id IN (%s)" % ph, candidate_ids)
-		if remaining.is_empty():
-			continue
-		var new_master := int(remaining[0].get("romm_id", 0))
-		for r in remaining:
-			new_master = mini(new_master, int(r.get("romm_id", 0)))
-		db.query_bool_unlocked("UPDATE games SET is_master_entry = 1 WHERE romm_id = ?", [new_master])
+		db.query_bool_unlocked("UPDATE games SET is_master_entry = 1 WHERE romm_id IN (%s)" % ph, candidate_ids)
 
 	var doomed_ids = doomed.map(func(r): return int(r.get("romm_id", 0)))
+
+	# Audit log first: if the delete rolls back, the log rows roll back too.
+	var now := Time.get_datetime_string_from_system(true)
+	for i in range(0, doomed_ids.size(), chunk_size):
+		var chunk = doomed_ids.slice(i, i + chunk_size)
+		var ph = ", ".join(chunk.map(func(_id): return "(?, ?, 'server_deleted', ?)"))
+		var bindings: Array = []
+		for id in chunk:
+			bindings.append_array([platform_slug, id, now])
+		db.query_bool_unlocked("INSERT INTO reconciliation_log (platform_slug, romm_id, action, created_at) VALUES %s" % ph, bindings)
+
 	for i in range(0, doomed_ids.size(), chunk_size):
 		var chunk = doomed_ids.slice(i, i + chunk_size)
 		var ph = ", ".join(chunk.map(func(_id): return "?"))
@@ -983,9 +1111,13 @@ func _delete_server_removed_games(platform_slug: String, seen_ids: Array) -> Dic
 		db.query_bool_unlocked("DELETE FROM collection_roms WHERE romm_id IN (%s)" % ph, chunk)
 		db.query_bool_unlocked("DELETE FROM pending_props_sync WHERE romm_id IN (%s)" % ph, chunk)
 
-	var success = db.query_bool_unlocked(
-		"DELETE FROM games WHERE platform_slug = ? AND romm_id NOT IN (SELECT romm_id FROM sync_seen_ids)",
-		[platform_slug])
+	var success := true
+	for i in range(0, doomed_ids.size(), chunk_size):
+		var chunk = doomed_ids.slice(i, i + chunk_size)
+		var ph = ", ".join(chunk.map(func(_id): return "?"))
+		if not db.query_bool_unlocked("DELETE FROM games WHERE platform_slug = ? AND romm_id IN (%s)" % ph, [platform_slug] + chunk):
+			success = false
+			break
 
 	if not success:
 		print("[SyncThread] ERROR: Reconciliation delete failed for %s, rolling back" % platform_slug)
@@ -1031,8 +1163,9 @@ func _lookup_platform_id_sync(platform_slug: String) -> int:
 				if query_result.size() > 0:
 					return query_result[0].get("romm_id", 0)
 				return 0,
-			func(romm_id: int):
-				callback.call(romm_id)
+			func(romm_id):
+				# null when the queue dropped the task (overflow).
+				callback.call(romm_id if romm_id is int else null)
 		)
 	, 60000)
 
@@ -1055,8 +1188,9 @@ func _get_last_sync_time_sync(platform_slug: String) -> String:
 				if query_result.size() > 0:
 					return query_result[0].get("value", "")
 				return "",
-			func(value: String):
-				callback.call(value)
+			func(value):
+				# null when the queue dropped the task (overflow).
+				callback.call(value if value is String else null)
 		)
 	, 60000)
 
@@ -1076,8 +1210,9 @@ func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 		MemorySubManager.queue_db_task(
 			func():
 				return data_manager.database.query_bool("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)", [key, timestamp]),
-			func(success: bool):
-				callback.call(success)
+			func(success):
+				# null when the queue dropped the task (overflow).
+				callback.call(success if success is bool else null)
 		)
 	, 60000)
 
@@ -1201,8 +1336,9 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 				# Step 2: Insert all games in one transaction
 				var insert_success = _insert_games_transaction(games)
 				return insert_success,
-			func(db_success: bool):
-				callback.call(db_success)
+			func(db_success):
+				# null when the queue dropped the task (overflow).
+				callback.call(db_success if db_success is bool else null)
 		)
 	, 120000)
 

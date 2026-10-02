@@ -462,7 +462,10 @@ func _apply_initial_window_size() -> void:
 	# sizes have stopped changing for several consecutive frames. If the sizes
 	# never changed (no resize needed), we exit after one stable frame.
 	const STABLE_FRAMES_REQUIRED: int = 3
-	const MAX_WAIT_FRAMES: int = 60
+	# Safety cap for a window manager that never stops resizing; downstream
+	# layout (startup_layout_suppressed + grid settle) handles transient sizes,
+	# so waiting longer than this just delays boot on pathological WMs.
+	const MAX_WAIT_FRAMES: int = 20
 	var frame_wait := 0
 	var stable_frames := 0
 	var last_window_size: Vector2i = DisplayServer.window_get_size()

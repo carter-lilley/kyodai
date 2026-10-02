@@ -23,6 +23,15 @@ var _startup_zoom_sync_active: bool = true
 var _zoom_save_timer: Timer = null
 const ZOOM_SAVE_DELAY_MS: int = 1500
 
+# Cached SettingsVar refs for the hot zoom/layout keys. Settings load once at
+# DataManager init and presets mutate these objects in place, so the refs stay
+# valid for the session and skip repeated DataManager.get_setting() lookups.
+var _sv_zoom_level: SettingsVar = null
+var _sv_zoom_ratio: SettingsVar = null
+var _sv_zoom_list: SettingsVar = null
+var _sv_layout_mode: SettingsVar = null
+var _sv_grid_vertical: SettingsVar = null
+
 # Focus restoration on app resume (Android)
 var _last_focused_index: int = -1
 
@@ -32,6 +41,14 @@ func initialize(
 ) -> void:
 	_main_content_vbox = main_content_vbox
 	_content_wrapper = content_wrapper
+
+	# Cache the hot SettingsVar refs (DataManager has loaded settings by now).
+	if DataManager:
+		_sv_zoom_level = DataManager.get_setting("library_card_zoom_level")
+		_sv_zoom_ratio = DataManager.get_setting("library_card_zoom")
+		_sv_zoom_list = DataManager.get_setting("library_card_zoom_list")
+		_sv_layout_mode = DataManager.get_setting("library_layout_mode")
+		_sv_grid_vertical = DataManager.get_setting("library_grid_vertical")
 
 	# Resolve toolbar nodes
 	_toolbar = _main_content_vbox.get_node_or_null("controlbar_background")
@@ -79,13 +96,13 @@ func connect_signals() -> void:
 		_more_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_more_button.pressed.connect(_on_more_button_pressed)
 
-	# Set up the controls-bar user avatar: fetch the current RomM user once
-	# the network is online and swap the fallback icon for the avatar image.
+	# Set up the controls-bar user avatar: swap the fallback icon for the RomM
+	# user's avatar image. Signal hookup is cheap, but the actual fetch/decode
+	# is deferred until the home grid has settled (fetch_avatar_when_idle) so a
+	# network response can't land mid-startup.
 	if _user_avatar and SystemManager.network:
 		SystemManager.network.network_status_changed.connect(_on_network_status_changed_for_avatar)
 		SystemManager.network.current_user_changed.connect(_on_current_user_changed)
-		if SystemManager.network.is_online():
-			SystemManager.network.fetch_current_user()
 
 func finish_startup_zoom_sync() -> void:
 	"""Mark startup zoom sync complete and connect the continuous value_changed
@@ -264,23 +281,20 @@ func _on_zoom_changed_finished(value_changed: bool):
 		# Grid mode: save the integer level.
 		var level = clampi(int(round(_zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
 		if DataManager:
-			var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
-			if zoom_level_setting:
-				DataManager.set_setting(level, zoom_level_setting)
+			if _sv_zoom_level:
+				DataManager.set_setting(level, _sv_zoom_level)
 				if _zoom_save_timer:
 					_zoom_save_timer.start()
-			var zoom_setting = DataManager.get_setting("library_card_zoom")
-			if zoom_setting:
-				DataManager.set_setting(_current_snap_ratios[level], zoom_setting)
+			if _sv_zoom_ratio:
+				DataManager.set_setting(_current_snap_ratios[level], _sv_zoom_ratio)
 				if _zoom_save_timer:
 					_zoom_save_timer.start()
 	else:
 		# List/Carousel mode: save the per-mode ratio.
 		var saved_value = _zoom_slider.value
 		if DataManager:
-			var zoom_setting = DataManager.get_setting("library_card_zoom_list")
-			if zoom_setting:
-				DataManager.set_setting(saved_value, zoom_setting)
+			if _sv_zoom_list:
+				DataManager.set_setting(saved_value, _sv_zoom_list)
 				if _zoom_save_timer:
 					_zoom_save_timer.start()
 
@@ -297,13 +311,10 @@ func load_and_apply_saved_zoom() -> void:
 	if not DataManager:
 		return
 
-	var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
-	var zoom_setting = DataManager.get_setting("library_card_zoom")
-	var layout_mode_setting = DataManager.get_setting("library_layout_mode")
-	var is_grid: bool = layout_mode_setting.value == 0 if layout_mode_setting else true
+	var is_grid: bool = _sv_layout_mode.value == 0 if _sv_layout_mode else true
 
-	if is_grid and zoom_level_setting and zoom_level_setting.value is int and zoom_level_setting.value >= 0:
-		var level: int = zoom_level_setting.value
+	if is_grid and _sv_zoom_level and _sv_zoom_level.value is int and _sv_zoom_level.value >= 0:
+		var level: int = _sv_zoom_level.value
 		if UIManager and UIManager.card_settings_state:
 			UIManager.card_settings_state.card_zoom_level = level
 
@@ -314,9 +325,8 @@ func load_and_apply_saved_zoom() -> void:
 
 	elif not is_grid:
 		# List/Carousel: apply the per-mode ratio.
-		var list_setting = DataManager.get_setting("library_card_zoom_list")
-		if list_setting:
-			var saved_zoom = list_setting.value
+		if _sv_zoom_list:
+			var saved_zoom = _sv_zoom_list.value
 			if UIManager and UIManager.card_settings_state:
 				UIManager.card_settings_state.card_zoom_list_ratio = saved_zoom
 
@@ -325,9 +335,9 @@ func load_and_apply_saved_zoom() -> void:
 				grid.target_card_width_ratio = saved_zoom
 			)
 
-	elif zoom_setting:
+	elif _sv_zoom_ratio:
 		# GRID without a saved level: legacy ratio fallback (grid derives N).
-		var saved_zoom = zoom_setting.value
+		var saved_zoom = _sv_zoom_ratio.value
 
 		# Apply saved zoom to all grid views
 		UIManager.apply_to_all_grids(func(grid: VirtualScrollGridContainer):
@@ -345,10 +355,9 @@ func load_and_apply_saved_zoom() -> void:
 		if games_grid:
 			actual_zoom = games_grid.target_card_width_ratio
 		elif is_grid:
-			actual_zoom = zoom_setting.value if zoom_setting else 0.25
+			actual_zoom = _sv_zoom_ratio.value if _sv_zoom_ratio else 0.25
 		else:
-			var list_zoom_setting = DataManager.get_setting("library_card_zoom_list")
-			actual_zoom = list_zoom_setting.value if list_zoom_setting else 0.25
+			actual_zoom = _sv_zoom_list.value if _sv_zoom_list else 0.25
 		_zoom_slider.set_block_signals(true)
 		if _current_snap_ratios.size() > 0:
 			var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
@@ -390,13 +399,12 @@ func save_zoom_ratio(ratio: float) -> void:
 	var win_size = DisplayServer.window_get_size()
 	if win_size == Vector2i.ZERO or OS.get_cmdline_args().has("--benchmark-startup"):
 		return
-	var zoom_setting = DataManager.get_setting("library_card_zoom")
-	if not zoom_setting:
+	if not _sv_zoom_ratio:
 		return
 	var clamped_ratio = clampf(ratio, 0.05, 0.5)
-	if is_equal_approx(zoom_setting.value, clamped_ratio):
+	if is_equal_approx(_sv_zoom_ratio.value, clamped_ratio):
 		return
-	DataManager.set_setting(clamped_ratio, zoom_setting)
+	DataManager.set_setting(clamped_ratio, _sv_zoom_ratio)
 	if _zoom_save_timer:
 		_zoom_save_timer.start()
 
@@ -408,8 +416,7 @@ func sync_view_mode_button_to_setting() -> void:
 	if not _view_mode_group or not DataManager:
 		return
 
-	var mode_setting = DataManager.get_setting("library_layout_mode")
-	var layout_mode_val = mode_setting.value if mode_setting else 0
+	var layout_mode_val = _sv_layout_mode.value if _sv_layout_mode else 0
 
 	var button_index: int
 	match layout_mode_val:
@@ -462,9 +469,8 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 
 	# Save to settings
 	if DataManager:
-		var mode_setting = DataManager.get_setting("library_layout_mode")
-		if mode_setting:
-			DataManager.set_setting(setting_value, mode_setting)
+		if _sv_layout_mode:
+			DataManager.set_setting(setting_value, _sv_layout_mode)
 			DataManager.save_settings()
 
 	# Update zoom slider stops/range since max zoom and snap levels differ per mode
@@ -688,13 +694,10 @@ func _toggle_horizontal_grid() -> void:
 	if new_level >= 0 and UIManager and UIManager.card_settings_state:
 		UIManager.card_settings_state.card_zoom_level = new_level
 	if DataManager:
-		var setting = DataManager.get_setting("library_grid_vertical")
-		if setting:
-			DataManager.set_setting(target_vertical, setting)
-		if new_level >= 0:
-			var level_setting = DataManager.get_setting("library_card_zoom_level")
-			if level_setting:
-				DataManager.set_setting(new_level, level_setting)
+		if _sv_grid_vertical:
+			DataManager.set_setting(target_vertical, _sv_grid_vertical)
+		if new_level >= 0 and _sv_zoom_level:
+			DataManager.set_setting(new_level, _sv_zoom_level)
 		DataManager.save_settings()
 
 	# Refresh zoom slider so it uses snap ratios for the new orientation
@@ -731,11 +734,32 @@ func update_controlbar_mask_color() -> void:
 # User avatar
 # ============================================================================
 
+# Avatar fetch/decode is deferred until the home grid has settled so network
+# latency and image decode can't sit on the startup critical path.
+var _avatar_fetch_allowed: bool = false
+
+## Kick the initial avatar fetch once startup has settled. Also arms the
+## network-status handler so a reconnect later in the session refetches.
+func fetch_avatar_when_idle() -> void:
+	_avatar_fetch_allowed = true
+	if not _user_avatar or not SystemManager.network:
+		return
+	if SystemManager.network.is_online():
+		if SystemManager.network.current_user.is_empty():
+			SystemManager.network.fetch_current_user()
+		else:
+			# User data already arrived (e.g. an early fetch elsewhere); apply now.
+			_on_current_user_changed(SystemManager.network.current_user)
+
 func _on_network_status_changed_for_avatar(online: bool) -> void:
+	if not _avatar_fetch_allowed:
+		return
 	if online and SystemManager.network.current_user.is_empty():
 		SystemManager.network.fetch_current_user()
 
 func _on_current_user_changed(user: Dictionary) -> void:
+	if not _avatar_fetch_allowed:
+		return
 	if not is_instance_valid(_user_avatar):
 		return
 	var avatar_path: String = user.get("avatar_path", "")
@@ -832,14 +856,12 @@ func adjust_zoom(delta: float) -> void:
 				call_deferred("_restore_focus_to_card", focused_index)
 			# Save the integer level for grid mode.
 			if DataManager:
-				var zoom_level_setting = DataManager.get_setting("library_card_zoom_level")
-				if zoom_level_setting:
-					DataManager.set_setting(new_index, zoom_level_setting)
+				if _sv_zoom_level:
+					DataManager.set_setting(new_index, _sv_zoom_level)
 					if _zoom_save_timer:
 						_zoom_save_timer.start()
-				var zoom_setting = DataManager.get_setting("library_card_zoom")
-				if zoom_setting:
-					DataManager.set_setting(_current_snap_ratios[new_index], zoom_setting)
+				if _sv_zoom_ratio:
+					DataManager.set_setting(_current_snap_ratios[new_index], _sv_zoom_ratio)
 					if _zoom_save_timer:
 						_zoom_save_timer.start()
 		return
@@ -859,9 +881,8 @@ func adjust_zoom(delta: float) -> void:
 			call_deferred("_restore_focus_to_card", focused_index)
 		# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
 		if DataManager:
-			var zoom_setting = DataManager.get_setting("library_card_zoom")
-			if zoom_setting:
-				DataManager.set_setting(actual_zoom, zoom_setting)
+			if _sv_zoom_ratio:
+				DataManager.set_setting(actual_zoom, _sv_zoom_ratio)
 				if _zoom_save_timer:
 					_zoom_save_timer.start()
 
@@ -880,14 +901,12 @@ func persist_settled_zoom(grid: VirtualScrollGridContainer) -> void:
 		level = _find_nearest_snap_index(grid.target_card_width_ratio)
 		UIManager.card_settings_state.card_zoom_level = level
 	if level >= 0 and DataManager:
-		var level_setting = DataManager.get_setting("library_card_zoom_level")
-		if level_setting:
-			DataManager.set_setting(level, level_setting)
+		if _sv_zoom_level:
+			DataManager.set_setting(level, _sv_zoom_level)
 			if _zoom_save_timer:
 				_zoom_save_timer.start()
-		var ratio_setting = DataManager.get_setting("library_card_zoom")
-		if ratio_setting:
-			DataManager.set_setting(grid.target_card_width_ratio, ratio_setting)
+		if _sv_zoom_ratio:
+			DataManager.set_setting(grid.target_card_width_ratio, _sv_zoom_ratio)
 			if _zoom_save_timer:
 				_zoom_save_timer.start()
 		UIManager.card_settings_state.card_zoom_ratio = grid.target_card_width_ratio

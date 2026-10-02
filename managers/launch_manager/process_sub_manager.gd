@@ -487,15 +487,8 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		push_error("[ProcessManager] Invalid launch intent")
 		return false
 
-	# Check if emulator is fully installed using step validation (all emulators use registry steps)
-	var emulator = launch_manager.registry.get_emulator(intent.emulator_id)
-	var is_actually_installed = false
-	var install_steps = emulator.get("install", [])
-	is_actually_installed = true
-	for i in range(install_steps.size()):
-		if not launch_manager.emulator._validate_install_step(intent.emulator_id, i, install_steps):
-			is_actually_installed = false
-			break
+	# Check if emulator is fully installed (cached scan, see _is_emulator_fully_installed)
+	var is_actually_installed: bool = launch_manager.emulator.get_install_progress(intent.emulator_id).get("is_installed", false)
 
 	if not is_actually_installed:
 		push_error("[ProcessManager] Emulator not fully installed: " + intent.emulator_id)
@@ -607,6 +600,16 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		else:
 			print("[ProcessManager] No user/ in requested working dir '%s'; falling back to exe dir" % effective_working_dir)
 			effective_working_dir = exe_path.get_base_dir().replace("//", "/")
+
+	# Existence guard: a missing working dir makes the shell wrappers' `cd` (or
+	# PowerShell's -WorkingDirectory) fail before the emulator ever starts.
+	# Fall back to the exe dir, then to the process default working dir.
+	if effective_working_dir != "" and not FSM.dir_exists(effective_working_dir):
+		push_warning("[ProcessManager] Working dir does not exist, falling back: " + effective_working_dir)
+		effective_working_dir = exe_path.get_base_dir().replace("//", "/")
+	if effective_working_dir != "" and not FSM.dir_exists(effective_working_dir):
+		push_warning("[ProcessManager] Exe dir missing too, using default working dir: " + effective_working_dir)
+		effective_working_dir = ""
 	
 	print("[ProcessManager] Creating desktop process for: ", exe_path)
 	print("[ProcessManager] launch args: ", arguments)

@@ -168,16 +168,10 @@ func initialize(
 	# Invisible edge resize grips: stripping the native frame also strips its
 	# resize borders. Anchored full-rect on the root layout (which spans the
 	# window), drawn above app content but below every CanvasLayer overlay.
+	# Deferred: nothing needs the grips before first paint, and _raise_resize_grips
+	# already null-guards for layout rebuilds that land before creation.
 	if _title_bar:
-		_window_resize_grips = RESIZE_GRIPS_SCRIPT.new()
-		_window_resize_grips.name = "WindowResizeGrips"
-		_root_control.add_child(_window_resize_grips)
-		# A nav rebuild (bar<->rail switch) appends a fresh InnerLayout after the
-		# grips; GUI picking walks children in reverse tree order and ignores
-		# z_index, so the grips must be re-raised or the edge strips stop
-		# receiving hover. Re-assert on every layout rebuild.
-		if not layout_changed.is_connected(_raise_resize_grips):
-			layout_changed.connect(_raise_resize_grips)
+		call_deferred("_create_window_resize_grips")
 
 	# Ensure MainContentVBox fills the MarginContainer
 	_main_content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -240,25 +234,37 @@ func initialize(
 	DataManager.apply_preset_begin.connect(_on_apply_preset_begin)
 	DataManager.apply_preset_end.connect(_on_apply_preset_end)
 
-	# Apply dark mode setting on startup
+	# Apply dark mode setting on startup (walks the tree only on actual change)
 	var dark_mode_setting = DataManager.get_setting("dark_mode")
 	if dark_mode_setting:
 		theme._apply_dark_mode(dark_mode_setting.value)
 
+	# Track whether any style-affecting value actually changed: the refresh walk
+	# below is what propagates these to nodes built earlier in initialize(), and
+	# it's a whole-tree cost that boot shouldn't pay when settings match the
+	# compiled defaults.
+	var style_dirty := false
+
 	# Apply frosted look setting on startup
 	var frosted_setting = DataManager.get_setting("frosted_look")
 	if frosted_setting and frosted_setting.value is bool:
-		M3Theme.frosted_look = frosted_setting.value
+		if M3Theme.frosted_look != frosted_setting.value:
+			M3Theme.frosted_look = frosted_setting.value
+			style_dirty = true
 
 	# Apply primary color setting on startup
 	var primary_color_setting = DataManager.get_setting("library_primary_color")
 	if primary_color_setting and primary_color_setting.value is Color:
+		var primary_before := M3Theme.PRIMARY_LIGHT
 		M3Theme.set_primary_seed(primary_color_setting.value)
+		if M3Theme.PRIMARY_LIGHT != primary_before:
+			style_dirty = true
 
 	# Apply custom interface font on startup
 	var ui_font_setting = DataManager.get_setting("ui_font")
 	if ui_font_setting and ui_font_setting.value is String and not ui_font_setting.value.is_empty():
 		_apply_ui_font(ui_font_setting.value)
+		style_dirty = true
 
 	# Apply focus ring animation settings on startup
 	var focus_movement_setting = DataManager.get_setting("library_focus_movement_anim")
@@ -274,7 +280,11 @@ func initialize(
 	if focus_shape_setting and focus_shape_setting.value is int:
 		_apply_focus_ring_shape(focus_shape_setting.value)
 
-	theme._request_theme_refresh()
+	# Only walk the tree when a style-affecting setting actually changed the
+	# M3Theme state from the compiled defaults (see style_dirty above); nodes
+	# built during initialize() read current M3Theme values at build time.
+	if style_dirty:
+		theme._request_theme_refresh()
 
 # ============================================================================
 # Layout helpers
@@ -307,6 +317,21 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	layout.add_theme_constant_override("separation", 0)
 
 	return layout
+
+func _create_window_resize_grips() -> void:
+	"""Deferred from initialize(): nothing needs the grips before first paint,
+	and _raise_resize_grips null-guards layout rebuilds that land earlier."""
+	if _window_resize_grips or not _root_control:
+		return
+	_window_resize_grips = RESIZE_GRIPS_SCRIPT.new()
+	_window_resize_grips.name = "WindowResizeGrips"
+	_root_control.add_child(_window_resize_grips)
+	# A nav rebuild (bar<->rail switch) appends a fresh InnerLayout after the
+	# grips; GUI picking walks children in reverse tree order and ignores
+	# z_index, so the grips must be re-raised or the edge strips stop
+	# receiving hover. Re-assert on every layout rebuild.
+	if not layout_changed.is_connected(_raise_resize_grips):
+		layout_changed.connect(_raise_resize_grips)
 
 func _raise_resize_grips(_position: String = "") -> void:
 	# Keep the resize grips as the last RootLayout child: picking checks

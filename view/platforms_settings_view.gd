@@ -398,7 +398,14 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 	var data_copy: Array = data.duplicate(true)
 	SystemManager.memory.queue_db_task(
 		func(): return _precompute_card_data(data_copy),
-		func(precomputed: Dictionary):
+		func(precomputed):
+			# null when the queue dropped the task (overflow): bail with the
+			# pending flag cleared so the populate batch isn't blocked forever.
+			if precomputed == null:
+				_precompute_pending = false
+				if on_complete.is_valid():
+					on_complete.call()
+				return
 			if render_generation != _render_generation or not is_inside_tree():
 				if on_complete.is_valid():
 					on_complete.call()

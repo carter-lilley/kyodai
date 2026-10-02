@@ -143,6 +143,10 @@ func _get_ayn_thor_manager() -> Node:
 	var main = get_node_or_null("/root/Main")
 	return main.get_node_or_null("AynThorManager") if main else null
 
+## Cached SettingsVar for the swap state; settings load once and presets
+## mutate in place, so the ref stays valid for the session.
+var _sv_swapped: SettingsVar = null
+
 ## Connect to AynThorManager's screens_swapped signal and restore the saved
 ## swap state. Owns the dual_screen_swapped setting lifecycle so main.gd stays
 ## lifecycle-only.
@@ -155,16 +159,16 @@ func setup_swap_persistence() -> void:
 
 	# Restore saved screen swap state while layout is still suppressed so the
 	# viewport resize does not re-snap the grid away from the saved zoom.
-	var swap_setting = DataManager.get_setting("dual_screen_swapped")
-	print("[DualScreenManager] Startup dual_screen_swapped setting: ", swap_setting.value if swap_setting else "NULL")
+	_sv_swapped = DataManager.get_setting("dual_screen_swapped") if DataManager else null
+	print("[DualScreenManager] Startup dual_screen_swapped setting: ", _sv_swapped.value if _sv_swapped else "NULL")
 	# Only restore the swap when dual-screen mode is actually enabled —
 	# otherwise the main viewport would be drawn to a released screen.
 	var ds_enabled = SystemManager.display.is_dual_screen_enabled() if SystemManager and SystemManager.display else false
-	if ds_enabled and swap_setting and swap_setting.value and not ayn.is_swapped:
+	if ds_enabled and _sv_swapped and _sv_swapped.value and not ayn.is_swapped:
 		print("[DualScreenManager] Restoring saved screen swap state")
 		ayn.swap_screens()
 	else:
-		print("[DualScreenManager] Not restoring screen swap (setting=", swap_setting.value if swap_setting else "NULL", ", is_swapped=", ayn.is_swapped, ", ds_enabled=", ds_enabled, ")")
+		print("[DualScreenManager] Not restoring screen swap (setting=", _sv_swapped.value if _sv_swapped else "NULL", ", is_swapped=", ayn.is_swapped, ", ds_enabled=", ds_enabled, ")")
 
 func teardown_swap_persistence() -> void:
 	var ayn := _get_ayn_thor_manager()
@@ -175,9 +179,8 @@ func _on_screens_swapped(is_swapped: bool) -> void:
 	"""Persist the new swapped state so it survives restarts."""
 	print("[DualScreenManager] _on_screens_swapped called with is_swapped=", is_swapped)
 	if DataManager:
-		var swap_setting = DataManager.get_setting("dual_screen_swapped")
-		if swap_setting:
-			DataManager.set_setting(is_swapped, swap_setting)
+		if _sv_swapped:
+			DataManager.set_setting(is_swapped, _sv_swapped)
 			DataManager.save_settings()
 		else:
 			push_warning("[DualScreenManager] dual_screen_swapped setting not found!")

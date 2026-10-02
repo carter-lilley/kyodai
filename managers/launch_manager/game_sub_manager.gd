@@ -611,6 +611,35 @@ func _locate_xenia_archive(game: GameResource) -> String:
 		return archive_path
 	return ""
 
+## Waits for a queued extraction to finish. Uses the extraction_completed
+## signal + SceneTreeTimer instead of polling process_frame, so large
+## extractions don't burn a frame every tick. Disconnects on match or timeout.
+func _await_extraction(item_id: String, log_tag: String, timeout_sec: float = 1800.0) -> bool:
+	var tracker := {"complete": false, "success": false}
+	# Declared before assignment so the lambda can reference itself for disconnect.
+	var on_complete := Callable()
+	on_complete = func(completed_item_id: String, success: bool, _message: String):
+		if completed_item_id != item_id:
+			return
+		tracker.complete = true
+		tracker.success = success
+		print("[%s] Extraction callback - success=%s" % [log_tag, str(success)])
+		# Disconnect once matched so we don't keep listening for other items.
+		if SystemManager.download.extraction_completed.is_connected(on_complete):
+			SystemManager.download.extraction_completed.disconnect(on_complete)
+
+	SystemManager.download.extraction_completed.connect(on_complete)
+	await get_tree().create_timer(timeout_sec).timeout
+
+	if not tracker.complete:
+		if SystemManager.download.extraction_completed.is_connected(on_complete):
+			SystemManager.download.extraction_completed.disconnect(on_complete)
+		push_error("[%s] Extraction timed out after %d minutes" % [log_tag, int(timeout_sec / 60.0)])
+		return false
+
+	print("[%s] Extraction complete, success=%s" % [log_tag, str(tracker.success)])
+	return tracker.success
+
 ## Extracts an XBLA archive to the specified directory (archive is kept)
 func _extract_xenia_archive(archive_path: String, extract_to: String, suppress_notification: bool = false) -> bool:
 	print("[GameManager] Xenia: Extracting archive: " + archive_path + " to: " + extract_to)
@@ -627,32 +656,7 @@ func _extract_xenia_archive(archive_path: String, extract_to: String, suppress_n
 		return false
 
 	print("[GameManager] Xenia: Waiting for extraction to complete...")
-
-	var completion_tracker := {"complete": false, "success": false}
-
-	var on_complete = func(completed_item_id: String, success: bool, _message: String):
-		if completed_item_id == item_id:
-			completion_tracker.complete = true
-			completion_tracker.success = success
-			print("[GameManager] Xenia: Extraction callback - success=" + str(success))
-
-	SystemManager.download.extraction_completed.connect(on_complete)
-
-	# Wait for extraction to complete (30 min timeout for large games)
-	var timeout_frames = 0
-	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
-	while not completion_tracker.complete:
-		await get_tree().process_frame
-		timeout_frames += 1
-		if timeout_frames > max_timeout_frames:
-			push_error("[GameManager] Xenia: Extraction timed out after 30 minutes")
-			SystemManager.download.extraction_completed.disconnect(on_complete)
-			return false
-
-	SystemManager.download.extraction_completed.disconnect(on_complete)
-
-	print("[GameManager] Xenia: Extraction complete, success=" + str(completion_tracker.success))
-	return completion_tracker.success
+	return await _await_extraction(item_id, "GameManager] Xenia")
 
 func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
@@ -956,80 +960,6 @@ func _ensure_vita3k_license(rom_path: String, emulator_dir: String, title_id: St
 	zr.close()
 
 
-## Recursively searches for PARAM.SFO file in a directory
-## Returns the full path to PARAM.SFO if found, empty string otherwise
-func _find_param_sfo_recursive(search_dir: String) -> String:
-	var dir := DirAccess.open(search_dir)
-	if not dir:
-		return ""
-	
-	dir.list_dir_begin()
-	var file_name := dir.get_next()
-	
-	while file_name != "":
-		if file_name != "." and file_name != "..":
-			var full_path := FSM.join_paths(search_dir, file_name)
-			
-			# Check if this is the PARAM.SFO file we're looking for
-			if file_name == "PARAM.SFO" and FSM.file_exists(full_path):
-				dir.list_dir_end()
-				return full_path
-			
-			# If it's a directory, search recursively
-			if FSM.dir_exists(full_path):
-				var result := _find_param_sfo_recursive(full_path)
-				if result != "":
-					dir.list_dir_end()
-					return result
-						
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
-	return ""
-
-
-## Recursively copies a directory and all its contents
-## Returns true on success, false on failure
-func _copy_dir_recursive(source_dir: String, dest_dir: String) -> bool:
-	print("[GameManager] RPCS3: Copying directory recursively from " + source_dir + " to " + dest_dir)
-	
-	# Create destination directory
-	if not FSM.make_dir_recursive(dest_dir):
-		push_error("[GameManager] RPCS3: Failed to create destination directory: " + dest_dir)
-		return false
-	
-	var dir := DirAccess.open(source_dir)
-	if not dir:
-		push_error("[GameManager] RPCS3: Cannot open source directory: " + source_dir)
-		return false
-	
-	dir.list_dir_begin()
-	var file_name := dir.get_next()
-	var success := true
-	
-	while file_name != "":
-		if file_name != "." and file_name != "..":
-			var source_path := FSM.join_paths(source_dir, file_name)
-			var dest_path := FSM.join_paths(dest_dir, file_name)
-			
-			if FSM.dir_exists(source_path):
-				# Recursively copy subdirectory
-				if not _copy_dir_recursive(source_path, dest_path):
-					success = false
-					break
-			else:
-				# Copy file
-				if not FSM.copy_file(source_path, dest_path):
-					push_error("[GameManager] RPCS3: Failed to copy file: " + source_path + " to " + dest_path)
-					success = false
-					break
-		
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
-	return success
-
-
 ## Checks whether the given RPCS3 game path contains actual game files
 func _rpcs3_game_has_files(game_path: String) -> bool:
 	if not FSM.dir_exists(game_path):
@@ -1071,7 +1001,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			
 			# First, try to get TitleID from existing PARAM.SFO in the extracted folder
 			# This is more reliable than searching for ZIPs when multiple games share a folder
-			var existing_sfo_path = _find_param_sfo_recursive(rom_path)
+			var existing_sfo_path = FSM.find_file_recursive(rom_path, "PARAM.SFO")
 			if existing_sfo_path != "":
 				var sfo_bytes = FSM.read_file_bytes(existing_sfo_path)
 				if not sfo_bytes.is_empty():
@@ -1462,33 +1392,7 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 		return false
 	
 	print("[GameManager] RPCS3: Waiting for extraction to complete...")
-	
-	# Use a completion tracker object
-	var completion_tracker := {"complete": false, "success": false}
-	
-	var on_complete = func(completed_item_id: String, success: bool, _message: String):
-		if completed_item_id == item_id:
-			completion_tracker.complete = true
-			completion_tracker.success = success
-			print("[GameManager] RPCS3: Extraction callback - success=" + str(success))
-	
-	SystemManager.download.extraction_completed.connect(on_complete)
-	
-	# Wait for extraction to complete (30 min timeout for large games)
-	var timeout_frames = 0
-	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
-	while not completion_tracker.complete:
-		await get_tree().process_frame
-		timeout_frames += 1
-		if timeout_frames > max_timeout_frames:
-			push_error("[GameManager] RPCS3: Extraction timed out after 30 minutes")
-			SystemManager.download.extraction_completed.disconnect(on_complete)
-			return false
-	
-	SystemManager.download.extraction_completed.disconnect(on_complete)
-	
-	print("[GameManager] RPCS3: Extraction complete, success=" + str(completion_tracker.success))
-	return completion_tracker.success
+	return await _await_extraction(item_id, "GameManager] RPCS3")
 
 
 ## Prepares a PS4 game for launch by extracting the TitleID and extracting game files
@@ -1607,41 +1511,8 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 		push_error("[GameManager] shadPS4: Failed to queue extraction")
 		return false
 	
-	print("[GameManager] shadPS4: Waiting for extraction to complete (no timeout)...")
-	
-	# Use a completion tracker object
-	var completion_tracker := {"complete": false, "success": false}
-	
-	var on_complete = func(completed_item_id: String, success: bool, _message: String):
-		if completed_item_id == item_id:
-			completion_tracker.complete = true
-			completion_tracker.success = success
-			print("[GameManager] shadPS4: Extraction callback - success=" + str(success))
-	
-	SystemManager.download.extraction_completed.connect(on_complete)
-	
-	# Wait for extraction to complete (30 min timeout for large games)
-	var timeout_frames = 0
-	var max_timeout_frames = 30 * 60 * 60  # 30 minutes at 60fps
-	while not completion_tracker.complete:
-		await get_tree().process_frame
-		timeout_frames += 1
-		if timeout_frames > max_timeout_frames:
-			push_error("[GameManager] shadPS4: Extraction timed out after 30 minutes")
-			SystemManager.download.extraction_completed.disconnect(on_complete)
-			return false
-	
-	SystemManager.download.extraction_completed.disconnect(on_complete)
-	
-	print("[GameManager] shadPS4: Extraction wait loop ended")
-	print("[GameManager] shadPS4: completion_tracker.complete=" + str(completion_tracker.complete) + ", completion_tracker.success=" + str(completion_tracker.success))
-	
-	if not completion_tracker.complete:
-		push_error("[GameManager] shadPS4: Extraction callback never fired")
-		return false
-	
-	print("[GameManager] shadPS4: _extract_shadps4_zip returning: " + str(completion_tracker.success))
-	return completion_tracker.success
+	print("[GameManager] shadPS4: Waiting for extraction to complete...")
+	return await _await_extraction(item_id, "GameManager] shadPS4")
 
 ## Cleans up extracted game files when a game is deleted
 ## Platforms that extract: PS3 (RPCS3), Vita (Vita3K)

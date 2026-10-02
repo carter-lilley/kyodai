@@ -133,6 +133,8 @@ func _ready():
 	# Connect to DataManager to sync UI when presets are applied
 	if DataManager:
 		DataManager.apply_preset_end.connect(_on_preset_applied)
+		# Confirm dialog for above-threshold server-deletion batches.
+		DataManager.server_deletions_detected.connect(_on_server_deletions_detected)
 
 	# Connect to LaunchManager to save focus before game launch
 	if LaunchManager:
@@ -211,32 +213,57 @@ func _ready():
 	# paint and grid settle win the main thread.
 	call_deferred("_prewarm_shader_pipelines")
 
-	# Extract bundled tools on packaged builds (binaries inside the PCK cannot be executed)
-	if SystemManager.platform.is_packaged():
-		AndroidBinaryExtractor.extract_all_binaries()
-
-	# Check if first-run wizard needs to be shown
-	phase_start_us = Time.get_ticks_usec()
-	_show_oobe_wizard_if_needed()
-	print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-
-	# Focus the first Home card on startup once data is loaded, and pre-create the
-	# settings dialog in the background so opening it later (especially the RomM
-	# platform cards screen) is instant.
+	# Focus the first Home card on startup once data is loaded.
 	var first_run_setting = DataManager.get_setting("first_run_completed")
 	if first_run_setting and first_run_setting.value:
 		call_deferred("_focus_first_home_card_on_startup")
-		call_deferred("_pre_create_settings_dialog")
 
 	# Startup zoom sync is complete; clear the guard after the current frame so
 	# any deferred slider emissions that fire during this frame are ignored.
 	UIManager.toolbar.call_deferred("set_startup_zoom_sync_active", false)
 	print("[Main] _ready() completed, elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
 
+	# Non-critical boot work (OOBE wizard, avatar fetch, tool extraction,
+	# settings-dialog pre-create) runs after the settle frame so none of it
+	# sits between _ready() and first paint.
+	call_deferred("_post_ready_startup")
+
 	# Headless benchmark modes (--benchmark-startup / --benchmark-shutdown and
 	# related flags) live in utils/startup_benchmark.gd.
 	if await StartupBenchmark.run_from_args(self):
 		return
+
+func _post_ready_startup() -> void:
+	"""Second boot phase: runs deferred after the Home grid settle so first
+	paint isn't blocked by wizard/avatar/extraction work."""
+	var post_start_us := Time.get_ticks_usec()
+	var phase_start_us := Time.get_ticks_usec()
+
+	# Check if first-run wizard needs to be shown
+	_show_oobe_wizard_if_needed()
+	print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Kick the avatar fetch/decode now that the grid is up.
+	phase_start_us = Time.get_ticks_usec()
+	if UIManager and UIManager.toolbar:
+		UIManager.toolbar.fetch_avatar_when_idle()
+	print("[Main] avatar kickoff elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Extract bundled tools on packaged builds (binaries inside the PCK cannot
+	# be executed). File IO + chmod; every consumer also extracts lazily on
+	# demand, so running it here just warms the cache.
+	if SystemManager.platform.is_packaged():
+		phase_start_us = Time.get_ticks_usec()
+		AndroidBinaryExtractor.extract_all_binaries()
+		print("[Main] binary extraction elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Pre-create the settings dialog in the background so opening it later
+	# (especially the RomM platform cards screen) is instant.
+	var first_run_setting = DataManager.get_setting("first_run_completed")
+	if first_run_setting and first_run_setting.value:
+		call_deferred("_pre_create_settings_dialog")
+
+	print("[Main] _post_ready_startup elapsed_us=", Time.get_ticks_usec() - post_start_us)
 
 func _apply_m3_theme() -> void:
 	_m3_theme = M3Theme.generate_theme()
@@ -332,6 +359,43 @@ func _on_preset_applied() -> void:
 	UIManager.toolbar.sync_view_mode_button_to_setting()
 	# Re-apply zoom to all views (deferred so grids have valid dimensions)
 	UIManager.toolbar.call_deferred("load_and_apply_saved_zoom")
+
+
+# Server-deletion confirmation: a full sync can hold one above-threshold
+# batch per platform; dialogs are shown one at a time, queued per signal.
+var _server_deletion_queue: Array = []
+var _server_deletion_dialog_open: bool = false
+
+func _on_server_deletions_detected(platform_slug: String, count: int) -> void:
+	_server_deletion_queue.append({"slug": platform_slug, "count": count})
+	_show_next_server_deletion_dialog()
+
+func _show_next_server_deletion_dialog() -> void:
+	if _server_deletion_dialog_open or _server_deletion_queue.is_empty():
+		return
+	_server_deletion_dialog_open = true
+	var entry: Dictionary = _server_deletion_queue.pop_front()
+	var slug: String = entry.slug
+	var count: int = entry.count
+
+	var dialog := M3Dialog.new()
+	dialog.title_text = "Games removed from server"
+	dialog.body_text = "The server no longer lists %d games for %s. Remove them from this device?\n\nROM and save files on disk are not affected." % [count, slug]
+	dialog.add_action("Keep", func():
+		DataManager.decline_server_deletions(slug)
+		dialog.dismiss()
+	, false)
+	dialog.add_action("Remove", func():
+		DataManager.confirm_server_deletions(slug)
+		dialog.dismiss()
+	, true)
+	# Any dismissal path (buttons above, scrim, X, back) frees the queue;
+	# scrim/X/back counts as Keep (safe default, and a no-op after Remove).
+	dialog.dismissed.connect(func():
+		DataManager.decline_server_deletions(slug)
+		_server_deletion_dialog_open = false
+		_show_next_server_deletion_dialog())
+	M3Dialog.show_dialog(dialog)
 
 func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	"""Focus the first game card in the Home grid once it has data."""

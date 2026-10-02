@@ -76,7 +76,9 @@ const MAX_DB_QUEUE_SIZE = 500
 ## Extra headroom main-thread producers get past the soft cap before tasks
 ## are dropped (with a null callback) instead of growing the queue forever.
 const MAX_DB_QUEUE_MAIN_OVERFLOW = 500
-const MAX_EXTRACTION_QUEUE_SIZE = 5
+# 5 was tight enough that bursts of save-sync / cover extraction silently
+# dropped work; 10 absorbs realistic bursts without unbounded memory growth.
+const MAX_EXTRACTION_QUEUE_SIZE = 10
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
 const MAX_SYNC_QUEUE_SIZE = 10
 const OS_EXECUTE_THREAD_COUNT: int = 4
@@ -551,6 +553,14 @@ func _execute_callback(callback: Callable, result):
 # ============================================================================
 # THREAD QUEUE METHODS (from thread_manager)
 # ============================================================================
+
+## True when called on the DB worker thread. Write helpers use this to stay
+## synchronous inside an outer DB task (preserving FIFO/atomicity) while
+## queueing when invoked from the main thread.
+static func is_db_thread() -> bool:
+	# Thread.get_id() is a String; OS.get_thread_caller_id() is an int.
+	return _instance != null and _instance._db_thread != null \
+		and OS.get_thread_caller_id() == int(_instance._db_thread.get_id())
 
 static func queue_db_task(callable: Callable, callback: Callable = Callable()):
 	if _instance == null:

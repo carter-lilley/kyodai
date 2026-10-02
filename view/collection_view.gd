@@ -199,8 +199,9 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 		func():
 			var count = DataManager.get_games_for_collection_count(collection_id)
 			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
+		func(count):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				return
 			_total_games = count
@@ -221,8 +222,9 @@ func _load_platform_total_count(preserve_cache: bool = false) -> void:
 		func():
 			var count = DataManager.get_total_games_count(platform_slug)
 			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
+		func(count):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				return
 			_total_games = count
@@ -244,8 +246,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 					return stale
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, platform_slug)
 				return games,
-			func(games: Array[GameResource]):
-				if not is_instance_valid(games_grid):
+			func(games):
+				# null when the queue dropped the task (overflow).
+				if games == null or not is_instance_valid(games_grid):
 					return
 				games_grid.on_items_loaded(games, offset, is_preload)
 		)
@@ -259,8 +262,9 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 				return stale
 			var games = DataManager.get_games_for_collection_paginated(collection_id, offset, limit)
 			return games,
-		func(games: Array[GameResource]):
-			if not is_instance_valid(games_grid):
+		func(games):
+			# null when the queue dropped the task (overflow).
+			if games == null or not is_instance_valid(games_grid):
 				return
 			games_grid.on_items_loaded(games, offset, is_preload)
 	)

@@ -3,7 +3,7 @@
 xemu raw hdd save sync
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-
+dont invert glow
 
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs

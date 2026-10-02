@@ -195,8 +195,9 @@ func _load_letter_index() -> void:
 	SystemManager.memory.queue_db_task(
 		func():
 			return DataManager.get_title_letter_runs(platform_slug, filters, search_query),
-		func(runs: Array[Dictionary]):
-			if not is_instance_valid(_az_carousel):
+		func(runs):
+			# null when the queue dropped the task (overflow).
+			if runs == null or not is_instance_valid(_az_carousel):
 				return
 			_apply_letter_runs(runs)
 	)
@@ -430,8 +431,9 @@ func _load_total_count_with_search(on_complete: Callable = Callable()):
 		func():
 			var count = DataManager.get_search_results_count(_search_query, _active_filters)
 			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
+		func(count):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -614,14 +616,15 @@ func _load_total_count_with_platform(preserve_cache: bool = false) -> void:
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug, _active_filters)
 			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
+		func(count):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				return
 			_total_games = count
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-			
+
 			# Reset scroll to top when switching platforms
 			games_grid.scroll_to_index(0, false)
 			
@@ -691,8 +694,9 @@ func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Cal
 		func():
 			var count = DataManager.get_total_games_count(_current_platform_slug, _active_filters)
 			return count,
-		func(count: int):
-			if not is_instance_valid(games_grid):
+		func(count):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -721,7 +725,10 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				var games = DataManager.search_games_paginated(_search_query, offset, limit, _active_filters)
 				if DEBUG_LOG: print("[LibraryView] DB task (search): offset=", offset, " limit=", limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
-			func(games: Array[GameResource]):
+			func(games):
+				# null when the queue dropped the task (overflow).
+				if games == null or not is_instance_valid(games_grid):
+					return
 				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
 				if DEBUG_LOG: print("[LibraryView] on_items_loaded callback (search): offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
@@ -736,7 +743,10 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, _current_platform_slug, _active_filters)
 				if DEBUG_LOG: print("[LibraryView] DB task: offset=", offset, " limit=", limit, " platform=", _current_platform_slug, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 				return games,
-			func(games: Array[GameResource]):
+			func(games):
+				# null when the queue dropped the task (overflow).
+				if games == null or not is_instance_valid(games_grid):
+					return
 				var callback_start_us := Time.get_ticks_usec()
 				games_grid.on_items_loaded(games, offset, is_preload)
 				if DEBUG_LOG: print("[LibraryView] on_items_loaded callback: offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)

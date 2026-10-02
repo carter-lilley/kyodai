@@ -224,9 +224,10 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		func():
 			var count = DataManager.get_downloaded_games_count()
 			return count,
-		func(count: int):
+		func(count):
 			_total_count_load_pending = false
-			if not is_instance_valid(games_grid):
+			# null when the queue dropped the task (overflow).
+			if count == null or not is_instance_valid(games_grid):
 				_is_loading = false
 				if on_complete.is_valid():
 					on_complete.call()
@@ -415,7 +416,10 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				"offset": offset,
 				"gamenative_indices": result_gamenative_indices
 			},
-		func(result: Dictionary):
+		func(result):
+			# null when the queue dropped the task (overflow).
+			if result == null or not is_instance_valid(games_grid):
+				return
 			var callback_start_us := Time.get_ticks_usec()
 			var games = result["games"] as Array[GameResource]
 			var response_offset = result["offset"] as int

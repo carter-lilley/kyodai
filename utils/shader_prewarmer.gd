@@ -30,7 +30,52 @@ const LOG_SHADER_US := 8000
 # guard makes whichever runs second a no-op.
 static var _started := false
 
+## Baked shader list. The bundled set is static, so exported builds skip the
+## res:// directory scan entirely; editor builds scan and validate against this
+## list so adding/removing a shader is caught during development.
+const BAKED_SHADER_PATHS: Array[String] = [
+	"res://addons/m3/shaders/card/rounded_media.gdshader",
+	"res://shaders/background/library_background_cafeos.gdshader",
+	"res://shaders/background/library_background_dotgrid.gdshader",
+	"res://shaders/background/library_background_gradient.gdshader",
+	"res://shaders/background/library_background_gradient_flow.gdshader",
+	"res://shaders/background/library_background_hero.gdshader",
+	"res://shaders/background/library_background_horizon3d.gdshader",
+	"res://shaders/background/library_background_isolines.gdshader",
+	"res://shaders/background/library_background_motes.gdshader",
+	"res://shaders/background/library_background_osdsys.gdshader",
+	"res://shaders/background/library_background_xmb.gdshader",
+	"res://shaders/background/library_background_xmb_classic.gdshader",
+	"res://shaders/card/badge.gdshader",
+	"res://shaders/card/base_card.gdshader",
+	"res://shaders/card/blur.gdshader",
+	"res://shaders/card/border.gdshader",
+	"res://shaders/card/case_wrap.gdshader",
+	"res://shaders/card/distort.gdshader",
+	"res://shaders/card/drop_shadow.gdshader",
+	"res://shaders/card/glass.gdshader",
+	"res://shaders/card/glass_swoop.gdshader",
+	"res://shaders/card/glow.gdshader",
+	"res://shaders/card/gradient_overlay.gdshader",
+	"res://shaders/card/hsl.gdshader",
+	"res://shaders/card/present_wrap.gdshader",
+	"res://shaders/card/shine.gdshader",
+	"res://shaders/frosted_backdrop.gdshader",
+	"res://shaders/hero_image.gdshader",
+	"res://shaders/skeleton_shimmer.gdshader",
+]
+
 static func collect_shader_paths() -> Array[String]:
+	if OS.has_feature("editor"):
+		# Editor: scan for real so new shaders are picked up without a list
+		# edit, and warn when the baked list (used by exports) has drifted.
+		var scanned := _scan_shader_paths()
+		if scanned != BAKED_SHADER_PATHS:
+			push_warning("[ShaderPrewarmer] BAKED_SHADER_PATHS drifted from the res:// scan; update the baked list")
+		return scanned
+	return BAKED_SHADER_PATHS.duplicate()
+
+static func _scan_shader_paths() -> Array[String]:
 	var paths: Array[String] = []
 	for dir_path in SCAN_DIRS:
 		_collect_dir(dir_path, paths)

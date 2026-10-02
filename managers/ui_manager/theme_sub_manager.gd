@@ -38,6 +38,10 @@ func _setup_library_appearance() -> void:
 	_tab_container.add_theme_stylebox_override("panel", transparent_style)
 
 func _apply_dark_mode(enabled: bool) -> void:
+	# Skip the full-tree walk when the mode isn't actually changing: nodes bake
+	# M3Theme values at build time, so an unchanged value can't leave staleness.
+	if M3Theme.is_dark_mode == enabled:
+		return
 	M3Theme.is_dark_mode = enabled
 	if not _theme_refresh_pending:
 		_theme_refresh_pending = true

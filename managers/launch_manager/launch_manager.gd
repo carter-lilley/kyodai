@@ -483,16 +483,14 @@ func on_install_reminder_dismissed(emulator_id: String) -> void:
 		_abort_pending_launches(emulator_id, "Emulator not installed")
 
 
-## Validates every registry install step for an emulator.
+## Validates every registry install step for an emulator. Uses the cached
+## get_install_progress scan so a launch sequence validates once instead of
+## re-probing the filesystem at every stage (5 s TTL, cleared on installs).
 func _is_emulator_fully_installed(emulator_id: String) -> bool:
 	var emu = registry.get_emulator(emulator_id)
 	if emu.is_empty():
 		return false
-	var install_steps = emu.get("install", [])
-	for i in range(install_steps.size()):
-		if not emulator._validate_install_step(emulator_id, i, install_steps):
-			return false
-	return true
+	return emulator.get_install_progress(emulator_id).get("is_installed", false)
 
 
 ## Resumes queued launches for an emulator that finished installing.
@@ -624,13 +622,8 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	var emu = registry.get_emulator(emulator_id)
 	var emulator_name = RegistrySubManager.get_emulator_display_name(emu, emulator_id)
 	
-	# Check if emulator is fully installed
-	var is_actually_installed = true
-	var install_steps = emu.get("install", [])
-	for i in range(install_steps.size()):
-		if not emulator._validate_install_step(emulator_id, i, install_steps):
-			is_actually_installed = false
-			break
+	# Check if emulator is fully installed (cached scan, see _is_emulator_fully_installed)
+	var is_actually_installed = emulator.get_install_progress(emulator_id).get("is_installed", false)
 	
 	# If emulator is now installed but there's a stale pending launch, abort it
 	# cleanly so its in-flight guard can't wedge the game as "already launching"
@@ -768,9 +761,11 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			if on_failed.is_valid():
 				on_failed.call()
 			return false
-		# Cache the prepared ROM path for shuffler launches so callers can update bag entries.
-		if is_shuffler:
-			_last_prepared_rom_paths[game.romm_id] = $GameSubManager._last_prepared_rom_path
+		# Cache the prepared ROM path for every launch: it carries the relative
+		# path fix, m3u playlist substitution, and extraction rewrites that
+		# _launch_game_internal must use verbatim instead of re-resolving.
+		# Shuffler callers also read this to update bag entries.
+		_last_prepared_rom_paths[game.romm_id] = $GameSubManager._last_prepared_rom_path
 		print("[LaunchManager] _ensure_prerequisites: Game preparation complete")
 	else:
 		print("[LaunchManager] _ensure_prerequisites: Skipping game preparation (shuffler session)")
@@ -873,8 +868,14 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 			_end_launch(game.romm_id)
 			return
 	
-	var launch_intent = intent_manager.create_launch_intent(game)
-	
+	# Use the ROM path resolved during game prep (m3u playlists, relative-path
+	# fixes) instead of re-deriving it. Erased on use so a stale entry from a
+	# previous launch can never leak into this one. Empty falls back to the
+	# intent builder's own resolution (e.g. headless runs that skip prep).
+	var prepared_path := _last_prepared_rom_paths.get(game.romm_id, "") as String
+	_last_prepared_rom_paths.erase(game.romm_id)
+	var launch_intent = intent_manager.create_launch_intent(game, prepared_path)
+
 	if not launch_intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
 		SystemManager.notifications.show_notification("Failed to create launch intent", SystemManager.notifications.Type.ERROR)

@@ -50,6 +50,23 @@ var _lru_flush_timer: Timer = null
 
 func _ready():
 	data_manager = get_parent()
+	# Own the fold_duplicate_covers reaction so DataManager._on_setting_changed
+	# doesn't reach into cover internals.
+	DataManager.setting_changed.connect(_on_setting_changed)
+
+func _on_setting_changed(value, setting: SettingsVar) -> void:
+	if setting.property_name != "fold_duplicate_covers":
+		return
+	if value:
+		print("[CoverFolding] Setting enabled - applying cover folding...")
+		apply_cover_folding_to_database(func(folded_count: int):
+			print("[CoverFolding] Applied cover folding to %d games" % folded_count)
+			# Trigger grid refresh
+			data_manager.sync_completed.emit(true, "Cover folding enabled - folded %d games" % folded_count)
+		)
+	else:
+		print("[CoverFolding] Setting disabled - removing cover-based siblings...")
+		_remove_cover_based_siblings()
 	_ensure_cache_folder()
 	_load_lru_sidecar()
 	_lru_flush_timer = Timer.new()
@@ -614,7 +631,10 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 
 			var tx_ok = true
 
-			# Process each cover group with 2+ games
+			# Process each cover group with 2+ games. Two bulk statements per
+			# group regardless of group size: one tags every member, one
+			# promotes the master. (Members are addressed by romm_id, not
+			# cover_url, so games excluded for having RomM siblings stay clean.)
 			for cover_url in cover_groups.keys():
 				var games = cover_groups[cover_url]
 				if games.size() < 2:
@@ -631,22 +651,24 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 					if game.romm_id < lowest_id:
 						lowest_id = game.romm_id
 
-				# Update all games in this group
+				var member_ids: Array = []
+				var placeholders: Array[String] = []
 				for game in games:
-					var is_master = 1 if game.romm_id == lowest_id else 0
+					member_ids.append(game.romm_id)
+					placeholders.append("?")
 
-					var update_query = """
-						UPDATE games
-						SET cover_group_id = ?, cover_group_master = ?
-						WHERE romm_id = ?
-					"""
+				var tag_query := "UPDATE games SET cover_group_id = ?, cover_group_master = 0 WHERE romm_id IN (%s)" % ",".join(placeholders)
+				var tag_bindings: Array = [group_id]
+				tag_bindings.append_array(member_ids)
+				if not data_manager.database.query_bool_unlocked(tag_query, tag_bindings):
+					tx_ok = false
 
-					if not data_manager.database.query_bool_unlocked(update_query, [group_id, is_master, game.romm_id]):
-						tx_ok = false
+				if not data_manager.database.query_bool_unlocked(
+					"UPDATE games SET cover_group_master = 1 WHERE romm_id = ?", [lowest_id]):
+					tx_ok = false
 
-					# Count non-master games as folded
-					if game.romm_id != lowest_id:
-						games_folded += 1
+				# All non-master members count as folded
+				games_folded += games.size() - 1
 
 			if tx_ok:
 				data_manager.database.query_bool_unlocked("COMMIT")
@@ -657,8 +679,16 @@ func apply_cover_folding_to_database(callback: Callable = Callable()):
 
 			print("[CoverFolding] Processed %d cover groups, folded %d games" % [groups_processed, games_folded])
 			return games_folded,
-		func(folded_count: int):
+		func(folded_count):
+			# Always dismiss the pinned notification — null means the queue
+			# dropped the task (overflow), not that folding finished.
 			SystemManager.notifications.dismiss_notification(notification_id)
+
+			if folded_count == null:
+				push_warning("[CoverFolding] folding task dropped (DB queue overflow)")
+				if callback.is_valid():
+					callback.call(0)
+				return
 
 			if folded_count > 0:
 				SystemManager.notifications.show_notification(
@@ -700,7 +730,11 @@ func _remove_cover_based_siblings():
 				unfolded_count = query_result[0].get("count", 0)
 
 			return unfolded_count,
-		func(unfolded_count: int):
+		func(unfolded_count):
+			# null when the queue dropped the task (overflow).
+			if unfolded_count == null:
+				push_warning("[CoverFolding] unfold task dropped (DB queue overflow)")
+				return
 			print("[CoverFolding] Unfolded %d games" % unfolded_count)
 			# Notify listeners that library needs refresh
 			data_manager.sync_completed.emit(true, "Cover folding disabled - unfolded %d games" % unfolded_count)

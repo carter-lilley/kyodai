@@ -24,6 +24,11 @@ signal cache_cleared()
 @warning_ignore("unused_signal")
 signal scan_for_downloaded_games_completed(found_count: int)
 
+# Emitted (main thread) when a full sync finds more server-side deletions for
+# a platform than the auto-delete threshold. The batch is held until
+# confirm_server_deletions() or decline_server_deletions() is called.
+signal server_deletions_detected(platform_slug: String, count: int)
+
 # Settings facade signals
 signal setting_changed(value: Variant, setting: SettingsVar)
 signal settings_saved()
@@ -63,7 +68,12 @@ func _ready():
 	MemorySubManager.queue_db_task(
 		func():
 			return database.initialize_database(),
-		func(success: bool):
+		func(success):
+			# null when the queue dropped the task (overflow): without this,
+			# neither database_ready nor database_failed would ever emit and
+			# every view would hang waiting.
+			if success == null:
+				success = false
 			if success:
 				print("[DatabaseManager] Database ready - emitting signal")
 				database_ready.emit()
@@ -115,18 +125,8 @@ func _ensure_memory_manager():
 
 
 func _on_setting_changed(value, setting):
-	if setting.property_name == "fold_duplicate_covers":
-		if value:
-			print("[CoverFolding] Setting enabled - applying cover folding...")
-			cover.apply_cover_folding_to_database(func(folded_count: int):
-				print("[CoverFolding] Applied cover folding to %d games" % folded_count)
-				# Trigger grid refresh
-				sync_completed.emit(true, "Cover folding enabled - folded %d games" % folded_count)
-			)
-		else:
-			print("[CoverFolding] Setting disabled - removing cover-based siblings...")
-			cover._remove_cover_based_siblings()
-	elif setting.property_name == "hide_games_without_covers":
+	# fold_duplicate_covers is owned by CoverSubManager._on_setting_changed.
+	if setting.property_name == "hide_games_without_covers":
 		print("[DataManager] Hide no-cover setting changed to %s" % value)
 		# Filter clause changed; count may be different even without data changes.
 		database.invalidate_downloaded_games_count_cache()
@@ -520,6 +520,27 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 
 func remove_platform_games(platform_slug: String, callback: Callable = Callable()):
 	database.remove_platform_games(platform_slug, callback)
+
+
+# ==================== SERVER-DELETION RECONCILIATION ====================
+
+## Commits a held above-threshold deletion batch. Returns false when no batch
+## is pending for the platform.
+func confirm_server_deletions(platform_slug: String) -> bool:
+	return sync.confirm_server_deletions(platform_slug)
+
+
+## Discards a held deletion batch; local rows stay as-is.
+func decline_server_deletions(platform_slug: String) -> void:
+	sync.decline_server_deletions(platform_slug)
+
+
+func has_pending_server_deletions(platform_slug: String) -> bool:
+	return sync.has_pending_server_deletions(platform_slug)
+
+
+func get_reconciliation_log(platform_slug: String = "", limit: int = 100) -> Array:
+	return database.get_reconciliation_log(platform_slug, limit)
 
 
 func get_all_platforms() -> Array[PlatformResource]:

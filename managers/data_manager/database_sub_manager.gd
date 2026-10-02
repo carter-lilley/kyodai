@@ -123,8 +123,9 @@ func query_array(query: String, bindings: Array = []) -> Array:
 
 
 ## Timeout for query_array_async. Only reachable when the DB task queue
-## drops a task without invoking its callback (app-shutdown paths).
-const QUERY_ASYNC_TIMEOUT_MSEC := 5000
+## drops a task without invoking its callback (app-shutdown paths). Cold
+## ORDER BY RANDOM() over large libraries can exceed 5 s on slow storage.
+const QUERY_ASYNC_TIMEOUT_MSEC := 15000
 
 ## Materializes a query result on the DB worker thread and awaits it back on
 ## the caller's (main) thread. Same locking as query_array, but building the
@@ -357,6 +358,19 @@ func _create_tables():
 		)
 	""")
 
+	# Audit trail for server-deletion reconciliation. Written inside the same
+	# transaction as the deletes, so a rolled-back batch leaves no log rows.
+	query_bool("""
+		CREATE TABLE IF NOT EXISTS reconciliation_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			platform_slug TEXT NOT NULL,
+			romm_id INTEGER NOT NULL,
+			action TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)
+	""")
+	query_bool("CREATE INDEX IF NOT EXISTS idx_reconciliation_log_platform ON reconciliation_log(platform_slug)")
+
 
 func is_database_ready() -> bool:
 	return _is_db_ready
@@ -393,10 +407,6 @@ func ensure_schema_alignment() -> bool:
 				SystemManager.notifications.show_notification("Database schema updated (" + str(repaired.size()) + " missing columns added)", SystemManager.notifications.Type.WARNING)
 		)
 	return true
-
-
-func _escape_sql(text: String) -> String:
-	return text.replace("'", "''")
 
 
 func invalidate_downloaded_games_count_cache() -> void:
@@ -814,29 +824,71 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 
 	var root_folder = root_folder_setting.value
 
-	# Get all games from database to match against
-	var all_games = get_all_games()
-	if all_games.size() == 0:
-		if callback.is_valid():
-			callback.call(0)
-		return
+	# Scan results change has_local_copy / downloaded_sibling_ids.
+	invalidate_downloaded_games_count_cache()
 
-	# Build lookup dictionary: file_name -> game
-	var game_lookup: Dictionary = {}
-	for game in all_games:
-		# Add main game file
-		if game.file_name != "":
-			var key = game.platform_slug + "/" + game.file_name.to_lower()
-			game_lookup[key] = game
+	# The whole pipeline (slim DB read, lookup build, filesystem scan, matching,
+	# and the matched-row UPDATEs) runs as one DB-worker task, so the main
+	# thread never materializes the library or blocks on directory IO.
+	MemorySubManager.queue_db_task(
+		func():
+			return _scan_and_update_downloaded_games(root_folder),
+		func(updated_count):
+			# null when the queue dropped the task (overflow).
+			if updated_count == null:
+				updated_count = 0
+			print("[DEBUG] Scan complete - updated %d games in DB" % updated_count)
+			data_manager.scan_for_downloaded_games_completed.emit(updated_count)
+			if callback.is_valid():
+				callback.call(updated_count)
+	)
+	return
 
-		# Add sibling files
-		for sibling in game.siblings:
-			var sibling_file_name = sibling.get("file_name", "")
-			if sibling_file_name != "":
-				var sibling_key = game.platform_slug + "/" + sibling_file_name.to_lower()
-				game_lookup[sibling_key] = game
 
-	# Scan filesystem
+func _scan_and_update_downloaded_games(root_folder: String) -> int:
+	"""DB worker: match downloaded files against the library and update rows.
+	Reads only the columns matching needs; no GameResource materialization."""
+	# Slim read: romm_id, platform_slug, file_name, siblings, downloaded ids.
+	var rows = query_array("SELECT romm_id, platform_slug, file_name, siblings, downloaded_sibling_ids FROM games")
+	if rows.is_empty():
+		return 0
+
+	# Build lookups: file -> romm_id, plus per-game sibling file -> sibling_id.
+	var file_to_romm: Dictionary = {}
+	var sibling_file_to_id: Dictionary = {}  # romm_id -> {file_name_lower: sibling_id}
+	var main_file_lower: Dictionary = {}     # romm_id -> file_name.to_lower()
+	var existing_dl_ids: Dictionary = {}     # romm_id -> Array (parsed JSON)
+
+	for row in rows:
+		var romm_id := int(row.get("romm_id", 0))
+		var platform_slug := str(row.get("platform_slug", ""))
+		var file_name := str(row.get("file_name", ""))
+		if romm_id == 0:
+			continue
+
+		var sib_map: Dictionary = {}
+		var json := JSON.new()
+		if json.parse(str(row.get("siblings", "[]"))) == OK and json.data is Array:
+			for sibling in json.data:
+				if sibling is Dictionary:
+					var sib_file := str(sibling.get("file_name", ""))
+					var sib_id := int(sibling.get("id", 0))
+					if sib_file != "" and sib_id != 0:
+						sib_map[sib_file.to_lower()] = sib_id
+						file_to_romm[platform_slug + "/" + sib_file.to_lower()] = romm_id
+		sibling_file_to_id[romm_id] = sib_map
+
+		if file_name != "":
+			main_file_lower[romm_id] = file_name.to_lower()
+			file_to_romm[platform_slug + "/" + file_name.to_lower()] = romm_id
+
+		var ids: Array = []
+		var id_json := JSON.new()
+		if id_json.parse(str(row.get("downloaded_sibling_ids", "[]"))) == OK and id_json.data is Array:
+			ids = id_json.data
+		existing_dl_ids[romm_id] = ids
+
+	# Filesystem scan on the worker: directory IO stays off the main thread.
 	var found_files: Array[String] = []
 	_scan_games_directory(root_folder, "", found_files)
 
@@ -847,10 +899,8 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 		if f.ends_with(".kyodai_download"):
 			in_progress[f.trim_suffix(".kyodai_download")] = true
 
-	# Match files to games
-	var matched_games: Dictionary = {}  # romm_id -> {game, matched_siblings: [], file_path: ""}
-	var _matched_count: int = 0
-
+	# Match files to games.
+	var matched: Dictionary = {}  # romm_id -> {file_path: String, new_sibling_ids: Array}
 	for file_path in found_files:
 		if in_progress.has(file_path):
 			continue
@@ -859,44 +909,46 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 		if parts.size() < 2:
 			continue
 
-		var platform_slug = parts[0]
-		var file_name = parts[1]
-		var lookup_key = platform_slug + "/" + file_name.to_lower()
+		var lookup_key = parts[0] + "/" + parts[1].to_lower()
+		if not file_to_romm.has(lookup_key):
+			continue
+		var romm_id: int = file_to_romm[lookup_key]
+		if not matched.has(romm_id):
+			matched[romm_id] = {"file_path": "", "new_sibling_ids": []}
+		var file_lower: String = parts[1].to_lower()
+		if main_file_lower.get(romm_id, "") == file_lower:
+			# Main game file: record its full path.
+			matched[romm_id].file_path = root_folder + "/" + file_path
+		else:
+			# Sibling file: record its sibling id if not already tracked.
+			var sib_id := int(sibling_file_to_id[romm_id].get(file_lower, 0))
+			if sib_id != 0 and not matched[romm_id].new_sibling_ids.has(sib_id) \
+					and not existing_dl_ids[romm_id].has(sib_id):
+				matched[romm_id].new_sibling_ids.append(sib_id)
 
-		if game_lookup.has(lookup_key):
-			var game = game_lookup[lookup_key]
-
-			if not matched_games.has(game.romm_id):
-				matched_games[game.romm_id] = {
-					"game": game,
-					"matched_siblings": [],
-					"file_path": ""
-				}
-
-			var full_file_path = root_folder + "/" + file_path
-
-			# Check if it's the main game file or a sibling
-			if file_name.to_lower() == game.file_name.to_lower():
-				# It's the main game file - update file_path
-				matched_games[game.romm_id].file_path = full_file_path
+	# Transactional update of all matched rows. file_path follows the legacy
+	# behavior of writing "" when only sibling files matched.
+	var updated_count := 0
+	_db_lock()
+	var tx_ok = query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION")
+	if tx_ok:
+		for romm_id in matched.keys():
+			var entry: Dictionary = matched[romm_id]
+			var merged_ids: Array = existing_dl_ids[romm_id].duplicate()
+			merged_ids.append_array(entry.new_sibling_ids)
+			if query_bool_unlocked(
+					"UPDATE games SET has_local_copy = 1, file_path = ?, downloaded_sibling_ids = ? WHERE romm_id = ?",
+					[entry.file_path, JSON.stringify(merged_ids), romm_id]):
+				updated_count += 1
 			else:
-				# It's a sibling - find the sibling ID
-				for sibling in game.siblings:
-					var sibling_file = sibling.get("file_name", "")
-					if sibling_file.to_lower() == file_name.to_lower():
-						var sibling_id = sibling.get("id", 0)
-						if sibling_id != 0 and not matched_games[game.romm_id].matched_siblings.has(sibling_id):
-							matched_games[game.romm_id].matched_siblings.append(sibling_id)
-							break
-
-			_matched_count += 1
-
-	# Update database for matched games
-	if matched_games.size() > 0:
-		_update_matched_games_in_db(matched_games, callback)
+				tx_ok = false
+	if tx_ok:
+		query_bool_unlocked("COMMIT")
 	else:
-		if callback.is_valid():
-			callback.call(0)
+		query_bool_unlocked("ROLLBACK")
+		updated_count = 0
+	_db_unlock()
+	return updated_count
 
 
 func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
@@ -926,47 +978,6 @@ func _scan_games_directory(root_path: String, sub_path: String, results: Array[S
 		else:
 			# It's a file - add to results
 			results.append(current_path)
-
-
-func _update_matched_games_in_db(matched_games: Dictionary, callback: Callable) -> void:
-	"""Update database entries for matched games."""
-	print("[DEBUG] _update_matched_games_in_db called with %d matched games" % matched_games.size())
-	# Scan results change has_local_copy / downloaded_sibling_ids.
-	invalidate_downloaded_games_count_cache()
-	MemorySubManager.queue_db_task(
-		func():
-			_db_lock()
-			var updated_count: int = 0
-
-			for romm_id in matched_games.keys():
-				var match_data = matched_games[romm_id]
-				var game: GameResource = match_data.game
-				var matched_siblings: Array = match_data.matched_siblings
-				var new_file_path: String = match_data.file_path
-
-				# Update game object
-				game.has_local_copy = true
-				if new_file_path != "":
-					game.file_path = new_file_path
-				for sibling_id in matched_siblings:
-					if not sibling_id in game.downloaded_sibling_ids:
-						game.downloaded_sibling_ids.append(sibling_id)
-
-				# Update database
-				var downloaded_ids_json = JSON.stringify(game.downloaded_sibling_ids)
-				var query = "UPDATE games SET has_local_copy = 1, file_path = ?, downloaded_sibling_ids = ? WHERE romm_id = ?"
-
-				if query_bool_unlocked(query, [new_file_path, downloaded_ids_json, romm_id]):
-					updated_count += 1
-
-			_db_unlock()
-			return updated_count,
-		func(updated_count: int):
-			print("[DEBUG] Scan complete - updated %d games in DB" % updated_count)
-			data_manager.scan_for_downloaded_games_completed.emit(updated_count)
-			if callback.is_valid():
-				callback.call(updated_count)
-	)
 
 
 # ==================== PLATFORMS ====================
@@ -1049,7 +1060,13 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 				"cover_urls": cover_urls,
 				"count": count_before
 			},
-		func(result: Dictionary):
+		func(result):
+			# null when the queue dropped the task (overflow).
+			if result == null:
+				push_error("[Sync] Removal task dropped (DB queue overflow) for %s" % platform_slug)
+				if callback.is_valid():
+					callback.call(false)
+				return
 			var success = result.get("success", false)
 			var cover_urls = result.get("cover_urls", [])
 			var _count = result.get("count", 0)
@@ -1156,7 +1173,10 @@ WHERE romm_id = ?
 			_db_unlock()
 			return success,
 
-		func(success: bool):
+		func(success):
+			# null when the queue dropped the task (overflow).
+			if success == null:
+				success = false
 			if success:
 				data_manager.game_updated.emit(game)
 			if callback.is_valid():
@@ -1176,9 +1196,10 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 			_db_unlock()
 			return success,
 
-		func(success: bool):
-			if success:
-				pass
+		# success is null when the queue dropped the task (overflow).
+		func(success):
+			if success == null:
+				success = false
 			if callback.is_valid():
 				callback.call(success)
 	)
@@ -1196,9 +1217,9 @@ func update_game_save_info(romm_id: int, save_id: String, save_usage: String, ca
 			_db_unlock()
 			return success,
 
-		func(success: bool):
-			if success:
-				pass
+		func(success):
+			if success == null:
+				success = false
 			if callback.is_valid():
 				callback.call(success)
 	)
@@ -1216,9 +1237,9 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 			_db_unlock()
 			return success,
 
-		func(success: bool):
-			if success:
-				pass
+		func(success):
+			if success == null:
+				success = false
 			if callback.is_valid():
 				callback.call(success)
 	)
@@ -1236,7 +1257,9 @@ func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = C
 			_db_unlock()
 			return success,
 
-		func(success: bool):
+		func(success):
+			if success == null:
+				success = false
 			if callback.is_valid():
 				callback.call(success)
 	)
@@ -1244,19 +1267,27 @@ func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = C
 
 
 func update_game_last_played(romm_id: int, timestamp: String) -> bool:
-	"""Update the last_played timestamp for a game."""
+	"""Update the last_played timestamp for a game. Queued on the DB worker
+	when called from the main thread; synchronous when already on it."""
 	if not _is_db_ready:
 		return false
-
-	return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
+	if MemorySubManager.is_db_thread():
+		return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
+	MemorySubManager.queue_db_task(func():
+		query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id]))
+	return true
 
 
 func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
-	"""Update the present-wrap unwrapped flag for a game."""
+	"""Update the present-wrap unwrapped flag for a game. Queued on the DB
+	worker when called from the main thread; synchronous when already on it."""
 	if not _is_db_ready:
 		return false
-
-	return query_bool("UPDATE games SET unwrapped = ? WHERE romm_id = ?", [1 if unwrapped else 0, romm_id])
+	if MemorySubManager.is_db_thread():
+		return query_bool("UPDATE games SET unwrapped = ? WHERE romm_id = ?", [1 if unwrapped else 0, romm_id])
+	MemorySubManager.queue_db_task(func():
+		query_bool("UPDATE games SET unwrapped = ? WHERE romm_id = ?", [1 if unwrapped else 0, romm_id]))
+	return true
 
 
 ## Whitelist of user-prop columns that update_game_user_props may write.
@@ -1271,7 +1302,9 @@ const USER_PROP_COLUMNS := {
 
 func update_game_user_props(romm_id: int, props: Dictionary) -> bool:
 	"""Update one or more RomM per-user prop columns for a game.
-	props keys: status, now_playing, backlogged, hidden, is_favorite, last_played"""
+	props keys: status, now_playing, backlogged, hidden, is_favorite, last_played.
+	Queued on the DB worker when called from the main thread; synchronous when
+	already on it (so worker-context batch flows keep their ordering)."""
 	if not _is_db_ready or props.is_empty():
 		return false
 
@@ -1294,36 +1327,59 @@ func update_game_user_props(romm_id: int, props: Dictionary) -> bool:
 	bindings.append(romm_id)
 	_filter_options_cache_valid = false
 	_filter_options_cache.clear()
-	return query_bool("UPDATE games SET %s WHERE romm_id = ?" % ", ".join(sets), bindings)
+	var query := "UPDATE games SET %s WHERE romm_id = ?" % ", ".join(sets)
+	if MemorySubManager.is_db_thread():
+		return query_bool(query, bindings)
+	MemorySubManager.queue_db_task(func():
+		query_bool(query, bindings))
+	return true
 
 
 func set_all_favorites(favorite_romm_ids: Array) -> bool:
-	"""Reset is_favorite for all games, then mark the given romm_ids as favorites."""
+	"""Reset is_favorite for all games, then mark the given romm_ids as favorites.
+	Queued on the DB worker when called from the main thread; synchronous when
+	already on it."""
 	if not _is_db_ready:
 		return false
 	_filter_options_cache_valid = false
 	_filter_options_cache.clear()
-	var success = query_bool("UPDATE games SET is_favorite = 0", [])
-	if favorite_romm_ids.is_empty():
-		return success
-	var placeholders: Array[String] = []
-	for id in favorite_romm_ids:
-		placeholders.append("?")
-	success = query_bool("UPDATE games SET is_favorite = 1 WHERE romm_id IN (%s)" % ",".join(placeholders), favorite_romm_ids) and success
+	if MemorySubManager.is_db_thread():
+		return _set_all_favorites_sync(favorite_romm_ids)
+	MemorySubManager.queue_db_task(func():
+		_set_all_favorites_sync(favorite_romm_ids))
+	return true
+
+
+func _set_all_favorites_sync(favorite_romm_ids: Array) -> bool:
+	# Caller must be on the DB worker thread (or otherwise serialized); the two
+	# UPDATEs are atomic under one lock hold.
+	_db_lock()
+	var success = query_bool_unlocked("UPDATE games SET is_favorite = 0", [])
+	if not favorite_romm_ids.is_empty():
+		var placeholders: Array[String] = []
+		for id in favorite_romm_ids:
+			placeholders.append("?")
+		success = query_bool_unlocked("UPDATE games SET is_favorite = 1 WHERE romm_id IN (%s)" % ",".join(placeholders), favorite_romm_ids) and success
+	_db_unlock()
 	return success
 
 
 # ==================== PENDING PROPS SYNC QUEUE ====================
 
 func queue_pending_props(romm_id: int, kind: String, payload: Dictionary) -> bool:
-	"""Queue a failed RomM user-prop write for retry (latest state wins per rom+kind)."""
+	"""Queue a failed RomM user-prop write for retry (latest state wins per rom+kind).
+	Queued on the DB worker when called from the main thread; synchronous when
+	already on it."""
 	if not _is_db_ready:
 		return false
 	var timestamp = Time.get_datetime_string_from_system(false, true)
-	return query_bool(
-		"INSERT OR REPLACE INTO pending_props_sync (romm_id, kind, payload, queued_at) VALUES (?, ?, ?, ?)",
-		[romm_id, kind, JSON.stringify(payload), timestamp]
-	)
+	const QUERY := "INSERT OR REPLACE INTO pending_props_sync (romm_id, kind, payload, queued_at) VALUES (?, ?, ?, ?)"
+	var bindings := [romm_id, kind, JSON.stringify(payload), timestamp]
+	if MemorySubManager.is_db_thread():
+		return query_bool(QUERY, bindings)
+	MemorySubManager.queue_db_task(func():
+		query_bool(QUERY, bindings))
+	return true
 
 
 func get_pending_props_sync() -> Array[Dictionary]:
@@ -1346,9 +1402,48 @@ func get_pending_props_sync() -> Array[Dictionary]:
 
 
 func clear_pending_props(romm_id: int, kind: String) -> bool:
+	"""Queued on the DB worker when called from the main thread; synchronous
+	when already on it."""
 	if not _is_db_ready:
 		return false
-	return query_bool("DELETE FROM pending_props_sync WHERE romm_id = ? AND kind = ?", [romm_id, kind])
+	if MemorySubManager.is_db_thread():
+		return query_bool("DELETE FROM pending_props_sync WHERE romm_id = ? AND kind = ?", [romm_id, kind])
+	MemorySubManager.queue_db_task(func():
+		query_bool("DELETE FROM pending_props_sync WHERE romm_id = ? AND kind = ?", [romm_id, kind]))
+	return true
+
+
+# ==================== SERVER-DELETION RECONCILIATION ====================
+
+func count_platform_rows(platform_slug: String) -> int:
+	"""Raw row count for a platform with no master/cover filters - used by the
+	reconciliation guard to compare the server enumeration against reality."""
+	if not _is_db_ready:
+		return 0
+	var rows = query_array("SELECT COUNT(*) AS c FROM games WHERE platform_slug = ?", [platform_slug])
+	if rows.is_empty():
+		return 0
+	return int(rows[0].get("c", 0))
+
+
+func get_reconciliation_log(platform_slug: String = "", limit: int = 100) -> Array:
+	"""Most recent reconciliation log entries, newest first; optionally scoped
+	to one platform."""
+	if not _is_db_ready:
+		return []
+	if platform_slug == "":
+		return query_array("SELECT platform_slug, romm_id, action, created_at FROM reconciliation_log ORDER BY id DESC LIMIT ?", [limit])
+	return query_array("SELECT platform_slug, romm_id, action, created_at FROM reconciliation_log WHERE platform_slug = ? ORDER BY id DESC LIMIT ?", [platform_slug, limit])
+
+
+func get_last_reconciliation_time(platform_slug: String) -> String:
+	"""created_at of the most recent reconciliation for a platform, or ""."""
+	if not _is_db_ready:
+		return ""
+	var rows = query_array("SELECT created_at FROM reconciliation_log WHERE platform_slug = ? ORDER BY id DESC LIMIT 1", [platform_slug])
+	if rows.is_empty():
+		return ""
+	return str(rows[0].get("created_at", ""))
 
 
 func get_game_by_id(romm_id: int) -> GameResource:
@@ -1914,16 +2009,3 @@ func clear_romm_device_id() -> void:
 	if not _is_db_ready:
 		return
 	query_bool("DELETE FROM cache_metadata WHERE key = 'romm_device_id'")
-
-
-# ==================== SETTINGS CHANGE HANDLER ====================
-
-func _on_setting_changed(value, setting):
-	if setting.property_name == "hide_games_without_covers":
-		print("[DatabaseManager] Hide no-cover setting changed to %s" % value)
-		invalidate_downloaded_games_count_cache()
-	elif setting.property_name == "fold_romm_siblings":
-		print("[DatabaseManager] Fold RomM siblings setting changed to %s" % value)
-		invalidate_downloaded_games_count_cache()
-	elif setting.property_name == "enabled_platforms":
-		invalidate_downloaded_games_count_cache()

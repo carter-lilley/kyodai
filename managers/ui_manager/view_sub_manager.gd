@@ -314,7 +314,6 @@ func _remove_platform_tab(platform_slug: String) -> void:
 func _add_favorites_tab() -> void:
 	if _favorites_tab and is_instance_valid(_favorites_tab):
 		return
-		return
 	var tab = Control.new()
 	tab.name = FAVORITES_TAB_TITLE
 	tab.visible = false

@@ -1272,7 +1272,10 @@ func _populate_related_games(game: GameResource) -> void:
 					unmatched.append(titles[i])
 			var by_title: Dictionary = DataManager.get_games_by_titles(unmatched) if not unmatched.is_empty() else {}
 			return {"by_igdb": by_igdb, "by_title": by_title},
-		func(matches: Dictionary):
+		func(matches):
+			# null when the queue dropped the task (overflow).
+			if matches == null:
+				return
 			if not is_instance_valid(self) or _current_game == null or _current_game.romm_id != for_romm_id:
 				return
 			if not is_instance_valid(related_row):
