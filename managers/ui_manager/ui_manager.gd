@@ -156,6 +156,7 @@ func initialize(
 	status_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
 	status_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	status_layout.add_theme_constant_override("separation", 0)
 	if _title_bar:
 		status_layout.add_child(_title_bar)
 	status_layout.add_child(_status_bar)
@@ -767,6 +768,23 @@ func _refresh_focus_lock_state_deferred() -> void:
 	_focus_lock_refresh_queued = false
 	refresh_focus_lock_state()
 
+func _ensure_focus_after_preset() -> void:
+	# Let the deferred theme refresh (and its nested focus restore) land first;
+	# we only act if focus is genuinely absent afterwards.
+	await get_tree().process_frame
+	# An open overlay owns focus via its own machinery.
+	if M3Overlay._get_topmost_overlay() != null:
+		return
+	var viewport: Viewport = null
+	if navigation:
+		viewport = navigation._get_active_viewport()
+	if not viewport:
+		return
+	var focused := viewport.gui_get_focus_owner()
+	if focused and is_instance_valid(focused) and focused.is_visible_in_tree():
+		return
+	get_focus_restore_fallback_to_home().call()
+
 func refresh_focus_lock_state() -> void:
 	"""Re-apply the current focus lock after layout/theme changes."""
 	if not _focus_lock_active or not _focus_locked_grid:
@@ -859,12 +877,19 @@ func _on_apply_preset_begin() -> void:
 	theme._on_apply_preset_begin()
 
 func _on_apply_preset_end() -> void:
-	"""Flush batched card settings, then let ThemeManager drive the rebuild."""
+	"""Flush batched card settings and let each subsystem react."""
+	var mask := CardSettingsState.ChangeMask.NONE
 	if card_settings_state:
-		card_settings_state.end_batch()
+		mask = card_settings_state.end_batch()
+	# Effect changes need a full view rebuild; layout/display/media shape/theme
+	# changes are applied live by the grid and other setting_changed handlers.
+	if mask & CardSettingsState.ChangeMask.EFFECTS:
+		view._rebuild_views("Preset applied", true)
 	theme._on_apply_preset_end()
 	# Theme/layout may have created new focusable controls; re-apply lock if needed.
 	queue_refresh_focus_lock_state()
+	# Last-resort focus guarantee once all deferred restores have settled.
+	call_deferred("_ensure_focus_after_preset")
 
 var _persisting_ui_font_path: bool = false
 
@@ -887,16 +912,11 @@ func _apply_ui_font(path: String) -> void:
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	"""Handle settings changes.
 
-	Always update the centralized CardSettingsState. During a preset the actual
-	view rebuild is deferred to ThemeManager._on_apply_preset_end(); outside of
-	presets we still drive navigation/background/hero changes here.
+	Each subsystem reacts to its own setting directly. Card/grid setting changes
+	are batched during preset application so the grid reacts once at the end.
 	"""
 	if card_settings_state:
 		card_settings_state.apply_setting(setting.property_name, _value)
-
-	if theme._preset_in_progress:
-		# During preset application ThemeManager handles the final rebuild.
-		return
 
 	if DEBUG_LOG: print("[UIManager] _on_setting_changed: %s" % setting.property_name)
 	match setting.property_name:

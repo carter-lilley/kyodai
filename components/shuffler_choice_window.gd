@@ -6,7 +6,7 @@ extends Window
 
 signal game_chosen(chosen: Dictionary, candidates: Array)
 
-const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CoverLoader = preload("res://utils/shuffler_cover_loader.gd")
 const MAX_COVER_TEXTURE_SIZE := 512
 const TILT_DEGREES := 4.0
 const HOVER_AMPLITUDE_DP := 12.0
@@ -23,6 +23,13 @@ const ENTRANCE_STAGGER := 0.12
 var _candidates: Array = []
 var _resolved := false
 var _base_poses: Dictionary = {}
+# The manager pools one choice window per session and re-presents it per
+# pick, possibly before the previous entrance finished; every card tween
+# (entrance + looping hover) is tracked so a re-present can kill them.
+var _card_tweens: Array[Tween] = []
+# Bumped per present: async cover loads from a previous candidate set check
+# it so a late texture can't land on a card showing a different game.
+var _present_generation := 0
 
 func _ready() -> void:
 	# Same OS-window initialization pattern as ShufflerControlsWindow: a real
@@ -90,8 +97,6 @@ func _ready() -> void:
 	title.add_theme_constant_override("shadow_offset_y", M3Units.dp(3))
 
 	_setup_background()
-	_apply_card_poses()
-	_play_entrance_animation()
 
 	# No cancel path for now (testing): refuse to be closed without a pick.
 	close_requested.connect(move_to_foreground.call)
@@ -145,6 +150,7 @@ func _play_entrance_animation() -> void:
 		var base: Vector2 = _base_poses[card]
 		card.offset_transform_position = base + offscreen
 		var tween := card.create_tween()
+		_card_tweens.append(tween)
 		tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tween.tween_interval(ENTRANCE_STAGGER * i)
 		tween.tween_property(card, "offset_transform_position", base, ENTRANCE_DURATION)
@@ -157,6 +163,7 @@ func _start_hover(card: M3Card) -> void:
 	var base: Vector2 = _base_poses[card]
 	var peak := base + Vector2(0, -M3Units.dp(HOVER_AMPLITUDE_DP))
 	var tween := card.create_tween().set_loops()
+	_card_tweens.append(tween)
 	tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_interval(HOVER_PHASE_STAGGER * phase_index)
 	tween.tween_property(card, "offset_transform_position", peak, HOVER_HALF_PERIOD).from(base)
@@ -165,16 +172,37 @@ func _start_hover(card: M3Card) -> void:
 	tween.tween_interval(HOVER_TURN_DWELL)
 
 func present(candidates: Array) -> void:
+	# Pooled reuse: undo the previous pick's state before showing the new set.
+	_resolved = false
 	_candidates = candidates
+	_present_generation += 1
+	_kill_card_tweens()
+	_apply_card_poses()
 	var cards := [_card_a, _card_b, _card_c]
-	for i in range(mini(candidates.size(), cards.size())):
-		var entry: Dictionary = candidates[i]
+	for i in range(cards.size()):
 		var card: M3Card = cards[i]
-		card.headline = entry.game.title
-		_load_cover(card, entry.game)
-		if not card.pressed.is_connected(_on_card_pressed):
+		# Each present binds its own entries; drop the previous set's
+		# bindings so a stale candidate can never be emitted.
+		for conn in card.pressed.get_connections():
+			card.pressed.disconnect(conn.callable)
+		# Clear the previous game's cover while the new one loads.
+		card.media_texture = null
+		if i < candidates.size():
+			var entry: Dictionary = candidates[i]
+			card.headline = entry.game.title
+			_load_cover(card, entry.game)
 			card.pressed.connect(_on_card_pressed.bind(entry))
+	if not visible:
+		show()
+		move_to_foreground()
+	_play_entrance_animation()
 	call_deferred("_focus_first_card")
+
+func _kill_card_tweens() -> void:
+	for tw in _card_tweens:
+		if tw and tw.is_valid():
+			tw.kill()
+	_card_tweens.clear()
 
 func _focus_first_card() -> void:
 	_card_a.grab_focus()
@@ -190,48 +218,16 @@ func _on_card_pressed(entry: Dictionary) -> void:
 	_resolved = true
 	game_chosen.emit(entry, _candidates)
 	hide()
+	# Stop the looping hover tweens while the pooled window sits hidden.
+	_kill_card_tweens()
 
 func _load_cover(card: M3Card, game: GameResource) -> void:
-	if not game:
-		return
-	var cache_path := ""
-	var cover_url := ""
-	if game.cover_path and FSM.file_exists(game.cover_path):
-		cache_path = game.cover_path
-	elif game.cover_url != "" and game.cover_url.begins_with("http"):
-		cover_url = game.cover_url
-		cache_path = DataManager.get_cached_image_path(cover_url)
-	if cache_path == "":
-		return
-	if not FSM.file_exists(cache_path):
-		# Not on disk yet: these games may never have appeared in the library
-		# grid, so their covers were never downloaded. Fetch now (CoverSubManager
-		# writes the cache file), then re-run the decode path. The file-exists
-		# guard prevents a retry loop when the download itself fails.
-		if cover_url != "":
-			var card_ref_dl: WeakRef = weakref(card)
-			DataManager.load_image(cover_url, func(_t: Texture2D, _r: int):
-				var c: M3Card = card_ref_dl.get_ref()
-				if c and FSM.file_exists(cache_path):
-					_load_cover(c, game)
-			)
-		return
-	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
-	var cached = SystemManager.memory.get_cached_texture(cache_key)
-	if cached:
-		card.media_texture = cached
-		return
-	DataManager.cover.note_cover_access(cache_path)
+	var generation := _present_generation
 	var card_ref: WeakRef = weakref(card)
-	SystemManager.memory.queue_image_task(
-		func() -> Image:
-			return MemorySubManager.prepare_image_for_texture(CardMediaLoader._load_image_from_buffer(FSM.read_file_bytes(cache_path))),
-		func(image) -> void:
-			var c: M3Card = card_ref.get_ref()
-			if not c or not image or image.is_empty():
-				return
-			var texture = SystemManager.memory.create_texture_from_image(image)
-			if texture:
-				SystemManager.memory.cache_texture(cache_key, texture)
-				c.media_texture = texture
+	var self_ref: WeakRef = weakref(self)
+	CoverLoader.request_cover(game, MAX_COVER_TEXTURE_SIZE, func(tex: Texture2D):
+		var c: M3Card = card_ref.get_ref()
+		var w = self_ref.get_ref()
+		if c and w and w._present_generation == generation:
+			c.media_texture = tex
 	)

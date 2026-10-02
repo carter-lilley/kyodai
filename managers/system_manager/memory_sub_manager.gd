@@ -77,8 +77,10 @@ const MAX_DB_QUEUE_SIZE = 500
 ## are dropped (with a null callback) instead of growing the queue forever.
 const MAX_DB_QUEUE_MAIN_OVERFLOW = 500
 # 5 was tight enough that bursts of save-sync / cover extraction silently
-# dropped work; 10 absorbs realistic bursts without unbounded memory growth.
-const MAX_EXTRACTION_QUEUE_SIZE = 10
+# dropped work; 20 absorbs realistic bursts without unbounded memory growth.
+const MAX_EXTRACTION_QUEUE_SIZE = 20
+# Total tasks dropped because the extraction queue was full (diagnostic).
+static var _extraction_overflow_count: int = 0
 const MAX_DOWNLOAD_QUEUE_SIZE = 500
 const MAX_SYNC_QUEUE_SIZE = 10
 const OS_EXECUTE_THREAD_COUNT: int = 4
@@ -923,7 +925,8 @@ static func queue_extraction_task(callable: Callable, callback: Callable = Calla
 
 	if current_size >= MAX_EXTRACTION_QUEUE_SIZE:
 		_instance._extraction_mutex.unlock()
-		push_error("[SystemManager.memory] Extraction queue full - cannot queue task")
+		_extraction_overflow_count += 1
+		push_error("[SystemManager.memory] Extraction queue full - dropping task (overflow count=" + str(_extraction_overflow_count) + ")")
 		if callback.is_valid():
 			callback.call_deferred(false)
 		return

@@ -34,6 +34,12 @@ const ACCEPT_DEBOUNCE_MSEC := 250
 var _last_accept_msec: int = -1
 var _replayed_accept: InputEventAction = null
 
+# Input lockout after summon: events in this window are swallowed so a held
+# or queued press (chord release, game input already in flight) can't
+# instantly activate the freshly-focused Pause button and vanish the panel.
+const SUMMON_INPUT_LOCKOUT_MSEC := 200
+var _input_locked_until_msec: int = -1
+
 func set_reroll_enabled(enabled: bool) -> void:
 	if _shuffle_btn and is_instance_valid(_shuffle_btn):
 		_shuffle_btn.disabled = not enabled
@@ -137,6 +143,14 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 
+	# Summon lockout: swallow events so they can't reach the freshly-focused
+	# button through the viewport's GUI router either. The chord state above
+	# already updated, so releasing the chord during the lockout is safe.
+	if Time.get_ticks_msec() < _input_locked_until_msec:
+		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
+			get_viewport().set_input_as_handled()
+		return
+
 	# Manual controller UI navigation: the controls window viewport is not the
 	# active OS-focused viewport, so Godot's default ui_* action handling does
 	# not run here. Handle the raw events ourselves while the panel is visible.
@@ -215,6 +229,11 @@ func show_controls() -> void:
 	if _is_visible:
 		return
 	_is_visible = true
+	_input_locked_until_msec = Time.get_ticks_msec() + SUMMON_INPUT_LOCKOUT_MSEC
+	SystemManager.audio.play_sfx("click_04")
+	# Brief haptic blip so the summon has physical feedback on the pad.
+	for device in Input.get_connected_joypads():
+		Input.start_joy_vibration(device, 0.45, 0.55, 0.12)
 	if _active_tween and is_instance_valid(_active_tween):
 		_active_tween.kill()
 		_active_tween = null
@@ -271,14 +290,6 @@ func _warp_cursor_to_bottom_button() -> void:
 	# window-relative, not screen-relative, so pass local button center.
 	var target := Vector2i(_pause_btn.position + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
-
-func _get_bottom_button() -> Control:
-	if not _button_group or not is_instance_valid(_button_group):
-		return null
-	var count := _button_group.get_child_count()
-	if count == 0:
-		return null
-	return _button_group.get_child(count - 1) as Control
 
 func _apply_custom_cursor() -> void:
 	var cursor_tex := load(CURSOR_PATH) as Texture2D

@@ -168,6 +168,26 @@
 			}
 		},
 		{
+			"step": "chmod_executable",
+			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"linux": {
+					"action_type": "chmod",
+					"file": "Vita3K",
+					"mode": "+x",
+					"validate": {
+						"action_type": "file_exists",
+						"file": "Vita3K"
+					}
+				},
+				"android": {
+					"action_type": "none"
+				}
+			}
+		},
+		{
 			"step": "create_ux0_app_folder",
 			"platforms": {
 				"windows": {

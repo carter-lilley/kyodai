@@ -4,6 +4,12 @@ extends EffectBase
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
+## Glow derives its look from the source image and user brightness settings;
+## auto-inverting lightness on dark/light swaps reads as the effect breaking,
+## so its settings never convert across mode swaps.
+static func is_theme_adaptive() -> bool:
+	return false
+
 const GLOW_MARGIN_RATIO = 0.08
 const MAX_QUALITY_SCALE = 0.6
 

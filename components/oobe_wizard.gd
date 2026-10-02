@@ -45,6 +45,12 @@ func _init():
 func _ready():
 	super._ready()
 
+	# @tool so the dialog chrome previews in the editor, but everything below
+	# builds runtime content against runtime autoloads (SystemManager,
+	# DataManager) that must not run in the editor.
+	if Engine.is_editor_hint():
+		return
+
 	# Hide the close button since this dialog is mandatory
 	if _close_button:
 		_close_button.visible = false

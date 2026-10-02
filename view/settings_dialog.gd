@@ -470,7 +470,95 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		_on_cancel_pressed()
 		return
+
+	# Keep directional focus inside the right-hand scroll pane until the user
+	# reaches the first/last focusable item in the current category. This stops
+	# focus from leaking to the bottom action row while scrolling through a
+	# long settings page.
+	if visible and _right_scroll and _right_content and (event.is_action_pressed("ui_down") or event.is_action_pressed("ui_up")):
+		var focused := get_viewport().gui_get_focus_owner()
+		if focused and _right_scroll.is_ancestor_of(focused) and _right_scroll.is_ancestor_of(_right_content):
+			var dir := 1 if event.is_action_pressed("ui_down") else -1
+			if _handle_settings_focus_direction(focused, dir):
+				get_viewport().set_input_as_handled()
+				return
+
 	super._input(event)
+
+## Returns true if the directional event was consumed.
+func _handle_settings_focus_direction(focused: Control, dir: int) -> bool:
+	var candidate := focused.find_next_valid_focus() if dir == 1 else focused.find_prev_valid_focus()
+	if candidate and _right_scroll.is_ancestor_of(candidate):
+		# Godot's next target is still inside the scrollable content: let it go.
+		return false
+
+	# Candidate would leave the scroll pane. Only allow that at the content boundary.
+	var focusables := _get_focusable_content_controls()
+	var idx := focusables.find(focused)
+	if idx < 0:
+		return false
+	var boundary_idx := focusables.size() - 1 if dir == 1 else 0
+	if idx == boundary_idx:
+		return false
+
+	# Not at the boundary: move focus to the next/prev focusable inside the
+	# content and scroll it into view.
+	var next_idx := idx + dir
+	if next_idx >= 0 and next_idx < focusables.size():
+		var next := focusables[next_idx]
+		if UIManager:
+			UIManager.suppress_next_focus_sound()
+		next.grab_focus()
+		_right_scroll.ensure_control_visible(next)
+	else:
+		# Fallback: scroll a step without moving focus.
+		var step := int(M3Units.dp(120))
+		var v_scroll_bar := _right_scroll.get_v_scroll_bar()
+		var max_scroll := int(v_scroll_bar.max_value) if v_scroll_bar else 0
+		_right_scroll.scroll_vertical = clampi(_right_scroll.scroll_vertical + dir * step, 0, max_scroll)
+	return true
+
+func _get_focusable_content_controls() -> Array[Control]:
+	var out: Array[Control] = []
+	if _right_content:
+		_collect_focusable_content_controls(_right_content, out)
+	out.sort_custom(func(a: Control, b: Control) -> bool:
+		var ra := a.get_global_rect()
+		var rb := b.get_global_rect()
+		if abs(ra.position.y - rb.position.y) > 1.0:
+			return ra.position.y < rb.position.y
+		return ra.position.x < rb.position.x
+	)
+	return out
+
+func _collect_focusable_content_controls(node: Node, out: Array[Control]) -> void:
+	if node is Control:
+		var ctrl := node as Control
+		if _is_control_navigable(ctrl):
+			out.append(ctrl)
+	for child in node.get_children():
+		_collect_focusable_content_controls(child, out)
+
+func _is_control_navigable(ctrl: Control) -> bool:
+	if not is_instance_valid(ctrl) or ctrl.is_queued_for_deletion():
+		return false
+	if not ctrl.visible or ctrl.focus_mode == Control.FOCUS_NONE:
+		return false
+	if ctrl is BaseButton and (ctrl as BaseButton).disabled:
+		return false
+	if "editable" in ctrl and not ctrl.editable:
+		return false
+	if "disabled" in ctrl and ctrl.disabled:
+		return false
+	return true
+
+func _get_dialog_scroll_container() -> ScrollContainer:
+	# The basic dialog layout holds both the sidebar scroll and the content
+	# scroll inside content_slot; the generic recursive lookup would find the
+	# sidebar first, so explicitly return the right-hand content scroll.
+	if _right_scroll:
+		return _right_scroll
+	return super._get_dialog_scroll_container()
 
 func _on_ok_pressed() -> void:
 	dismiss()

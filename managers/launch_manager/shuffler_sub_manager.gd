@@ -78,23 +78,23 @@ var _first_download_notification_shown: bool = false
 var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
 var _download_item_ids: Array[String] = []
-var _download_progresses: Dictionary = {}  # item_id -> float
-var _download_sizes: Dictionary = {}       # item_id -> int (bytes)
-var _total_download_bytes: int = 0
-var _active_download_item_id: String = ""
 var _shuffler_vita_apps: Array[Dictionary] = []
 var _maximize_token: int = 0  # incremented whenever the foreground game changes; in-flight maximize coroutines check it and bail
 var _window_backend: int = WindowBackend.NONE
 
-# Balatro-style "choose 1 of 3" interstitial. Every 5-7 shuffles the current
-# game closes and the player picks one seen game to keep; the rejected games
-# are removed from the bag.
+# Balatro-style "choose 1 of 3" interstitial. Every 3-5 completed shuffles the
+# current game closes and the player picks one seen game to keep; the rejected
+# games are removed from the bag.
 const CHOICE_SCENE := "res://components/shuffler_choice_window.tscn"
 const INTRO_SCENE := "res://components/shuffler_intro_window.tscn"
 const CHOICE_MIN_CANDIDATES := 3
-const CHOICE_MIN_SHUFFLES := 4
-const CHOICE_MAX_SHUFFLES := 6
+const CHOICE_MIN_SHUFFLES := 3
+const CHOICE_MAX_SHUFFLES := 5
 var _games_until_choice: int = -1
+# Armed by _switch_to_next_game when it dispatches a shuffle; the matching
+# decrement lands in _switch_to_game only once the switch actually commits,
+# so a choice offer or an aborted dispatch can't drain the countdown.
+var _debit_choice_on_commit := false
 var _seen_entries: Array = []  # bag entries that have been the current game
 var _choice_window: Node = null
 var _intro_window: Node = null
@@ -330,6 +330,7 @@ func start_session(config: Dictionary) -> void:
 	_reset_download_tracking()
 	_shuffler_vita_apps.clear()
 	_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+	_debit_choice_on_commit = false
 	_seen_entries.clear()
 
 	# Cut background music for the whole session (resumed in stop_session);
@@ -370,9 +371,6 @@ func stop_session() -> void:
 	_maximize_token += 1
 
 	_kill_round_timer()
-
-	if SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.disconnect(_on_download_progress)
 
 	for item_id in _download_item_ids:
 		SystemManager.download.cancel(item_id)
@@ -527,7 +525,14 @@ func restart_game() -> void:
 	entry.pid = -1
 	if _state != State.STOPPING and _state != State.IDLE:
 		_launch_game(entry)
-		_start_round_timer(_random_round_time())
+		# Start the round only once the relaunch has actually produced a
+		# process (or is still in flight past the settle window). A failed
+		# boot is recovered by the deferred skip in _launch_game's pid
+		# callback instead of idling out a full round on a dead game.
+		await _await_launch_settled(entry)
+		if _state != State.STOPPING and _state != State.IDLE \
+			and (entry.pid != -1 or entry.get("launch_pending", false)):
+			_start_round_timer(_random_round_time())
 	_switch_in_progress = false
 	_restart_in_progress = false
 	if _pending_switch_index != -1:
@@ -668,9 +673,6 @@ func _start_bag_preparation() -> void:
 	_reset_download_tracking()
 	print("[ShufflerSubManager] _start_bag_preparation: " + _format_bag())
 
-	if not SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.connect(_on_download_progress)
-
 	for i in range(_bag.entries.size()):
 		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(_bag.entries[i]))
 		_start_entry_acquisition(i)
@@ -693,7 +695,6 @@ func _start_entry_acquisition(index: int) -> void:
 		for e in game.get_disc_entries():
 			if not e["downloaded"]:
 				missing_count += 1
-				_total_download_bytes += int(e.get("file_size", 0))
 		_total_downloads += missing_count
 		_pending_downloads += missing_count
 		entry.status = ShufflerBag.EntryStatus.DOWNLOADING
@@ -724,39 +725,33 @@ func _start_entry_acquisition(index: int) -> void:
 	else:
 		_total_downloads += 1
 		_pending_downloads += 1
-		_total_download_bytes += game.get_active_file_size()
 		_download_entry(entry)
 
 ## Fills the bag's reroll candidate pool in the background after session
-## start: full-platform fetches with the query materialized on the DB worker
-## thread and time-budgeted row conversion, so the work never hitches the UI.
-## Abandons silently if the session ends or the bag is replaced mid-build.
+## start: a single SQL-side random sample capped relative to the bag, so the
+## whole platform library is never materialized as GameResources (the old
+## per-platform fetch built one per row). Abandons silently if the session
+## ends or the bag is replaced mid-build.
 func _build_candidates_background(platforms: Array[String], filters: Dictionary) -> void:
 	var bag := _bag
 	bag.candidates_building = true
 	var build_start := Time.get_ticks_msec()
-	var seen: Dictionary = {}
-	for id in bag.get_bag_ids():
-		seen[id] = true
-	var pool: Array[GameResource] = []
-	for platform_slug in platforms:
-		if _bag != bag or _state == State.IDLE:
-			bag.candidates_building = false
-			return
-		var games: Array[GameResource] = await DataManager.get_games_for_shuffle_async(platform_slug, filters)
-		for game in games:
-			if seen.has(game.romm_id):
-				continue
-			seen[game.romm_id] = true
-			pool.append(game)
+	var pool: Array[GameResource] = await DataManager.get_random_games_for_shuffle_async(platforms, filters, bag.size() * 10)
 	if _bag != bag or _state == State.IDLE:
 		bag.candidates_building = false
 		return
-	pool.shuffle()
-	bag.candidates = pool
+	# The random sample can overlap games already in the bag; drop those.
+	var seen: Dictionary = {}
+	for id in bag.get_bag_ids():
+		seen[id] = true
+	var candidates: Array[GameResource] = []
+	for game in pool:
+		if not seen.has(game.romm_id):
+			candidates.append(game)
+	bag.candidates = candidates
 	bag.candidates_building = false
 	bag.candidates_built = true
-	print("[ShufflerSubManager] Candidate pool built: " + str(pool.size()) + " games in " + str(Time.get_ticks_msec() - build_start) + " ms")
+	print("[ShufflerSubManager] Candidate pool built: " + str(candidates.size()) + " games in " + str(Time.get_ticks_msec() - build_start) + " ms")
 
 ## Swaps a bag slot for a fresh candidate WITHOUT starting acquisition.
 ## Returns the new entry ({} when nothing was swapped: out of candidates or
@@ -925,11 +920,9 @@ func _download_entry(entry: Dictionary) -> void:
 	entry.temp_path = temp_path
 
 	var file_size = game.get_active_file_size()
-	var captured_item_id: String = ""
 
 	var callbacks = {
 		"on_complete": func(success: bool, _path: String):
-			_download_progresses[captured_item_id] = 1.0
 			var completed = _total_downloads - _pending_downloads
 			download_progress.emit(completed, _total_downloads)
 			_pending_downloads -= 1
@@ -978,11 +971,7 @@ func _download_entry(entry: Dictionary) -> void:
 	)
 
 	if item_id != "":
-		captured_item_id = item_id
-		_active_download_item_id = item_id
 		_download_item_ids.append(item_id)
-		_download_sizes[item_id] = file_size
-		_download_progresses[item_id] = 0.0
 		entry.download_id = item_id
 	else:
 		_pending_downloads -= 1
@@ -1114,19 +1103,11 @@ func _ensure_controls_on_top() -> void:
 # DOWNLOAD PROGRESS
 # ============================================================================
 
-func _on_download_progress(item_id: String, progress: float) -> void:
-	if item_id in _download_item_ids:
-		_download_progresses[item_id] = progress
-
 func _reset_download_tracking() -> void:
 	_pending_downloads = 0
 	_total_downloads = 0
 	_pending_preparations = 0
 	_download_item_ids.clear()
-	_download_progresses.clear()
-	_download_sizes.clear()
-	_total_download_bytes = 0
-	_active_download_item_id = ""
 	_first_download_notification_shown = false
 
 # ============================================================================
@@ -1141,9 +1122,6 @@ func _enter_shuffler_mode() -> void:
 	_shuffle_session_active = true
 	_start_session_log_capture()
 	print("[ShufflerSubManager] _enter_shuffler_mode: " + _format_bag())
-
-	if SystemManager.download.download_progress.is_connected(_on_download_progress):
-		SystemManager.download.download_progress.disconnect(_on_download_progress)
 
 	if SystemManager.display:
 		SystemManager.display.save_last_window_size()
@@ -1207,9 +1185,9 @@ func _switch_to_next_game() -> void:
 		print("[ShufflerSubManager] No other ready game; extending current round")
 		_start_round_timer(_random_round_time())
 		return
-	# A real shuffle is about to happen: count it against the choice trigger.
-	if _games_until_choice > 0:
-		_games_until_choice -= 1
+	# A real shuffle is about to happen: arm the choice debit, which lands in
+	# _switch_to_game only once the switch actually commits — a choice offer
+	# or an aborted dispatch must not consume a shuffle that never ran.
 	if _games_until_choice == 0:
 		var pool := _choice_pool()
 		if pool.size() >= CHOICE_MIN_CANDIDATES:
@@ -1217,13 +1195,14 @@ func _switch_to_next_game() -> void:
 			return
 		# Not enough seen games to offer a choice (tiny bag); postpone.
 		_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
+	_debit_choice_on_commit = true
 	_request_switch(next_index)
 
 func _choice_pool() -> Array:
-	"""Seen entries that are still in the bag, in a random order."""
+	"""Seen, launch-ready entries that are still in the bag, in random order."""
 	var pool: Array = []
 	for entry in _seen_entries:
-		if _bag.entries.has(entry):
+		if _bag.entries.has(entry) and entry.status == ShufflerBag.EntryStatus.READY:
 			pool.append(entry)
 	pool.shuffle()
 	return pool
@@ -1231,6 +1210,9 @@ func _choice_pool() -> Array:
 func _offer_choice(pool: Array) -> void:
 	print("[ShufflerSubManager] _offer_choice: pool=" + str(pool.size()) + " current=" + str(_current_game_index))
 	_state = State.CHOOSING
+	# Any armed-but-unpaid debit belongs to a dispatch this choice supersedes;
+	# the countdown restarts fresh when the choice resolves.
+	_debit_choice_on_commit = false
 	_kill_round_timer()
 	var prev_entry = null
 	if _current_game_index >= 0 and _current_game_index < _bag.size():
@@ -1243,7 +1225,15 @@ func _offer_choice(pool: Array) -> void:
 	if _state != State.CHOOSING:
 		print("[ShufflerSubManager] _offer_choice aborted: state=" + str(_state))
 		return
-	var candidates := pool.slice(0, CHOICE_MIN_CANDIDATES)
+	# Readiness can change while the previous game was stopping (a pooled
+	# entry's download/prep can fail mid-trigger); only present entries that
+	# are still ready and still in the bag.
+	var candidates: Array = []
+	for entry in pool:
+		if _bag.entries.has(entry) and entry.status == ShufflerBag.EntryStatus.READY:
+			candidates.append(entry)
+			if candidates.size() >= CHOICE_MIN_CANDIDATES:
+				break
 	if candidates.size() < CHOICE_MIN_CANDIDATES:
 		_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
 		_state = State.ACTIVE
@@ -1259,9 +1249,12 @@ func _offer_choice(pool: Array) -> void:
 		_state = State.ACTIVE
 		_switch_to_next_game()
 		return
-	_choice_window = scene.instantiate()
-	_choice_window.game_chosen.connect(_on_game_chosen)
-	get_tree().root.add_child(_choice_window)
+	# Pooled for the session like the intro window: one OS window, re-presented
+	# per pick (present() resets all card state for reuse).
+	if not (_choice_window and is_instance_valid(_choice_window)):
+		_choice_window = scene.instantiate()
+		_choice_window.game_chosen.connect(_on_game_chosen)
+		get_tree().root.add_child(_choice_window)
 	_choice_window.present(candidates)
 
 func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
@@ -1286,15 +1279,19 @@ func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
 			rejected_entries.append(entry)
 			# Suspend-method games keep a frozen process with a live pid when
 			# stopped; kill it before the slot is replaced/dropped so it can't
-			# leak (the reroll flow does the same).
+			# leak (the reroll flow does the same). The replacement reuses
+			# this slot's download/temp paths, so wait for the process to
+			# actually die — it could otherwise hold files open mid-replace.
 			if entry.pid != -1:
 				LaunchManager.process.kill_process_async(entry.pid)
+				await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
 				entry.started = false
 				entry.active = false
 				entry.pid = -1
+	# The pooled window already hid itself in _on_card_pressed; keep it alive
+	# for the next pick (stop_session frees it).
 	if _choice_window and is_instance_valid(_choice_window):
-		_choice_window.queue_free()
-		_choice_window = null
+		_choice_window.hide()
 	_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
 	if _state != State.CHOOSING:
 		return
@@ -1374,6 +1371,12 @@ func _switch_to_game(index: int) -> void:
 		_launch_game(entry)
 
 	print("[ShufflerSubManager] _switch_to_game: launched index=" + str(index) + " state=" + str(_state))
+	# Pay the shuffle debit armed by _switch_to_next_game now that the switch
+	# has actually committed.
+	if _debit_choice_on_commit:
+		_debit_choice_on_commit = false
+		if _games_until_choice > 0:
+			_games_until_choice -= 1
 	if _state == State.ACTIVE or _state == State.PAUSED:
 		var round_time = _random_round_time()
 		print("[ShufflerSubManager] _switch_to_game: starting round timer " + str(round_time) + "s")
@@ -1409,19 +1412,18 @@ func _prewarm_intro_assets() -> void:
 ## Intro notification for a game's first appearance this session (ported from
 ## the old game_shuffler's notif_intro). Plays over the screen while the
 ## emulator boots; unfocusable and click-through, so it never touches input.
+## One pooled OS window per session: creating a transparent DisplayServer
+## window per game switch is the expensive part, so present() re-runs on the
+## same instance (it resets all animation state for reuse).
 func _show_intro(game: GameResource) -> void:
-	var scene := _intro_scene
-	if scene == null:
-		scene = load(INTRO_SCENE) as PackedScene
-		_intro_scene = scene
-	if not scene:
-		push_warning("[ShufflerSubManager] Failed to load intro window scene: " + INTRO_SCENE)
-		return
-	# Defensive: a previous intro should have freed itself by now.
-	if _intro_window and is_instance_valid(_intro_window):
-		_intro_window.queue_free()
-	_intro_window = scene.instantiate()
-	get_tree().root.add_child(_intro_window)
+	if not (_intro_window and is_instance_valid(_intro_window)):
+		if _intro_scene == null:
+			_intro_scene = load(INTRO_SCENE) as PackedScene
+		if not _intro_scene:
+			push_warning("[ShufflerSubManager] Failed to load intro window scene: " + INTRO_SCENE)
+			return
+		_intro_window = _intro_scene.instantiate()
+		get_tree().root.add_child(_intro_window)
 	_intro_window.present(game)
 
 func _launch_game(entry: Dictionary) -> void:
@@ -1695,9 +1697,6 @@ func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callabl
 			if callback.is_valid():
 				callback.call_deferred({"exit_code": -1, "output": []})
 
-func _hide_window(pid: int, exe_name: String) -> void:
-	_hide_window_async(pid, exe_name)
-
 func _hide_window_awaited(pid: int, exe_name: String) -> void:
 	var hide_start := Time.get_ticks_msec()
 	var done := {"complete": false, "exit_code": -1}
@@ -1794,9 +1793,6 @@ func _maximize_window_async(pid: int, token: int = -1) -> bool:
 		await get_tree().process_frame
 
 	return os_state["success"]
-
-func _maximize_window(pid: int) -> bool:
-	return await _maximize_window_async(pid)
 
 # ============================================================================
 # LINUX WINDOW BACKENDS

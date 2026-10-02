@@ -55,12 +55,14 @@ signal changed(mask: int)
 func begin_batch() -> void:
 	_batch_depth += 1
 
-func end_batch() -> void:
+func end_batch() -> int:
 	_batch_depth = max(0, _batch_depth - 1)
 	if _batch_depth == 0 and pending_mask != 0:
 		var mask := pending_mask
 		pending_mask = 0
 		changed.emit(mask)
+		return mask
+	return ChangeMask.NONE
 
 func _mark(mask: int) -> void:
 	if _batch_depth > 0:

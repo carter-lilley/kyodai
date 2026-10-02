@@ -10,7 +10,7 @@ extends Window
 
 signal intro_finished()
 
-const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CoverLoader = preload("res://utils/shuffler_cover_loader.gd")
 const MAX_COVER_TEXTURE_SIZE := 512
 
 const COVER_ASPECT_FALLBACK := 0.75  # 3:4 placeholder when no cover exists
@@ -29,6 +29,14 @@ const INFO_SIZE_DP := 26.0
 
 var _screen: Vector2 = Vector2.ZERO
 var _cover_size: Vector2 = Vector2.ZERO
+# The manager pools one intro window per session and re-presents it per game,
+# possibly mid-animation; every tween is tracked so a re-present can kill the
+# previous run before resetting state.
+var _tweens: Array[Tween] = []
+# Bumped per present: async cover loads from a previous game check it so a
+# late texture can't land on the new game's intro (the weakref alone no
+# longer guards this now that the window survives between presents).
+var _present_generation := 0
 
 func _ready() -> void:
 	# Same OS-window initialization pattern as ShufflerChoiceWindow, plus
@@ -71,6 +79,7 @@ func _ready() -> void:
 	margin.add_theme_constant_override("margin_bottom", M3Units.dp(16))
 
 func present(game: GameResource) -> void:
+	_reset_for_present()
 	_title_label.text = game.title
 	var platform_name := game.platform if game.platform != "" else game.platform_slug.capitalize()
 	var info := platform_name
@@ -79,7 +88,27 @@ func present(game: GameResource) -> void:
 		info += "  •  " + str(year)
 	_info_label.text = info
 	_load_cover(game)
+	if not visible:
+		show()
+		move_to_foreground()
 	call_deferred("_play")
+
+## Kills any in-flight animation and restores every animated property to its
+## pre-show state so a pooled window can run the sequence again cleanly.
+func _reset_for_present() -> void:
+	for tw in _tweens:
+		if tw and tw.is_valid():
+			tw.kill()
+	_tweens.clear()
+	_cover.texture = null
+	_cover.visible = false
+	_cover.modulate.a = 1.0
+	_cover_placeholder.visible = true
+	_cover_placeholder.modulate.a = 1.0
+	_cover_pivot.visible = false
+	_banner.modulate.a = 1.0
+	_banner.custom_minimum_size.x = 0.0
+	_present_generation += 1
 
 # ============================================================================
 # ANIMATION (ported beat-for-beat from notif_intro.gd)
@@ -94,6 +123,7 @@ func _play() -> void:
 	_cover_pivot.position = _screen * 0.5 + Vector2(0, _screen.y)
 	_cover_pivot.visible = true
 	var tw := create_tween()
+	_tweens.append(tw)
 	tw.set_trans(Tween.TRANS_CIRC).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_cover_pivot, "position", _screen * 0.5, 0.7)
 	tw.tween_callback(_beat_two)
@@ -104,6 +134,7 @@ func _beat_two() -> void:
 	# dwells, then fades; meanwhile the banner sweeps in from the right edge,
 	# its clip_contents revealing the labels as it grows, then fades too.
 	var cover_tw := create_tween()
+	_tweens.append(cover_tw)
 	cover_tw.tween_interval(0.2)
 	cover_tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	cover_tw.tween_property(_cover_pivot, "position", Vector2(_cover_size.x * 0.5, _screen.y * 0.5), 1.7)
@@ -113,6 +144,7 @@ func _beat_two() -> void:
 	cover_tw.parallel().tween_property(_cover_placeholder, "modulate:a", 0.0, 1.5)
 
 	var banner_tw := create_tween()
+	_tweens.append(banner_tw)
 	banner_tw.tween_interval(0.8)
 	banner_tw.set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
 	var target_w: float = maxf(_screen.x - _cover_size.x, 0.0)
@@ -123,7 +155,8 @@ func _beat_two() -> void:
 
 func _beat_three() -> void:
 	intro_finished.emit()
-	queue_free()
+	# Pooled by the manager for the whole session: hide, don't free.
+	hide()
 
 # ============================================================================
 # COVER LOADING (same cache pipeline as ShufflerChoiceWindow)
@@ -147,46 +180,12 @@ func _apply_texture(tex: Texture2D) -> void:
 		_layout_cover()
 
 func _load_cover(game: GameResource) -> void:
-	if not game:
-		return
-	var cache_path := ""
-	var cover_url := ""
-	if game.cover_path and FSM.file_exists(game.cover_path):
-		cache_path = game.cover_path
-	elif game.cover_url != "" and game.cover_url.begins_with("http"):
-		cover_url = game.cover_url
-		cache_path = DataManager.get_cached_image_path(cover_url)
-	if cache_path == "":
-		return
-	if not FSM.file_exists(cache_path):
-		# Not on disk yet: fetch now, then re-run the decode path. The
-		# file-exists guard prevents a retry loop when the download fails.
-		if cover_url != "":
-			var self_ref_dl: WeakRef = weakref(self)
-			DataManager.load_image(cover_url, func(_t: Texture2D, _r: int):
-				var w = self_ref_dl.get_ref()
-				if w and FSM.file_exists(cache_path):
-					w._load_cover(game)
-			)
-		return
-	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
-	var cached = SystemManager.memory.get_cached_texture(cache_key)
-	if cached:
-		_apply_texture(cached)
-		return
-	DataManager.cover.note_cover_access(cache_path)
+	var generation := _present_generation
 	var self_ref: WeakRef = weakref(self)
-	SystemManager.memory.queue_image_task(
-		func() -> Image:
-			return MemorySubManager.prepare_image_for_texture(CardMediaLoader._load_image_from_buffer(FSM.read_file_bytes(cache_path))),
-		func(image) -> void:
-			var w = self_ref.get_ref()
-			if not w or not image or image.is_empty():
-				return
-			var texture = SystemManager.memory.create_texture_from_image(image)
-			if texture:
-				SystemManager.memory.cache_texture(cache_key, texture)
-				w._apply_texture(texture)
+	CoverLoader.request_cover(game, MAX_COVER_TEXTURE_SIZE, func(tex: Texture2D):
+		var w = self_ref.get_ref()
+		if w and w._present_generation == generation:
+			w._apply_texture(tex)
 	)
 
 # ============================================================================

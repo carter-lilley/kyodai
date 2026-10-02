@@ -33,7 +33,12 @@ func _init():
 
 func _ready():
 	super._ready()
-	
+
+	# @tool so the dialog chrome previews in the editor, but everything below
+	# touches runtime autoloads (LaunchManager) and builds runtime content.
+	if Engine.is_editor_hint():
+		return
+
 	# Reset any leftover temporary overrides from a previous session.
 	LaunchManager.clear_shuffle_overrides()
 	

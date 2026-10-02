@@ -2,38 +2,17 @@
 
 [ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_5r1m0"]
 
-[sub_resource type="Gradient" id="Gradient_3yjc8"]
-offsets = PackedFloat32Array(0.12044818, 0.8053221)
-colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
-
 [sub_resource type="Gradient" id="Gradient_basebg"]
 colors = PackedColorArray(0.078, 0.071, 0.094, 1, 0.078, 0.071, 0.094, 1)
 
 [resource]
 script = ExtResource("1_5r1m0")
 name = "Default"
+description = ""
 created_at = "2026-05-31T21:08:56"
-library_navigation_type = 1
-library_grid_padding = 22
-library_card_zoom = 0.24957087606377312
-library_show_title_mode = 0
-library_card_display_mode = 0
-library_focus_scale = 0.09
-library_grid_vertical = true
-library_background_config = {
-"base": {
-"settings": {
-"gradient": SubResource("Gradient_basebg"),
-"gradient_angle": 180.0,
-"gradient_radial": false
-}
-},
-"effects": [],
-"overlays": []
-}
-library_primary_color = Color(1, 1, 1, 1)
-dark_mode = true
-card_effect_config = {
+version = 4
+values = {
+"card_effect_config": {
 "card_orientation": 2,
 "card_rounding": 0.24,
 "effects": [{
@@ -58,4 +37,32 @@ card_effect_config = {
 }
 }],
 "hero_height": 4
+},
+"card_media_aspect_ratio": 0,
+"dark_mode": true,
+"library_background_config": {
+"base": {
+"settings": {
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 180.0,
+"gradient_radial": false
+}
+},
+"effects": [],
+"overlays": []
+},
+"library_card_content_alignment": 0,
+"library_card_display_mode": 0,
+"library_card_zoom": 0.24957087606377312,
+"library_card_zoom_level": -1,
+"library_focus_centering": 0,
+"library_focus_scale": 0.09,
+"library_grid_padding": 22,
+"library_grid_staggered": false,
+"library_grid_vertical": true,
+"library_layout_mode": 0,
+"library_navigation_type": 1,
+"library_pagination_view": false,
+"library_primary_color": Color(1, 1, 1, 1),
+"library_show_title_mode": 0
 }

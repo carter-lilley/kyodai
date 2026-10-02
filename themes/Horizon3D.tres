@@ -2,6 +2,9 @@
 
 [ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_u30fp"]
 
+[sub_resource type="Gradient" id="Gradient_vktvg"]
+colors = PackedColorArray(0.8745098, 0.85882354, 0.84313726, 1, 0.8745098, 0.85882354, 0.84313726, 1)
+
 [sub_resource type="Gradient" id="Gradient_rgwmd"]
 offsets = PackedFloat32Array(0, 0.3312369, 0.7358491, 0.9350105, 0.9706499)
 colors = PackedColorArray(0.9764706, 0.9764706, 0.9764706, 1, 0.9686945, 0.9686945, 0.9686945, 1, 0.88235295, 0.88235295, 0.88235295, 1, 0.77, 0.77, 0.77, 1, 0.83, 0.83, 0.83, 1)
@@ -13,39 +16,14 @@ colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 1)
 offsets = PackedFloat32Array(0, 0.8825996)
 colors = PackedColorArray(0.9607843, 0.9607843, 0.9607843, 1, 0.57254905, 0.57254905, 0.57254905, 1)
 
-[sub_resource type="Gradient" id="Gradient_3yjc8"]
-offsets = PackedFloat32Array(0.12044818, 0.8053221)
-colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
-
-[sub_resource type="Gradient" id="Gradient_vktvg"]
-colors = PackedColorArray(0.8745098, 0.85882354, 0.84313726, 1, 0.8745098, 0.85882354, 0.84313726, 1)
-
 [resource]
 script = ExtResource("1_u30fp")
 name = "Horizon3D"
+description = ""
 created_at = "2026-05-31T23:35:10"
-library_grid_padding = 14
-library_card_zoom = 0.3127674726820136
-library_show_title_mode = 0
-library_card_display_mode = 2
-library_focus_scale = 0.03
-card_media_aspect_ratio = 3
-library_background_config = {
-"base": {
-"settings": {
-"gradient": SubResource("Gradient_vktvg"),
-"gradient_angle": 90.0,
-"gradient_radial": false
-}
-},
-"effects": [],
-"overlays": []
-}
-library_primary_color = Color(0.22352941, 0.92156863, 0.654902, 1)
-library_navigation_type = 0
-library_grid_vertical = false
-dark_mode = false
-card_effect_config = {
+version = 4
+values = {
+"card_effect_config": {
 "card_orientation": 2,
 "card_rounding": 0.38,
 "effects": [{
@@ -54,13 +32,13 @@ card_effect_config = {
 "border_color": Color(1, 1, 1, 1),
 "border_fade_in": 0.0,
 "border_gradient": SubResource("Gradient_rgwmd"),
-"border_size": 0.14,
 "border_gradient_angle": 180.0,
-"inner_stroke_gradient_angle": 180.0,
-"outer_stroke_gradient_angle": 180.0,
+"border_size": 0.14,
 "inner_stroke_gradient": SubResource("Gradient_5arxv"),
+"inner_stroke_gradient_angle": 180.0,
 "inner_stroke_width": 0.055,
 "outer_stroke_gradient": SubResource("Gradient_hjtwh"),
+"outer_stroke_gradient_angle": 180.0,
 "outer_stroke_width": 0.013
 }
 }, {
@@ -80,15 +58,43 @@ card_effect_config = {
 "border_color": Color(1, 1, 1, 1),
 "border_fade_in": 0.0,
 "border_gradient": SubResource("Gradient_rgwmd"),
-"border_size": 0.09,
 "border_gradient_angle": 180.0,
-"inner_stroke_gradient_angle": 180.0,
-"outer_stroke_gradient_angle": 180.0,
+"border_size": 0.09,
 "inner_stroke_gradient": SubResource("Gradient_5arxv"),
+"inner_stroke_gradient_angle": 180.0,
 "inner_stroke_width": 0.01,
 "outer_stroke_gradient": SubResource("Gradient_hjtwh"),
+"outer_stroke_gradient_angle": 180.0,
 "outer_stroke_width": 0.013
 }
 }],
 "hero_height": 4
+},
+"card_media_aspect_ratio": 3,
+"dark_mode": false,
+"library_background_config": {
+"base": {
+"settings": {
+"gradient": SubResource("Gradient_vktvg"),
+"gradient_angle": 90.0,
+"gradient_radial": false
+}
+},
+"effects": [],
+"overlays": []
+},
+"library_card_content_alignment": 0,
+"library_card_display_mode": 2,
+"library_card_zoom": 0.3127674726820136,
+"library_card_zoom_level": -1,
+"library_focus_centering": 0,
+"library_focus_scale": 0.03,
+"library_grid_padding": 14,
+"library_grid_staggered": false,
+"library_grid_vertical": false,
+"library_layout_mode": 0,
+"library_navigation_type": 0,
+"library_pagination_view": false,
+"library_primary_color": Color(0.22352941, 0.92156863, 0.654902, 1),
+"library_show_title_mode": 0
 }

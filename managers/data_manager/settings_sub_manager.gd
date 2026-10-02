@@ -293,52 +293,61 @@ func _xor_decrypt(encrypted: String, key: String) -> String:
 func _ensure_presets_folder() -> void:
 	FSM.make_dir_recursive(PRESETS_FOLDER)
 
-# List of built-in preset filenames (needed for Android where DirAccess doesn't work on res://)
+# Fallback built-in preset filenames. On desktop the themes/ folder is scanned
+# automatically; this list is used as a fallback on platforms (e.g. Android)
+# where res:// directory listing may be unreliable.
 const BUILTIN_PRESET_FILES: Array[String] = [
 	"CafeOS.tres",
 	"Default.tres",
 	"Horizon3D.tres",
-	"Horizon3D_(Dark).tres",
-	"Horizon_(Dark).tres",
-	"Horizon_(Light).tres",
+	"Horizon.tres",
 	"LiveArea.tres",
-	"NSO_(Light).tres",
+	"NSO.tres",
 	"SteamOS.tres",
 	"XMB.tres",
 ]
+
+func _discover_builtin_preset_files() -> Array[String]:
+	"""Discover built-in preset filenames. Scan the themes/ folder first; if the
+	scan yields nothing (common on Android where res:// listing is unreliable),
+	fall back to the hardcoded BUILTIN_PRESET_FILES list."""
+	var scanned: Array[String] = []
+	for file_name in FSM.list_dir(BUILTIN_PRESETS_FOLDER):
+		if FSM.is_dir(FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)):
+			continue
+		if file_name.ends_with(".tres") or file_name.ends_with(".tres.remap"):
+			scanned.append(file_name)
+
+	if not scanned.is_empty():
+		return scanned
+
+	print("[SettingsManager] res://themes/ scan returned empty; using built-in preset fallback list")
+	return BUILTIN_PRESET_FILES.duplicate()
 
 func list_presets() -> Array[ThemePreset]:
 	_ensure_presets_folder()
 	var presets: Array[ThemePreset] = []
 	var loaded_names: Array[String] = []
-	
-	# Load built-in presets first (from res://)
-	# On Android, DirAccess doesn't work for res://, so we use the hardcoded list
-	if not BUILTIN_PRESET_FILES.is_empty():
-		for file_name in BUILTIN_PRESET_FILES:
-			var preset_path = BUILTIN_PRESETS_FOLDER + file_name
-			if ResourceLoader.exists(preset_path):
-				var preset = ResourceLoader.load(preset_path) as ThemePreset
-				if preset and preset.name not in loaded_names:
-					preset.migrate_legacy()
-					presets.append(preset)
-					loaded_names.append(preset.name)
-	else:
-		# Fallback: try FSM (works on desktop)
-		for file_name in FSM.list_dir(BUILTIN_PRESETS_FOLDER):
-			if FSM.is_dir(FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)):
-				continue
-			if file_name.ends_with(".tres") or file_name.ends_with(".tres.remap"):
-				# Strip .remap extension if present - it's a mapping file, load the actual resource
-				var preset_path = FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)
-				if preset_path.ends_with(".remap"):
-					preset_path = preset_path.substr(0, preset_path.length() - 6)
-				var loaded_resource = ResourceLoader.load(preset_path)
-				var preset = loaded_resource as ThemePreset
-				if preset and preset.name not in loaded_names:
-					preset.migrate_legacy()
-					presets.append(preset)
-					loaded_names.append(preset.name)
+
+	# Load built-in presets first (from res://). Prefer a live directory scan so
+	# adding a .tres to themes/ is automatic on desktop; fall back to the hardcoded
+	# list on platforms where res:// scanning is unreliable (e.g. Android).
+	var builtin_files := _discover_builtin_preset_files()
+	for file_name in builtin_files:
+		var preset_path := FSM.join_paths(BUILTIN_PRESETS_FOLDER, file_name)
+		if preset_path.ends_with(".remap"):
+			preset_path = preset_path.substr(0, preset_path.length() - 6)
+		if not ResourceLoader.exists(preset_path):
+			push_warning("[SettingsManager] Built-in preset file missing, skipping: " + preset_path)
+			continue
+		var loaded_resource = ResourceLoader.load(preset_path)
+		var preset = loaded_resource as ThemePreset
+		if not preset:
+			push_warning("[SettingsManager] Built-in file is not a ThemePreset, skipping: " + preset_path)
+			continue
+		if preset.name not in loaded_names:
+			presets.append(preset)
+			loaded_names.append(preset.name)
 	
 	# Load user presets (from user://) - these override built-ins of the same name
 	for file_name in FSM.list_dir(PRESETS_FOLDER):
@@ -351,7 +360,6 @@ func list_presets() -> Array[ThemePreset]:
 			var user_preset = ResourceLoader.load(user_preset_path, "", ResourceLoader.CACHE_MODE_REPLACE) as ThemePreset
 			if not user_preset:
 				continue
-			user_preset.migrate_legacy()
 			var existing := loaded_names.find(user_preset.name)
 			if existing >= 0:
 				presets[existing] = user_preset
@@ -393,8 +401,6 @@ func load_preset(preset_path: String) -> ThemePreset:
 	if not preset:
 		push_error("Failed to load preset from: %s" % preset_path)
 		return null
-
-	preset.migrate_legacy()
 	return preset
 
 func apply_preset(preset: ThemePreset) -> bool:
@@ -405,9 +411,6 @@ func apply_preset(preset: ThemePreset) -> bool:
 	if not settings:
 		push_error("[SettingsSubManager] No settings loaded, cannot apply preset")
 		return false
-
-	# Fold pre-v4 typed fields into the values dictionary.
-	preset.migrate_legacy()
 
 	emit_signal("apply_preset_begin")
 
@@ -452,9 +455,6 @@ func import_preset(import_path: String) -> ThemePreset:
 	if not preset:
 		push_error("Failed to import preset from: %s" % import_path)
 		return null
-
-	preset.migrate_legacy()
-
 	# Save to presets folder
 	if save_preset(preset):
 		return preset

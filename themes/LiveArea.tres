@@ -2,55 +2,20 @@
 
 [ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_icu0t"]
 
-[sub_resource type="Gradient" id="Gradient_rgwmd"]
-colors = PackedColorArray(0, 0, 0, 0.14901961, 0, 0, 0, 0.14901961)
-
-[sub_resource type="Gradient" id="Gradient_3yjc8"]
-offsets = PackedFloat32Array(0.12044818, 0.8053221)
-colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
-
 [sub_resource type="Gradient" id="Gradient_basebg"]
 colors = PackedColorArray(0.042000007, 0.07738499, 0.52163994, 1, 0.042000007, 0.28139997, 0.84, 1)
+
+[sub_resource type="Gradient" id="Gradient_rgwmd"]
+colors = PackedColorArray(0, 0, 0, 0.14901961, 0, 0, 0, 0.14901961)
 
 [resource]
 script = ExtResource("1_icu0t")
 name = "LiveArea"
+description = ""
 created_at = "2026-05-31T18:41:43"
-library_grid_padding = 40
-library_card_zoom = 0.28931554957493205
-library_show_title_mode = 0
-library_card_display_mode = 1
-library_focus_scale = 0.03
-library_card_content_alignment = 1
-library_grid_vertical = true
-card_media_aspect_ratio = 3
-library_background_config = {
-"base": {
-"settings": {
-"gradient": SubResource("Gradient_basebg"),
-"gradient_angle": 180.0,
-"gradient_radial": false
-}
-},
-"effects": [{
-"effect_id": "xmb",
-"settings": {
-"show_dust": false,
-"star_threshold": 0.99,
-"time_scale": 0.9,
-"wave_amplitude": 0.3,
-"wave_color": Color(0.042000007, 0.28139997, 0.84, 1),
-"wave_intensity": 0.6,
-"wave_thickness": 0.6,
-"wave_vertical_offset": -0.75
-}
-}],
-"overlays": []
-}
-library_primary_color = Color(0.14117648, 0.38431373, 0.9490196, 1)
-library_navigation_type = 0
-dark_mode = true
-card_effect_config = {
+version = 4
+values = {
+"card_effect_config": {
 "card_orientation": 2,
 "card_rounding": 1.0,
 "effects": [{
@@ -89,4 +54,44 @@ card_effect_config = {
 }],
 "focus_effects": [],
 "hero_height": 4
+},
+"card_media_aspect_ratio": 3,
+"dark_mode": true,
+"library_background_config": {
+"base": {
+"settings": {
+"gradient": SubResource("Gradient_basebg"),
+"gradient_angle": 180.0,
+"gradient_radial": false
+}
+},
+"effects": [{
+"effect_id": "xmb",
+"settings": {
+"show_dust": false,
+"star_threshold": 0.99,
+"time_scale": 0.9,
+"wave_amplitude": 0.3,
+"wave_color": Color(0.042000007, 0.28139997, 0.84, 1),
+"wave_intensity": 0.6,
+"wave_thickness": 0.6,
+"wave_vertical_offset": -0.75
+}
+}],
+"overlays": []
+},
+"library_card_content_alignment": 1,
+"library_card_display_mode": 1,
+"library_card_zoom": 0.28931554957493205,
+"library_card_zoom_level": -1,
+"library_focus_centering": 0,
+"library_focus_scale": 0.03,
+"library_grid_padding": 40,
+"library_grid_staggered": false,
+"library_grid_vertical": true,
+"library_layout_mode": 0,
+"library_navigation_type": 0,
+"library_pagination_view": false,
+"library_primary_color": Color(0.14117648, 0.38431373, 0.9490196, 1),
+"library_show_title_mode": 0
 }
