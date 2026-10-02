@@ -214,6 +214,8 @@ func _on_resize_debounced() -> void:
 	else:
 		_viewport_size = Vector2.ZERO
 
+	print("[DIAG] _on_resize_debounced emitting viewport_size_changed size=", _viewport_size, " window_size=", DisplayServer.window_get_size(), " mode=", DisplayServer.window_get_mode())
+
 	# Detect monitor changes (e.g. dragging window to a different screen).
 	var screen := DisplayServer.window_get_current_screen()
 	if screen != _current_screen:
@@ -611,6 +613,7 @@ func save_last_window_size() -> void:
 		print("[SystemManager.display] Saved last window size: ", size)
 
 func windowed_toggle(value : bool):
+	print("[DIAG] windowed_toggle START value=", value, " mode=", DisplayServer.window_get_mode(), " window_size=", DisplayServer.window_get_size(), " viewport_size=", get_viewport().size)
 	if value:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		apply_window_chrome(true)
@@ -629,7 +632,9 @@ func windowed_toggle(value : bool):
 		settings_man.disable_setting("resolution")
 		# Force immediate cascade so consumers (zoom, popups, grid) get the
 		# new fullscreen resolution without waiting for the OS signal + debounce.
+		print("[DIAG] windowed_toggle entering fullscreen, emitting immediate cascade with viewport_size=", get_viewport().size)
 		_on_resize_debounced()
+	print("[DIAG] windowed_toggle END value=", value, " mode=", DisplayServer.window_get_mode(), " window_size=", DisplayServer.window_get_size(), " viewport_size=", get_viewport().size)
 
 # ============================================================================
 # Dual Screen Detection and Management

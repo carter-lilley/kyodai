@@ -758,13 +758,17 @@ func _on_resized():
 
 func _on_display_size_changed(_new_size: Vector2):
 	"""Handler for SystemManager.display's debounced viewport_size_changed signal."""
-	if startup_layout_suppressed:
-		return
-
-	# Keep the top-level visual layer pinned to the viewport.
+	# Keep the top-level visual layer pinned to the viewport even while startup
+	# layout is suppressed, so the layer never holds a stale viewport rect.
 	if _visual_layer and _visual_layer.top_level:
 		_visual_layer.position = Vector2.ZERO
 		_visual_layer.size = get_viewport_rect().size
+
+	if startup_layout_suppressed:
+		print("[DIAG] _on_display_size_changed suppressed (startup_layout_suppressed=true)")
+		return
+
+	print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer.position=", _visual_layer.position, " visual_layer.size=", _visual_layer.size, " viewport_rect=", get_viewport_rect().size, " visual_layer.global_position=", _visual_layer.global_position)
 
 	# Dedupe on the signal's viewport size, not this container's local rect:
 	# display_sub_manager sometimes emits immediately (DS swap, fullscreen
@@ -3230,7 +3234,18 @@ func _on_frame_pre_draw() -> void:
 	for card in _active_cards:
 		if not is_instance_valid(card) or not card.is_node_ready():
 			continue
-		card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
+		var expected_offset := _compute_visual_layer_offset(card)
+		card.sync_visual_transform_with_offset(expected_offset)
+		# Diagnostic: compare stamped RS origin with the card Control's global position
+		var vidx: int = card.get_meta("virtual_index", -1)
+		if vidx == _visible_start_idx:
+			var lt_v = card.get("_last_visual_transform")
+			if lt_v is Transform2D:
+				var stamped_origin: Vector2 = lt_v.origin
+				var card_global: Vector2 = card.global_position
+				var content_scale: Vector2 = card.get("content_scale") if card.get("content_scale") is Vector2 else Vector2.ONE
+				var delta := stamped_origin - card_global
+				print("[DIAG] _on_frame_pre_draw idx=", vidx, " stamped_origin=", stamped_origin, " card.global_position=", card_global, " content_scale=", content_scale, " delta=", delta)
 
 func _on_frame_post_draw_audit() -> void:
 	# Render-time truth check: after the frame was drawn, the stamped origins
@@ -3276,28 +3291,56 @@ func _on_frame_post_draw_audit() -> void:
 var _drawaudit_last_deltas: Dictionary = {}
 
 func _compute_visual_layer_offset(card: Control) -> Vector2:
-	"""Layer-space offset for a card computed from container math: the scroll
-	container's origin (stable during scroll) minus the live scroll value, plus
-	the margin overrides, plus the card's position. The scroll axis uses slot
-	math anchored to the first active card instead of card.position: flow-local
-	positions only update at the end-of-frame sort, so during a recycle the
-	margin cache (already new) and card.position (still old) disagree by one
-	row and the stamp flashes a row off for a frame. Slot deltas are the
-	post-sort truth at every instant."""
-	var sc_origin := _scroll_container.get_global_rect().position
-	var scroll_vec := Vector2(float(_scroll_container.scroll_horizontal), float(_scroll_container.scroll_vertical))
-	var margin_vec := Vector2(float(_last_margin_left), float(_last_margin_top))
-	var offset := sc_origin - scroll_vec + margin_vec + card.position - _visual_layer.global_position
+	"""Layer-space offset for a card.
+
+	The primary source of truth is the Control's actual on-screen position
+	(card.global_position), because it reflects every layout contribution
+	(margins, centering, page gaps, stagger, and any headers/sections above the
+	cards) and stays correct across window resizes and fullscreen transitions.
+
+	During active scrolling the FlowContainer child positions are stale until
+	the end-of-frame sort, so we fall back to slot-delta math when the card's
+	local position looks valid and the two methods agree within roughly one
+	row/column. Otherwise the global position wins, preventing persistent
+	drift when margins or slot math are stale."""
 	var vidx: int = card.get_meta("virtual_index", -1)
-	if vidx >= 0 and _active_cards.size() > 0 and is_instance_valid(_active_cards[0]):
+	var layer_origin := _visual_layer.global_position
+
+	# Primary source of truth: the actual on-screen top-left of the Control.
+	# sync_visual_transform_with_offset treats this as the unscaled base offset
+	# and applies content_scale around the card pivot, so the final visual origin
+	# is base_offset + pivot - content_scale * pivot (matching existing audit).
+	var raw_global_offset := card.global_position - layer_origin
+	var target_origin := raw_global_offset
+
+	# Fallback: slot-delta math is pre-sort-truth during fast scroll/recycle.
+	var use_slot := false
+	if _scroll_container and _active_cards.size() > 0 and is_instance_valid(_active_cards[0]) and vidx >= 0:
 		var first_idx: int = _active_cards[0].get_meta("virtual_index", -1)
 		if first_idx >= 0:
+			var sc_origin := _scroll_container.get_global_rect().position
+			var scroll_vec := Vector2(float(_scroll_container.scroll_horizontal), float(_scroll_container.scroll_vertical))
+			var margin_vec := Vector2(float(_last_margin_left), float(_last_margin_top))
 			var slot_delta := _get_slot_position_for_index(vidx) - _get_slot_position_for_index(first_idx)
+			var slot_offset := sc_origin - scroll_vec + margin_vec - layer_origin
 			if vertical:
-				offset.y = sc_origin.y - scroll_vec.y + margin_vec.y + slot_delta - _visual_layer.global_position.y
+				slot_offset.y += slot_delta
 			else:
-				offset.x = sc_origin.x - scroll_vec.x + margin_vec.x + slot_delta - _visual_layer.global_position.x
-	return offset
+				slot_offset.x += slot_delta
+			# Only trust slot math when the card has been placed by the flow
+			# container and the two methods are close (avoids one-frame recycle
+			# flash without snapping to stale math during resize).
+			var card_pos_valid := card.position.x >= 0.0 and card.position.y >= 0.0
+			var stride := _get_normal_stride()
+			var threshold := maxf(stride * 0.5, 4.0)
+			if card_pos_valid and raw_global_offset.distance_to(slot_offset) < threshold:
+				target_origin = slot_offset
+				use_slot = true
+
+	# Diagnostic: log first visible card's offset math to catch fullscreen drift
+	if vidx == _visible_start_idx:
+		print("[DIAG] _compute_visual_layer_offset idx=", vidx, " use_slot=", use_slot, " card.position=", card.position, " card.global_position=", card.global_position, " visual_layer.global_position=", layer_origin, " target_origin=", target_origin)
+	return target_origin
 
 func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) -> void:
 	var use_offsets: bool = _card_has_sync_visual_offset and _scroll_container and _visual_layer
