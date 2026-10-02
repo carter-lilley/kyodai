@@ -5,34 +5,22 @@ const ShaderPrewarmer := preload("res://utils/shader_prewarmer.gd")
 const StartupBenchmark := preload("res://utils/startup_benchmark.gd")
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
-# UI Nodes - initialized in _ready()
 var tab_container: TabContainer
 var library_background: LibraryBackground
 var content_wrapper: Control
 var main_content_vbox: VBoxContainer
 var root_layout: Control
 
-# Cached reference to the on-screen keyboard (survives reparenting in dual-screen mode)
 var _keyboard: PanelContainer = null
-
-# Cached reference to UILayer (survives reparenting in dual-screen mode)
 var _ui_layer: CanvasLayer = null
 
-# Zoom state tracking for analog triggers
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
 
-# Focus restoration on app resume (Android)
 var _last_focused_index: int = -1
-
-# True while hibernated for a game launch (memory trim already applied)
 var _trimmed_for_launch: bool = false
-
-# Rendering suspend while the desktop window is unfocused
 var _rendering_suspended: bool = false
 var _prev_viewport_update_mode: int = -1
-
-# M3 Theme resource (applied to root for fallback native control styling)
 var _m3_theme: Theme = null
 
 
@@ -75,7 +63,7 @@ func _ready():
 	if SystemManager.display:
 		await SystemManager.display.initial_window_size_settled
 
-	print("[Main] initial_window_size_settled elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
+	if DEBUG_LOG: print("[Main] initial_window_size_settled elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
 	WarmupBudget.tag("main_ready")
 
 	# Get all nodes using get_node to ensure they're ready
@@ -104,7 +92,7 @@ func _ready():
 		main_content_vbox,
 		root_layout
 	)
-	print("[Main] UIManager.initialize elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] UIManager.initialize elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	WarmupBudget.tag("ui_init")
 
 	# Boot-frame split: initialize (nav/views build) and the rest of _ready
@@ -150,18 +138,18 @@ func _ready():
 	phase_start_us = Time.get_ticks_usec()
 	UIManager.toolbar.sync_view_mode_button_to_setting()
 	UIManager.toolbar.sync_zoom_slider_to_view("Home")
-	print("[Main] view mode setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] view mode setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Apply M3 theme to root for fallback native control styling before grid is shown.
 	phase_start_us = Time.get_ticks_usec()
 	_apply_m3_theme()
-	print("[Main] _apply_m3_theme elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] _apply_m3_theme elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Connect to screen swap signal and restore the saved swap state.
 	# The dual_screen_swapped setting lifecycle is owned by DualScreenSubManager.
 	phase_start_us = Time.get_ticks_usec()
 	UIManager.dual_screen.setup_swap_persistence()
-	print("[Main] screen swap setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] screen swap setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Second boot-frame split: the settle + zoom sync run in their own frame
 	# instead of stacking onto the connects/theme work above.
@@ -185,7 +173,7 @@ func _ready():
 			var grid_settle_start_us := Time.get_ticks_usec()
 			var available_size := UIManager.compute_grid_available_size(grid, current_view)
 			grid.set_deterministic_available_size(available_size)
-			print("[Main] settle: set_deterministic_available_size elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
+			if DEBUG_LOG: print("[Main] settle: set_deterministic_available_size elapsed_us=", Time.get_ticks_usec() - grid_settle_start_us)
 			# The total count arrives asynchronously when the DB cache is cold.
 			# Settling with 0 items sizes the card pool to 0 and forces a full
 			# post-settle relayout when data lands (collapsed layout + a burst of
@@ -199,14 +187,14 @@ func _ready():
 	# though Godot hasn't propagated grid.size yet.
 	phase_start_us = Time.get_ticks_usec()
 	UIManager.toolbar.sync_zoom_slider_to_current_view()
-	print("[Main] _sync_zoom_slider_to_current_view elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] _sync_zoom_slider_to_current_view elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	# Save the current level and snapped ratio so the settings stay in sync with
 	# the slider and don't hold stale values from a previous viewport size.
 	if current_view:
 		var grid = UIManager.get_view_grid(current_view)
 		if grid:
 			UIManager.toolbar.persist_settled_zoom(grid)
-	print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
+	if DEBUG_LOG: print("[Main] Settle block total elapsed_us=", Time.get_ticks_usec() - settle_start_us)
 
 	# Compile all shader pipelines in the background so the first scroll/focus
 	# doesn't pay lazy-compile hitches. Deferred + internally delayed so first
@@ -221,7 +209,7 @@ func _ready():
 	# Startup zoom sync is complete; clear the guard after the current frame so
 	# any deferred slider emissions that fire during this frame are ignored.
 	UIManager.toolbar.call_deferred("set_startup_zoom_sync_active", false)
-	print("[Main] _ready() completed, elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
+	if DEBUG_LOG: print("[Main] _ready() completed, elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
 
 	# Non-critical boot work (OOBE wizard, avatar fetch, tool extraction,
 	# settings-dialog pre-create) runs after the settle frame so none of it
@@ -241,13 +229,13 @@ func _post_ready_startup() -> void:
 
 	# Check if first-run wizard needs to be shown
 	_show_oobe_wizard_if_needed()
-	print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] _show_oobe_wizard_if_needed elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Kick the avatar fetch/decode now that the grid is up.
 	phase_start_us = Time.get_ticks_usec()
 	if UIManager and UIManager.toolbar:
 		UIManager.toolbar.fetch_avatar_when_idle()
-	print("[Main] avatar kickoff elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[Main] avatar kickoff elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Extract bundled tools on packaged builds (binaries inside the PCK cannot
 	# be executed). File IO + chmod; every consumer also extracts lazily on
@@ -255,7 +243,7 @@ func _post_ready_startup() -> void:
 	if SystemManager.platform.is_packaged():
 		phase_start_us = Time.get_ticks_usec()
 		AndroidBinaryExtractor.extract_all_binaries()
-		print("[Main] binary extraction elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		if DEBUG_LOG: print("[Main] binary extraction elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Pre-create the settings dialog in the background so opening it later
 	# (especially the RomM platform cards screen) is instant.
@@ -263,7 +251,7 @@ func _post_ready_startup() -> void:
 	if first_run_setting and first_run_setting.value:
 		call_deferred("_pre_create_settings_dialog")
 
-	print("[Main] _post_ready_startup elapsed_us=", Time.get_ticks_usec() - post_start_us)
+	if DEBUG_LOG: print("[Main] _post_ready_startup elapsed_us=", Time.get_ticks_usec() - post_start_us)
 
 func _apply_m3_theme() -> void:
 	_m3_theme = M3Theme.generate_theme()
@@ -306,7 +294,7 @@ func _pre_create_settings_dialog() -> void:
 	platform cards screen can appear instantly when opened. Waits for a gap in
 	user input (5s cap) so the build can't land mid-interaction; the category
 	builds themselves spread over frames inside the dialog."""
-	print("[Main] _pre_create_settings_dialog entered at ms=", Time.get_ticks_msec())
+	if DEBUG_LOG: print("[Main] _pre_create_settings_dialog entered at ms=", Time.get_ticks_msec())
 	for i in range(3):
 		await get_tree().process_frame
 	# Hold off until the home grid has settled (capped) so the dialog's
@@ -317,11 +305,11 @@ func _pre_create_settings_dialog() -> void:
 	var waited_ms := Time.get_ticks_msec()
 	while WarmupBudget.input_idle_ms() < 500 and Time.get_ticks_msec() - waited_ms < 5000:
 		await get_tree().process_frame
-	print("[Main] _pre_create_settings_dialog building at ms=", Time.get_ticks_msec(), " idle_ms=", WarmupBudget.input_idle_ms())
+	if DEBUG_LOG: print("[Main] _pre_create_settings_dialog building at ms=", Time.get_ticks_msec(), " idle_ms=", WarmupBudget.input_idle_ms())
 	if UIManager:
 		var start_us := Time.get_ticks_usec()
 		await UIManager.pre_create_settings_dialog()
-		print("[Main] pre_create_settings_dialog (initial burst) elapsed_us=", Time.get_ticks_usec() - start_us)
+		if DEBUG_LOG: print("[Main] pre_create_settings_dialog (initial burst) elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _on_settings_button_pressed() -> void:
 	UIManager.show_settings_dialog()
@@ -400,19 +388,19 @@ func _show_next_server_deletion_dialog() -> void:
 func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	"""Focus the first game card in the Home grid once it has data."""
 	if attempts == 0:
-		print("[Main] Startup focus: entered at ms=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[Main] Startup focus: entered at ms=", Time.get_ticks_msec())
 	if attempts > 60:
-		print("[Main] Startup focus: grid did not populate, falling back to Home button")
+		if DEBUG_LOG: print("[Main] Startup focus: grid did not populate, falling back to Home button")
 		reset_focus_to_home_button()
 		return
 
 	if not UIManager or not UIManager.is_current_view("Home"):
-		print("[Main] Startup focus: Home is not current view, aborting")
+		if DEBUG_LOG: print("[Main] Startup focus: Home is not current view, aborting")
 		return
 
 	var home_view = UIManager.get_view("Home") as HomeView
 	if not home_view or not home_view.games_grid:
-		print("[Main] Startup focus: Home grid not ready, retrying...")
+		if DEBUG_LOG: print("[Main] Startup focus: Home grid not ready, retrying...")
 		await get_tree().process_frame
 		_focus_first_home_card_on_startup(attempts + 1)
 		return
@@ -420,12 +408,12 @@ func _focus_first_home_card_on_startup(attempts: int = 0) -> void:
 	var grid = home_view.games_grid
 	var range_info = grid.get_visible_range()
 	if range_info.total <= 0:
-		print("[Main] Startup focus: waiting for Home grid data (total=", range_info.total, ")")
+		if DEBUG_LOG: print("[Main] Startup focus: waiting for Home grid data (total=", range_info.total, ")")
 		await get_tree().process_frame
 		_focus_first_home_card_on_startup(attempts + 1)
 		return
 
-	print("[Main] Startup focus: focusing first Home card")
+	if DEBUG_LOG: print("[Main] Startup focus: focusing first Home card")
 	WarmupBudget.tag("startup_focus")
 	grid.scroll_to_index_and_focus(0, false)
 
@@ -434,7 +422,7 @@ func _prewarm_shader_pipelines() -> void:
 	# window so pipelines are warm before the first visible frame. If that
 	# somehow didn't run, start it once the home grid settles. Prewarm is
 	# idempotent, so this is a no-op in the normal case.
-	print("[Main] _prewarm_shader_pipelines entered at ms=", Time.get_ticks_msec())
+	if DEBUG_LOG: print("[Main] _prewarm_shader_pipelines entered at ms=", Time.get_ticks_msec())
 	await get_tree().create_timer(1.0).timeout
 	if not is_inside_tree():
 		return
@@ -464,15 +452,15 @@ func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, 
 		_settle_grid_when_data_ready(grid, view, available_size, settle_start_us, attempts + 1)
 		return
 	if attempts > 0:
-		print("[Main] settle waited ", attempts, " frames for grid data (source_total=", source_total, ", count_resolved_empty=", count_resolved_empty, ")")
+		if DEBUG_LOG: print("[Main] settle waited ", attempts, " frames for grid data (source_total=", source_total, ", count_resolved_empty=", count_resolved_empty, ")")
 	WarmupBudget.tag("grid_settle")
 	var sub_start_us := Time.get_ticks_usec()
 	grid._instantiate_card_pool()
-	print("[Main] settle: _instantiate_card_pool elapsed_us=", Time.get_ticks_usec() - sub_start_us)
+	if DEBUG_LOG: print("[Main] settle: _instantiate_card_pool elapsed_us=", Time.get_ticks_usec() - sub_start_us)
 	sub_start_us = Time.get_ticks_usec()
 	grid.settle_startup_with_buffer(0)
-	print("[Main] settle: settle_startup_with_buffer elapsed_us=", Time.get_ticks_usec() - sub_start_us)
-	print("[Main] Settled grid for ", view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - settle_start_us)
+	if DEBUG_LOG: print("[Main] settle: settle_startup_with_buffer elapsed_us=", Time.get_ticks_usec() - sub_start_us)
+	if DEBUG_LOG: print("[Main] Settled grid for ", view.view_name, " target_ratio=", grid.target_card_width_ratio, " available=", available_size, " elapsed_us=", Time.get_ticks_usec() - settle_start_us)
 	# Open the warmup gates (platform card pool waits on this) and start the
 	# countdown out of startup budgeting back to steady-state.
 	WarmupBudget.notify_home_grid_settled()
@@ -726,13 +714,13 @@ func _notification(what: int) -> void:
 		var window_save_start_us := Time.get_ticks_usec()
 		if SystemManager.display:
 			SystemManager.display.save_last_window_size()
-		print("[Main] save_last_window_size elapsed_us=", Time.get_ticks_usec() - window_save_start_us)
+		if DEBUG_LOG: print("[Main] save_last_window_size elapsed_us=", Time.get_ticks_usec() - window_save_start_us)
 
 		# Flush any pending settings changes before shutdown
 		var settings_save_start_us := Time.get_ticks_usec()
 		if DataManager:
 			DataManager.save_settings()
-		print("[Main] save_settings elapsed_us=", Time.get_ticks_usec() - settings_save_start_us)
+		if DEBUG_LOG: print("[Main] save_settings elapsed_us=", Time.get_ticks_usec() - settings_save_start_us)
 
 		# Pre-clean heavy resources and background work before freeing the tree.
 		# This reduces the number of synchronous RenderingServer.free_rid() calls
@@ -748,7 +736,7 @@ func _notification(what: int) -> void:
 			tree.root.queue_free()
 			call_deferred("_deferred_quit")
 
-		print("[Main] NOTIFICATION_WM_CLOSE_REQUEST total elapsed_us=", Time.get_ticks_usec() - close_start_us)
+		if DEBUG_LOG: print("[Main] NOTIFICATION_WM_CLOSE_REQUEST total elapsed_us=", Time.get_ticks_usec() - close_start_us)
 		return
 
 	if what == NOTIFICATION_APPLICATION_RESUMED:
@@ -761,10 +749,10 @@ func _notification(what: int) -> void:
 
 		# Restore focus when app returns to foreground (Android)
 		if _last_focused_index >= 0:
-			print("[Main] Calling _restore_focus_to_card deferred")
+			if DEBUG_LOG: print("[Main] Calling _restore_focus_to_card deferred")
 			UIManager.toolbar.call_deferred("_restore_focus_to_card", _last_focused_index)
 		else:
-			print("[Main] No saved focus index, skipping restoration")
+			if DEBUG_LOG: print("[Main] No saved focus index, skipping restoration")
 
 		# Clear emulator validation cache and stale pending launches
 		# This handles APK installs that completed while the app was in the background
@@ -804,13 +792,13 @@ func _pre_shutdown_cleanup() -> void:
 	var download_start_us := Time.get_ticks_usec()
 	if SystemManager and SystemManager.download:
 		SystemManager.download.shutdown()
-	print("[Main] download shutdown elapsed_us=", Time.get_ticks_usec() - download_start_us)
+	if DEBUG_LOG: print("[Main] download shutdown elapsed_us=", Time.get_ticks_usec() - download_start_us)
 
 	# Cancel active HTTP requests and free the request pool.
 	var network_start_us := Time.get_ticks_usec()
 	if SystemManager and SystemManager.network:
 		SystemManager.network.shutdown()
-	print("[Main] network shutdown elapsed_us=", Time.get_ticks_usec() - network_start_us)
+	if DEBUG_LOG: print("[Main] network shutdown elapsed_us=", Time.get_ticks_usec() - network_start_us)
 
 	# Release card pools, overlays, pending image work, and static caches.
 	# Shared with the launch-hibernation trim so pooled cards (and their
@@ -822,9 +810,9 @@ func _pre_shutdown_cleanup() -> void:
 	var memory_start_us := Time.get_ticks_usec()
 	if SystemManager and SystemManager.memory:
 		MemorySubManager.shutdown()
-	print("[Main] memory shutdown elapsed_us=", Time.get_ticks_usec() - memory_start_us)
+	if DEBUG_LOG: print("[Main] memory shutdown elapsed_us=", Time.get_ticks_usec() - memory_start_us)
 
-	print("[Main] Pre-shutdown cleanup elapsed_us=", Time.get_ticks_usec() - cleanup_start_us)
+	if DEBUG_LOG: print("[Main] Pre-shutdown cleanup elapsed_us=", Time.get_ticks_usec() - cleanup_start_us)
 
 func _deferred_quit() -> void:
 	var tree = get_tree()
@@ -855,7 +843,7 @@ func _release_heavy_resources(reason: String) -> void:
 	"""Free every reclaimable memory hold that existing lazy paths can rebuild.
 	Downloads, worker threads, and in-flight network requests are untouched."""
 	var trim_start_us := Time.get_ticks_usec()
-	print("[Main] Memory trim (", reason, ") starting")
+	if DEBUG_LOG: print("[Main] Memory trim (", reason, ") starting")
 
 	# Stop periodic work that wakes the main thread while backgrounded.
 	if UIManager:
@@ -869,7 +857,7 @@ func _release_heavy_resources(reason: String) -> void:
 		for grid in UIManager.view.get_all_grids():
 			grid.clear_pool()
 	PlatformCardPool.clear()
-	print("[Main] trim grid pools elapsed_us=", Time.get_ticks_usec() - pool_start_us)
+	if DEBUG_LOG: print("[Main] trim grid pools elapsed_us=", Time.get_ticks_usec() - pool_start_us)
 
 	# Overlays rebuild lazily through their existing show paths.
 	if UIManager and UIManager.overlay:
@@ -891,12 +879,12 @@ func _release_heavy_resources(reason: String) -> void:
 	LaunchTransitionOverlay._clear_source_override()
 	M3NavigationDestination.clear_shared_stylebox()
 	M3MenuRenderer.clear_shared_stylebox()
-	print("[Main] trim static caches elapsed_us=", Time.get_ticks_usec() - cache_start_us)
+	if DEBUG_LOG: print("[Main] trim static caches elapsed_us=", Time.get_ticks_usec() - cache_start_us)
 
 	if SystemManager and SystemManager.network:
 		SystemManager.network.clear_response_cache()
 
-	print("[Main] Memory trim (", reason, ") total elapsed_us=", Time.get_ticks_usec() - trim_start_us)
+	if DEBUG_LOG: print("[Main] Memory trim (", reason, ") total elapsed_us=", Time.get_ticks_usec() - trim_start_us)
 
 func _restore_after_launch() -> void:
 	"""Undo launch hibernation. Pools, covers, and the settings dialog all
@@ -911,9 +899,9 @@ func _restore_after_launch() -> void:
 func _log_rss(label: String) -> void:
 	var rss_kb := _get_process_rss_kb()
 	if rss_kb >= 0:
-		print("[Main] VmRSS (", label, "): ", snappedf(rss_kb / 1024.0, 0.1), " MB")
+		if DEBUG_LOG: print("[Main] VmRSS (", label, "): ", snappedf(rss_kb / 1024.0, 0.1), " MB")
 	else:
-		print("[Main] Resource count (", label, "): ", Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
+		if DEBUG_LOG: print("[Main] Resource count (", label, "): ", Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
 
 func _get_process_rss_kb() -> int:
 	"""VmRSS from /proc/self/status (Linux/Android); -1 where unavailable.

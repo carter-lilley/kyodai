@@ -119,7 +119,7 @@ static func _is_stale_home_path(path: String) -> bool:
 		return false
 	current_home = current_home.rstrip("/")
 	if not path.begins_with(current_home + "/") and path != current_home:
-		if path.begins_with("/home/") or path.begins_with("/Users/"):
+		if path.begins_with("/home/"):
 			return true
 	return false
 

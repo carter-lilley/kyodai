@@ -5,6 +5,8 @@
 extends Manager
 class_name FileSystemSubManager
 
+const DEBUG_LOG: bool = false
+
 ## Path format options for resolve_path()
 enum PathFormat {
 	DEFAULT,      ## Resolve placeholders, normalize slashes
@@ -581,7 +583,7 @@ static func _delete_dir_recursive_internal(path: String) -> bool:
 	print("[SystemManager.filesystem] Deleting directory: " + path)
 	var dir = DirAccess.open(path)
 	if dir == null:
-		print("[SystemManager.filesystem] FAILED to open directory: " + path)
+		if DEBUG_LOG: print("[SystemManager.filesystem] FAILED to open directory: " + path)
 		return false
 	
 	dir.list_dir_begin()
@@ -592,7 +594,7 @@ static func _delete_dir_recursive_internal(path: String) -> bool:
 		if file_name != "." and file_name != "..":
 			var item_path = join_paths(path, file_name)
 			if dir.current_is_dir():
-				print("[SystemManager.filesystem] Recursing into subdirectory: " + item_path)
+				if DEBUG_LOG: print("[SystemManager.filesystem] Recursing into subdirectory: " + item_path)
 				if not _delete_dir_recursive_internal(item_path):
 					failed_count += 1
 			else:
@@ -606,10 +608,10 @@ static func _delete_dir_recursive_internal(path: String) -> bool:
 						if remove_result == OK:
 							deleted_count += 1
 						else:
-							print("[SystemManager.filesystem] FAILED to delete file after clearing read-only: " + item_path + " (error: " + str(remove_result) + ")")
+							if DEBUG_LOG: print("[SystemManager.filesystem] FAILED to delete file after clearing read-only: " + item_path + " (error: " + str(remove_result) + ")")
 							failed_count += 1
 					else:
-						print("[SystemManager.filesystem] FAILED to delete file: " + item_path + " (error: " + str(remove_result) + ")")
+						if DEBUG_LOG: print("[SystemManager.filesystem] FAILED to delete file: " + item_path + " (error: " + str(remove_result) + ")")
 						failed_count += 1
 		file_name = dir.get_next()
 	dir.list_dir_end()
@@ -721,7 +723,7 @@ static func copy_file(source_path: String, dest_path: String) -> bool:
 static func copy_dir(source: String, dest: String) -> bool:
 	print("[SystemManager.filesystem] copy_dir: START " + source + " -> " + dest)
 	if not dir_exists(dest):
-		print("[SystemManager.filesystem] copy_dir: Creating destination directory: " + dest)
+		if DEBUG_LOG: print("[SystemManager.filesystem] copy_dir: Creating destination directory: " + dest)
 		if not make_dir_recursive(dest):
 			push_error("[SystemManager.filesystem] Failed to create destination directory: " + dest)
 			return false
@@ -864,7 +866,7 @@ static func _zip_directory_recursive(packer: ZIPPacker, dir_path: String, zip_pr
 				push_error("[SystemManager.filesystem] Failed to read file for zipping: " + full_path)
 				success = false
 			elif max_file_size > 0 and file_size > max_file_size:
-				print("[SystemManager.filesystem] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
+				if DEBUG_LOG: print("[SystemManager.filesystem] Skipping oversized file (" + str(file_size) + " bytes): " + full_path)
 			else:
 				var data = read_file_bytes(full_path)
 				if data.is_empty() and file_size > 0:
@@ -1325,7 +1327,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 
 	# Count total files first for accurate progress
 	var total_files = _count_files_in_7z_archive(binary_path, abs_archive)
-	print("[SystemManager.filesystem] 7-Zip total files in archive: " + str(total_files))
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7-Zip total files in archive: " + str(total_files))
 
 	# Stream 7z's own progress output (-bsp1) instead of polling the extraction
 	# directory with recursive file counts (the old approach re-walked tens of
@@ -1335,7 +1337,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 	if pipe.is_empty():
 		return _extract_with_7z_blocking(binary_path, abs_archive, abs_extract_dir, total_files, progress_callback)
 
-	print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
 
 	var stdio: FileAccess = pipe["stdio"]
 	var pid: int = pipe["pid"]
@@ -1376,7 +1378,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 		pipe["stderr"].close()
 
 	var exit_code := OS.get_process_exit_code(pid)
-	print("[SystemManager.filesystem] 7-Zip exit code: " + str(exit_code))
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7-Zip exit code: " + str(exit_code))
 
 	var success := exit_code == 0
 	if success:
@@ -1392,7 +1394,7 @@ static func _extract_with_7z(archive_path: String, extract_dir: String, progress
 ## on an inner thread and waits for completion with no incremental progress.
 static func _extract_with_7z_blocking(binary_path: String, abs_archive: String, abs_extract_dir: String, total_files: int, progress_callback: Callable = Callable()) -> bool:
 	var args: Array = ["x", abs_archive, "-o" + abs_extract_dir, "-y"]
-	print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7-Zip command: " + binary_path + " " + " ".join(args))
 
 	var result = {"done": false, "exit_code": -1}
 	var thread = Thread.new()
@@ -1406,7 +1408,7 @@ static func _extract_with_7z_blocking(binary_path: String, abs_archive: String, 
 		OS.delay_msec(250)
 	thread.wait_to_finish()
 
-	print("[SystemManager.filesystem] 7-Zip exit code: " + str(result.exit_code))
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7-Zip exit code: " + str(result.exit_code))
 	var success: bool = result.exit_code == 0
 	if success:
 		if progress_callback.is_valid():
@@ -1433,7 +1435,7 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 	# Join everything and split by newlines to get individual lines
 	var full_text = "\n".join(output)
 	var lines = full_text.split("\n", false)
-	print("[SystemManager.filesystem] 7z list: " + str(lines.size()) + " lines total")
+	if DEBUG_LOG: print("[SystemManager.filesystem] 7z list: " + str(lines.size()) + " lines total")
 	
 	# The summary line is typically the last non-empty line
 	# Format: "20643          311  2 files, 0 folders"
@@ -1451,7 +1453,7 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 			var match = regex.search(line)
 			if match:
 				var num_str = match.get_string(1)
-				print("[SystemManager.filesystem] Found total files from summary: " + num_str)
+				if DEBUG_LOG: print("[SystemManager.filesystem] Found total files from summary: " + num_str)
 				return int(num_str)
 			
 			# Fallback: manual parse - find " files" and backtrack to the number
@@ -1463,7 +1465,7 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 				num_start += 1
 				if num_start < idx:
 					var num_str = line.substr(num_start, idx - num_start)
-					print("[SystemManager.filesystem] Found total files from summary (manual): " + num_str)
+					if DEBUG_LOG: print("[SystemManager.filesystem] Found total files from summary (manual): " + num_str)
 					return int(num_str)
 		
 		# Only check last 5 non-empty lines for summary
@@ -1488,7 +1490,7 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 			if attr.length() == 5 and attr[0] == ".":
 				file_count += 1
 	
-	print("[SystemManager.filesystem] Counted files from entries: " + str(file_count))
+	if DEBUG_LOG: print("[SystemManager.filesystem] Counted files from entries: " + str(file_count))
 	return file_count if file_count > 0 else -1
 
 ## Gets the bundled 7z binary path for the current platform.
@@ -1667,26 +1669,26 @@ static func move_dir_contents(source_dir: String, dest_dir: String) -> bool:
 			continue
 		
 		# Rename failed - try copy+delete
-		print("[SystemManager.filesystem] Rename failed for " + source + ", falling back to copy+delete...")
+		if DEBUG_LOG: print("[SystemManager.filesystem] Rename failed for " + source + ", falling back to copy+delete...")
 		if file_exists(source):
-			print("[SystemManager.filesystem] Copying file: " + source + " -> " + dest)
+			if DEBUG_LOG: print("[SystemManager.filesystem] Copying file: " + source + " -> " + dest)
 			if not copy_file(source, dest):
 				push_error("[SystemManager.filesystem] Failed to copy file: " + source + " -> " + dest)
 				return false
-			print("[SystemManager.filesystem] Deleting source file: " + source)
+			if DEBUG_LOG: print("[SystemManager.filesystem] Deleting source file: " + source)
 			var del_success = delete_file(source)
 			if not del_success:
-				print("[SystemManager.filesystem] WARNING: Failed to delete source file: " + source)
+				if DEBUG_LOG: print("[SystemManager.filesystem] WARNING: Failed to delete source file: " + source)
 			moved_count += 1
 		elif is_dir(source):
-			print("[SystemManager.filesystem] Copying directory: " + source + " -> " + dest)
+			if DEBUG_LOG: print("[SystemManager.filesystem] Copying directory: " + source + " -> " + dest)
 			if not copy_dir(source, dest):
 				push_error("[SystemManager.filesystem] Failed to copy directory: " + source + " -> " + dest)
 				return false
-			print("[SystemManager.filesystem] Deleting source directory: " + source)
+			if DEBUG_LOG: print("[SystemManager.filesystem] Deleting source directory: " + source)
 			var del_success = delete_dir_recursive(source)
 			if not del_success:
-				print("[SystemManager.filesystem] WARNING: Failed to delete source directory: " + source)
+				if DEBUG_LOG: print("[SystemManager.filesystem] WARNING: Failed to delete source directory: " + source)
 			moved_count += 1
 	
 	print("[SystemManager.filesystem] Moved " + str(moved_count) + " items from " + source_dir + " to " + dest_dir)
@@ -1828,7 +1830,7 @@ static func _normalize_backslash_paths(root_dir: String) -> void:
 				print("[SystemManager.filesystem] Failed to normalize file: " + old_full + " -> " + new_full)
 	
 	if moved_count > 0:
-		print("[SystemManager.filesystem] Normalized " + str(moved_count) + " backslash path(s) in " + root_dir)
+		if DEBUG_LOG: print("[SystemManager.filesystem] Normalized " + str(moved_count) + " backslash path(s) in " + root_dir)
 
 static func _normalize_backslash_collect(full_path: String, rel_path: String, depth: int, out: Array[Dictionary]) -> void:
 	if rel_path != "" and rel_path.contains("\\"):
@@ -1852,7 +1854,7 @@ static func _normalize_backslash_collect(full_path: String, rel_path: String, de
 
 ## OS-level rename that preserves literal backslashes in filenames. Godot's
 ## DirAccess.rename_absolute normalizes backslashes into path separators, which
-## breaks renaming entries extracted from Windows-style ZIPs on Linux/macOS.
+## breaks renaming entries extracted from Windows-style ZIPs on Linux.
 static func _rename_literal(old_full: String, new_full: String) -> bool:
 	if old_full.is_empty() or new_full.is_empty():
 		return false

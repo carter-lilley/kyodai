@@ -224,7 +224,7 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 			formatted_arg = formatted_arg.replace("{emulator_dir}", global_emulator_dir)
 			intent.launch_args.append(formatted_arg)
 		
-		# Apply per-platform environment variables (Linux/macOS only)
+		# Apply per-platform environment variables (Linux only)
 		var env_config = platform_config.get("environment", {})
 		for var_name in env_config:
 			var formatted_value = str(env_config[var_name])

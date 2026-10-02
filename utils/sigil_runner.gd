@@ -27,8 +27,6 @@ static func _get_sigil_path() -> String:
 		return _AndroidBinaryExtractor.extract_binary(base_path + "win/sigil.exe", "sigil.exe")
 	elif SystemManager.platform.is_linux():
 		return _AndroidBinaryExtractor.extract_binary(base_path + "linux/sigil", "sigil")
-	elif SystemManager.platform.is_macos():
-		return _AndroidBinaryExtractor.extract_binary(base_path + "macos/sigil", "sigil")
 	elif SystemManager.platform.is_android():
 		# Android 10+ (targetSdk 29+) SELinux policy denies executing binaries from
 		# the app's private data dir. Sigil is shipped as a fake native library

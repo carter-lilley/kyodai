@@ -59,7 +59,7 @@ func _ready():
 		var zoom_state = UIManager.card_settings_state
 		initial_zoom = zoom_state.card_zoom_ratio if zoom_state.layout_mode == 0 else zoom_state.card_zoom_list_ratio
 	games_grid.setup(card_scene, 0, initial_zoom)
-	print("[HomeView] games_grid.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[HomeView] games_grid.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	games_grid.items_requested.connect(_on_items_requested)
 	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
@@ -67,7 +67,7 @@ func _ready():
 	# Setup vertical layout from settings
 	phase_start_us = Time.get_ticks_usec()
 	_update_grid_orientation()
-	print("[HomeView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[HomeView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# Autoload signals are established via _connect_signals (also re-run on
 	# _enter_tree after DS-mode reparenting).
@@ -76,16 +76,16 @@ func _ready():
 	# If database is already ready, trigger the callback manually (happens when DataManager loads first)
 	phase_start_us = Time.get_ticks_usec()
 	if DataManager.is_database_ready():
-		print("[DEBUG] Database already ready, calling _on_database_ready manually")
+		if DEBUG_LOG: print("[DEBUG] Database already ready, calling _on_database_ready manually")
 		_on_database_ready()
-	print("[HomeView] _on_database_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+	if DEBUG_LOG: print("[HomeView] _on_database_ready elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	
 	# Initial load is handled by _on_database_ready() when the DB is ready
 	
 	# Let the base View class own the focus signal connection.
 	reconnect_viewport()
 
-	print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
+	if DEBUG_LOG: print("[HomeView] _ready() total elapsed_us=", Time.get_ticks_usec() - ready_start_us)
 
 func _enter_tree() -> void:
 	# DS-mode reparenting fires _exit_tree (which disconnects all autoload
@@ -160,11 +160,11 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	# cache and GameNative games are already loaded, skip this so we don't mark
 	# the merged DB cache dirty and defeat the prefetch warm-up.
 	var should_reload_gamenative = reload_gamenative and (not _gamenative_loaded or not preserve_cache)
-	print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
+	if DEBUG_LOG: print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
 	if should_reload_gamenative:
 		var phase_start_us := Time.get_ticks_usec()
 		_load_gamenative_games()
-		print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		if DEBUG_LOG: print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# If the database is already ready AND the count cache is warm, set the count
 	# synchronously so the grid can settle with the correct total on the first
@@ -173,7 +173,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	if DataManager and DataManager.is_database_ready() and DataManager.has_cached_downloaded_count():
 		var phase_start_us := Time.get_ticks_usec()
 		var count = DataManager.get_downloaded_games_count()
-		print("[HomeView] get_downloaded_games_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		if DEBUG_LOG: print("[HomeView] get_downloaded_games_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 		_total_count_load_pending = false
 		if not is_instance_valid(games_grid):
 			_is_loading = false
@@ -196,25 +196,25 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		phase_start_us = Time.get_ticks_usec()
 		var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 		games_grid.set_total_count_with_available_size(_total_games, available_size, preserve_cache)
-		print("[HomeView] games_grid.set_total_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		if DEBUG_LOG: print("[HomeView] games_grid.set_total_count elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 		# Only log when the count actually changes to avoid startup noise.
 		if _total_games != _last_logged_total_games:
 			_last_logged_total_games = _total_games
-			print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+			if DEBUG_LOG: print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
 
 		if _db_games_count == 0:
 			_update_status("No downloaded games found")
 			# Trigger scan if no DB games found (may have been wiped from DB but files exist)
 			if trigger_scan_if_empty:
-				print("[DEBUG] Triggering scan because _db_games_count == 0")
+				if DEBUG_LOG: print("[DEBUG] Triggering scan because _db_games_count == 0")
 				_scan_for_downloaded_games()
 			else:
-				print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
+				if DEBUG_LOG: print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
 		else:
 			_update_status("Showing 0-0 of %d games" % _total_games)
 		_is_loading = false
-		print("[HomeView] _load_total_count total elapsed_us=", Time.get_ticks_usec() - load_start_us)
+		if DEBUG_LOG: print("[HomeView] _load_total_count total elapsed_us=", Time.get_ticks_usec() - load_start_us)
 		if on_complete.is_valid():
 			on_complete.call()
 		return
@@ -250,23 +250,23 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			# Only log when the count actually changes to avoid startup noise.
 			if _total_games != _last_logged_total_games:
 				_last_logged_total_games = _total_games
-				print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+				if DEBUG_LOG: print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
 
 			if _db_games_count == 0:
 				_update_status("No downloaded games found")
 				# Trigger scan if no DB games found (may have been wiped from DB but files exist)
 				if trigger_scan_if_empty:
-					print("[DEBUG] Triggering scan because _db_games_count == 0")
+					if DEBUG_LOG: print("[DEBUG] Triggering scan because _db_games_count == 0")
 					_scan_for_downloaded_games()
 				else:
-					print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
+					if DEBUG_LOG: print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
 			else:
 				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
 			if on_complete.is_valid():
 				on_complete.call()
 	)
-	print("[HomeView] _load_total_count async queued elapsed_us=", Time.get_ticks_usec() - load_start_us)
+	if DEBUG_LOG: print("[HomeView] _load_total_count async queued elapsed_us=", Time.get_ticks_usec() - load_start_us)
 
 func _load_gamenative_games() -> void:
 	"""Load and cache GameNative games for proper merging."""
@@ -305,9 +305,9 @@ func _prefetch_first_page() -> void:
 				_merged_cache_start = fetch_offset
 				_merged_cache_end = fetch_offset + _merged_games_cache.size()
 				_merged_cache_dirty = false
-				print("[HomeView] prefetch first page: fetch_offset=", fetch_offset, " fetch_limit=", fetch_limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us)
+				if DEBUG_LOG: print("[HomeView] prefetch first page: fetch_offset=", fetch_offset, " fetch_limit=", fetch_limit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us)
 			else:
-				print("[HomeView] prefetch first page: cache already warm")
+				if DEBUG_LOG: print("[HomeView] prefetch first page: cache already warm")
 			return null,
 		func(_result):
 			pass
@@ -316,14 +316,14 @@ func _prefetch_first_page() -> void:
 func _scan_for_downloaded_games():
 	"""Trigger scan to detect downloaded games in filesystem."""
 	if _is_scanning:
-		print("[DEBUG] _scan_for_downloaded_games skipped - scan already in progress")
+		if DEBUG_LOG: print("[DEBUG] _scan_for_downloaded_games skipped - scan already in progress")
 		return
 	_is_scanning = true
-	print("[DEBUG] _scan_for_downloaded_games called")
+	if DEBUG_LOG: print("[DEBUG] _scan_for_downloaded_games called")
 	_update_status("Scanning for downloaded games...")
 	DataManager.scan_for_downloaded_games(func(found_count: int):
 		_is_scanning = false
-		print("[DEBUG] Scan callback called with found_count: %d" % found_count)
+		if DEBUG_LOG: print("[DEBUG] Scan callback called with found_count: %d" % found_count)
 		if found_count > 0:
 			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
 			_load_total_count(false, false)
@@ -333,7 +333,7 @@ func _scan_for_downloaded_games():
 
 func _on_scan_completed(found_count: int):
 	"""Called when scan for downloaded games completes."""
-	print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
+	if DEBUG_LOG: print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		SystemManager.notifications.show_notification("Found %d downloaded games" % found_count, SystemManager.notifications.Type.SUCCESS)
 		_merged_games_cache.clear()
@@ -539,13 +539,13 @@ func _on_update_session_finished(_succeeded: Array, _failed: Array):
 	_load_total_count(false, false)
 
 func _on_database_ready():
-	print("[DEBUG] _on_database_ready called")
+	if DEBUG_LOG: print("[DEBUG] _on_database_ready called")
 	# One-shot: the manual is_database_ready() path in _ready() and the signal
 	# can BOTH fire when the signal is emitted after this view connects (e.g.
 	# delayed by startup cache warm-up). A second _load_total_count would force
 	# a redundant buffer refresh on the settled grid.
 	if _database_ready_handled:
-		print("[DEBUG] _on_database_ready already handled, skipping duplicate")
+		if DEBUG_LOG: print("[DEBUG] _on_database_ready already handled, skipping duplicate")
 		return
 	_database_ready_handled = true
 	_load_total_count()

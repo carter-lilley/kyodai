@@ -151,7 +151,7 @@ func _initialize_linux_window_backend() -> void:
 		_qdbus_cmd = _find_qdbus()
 		if _qdbus_cmd != "":
 			_window_backend = WindowBackend.LINUX_KWIN
-			print("[ShufflerSubManager] Linux window backend: KDE KWin scripting (" + _qdbus_cmd + ")")
+			if DEBUG_LOG: print("[ShufflerSubManager] Linux window backend: KDE KWin scripting (" + _qdbus_cmd + ")")
 			return
 		else:
 			push_warning("[ShufflerSubManager] KDE session detected but qdbus/qdbus6 not found; falling back to X11")
@@ -161,7 +161,7 @@ func _initialize_linux_window_backend() -> void:
 		_x11_windowctl_path = _resolve_x11_windowctl_path()
 		if _x11_windowctl_path != "" and FileAccess.file_exists(_x11_windowctl_path):
 			_window_backend = WindowBackend.LINUX_X11
-			print("[ShufflerSubManager] Linux window backend: X11 helper (" + _x11_windowctl_path + ")")
+			if DEBUG_LOG: print("[ShufflerSubManager] Linux window backend: X11 helper (" + _x11_windowctl_path + ")")
 			return
 
 	_window_backend = WindowBackend.NONE
@@ -202,7 +202,7 @@ func _start_session_log_capture() -> void:
 			file.close()
 
 	_session_log_start_offset = offset
-	print("[ShufflerSubManager] Session log capture started at offset " + str(offset))
+	if DEBUG_LOG: print("[ShufflerSubManager] Session log capture started at offset " + str(offset))
 
 func _finalize_session_log() -> void:
 	if _session_log_start_offset < 0:
@@ -240,7 +240,7 @@ func _finalize_session_log() -> void:
 
 	out.store_buffer(chunk)
 	out.close()
-	print("[ShufflerSubManager] Session log saved: " + output_path)
+	if DEBUG_LOG: print("[ShufflerSubManager] Session log saved: " + output_path)
 
 # ============================================================================
 # PUBLIC API
@@ -345,10 +345,10 @@ func start_session(config: Dictionary) -> void:
 func stop_session() -> void:
 	if _state == State.IDLE or _state == State.STOPPING:
 		if _starting:
-			print("[ShufflerSubManager] stop_session: session start still in flight; cancelling it")
+			if DEBUG_LOG: print("[ShufflerSubManager] stop_session: session start still in flight; cancelling it")
 			_start_cancelled = true
 		else:
-			print("[ShufflerSubManager] stop_session called but state=" + str(_state) + ", ignoring")
+			if DEBUG_LOG: print("[ShufflerSubManager] stop_session called but state=" + str(_state) + ", ignoring")
 		return
 
 	print("[ShufflerSubManager] stop_session: state=" + str(_state) + " " + _format_bag())
@@ -397,7 +397,7 @@ func stop_session() -> void:
 			elapsed += 0.2
 			if elapsed >= deadline:
 				push_warning("[ShufflerSubManager] Processes still alive after kill timeout: " + str(alive))
-		print("[ShufflerSubManager] stop_session: process teardown took " + str(elapsed) + "s")
+		if DEBUG_LOG: print("[ShufflerSubManager] stop_session: process teardown took " + str(elapsed) + "s")
 
 	_restore_emulator_file_if_backed_up("retroarch", _retroarch_shuffler_cfg_path())
 	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
@@ -481,7 +481,7 @@ func resume_session() -> void:
 
 func skip_game() -> void:
 	if not can_skip():
-		print("[ShufflerSubManager] skip_game ignored: state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] skip_game ignored: state=" + str(_state))
 		return
 	print("[ShufflerSubManager] skip_game: current=" + str(_current_game_index) + " " + _format_bag())
 	_kill_round_timer()
@@ -489,14 +489,14 @@ func skip_game() -> void:
 
 func restart_game() -> void:
 	if not can_restart():
-		print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] restart_game ignored: state=" + str(_state))
 		return
 	if _restart_in_progress:
 		# Input layers can deliver several requests per physical press
 		# (double-registered pads, raw + mapped action events). A restart is
 		# already tearing down and relaunching the game; a second one queued
 		# on top would just kill the fresh instance and loop forever.
-		print("[ShufflerSubManager] restart_game ignored: restart already in progress")
+		if DEBUG_LOG: print("[ShufflerSubManager] restart_game ignored: restart already in progress")
 		return
 	_restart_in_progress = true
 	print("[ShufflerSubManager] restart_game: current=" + str(_current_game_index))
@@ -507,7 +507,7 @@ func restart_game() -> void:
 	# stop_session may have run while we waited; never touch the bag during
 	# or after teardown.
 	if not can_restart() or _current_game_index < 0 or _current_game_index >= _bag.size():
-		print("[ShufflerSubManager] restart_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
+		if DEBUG_LOG: print("[ShufflerSubManager] restart_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
 		_restart_in_progress = false
 		return
 	_switch_in_progress = true
@@ -542,13 +542,13 @@ func restart_game() -> void:
 
 func remove_game() -> void:
 	if not can_reroll():
-		print("[ShufflerSubManager] remove_game ignored: state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] remove_game ignored: state=" + str(_state))
 		return
 	if _current_game_index < 0:
-		print("[ShufflerSubManager] remove_game ignored: no current game")
+		if DEBUG_LOG: print("[ShufflerSubManager] remove_game ignored: no current game")
 		return
 	if _reroll_in_progress:
-		print("[ShufflerSubManager] remove_game ignored: reroll in progress")
+		if DEBUG_LOG: print("[ShufflerSubManager] remove_game ignored: reroll in progress")
 		return
 
 	_reroll_in_progress = true
@@ -561,7 +561,7 @@ func remove_game() -> void:
 	# stop_session may have run while we waited; never touch the bag during
 	# or after teardown.
 	if not can_reroll() or _current_game_index < 0 or _current_game_index >= _bag.size():
-		print("[ShufflerSubManager] remove_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
+		if DEBUG_LOG: print("[ShufflerSubManager] remove_game aborted after wait: state=" + str(_state) + " current=" + str(_current_game_index))
 		_reset_reroll_state()
 		return
 
@@ -674,7 +674,7 @@ func _start_bag_preparation() -> void:
 	print("[ShufflerSubManager] _start_bag_preparation: " + _format_bag())
 
 	for i in range(_bag.entries.size()):
-		print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(_bag.entries[i]))
+		if DEBUG_LOG: print("[ShufflerSubManager] _start_bag_preparation entry " + str(i) + ": " + _format_entry(_bag.entries[i]))
 		_start_entry_acquisition(i)
 
 ## Starts acquiring one bag entry (local path, disc downloads, or full download).
@@ -712,7 +712,7 @@ func _start_entry_acquisition(index: int) -> void:
 				# The pick-3 screen can drop entries (renumbering slots) while
 				# this disc set downloads; only write back if we still have a slot.
 				if _live_index(entry) == -1:
-					print("[ShufflerSubManager] Disc-set slot for " + game.title + " left the bag; discarding temp m3u")
+					if DEBUG_LOG: print("[ShufflerSubManager] Disc-set slot for " + game.title + " left the bag; discarding temp m3u")
 					_maybe_complete_reroll(entry)
 					_check_all_preparations_complete()
 					return
@@ -806,7 +806,7 @@ func _try_replace_with_candidate(entry: Dictionary) -> bool:
 func _fail_entry(entry: Dictionary, reason: String) -> void:
 	var index := _live_index(entry)
 	if index == -1:
-		print("[ShufflerSubManager] _fail_entry: entry left the bag, skipping: " + reason)
+		if DEBUG_LOG: print("[ShufflerSubManager] _fail_entry: entry left the bag, skipping: " + reason)
 		_maybe_complete_reroll(entry)
 		return
 	_bag.entries[index].status = ShufflerBag.EntryStatus.FAILED
@@ -824,7 +824,7 @@ func _maybe_complete_reroll(entry: Dictionary) -> void:
 		return
 	var live := _live_index(entry)
 	if live == -1:
-		print("[ShufflerSubManager] Reroll refill entry left the bag; resetting reroll state")
+		if DEBUG_LOG: print("[ShufflerSubManager] Reroll refill entry left the bag; resetting reroll state")
 		_reset_reroll_state()
 		return
 	_reroll_slot_index = live
@@ -927,7 +927,7 @@ func _download_entry(entry: Dictionary) -> void:
 			download_progress.emit(completed, _total_downloads)
 			_pending_downloads -= 1
 			if DEBUG_LOG:
-				print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
+				if DEBUG_LOG: print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
 			# Resolved through the entry, never through a captured slot number:
 			# pick-3 rejections can remove entries (renumbering slots) while
 			# this download is in flight, which is exactly when the old
@@ -988,7 +988,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 	# downloads are still in flight).
 	var index := _live_index(entry)
 	if index == -1:
-		print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " is no longer in the bag; skipping")
+		if DEBUG_LOG: print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " is no longer in the bag; skipping")
 		_maybe_complete_reroll(entry)
 		_check_all_preparations_complete()
 		return
@@ -998,7 +998,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 	var game = entry.game
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
 	if DEBUG_LOG:
-		print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
+		if DEBUG_LOG: print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
 
 	# Only emulators whose launch can require prep (archive extraction /
 	# title-id-based launch paths) go through preparation. Xenia-family
@@ -1009,7 +1009,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
 		if DEBUG_LOG:
-			print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
+			if DEBUG_LOG: print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
 		game_ready.emit(index)
 		_maybe_complete_reroll(entry)
 		return
@@ -1026,7 +1026,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 	# slots while it runs. Re-resolve before touching bag bookkeeping.
 	index = _live_index(entry)
 	if index == -1:
-		print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " left the bag during prep; discarding result")
+		if DEBUG_LOG: print("[ShufflerSubManager] _prepare_entry: " + _format_entry(entry) + " left the bag during prep; discarding result")
 		_pending_preparations -= 1
 		_maybe_complete_reroll(entry)
 		_check_all_preparations_complete()
@@ -1038,7 +1038,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
 		if DEBUG_LOG:
-			print("[ShufflerSubManager] Ready after prep: " + game.title)
+			if DEBUG_LOG: print("[ShufflerSubManager] Ready after prep: " + game.title)
 		game_ready.emit(index)
 		_maybe_complete_reroll(entry)
 	else:
@@ -1048,7 +1048,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 			_fail_entry(entry, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 
 	if DEBUG_LOG:
-		print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
+		if DEBUG_LOG: print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
 	_check_all_preparations_complete()
 
 func _check_all_preparations_complete() -> void:
@@ -1070,7 +1070,7 @@ func _await_first_ready() -> void:
 		stop_session()
 		return
 	var cb = func(index: int):
-		print("[ShufflerSubManager] game_ready signal received for index " + str(index) + " while state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] game_ready signal received for index " + str(index) + " while state=" + str(_state))
 		if _state == State.DOWNLOADING:
 			_enter_shuffler_mode()
 	game_ready.connect(cb, CONNECT_ONE_SHOT)
@@ -1082,7 +1082,7 @@ func _random_round_time() -> float:
 	)
 
 func _reset_reroll_state() -> void:
-	print("[ShufflerSubManager] _reset_reroll_state")
+	if DEBUG_LOG: print("[ShufflerSubManager] _reset_reroll_state")
 	_reroll_in_progress = false
 	_reroll_entry = {}
 	_reroll_slot_index = -1
@@ -1155,7 +1155,7 @@ func _hide_main_window() -> void:
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 	await get_tree().create_timer(0.5).timeout
 	if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_MINIMIZED:
-		print("[ShufflerSubManager] main window minimize did not stick; retrying")
+		if DEBUG_LOG: print("[ShufflerSubManager] main window minimize did not stick; retrying")
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 
 func _apply_emulator_configs() -> void:
@@ -1167,7 +1167,7 @@ func _apply_emulator_configs() -> void:
 			needs_retroarch = true
 		elif emulator_id == "pcsx2":
 			needs_pcsx2 = true
-	print("[ShufflerSubManager] _apply_emulator_configs: needs_retroarch=" + str(needs_retroarch) + " needs_pcsx2=" + str(needs_pcsx2))
+	if DEBUG_LOG: print("[ShufflerSubManager] _apply_emulator_configs: needs_retroarch=" + str(needs_retroarch) + " needs_pcsx2=" + str(needs_pcsx2))
 	if needs_retroarch:
 		_ensure_retroarch_shuffler_config()
 	if needs_pcsx2:
@@ -1182,7 +1182,7 @@ func _switch_to_next_game() -> void:
 	print("[ShufflerSubManager] _switch_to_next_game ready indices excluding current=" + str(ready_indices))
 	var next_index = _bag.pick_random_ready(_current_game_index)
 	if next_index == -1:
-		print("[ShufflerSubManager] No other ready game; extending current round")
+		if DEBUG_LOG: print("[ShufflerSubManager] No other ready game; extending current round")
 		_start_round_timer(_random_round_time())
 		return
 	# A real shuffle is about to happen: arm the choice debit, which lands in
@@ -1331,17 +1331,17 @@ func _request_switch(index: int) -> void:
 func _switch_to_game(index: int) -> void:
 	print("[ShufflerSubManager] _switch_to_game: index=" + str(index) + " current=" + str(_current_game_index) + " state=" + str(_state) + " " + _format_bag())
 	if index < 0 or index >= _bag.size():
-		print("[ShufflerSubManager] _switch_to_game: invalid index " + str(index))
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: invalid index " + str(index))
 		return
 	if _current_game_index >= 0 and _current_game_index < _bag.size():
 		var prev = _bag.entries[_current_game_index]
 		prev.active = false
-		print("[ShufflerSubManager] _switch_to_game stopping previous: " + _format_entry(prev))
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game stopping previous: " + _format_entry(prev))
 		await _stop_game(prev)
 
 	# stop_session may have raced the stop await: never launch during teardown
 	if _state == State.STOPPING or _state == State.IDLE:
-		print("[ShufflerSubManager] _switch_to_game aborted: state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game aborted: state=" + str(_state))
 		return
 
 	_current_game_index = index
@@ -1353,19 +1353,19 @@ func _switch_to_game(index: int) -> void:
 		_show_intro(entry.game)
 
 	var method := entry.suspend_method as String
-	print("[ShufflerSubManager] _switch_to_game: target=" + _format_entry(entry) + " method=" + method)
+	if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: target=" + _format_entry(entry) + " method=" + method)
 	await _await_launch_settled(entry)
 	if method == "suspend" and entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
-		print("[ShufflerSubManager] _switch_to_game: resuming existing process")
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: resuming existing process")
 		await _resume_game(entry)
 	elif entry.started and entry.pid != -1 and await _is_process_running_async(entry.pid):
-		print("[ShufflerSubManager] _switch_to_game: killing lingering process and relaunching")
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: killing lingering process and relaunching")
 		LaunchManager.process.kill_process_async(entry.pid)
 		entry.started = false
 		entry.pid = -1
 		_launch_game(entry)
 	else:
-		print("[ShufflerSubManager] _switch_to_game: launching fresh")
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: launching fresh")
 		entry.started = false
 		entry.pid = -1
 		_launch_game(entry)
@@ -1382,7 +1382,7 @@ func _switch_to_game(index: int) -> void:
 		print("[ShufflerSubManager] _switch_to_game: starting round timer " + str(round_time) + "s")
 		_start_round_timer(round_time)
 	else:
-		print("[ShufflerSubManager] _switch_to_game: not starting timer because state=" + str(_state))
+		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: not starting timer because state=" + str(_state))
 
 	var game = entry.game
 	game_switched.emit(game.title, game.platform_slug)
@@ -1440,7 +1440,7 @@ func _launch_game(entry: Dictionary) -> void:
 	entry.launch_pending = true
 	var on_pid_ready = func(pid: int):
 		entry.launch_pending = false
-		print("[ShufflerSubManager] on_pid_ready for " + game.title + ": pid=" + str(pid))
+		if DEBUG_LOG: print("[ShufflerSubManager] on_pid_ready for " + game.title + ": pid=" + str(pid))
 		if pid != -1:
 			# Prerequisites (downloads, prep) can delay this callback past a
 			# switch or stop; a process that arrives late must not take focus
@@ -1483,7 +1483,7 @@ func _launch_game(entry: Dictionary) -> void:
 							"title_id": title_id,
 							"ux0_app_path": ux0_app_path
 						})
-						print("[ShufflerSubManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
+						if DEBUG_LOG: print("[ShufflerSubManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
 			else:
 				push_warning("[ShufflerSubManager] Vita3K game launched but no TitleID was extracted: " + game.title)
 
@@ -1709,7 +1709,7 @@ func _hide_window_awaited(pid: int, exe_name: String) -> void:
 		await get_tree().create_timer(0.05).timeout
 		elapsed = (Time.get_ticks_msec() - hide_start) / 1000.0
 	if done.complete:
-		print("[ShufflerSubManager] _hide_window_awaited: pid " + str(pid) + " hidden in " + str(Time.get_ticks_msec() - hide_start) + "ms (exit_code=" + str(done.exit_code) + ")")
+		if DEBUG_LOG: print("[ShufflerSubManager] _hide_window_awaited: pid " + str(pid) + " hidden in " + str(Time.get_ticks_msec() - hide_start) + "ms (exit_code=" + str(done.exit_code) + ")")
 	else:
 		push_warning("[ShufflerSubManager] _hide_window_awaited: timed out waiting for window backend (pid " + str(pid) + "); suspending anyway")
 
@@ -1721,20 +1721,20 @@ func _is_current_game_pid(pid: int) -> bool:
 	return _bag.entries[_current_game_index].pid == pid
 
 func _maximize_with_retry(pid: int) -> void:
-	print("[ShufflerSubManager] _maximize_with_retry START pid=" + str(pid))
+	if DEBUG_LOG: print("[ShufflerSubManager] _maximize_with_retry START pid=" + str(pid))
 	var token := _maximize_token
 	var maximized := false
 	for i in range(3):
 		if token != _maximize_token or not _is_current_game_pid(pid):
-			print("[ShufflerSubManager] _maximize_with_retry aborted: pid " + str(pid) + " is no longer the foreground game")
+			if DEBUG_LOG: print("[ShufflerSubManager] _maximize_with_retry aborted: pid " + str(pid) + " is no longer the foreground game")
 			return
-		print("[ShufflerSubManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
+		if DEBUG_LOG: print("[ShufflerSubManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
 		if await _maximize_window_async(pid, token):
-			print("[ShufflerSubManager] pid " + str(pid) + " maximized successfully")
+			if DEBUG_LOG: print("[ShufflerSubManager] pid " + str(pid) + " maximized successfully")
 			maximized = true
 			break
 		await get_tree().create_timer(0.5).timeout
-	print("[ShufflerSubManager] _maximize_with_retry END pid=" + str(pid) + " maximized=" + str(maximized))
+	if DEBUG_LOG: print("[ShufflerSubManager] _maximize_with_retry END pid=" + str(pid) + " maximized=" + str(maximized))
 	if token != _maximize_token or not _is_current_game_pid(pid):
 		return
 	if not maximized:
@@ -1750,7 +1750,7 @@ func _delayed_remaximize(pid: int, token: int) -> void:
 	await get_tree().create_timer(4.0).timeout
 	if token != _maximize_token or not _is_current_game_pid(pid):
 		return
-	print("[ShufflerSubManager] _delayed_remaximize: re-maximizing pid " + str(pid))
+	if DEBUG_LOG: print("[ShufflerSubManager] _delayed_remaximize: re-maximizing pid " + str(pid))
 	await _maximize_window_async(pid, token)
 	_ensure_controls_on_top()
 
@@ -1761,26 +1761,26 @@ func _maximize_window_async(pid: int, token: int = -1) -> bool:
 		WindowBackend.WINDOWS_AHK:
 			var ahk_script = _tools_dir + "maximize_process.ahk"
 			if not FileAccess.file_exists(ahk_script) or not FileAccess.file_exists(_ahk_path):
-				print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
+				if DEBUG_LOG: print("[ShufflerSubManager] _maximize_window_async missing tool: ahk_script=" + str(FileAccess.file_exists(ahk_script)) + " ahk_path=" + str(FileAccess.file_exists(_ahk_path)))
 				return false
 			MemorySubManager.queue_os_execute(_ahk_path, [ahk_script, str(pid)], func(result: Dictionary):
 				os_state["completed"] = true
 				os_state["success"] = (result.get("exit_code", -1) == 0)
 				var output: Array = result.get("output", [])
 				os_state["output_text"] = "".join(output)
-				print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + os_state["output_text"].strip_edges() + "\"")
+				if DEBUG_LOG: print("[ShufflerSubManager] maximize_process.ahk result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)) + " output=\"" + os_state["output_text"].strip_edges() + "\"")
 			)
 		WindowBackend.LINUX_KWIN:
 			_kwin_raise_async(pid, func(result: Dictionary):
 				os_state["completed"] = true
 				os_state["success"] = (result.get("exit_code", -1) == 0)
-				print("[ShufflerSubManager] kwin raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
+				if DEBUG_LOG: print("[ShufflerSubManager] kwin raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
 			)
 		WindowBackend.LINUX_X11:
 			_x11_raise_async(pid, func(result: Dictionary):
 				os_state["completed"] = true
 				os_state["success"] = (result.get("exit_code", -1) == 0)
-				print("[ShufflerSubManager] x11 raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
+				if DEBUG_LOG: print("[ShufflerSubManager] x11 raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
 			)
 		_:
 			return false
@@ -1950,9 +1950,9 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 # ============================================================================
 
 func _create_controls_window() -> void:
-	print("[ShufflerSubManager] _create_controls_window")
+	if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window")
 	if _controls_window and is_instance_valid(_controls_window):
-		print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
+		if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
 		_controls_window.queue_free()
 		_controls_window = null
 
@@ -2012,7 +2012,7 @@ func _ensure_pcsx2_shuffler_config() -> void:
 		var portable_path := FSM.join_paths(emu_dir, "portable.txt")
 		if not FSM.file_exists(portable_path):
 			FSM.write_file(portable_path, "")
-			print("[ShufflerSubManager] Created portable.txt to force PCSX2 portable mode")
+			if DEBUG_LOG: print("[ShufflerSubManager] Created portable.txt to force PCSX2 portable mode")
 
 	var edits: Array[Dictionary] = []
 	for key in PCSX2_MEMORY_CARD_KEYS:
@@ -2029,15 +2029,15 @@ func _ensure_pcsx2_shuffler_config() -> void:
 	var cfg_path := FSM.resolve_emulator_path(PCSX2_SHUFFLER_INI_PATH, "pcsx2")
 	if cfg_path == "":
 		return
-	print("[ShufflerSubManager] PCSX2 shuffler config path: " + cfg_path)
+	if DEBUG_LOG: print("[ShufflerSubManager] PCSX2 shuffler config path: " + cfg_path)
 	var content := FSM.read_file(cfg_path)
 	var section_regex := RegEx.new()
 	section_regex.compile(r"(?s)\[MemoryCards\].*?(?=\n\[|\Z)")
 	var section_match := section_regex.search(content)
 	if section_match:
-		print("[ShufflerSubManager] PCSX2 [MemoryCards] section:\n" + section_match.get_string().strip_edges())
+		if DEBUG_LOG: print("[ShufflerSubManager] PCSX2 [MemoryCards] section:\n" + section_match.get_string().strip_edges())
 	else:
-		print("[ShufflerSubManager] PCSX2 [MemoryCards] section not found")
+		if DEBUG_LOG: print("[ShufflerSubManager] PCSX2 [MemoryCards] section not found")
 
 func _cleanup_vita3k_shuffler_apps() -> void:
 	for entry in _shuffler_vita_apps:
@@ -2066,4 +2066,4 @@ func _restore_emulator_file_if_backed_up(emulator_id: String, file_path: String)
 	if LaunchManager.has_emulator_file_backup(emulator_id, file_path):
 		LaunchManager.restore_emulator_file(emulator_id, file_path)
 	else:
-		print("[ShufflerSubManager] Skipping restore for " + emulator_id + " " + file_path + " (no backup)")
+		if DEBUG_LOG: print("[ShufflerSubManager] Skipping restore for " + emulator_id + " " + file_path + " (no backup)")

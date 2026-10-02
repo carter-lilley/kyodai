@@ -86,31 +86,6 @@ jobs:
         name: sigil-linux-x64
         path: bin/sigil/linux/sigil
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Build
-      working-directory: bin/src/argosy-sigil
-      run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -DSIGIL_BUILD_CLI=ON -DSIGIL_BUILD_TESTS=OFF
-        cmake --build build --parallel
-
-    - name: Copy Binary
-      run: |
-        mkdir -p bin/sigil/macos
-        cp bin/src/argosy-sigil/build/sigil bin/sigil/macos/
-        chmod +x bin/sigil/macos/sigil
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: sigil-macos
-        path: bin/sigil/macos/sigil
-
   build-android:
     runs-on: ubuntu-latest
     steps:
@@ -161,7 +136,7 @@ jobs:
         path: bin/sigil/android/*
 
   commit-binaries:
-    needs: [build-windows, build-linux, build-macos, build-android]
+    needs: [build-windows, build-linux, build-android]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
@@ -176,18 +151,15 @@ jobs:
       run: |
         mkdir -p bin/sigil/win
         mkdir -p bin/sigil/linux
-        mkdir -p bin/sigil/macos
         mkdir -p bin/sigil/android
 
         cp artifacts/sigil-windows/sigil.exe bin/sigil/win/ || true
         cp artifacts/sigil-windows/sigil-arm64.exe bin/sigil/win/ || true
         cp artifacts/sigil-linux-x64/sigil bin/sigil/linux/ || true
-        cp artifacts/sigil-macos/sigil bin/sigil/macos/ || true
         cp artifacts/sigil-android/sigil-arm64.bin bin/sigil/android/ || true
         cp artifacts/sigil-android/sigil-armv7.bin bin/sigil/android/ || true
 
         chmod +x bin/sigil/linux/sigil || true
-        chmod +x bin/sigil/macos/sigil || true
         chmod +x bin/sigil/android/* || true
 
     - name: Commit and push

@@ -4,7 +4,6 @@ class_name PlatformSubManager
 enum Platform {
 	WINDOWS,
 	LINUX,
-	MACOS,
 	ANDROID,
 	UNKNOWN
 }
@@ -88,8 +87,6 @@ func _detect_platform():
 			current_platform = Platform.WINDOWS
 		"Linux", "FreeBSD", "NetBSD", "OpenBSD", "BSD":
 			current_platform = Platform.LINUX
-		"macOS":
-			current_platform = Platform.MACOS
 		"Android":
 			current_platform = Platform.ANDROID
 		_:
@@ -100,9 +97,6 @@ func is_windows() -> bool:
 
 func is_linux() -> bool:
 	return current_platform == Platform.LINUX
-
-func is_macos() -> bool:
-	return current_platform == Platform.MACOS
 
 func is_android() -> bool:
 	return current_platform == Platform.ANDROID
@@ -118,8 +112,6 @@ func get_platform_name() -> String:
 			return "Windows"
 		Platform.LINUX:
 			return "Linux"
-		Platform.MACOS:
-			return "macOS"
 		Platform.ANDROID:
 			return "Android"
 		_:
@@ -131,8 +123,6 @@ func get_settings_key_for_emulator() -> String:
 			return "emulator_path_windows"
 		Platform.LINUX:
 			return "emulator_path_linux"
-		Platform.MACOS:
-			return "emulator_path_macos"
 		Platform.ANDROID:
 			return "emulator_path_android"
 		_:

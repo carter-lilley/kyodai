@@ -3,6 +3,8 @@ class_name GameSaveSubManager
 
 ## Manages save file discovery and syncing with RomM server
 
+const DEBUG_LOG: bool = false
+
 signal save_sync_completed(game: GameResource, success: bool, message: String)
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
@@ -315,7 +317,7 @@ func _cleanup_temp_dir(file_path: String) -> void:
 					has_files = true
 					break
 			if not has_files:
-				print("[GameSaveSubManager] Removing empty temp directory: " + parent)
+				if DEBUG_LOG: print("[GameSaveSubManager] Removing empty temp directory: " + parent)
 				FSM.delete_dir_recursive(parent)
 				parent = parent.get_base_dir()
 			else:
@@ -1059,14 +1061,14 @@ func _eden_active_profile(save_root: String) -> Dictionary:
 			if profile_id != "" and FSM.dir_exists(profile_path):
 				result = {"profile_path": profile_path, "profile_id": profile_id, "source": "profiles.dat"}
 			else:
-				print("[GameSaveSubManager] _eden_active_profile: parsed profile missing on disk: " + profile_path)
+				if DEBUG_LOG: print("[GameSaveSubManager] _eden_active_profile: parsed profile missing on disk: " + profile_path)
 		else:
-			print("[GameSaveSubManager] _eden_active_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
+			if DEBUG_LOG: print("[GameSaveSubManager] _eden_active_profile: profiles.dat too small (" + str(data.size()) + " bytes)")
 
 	if result.is_empty():
 		result = _eden_scan_active_profile(root)
 
-	print("[GameSaveSubManager] _eden_active_profile: " + result.profile_path + " (source=" + result.source + ")")
+	if DEBUG_LOG: print("[GameSaveSubManager] _eden_active_profile: " + result.profile_path + " (source=" + result.source + ")")
 	return result
 
 ## Fallback when profiles.dat is absent/stale: newest-mtime non-zero profile
@@ -1148,11 +1150,11 @@ func _eden_save_target(save_root: String, title_id: String) -> String:
 func discover_local_eden_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "" or title_id.length() != 16:
-		print("[GameSaveSubManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 
 	if not FSM.dir_exists(directory):
-		print("[GameSaveSubManager] discover_local_eden_save: dir does not exist: " + directory)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: dir does not exist: " + directory)
 		return results
 
 	var candidates: Array[String] = []
@@ -1163,7 +1165,7 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 		candidates.append(FSM.join_paths(profile.profile_path, title_id.to_upper()))
 
 	for candidate in candidates:
-		print("[GameSaveSubManager] discover_local_eden_save: checking " + candidate)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: checking " + candidate)
 		if FSM.dir_exists(candidate):
 			results.append({
 				"file_name": title_id + ".zip",
@@ -1175,7 +1177,7 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 
 	var scanned := _eden_find_title_in_profiles(directory, title_id)
 	if scanned != "":
-		print("[GameSaveSubManager] discover_local_eden_save: found via profile scan: " + scanned)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: found via profile scan: " + scanned)
 		results.append({
 			"file_name": title_id + ".zip",
 			"file_path": scanned,
@@ -1186,7 +1188,7 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 
 	if not _eden_is_device_save(title_id):
 		var zero_path := FSM.join_paths(directory, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE, title_id.to_upper())
-		print("[GameSaveSubManager] discover_local_eden_save: checking fallback " + zero_path)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: checking fallback " + zero_path)
 		if FSM.dir_exists(zero_path):
 			results.append({
 				"file_name": title_id + ".zip",
@@ -1196,7 +1198,7 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 			})
 			return results
 
-	print("[GameSaveSubManager] discover_local_eden_save: no save found")
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: no save found")
 	return results
 
 ## Generalized fuzzy folder save discovery
@@ -1266,16 +1268,16 @@ func discover_local_fuzzy_folder_save(directory: String, search_id: String, recu
 
 func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dictionary]:
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_pcsx2_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return []
 	
-	print("[GameSaveSubManager] discover_local_pcsx2_save: searching for serial " + title_id + " in " + directory)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_pcsx2_save: searching for serial " + title_id + " in " + directory)
 	var results = discover_local_fuzzy_folder_save(directory, title_id, true, false)
 	
 	if results.is_empty():
-		print("[GameSaveSubManager] discover_local_pcsx2_save: no saves found for serial " + title_id)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_pcsx2_save: no saves found for serial " + title_id)
 	else:
-		print("[GameSaveSubManager] discover_local_pcsx2_save: returning save at " + results[0].file_path)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_pcsx2_save: returning save at " + results[0].file_path)
 	
 	return results
 
@@ -1284,20 +1286,20 @@ func discover_local_pcsx2_save(directory: String, title_id: String) -> Array[Dic
 ## PSP games can have multiple save folders (e.g., ULUS10509DAT, ULUS10509DLC)
 func discover_local_psp_save(directory: String, title_id: String) -> Array[Dictionary]:
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_psp_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_psp_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return []
 	
 	# PPSSPP save path already includes SAVEDATA in the path
 	# e.g., {emulator_dir}/memstick/PSP/SAVEDATA
 	var savedata_dir = directory.rstrip("/") + "/"
-	print("[GameSaveSubManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_psp_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(savedata_dir):
-		print("[GameSaveSubManager] discover_local_psp_save: SAVEDATA dir doesn't exist yet")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_psp_save: SAVEDATA dir doesn't exist yet")
 		return []
 	
 	var results = discover_local_fuzzy_folder_save(savedata_dir, title_id, false, true)
-	print("[GameSaveSubManager] discover_local_psp_save: found " + str(results.size()) + " matching save folders")
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_psp_save: found " + str(results.size()) + " matching save folders")
 	
 	return results
 
@@ -1306,14 +1308,14 @@ func discover_local_psp_save(directory: String, title_id: String) -> Array[Dicti
 func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_vita3k_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_vita3k_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 	
 	var savedata_dir = directory.rstrip("/") + "/"
-	print("[GameSaveSubManager] discover_local_vita3k_save: searching in " + savedata_dir + " for title_id " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_vita3k_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(savedata_dir):
-		print("[GameSaveSubManager] discover_local_vita3k_save: savedata dir doesn't exist yet")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_vita3k_save: savedata dir doesn't exist yet")
 		return results
 	
 	# Look for exact match folder
@@ -1326,9 +1328,9 @@ func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Di
 			"modified_time": mtime,
 			"extension": ".zip"
 		})
-		print("[GameSaveSubManager] discover_local_vita3k_save: found save at " + save_path)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_vita3k_save: found save at " + save_path)
 	else:
-		print("[GameSaveSubManager] discover_local_vita3k_save: no save found for " + title_id)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_vita3k_save: no save found for " + title_id)
 	
 	return results
 
@@ -1338,23 +1340,23 @@ func discover_local_vita3k_save(directory: String, title_id: String) -> Array[Di
 ## this as folder-prefix, so fuzzy-match on the TitleID like PSP.
 func discover_local_rpcs3_save(directory: String, title_id: String) -> Array[Dictionary]:
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_rpcs3_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_rpcs3_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return []
 	
 	var savedata_dir = directory.rstrip("/") + "/"
-	print("[GameSaveSubManager] discover_local_rpcs3_save: searching in " + savedata_dir + " for title_id " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_rpcs3_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(savedata_dir):
-		print("[GameSaveSubManager] discover_local_rpcs3_save: savedata dir doesn't exist yet")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_rpcs3_save: savedata dir doesn't exist yet")
 		return []
 	
 	var results = discover_local_fuzzy_folder_save(savedata_dir, title_id, false, true)
 	
 	if results.is_empty():
-		print("[GameSaveSubManager] discover_local_rpcs3_save: no save found for " + title_id)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_rpcs3_save: no save found for " + title_id)
 	else:
 		for save in results:
-			print("[GameSaveSubManager] discover_local_rpcs3_save: found save at " + save.file_path)
+			if DEBUG_LOG: print("[GameSaveSubManager] discover_local_rpcs3_save: found save at " + save.file_path)
 	
 	return results
 
@@ -1363,14 +1365,14 @@ func discover_local_rpcs3_save(directory: String, title_id: String) -> Array[Dic
 func discover_local_shadps4_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_shadps4_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_shadps4_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 	
 	var savedata_dir = directory.rstrip("/") + "/"
-	print("[GameSaveSubManager] discover_local_shadps4_save: searching in " + savedata_dir + " for title_id " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_shadps4_save: searching in " + savedata_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(savedata_dir):
-		print("[GameSaveSubManager] discover_local_shadps4_save: savedata dir doesn't exist yet")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_shadps4_save: savedata dir doesn't exist yet")
 		return results
 	
 	# Look for exact match folder
@@ -1383,9 +1385,9 @@ func discover_local_shadps4_save(directory: String, title_id: String) -> Array[D
 			"modified_time": mtime,
 			"extension": ".zip"
 		})
-		print("[GameSaveSubManager] discover_local_shadps4_save: found save at " + save_path)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_shadps4_save: found save at " + save_path)
 	else:
-		print("[GameSaveSubManager] discover_local_shadps4_save: no save found for " + title_id)
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_shadps4_save: no save found for " + title_id)
 	
 	return results
 
@@ -1413,7 +1415,7 @@ func _xenia_logged_profile_xuid(content_dir: String) -> String:
 			continue
 		xuid = str(parsed.sections.get("Profiles", {}).get("logged_profile_slot_0_xuid", "")).strip_edges()
 		if xuid != "":
-			print("[GameSaveSubManager] _xenia_logged_profile_xuid: " + xuid + " from " + config_path)
+			if DEBUG_LOG: print("[GameSaveSubManager] _xenia_logged_profile_xuid: " + xuid + " from " + config_path)
 			break
 	return xuid
 
@@ -1483,7 +1485,7 @@ func _xenia_rehome_to_active_profile(save_dir: String, title_id: String) -> void
 		if not FSM.dir_exists(stale_title):
 			continue
 		if FSM.move(stale_title, active_title):
-			print("[GameSaveSubManager] xenia rehome: moved " + stale_title + " -> " + active_title)
+			if DEBUG_LOG: print("[GameSaveSubManager] xenia rehome: moved " + stale_title + " -> " + active_title)
 		else:
 			push_warning("[GameSaveSubManager] xenia rehome: failed to move " + stale_title)
 		return
@@ -1491,14 +1493,14 @@ func _xenia_rehome_to_active_profile(save_dir: String, title_id: String) -> void
 func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if directory == "" or title_id == "":
-		print("[GameSaveSubManager] discover_local_xenia_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: invalid args (dir=" + directory + ", tid=" + title_id + ")")
 		return results
 	
 	var content_dir = directory.rstrip("/") + "/"
-	print("[GameSaveSubManager] discover_local_xenia_save: searching in " + content_dir + " for title_id " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: searching in " + content_dir + " for title_id " + title_id)
 	
 	if not FSM.dir_exists(content_dir):
-		print("[GameSaveSubManager] discover_local_xenia_save: content dir doesn't exist yet")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: content dir doesn't exist yet")
 		return results
 
 	# The active profile's copy wins when duplicates exist across profiles.
@@ -1511,7 +1513,7 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 			"modified_time": _get_folder_mtime(active_path),
 			"extension": ".zip"
 		})
-		print("[GameSaveSubManager] discover_local_xenia_save: found save at " + active_path + " (active profile)")
+		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: found save at " + active_path + " (active profile)")
 		return results
 
 	# Search recursively through all profile subdirectories
@@ -1534,13 +1536,13 @@ func discover_local_xenia_save(directory: String, title_id: String) -> Array[Dic
 						"modified_time": mtime,
 						"extension": ".zip"
 					})
-					print("[GameSaveSubManager] discover_local_xenia_save: found save at " + full_path)
+					if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: found save at " + full_path)
 					return results
 				else:
 					# Continue searching deeper (profile subdirectories)
 					dirs_to_check.append(full_path)
 	
-	print("[GameSaveSubManager] discover_local_xenia_save: no save found for " + title_id)
+	if DEBUG_LOG: print("[GameSaveSubManager] discover_local_xenia_save: no save found for " + title_id)
 	return results
 
 ## Recursion depth cap for _get_folder_mtime. Real save trees are shallow
@@ -1843,21 +1845,21 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 		# It's an individual save folder, use parent directory
 		savedata_dir = normalized_path.get_base_dir()
 	
-	print("[GameSaveSubManager] _zip_psp_save: normalized_path=" + normalized_path + ", folder_name=" + folder_name + ", savedata_dir=" + savedata_dir)
+	if DEBUG_LOG: print("[GameSaveSubManager] _zip_psp_save: normalized_path=" + normalized_path + ", folder_name=" + folder_name + ", savedata_dir=" + savedata_dir)
 	
 	var saves = discover_local_psp_save(savedata_dir, title_id)
 	
 	if saves.is_empty():
-		print("[GameSaveSubManager] _zip_psp_save: no saves found in " + savedata_dir)
+		if DEBUG_LOG: print("[GameSaveSubManager] _zip_psp_save: no saves found in " + savedata_dir)
 		return false
 	
-	print("[GameSaveSubManager] _zip_psp_save: found " + str(saves.size()) + " save(s) to zip")
+	if DEBUG_LOG: print("[GameSaveSubManager] _zip_psp_save: found " + str(saves.size()) + " save(s) to zip")
 	
 	# Copy all matching save folders to staging directory
 	for save in saves:
 		var save_folder_name = save.file_path.get_file()
 		var dest = FSM.join_paths(stage_dir, save_folder_name)
-		print("[GameSaveSubManager] _zip_psp_save: copying " + save.file_path + " to " + dest)
+		if DEBUG_LOG: print("[GameSaveSubManager] _zip_psp_save: copying " + save.file_path + " to " + dest)
 		var success = FSM.copy_dir(save.file_path, dest)
 		if not success:
 			push_error("[GameSaveSubManager] _zip_psp_save: failed to copy " + save.file_path)
@@ -1865,7 +1867,7 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 			return false
 	
 	# Zip the staging directory
-	print("[GameSaveSubManager] _zip_psp_save: creating zip at " + zip_path)
+	if DEBUG_LOG: print("[GameSaveSubManager] _zip_psp_save: creating zip at " + zip_path)
 	var zip_success = FSM.zip_directory(stage_dir, zip_path, max_file_size)
 	if not zip_success:
 		push_error("[GameSaveSubManager] _zip_psp_save: failed to create zip " + zip_path)
@@ -1910,7 +1912,7 @@ func _complete_3ds_identity(path: String) -> String:
 	var tail := rest.substr(segs[0].length() + 1 + segs[1].length())
 	var completed := base + id0 + "/" + id1 + tail
 	if completed != path:
-		print("[GameSaveSubManager] 3DS identity: " + id0 + "/" + id1 + " for " + base)
+		if DEBUG_LOG: print("[GameSaveSubManager] 3DS identity: " + id0 + "/" + id1 + " for " + base)
 	return completed
 
 ## Picks the single identity dir under parent. "" when none exist or the
@@ -2388,7 +2390,7 @@ func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remo
 		var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, device_id)
 		local["_hash_info"] = verdict.hash_info
 		var action: String = verdict.decision.action
-		print("[GameSaveSubManager] sync: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_rec.get("local_hash", "") if db_rec else ""))
+		if DEBUG_LOG: print("[GameSaveSubManager] sync: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_rec.get("local_hash", "") if db_rec else ""))
 
 		# Slot-wide parity: identical content exists under a different server
 		# file_name - adopt the baseline instead of POSTing a duplicate.
@@ -2800,7 +2802,7 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 		return _discover_game_saves(save_dir, game, extensions)
 	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
 		if local_saves.is_empty():
-			print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
+			if DEBUG_LOG: print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
 			SystemManager.notifications.show_notification("No local saves found for " + game.get_display_name() + " - nothing to upload", SystemManager.notifications.Type.INFO)
 			return
 
@@ -2866,7 +2868,7 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 				var remote = remote_by_name.get(local.file_name)
 				var verdict = _gavel_decide(emulator_id, game, local, remote, db_by_name.get(local.file_name), resolved_device_id)
 				local["_hash_info"] = verdict.hash_info
-				print("[GameSaveSubManager] auto_upload: gavel verdict for '" + local.file_name + "': " + verdict.decision.action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_by_name.get(local.file_name, {}).get("local_hash", "")))
+				if DEBUG_LOG: print("[GameSaveSubManager] auto_upload: gavel verdict for '" + local.file_name + "': " + verdict.decision.action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", "") if remote else "", db_by_name.get(local.file_name, {}).get("local_hash", "")))
 				if verdict.decision.action == "upload":
 					# Slot-wide parity: don't POST a duplicate of identical
 					# content living under a different server file_name
@@ -2998,7 +3000,7 @@ func _schedule_startup_dirty_sweep() -> void:
 		return
 	var dirty: Dictionary = await _check_most_recent_save_dirty()
 	if dirty.is_empty():
-		print("[GameSaveSubManager] Startup sweep: most recent save matches its last sync boundary")
+		if DEBUG_LOG: print("[GameSaveSubManager] Startup sweep: most recent save matches its last sync boundary")
 		return
 	print("[GameSaveSubManager] Startup sweep: unsynced local save for " + dirty.game.get_display_name())
 	var choice = await _show_dirty_sweep_dialog([dirty])
@@ -3018,7 +3020,7 @@ func _check_most_recent_save_dirty() -> Dictionary:
 		ctx = _resolve_sweep_context()
 		if ctx.is_empty():
 			return {}
-	print("[GameSaveSubManager] Startup sweep prologue (main thread) elapsed_us=", Time.get_ticks_usec() - prologue_start_us)
+	if DEBUG_LOG: print("[GameSaveSubManager] Startup sweep prologue (main thread) elapsed_us=", Time.get_ticks_usec() - prologue_start_us)
 	var worker_start_us := Time.get_ticks_usec()
 
 	# One work unit: context (game query, emulator/path resolution), sync-record
@@ -3049,7 +3051,7 @@ func _check_most_recent_save_dirty() -> Dictionary:
 				continue  # no baseline hash to compare against
 			var hash_info := _compute_local_save_hash(c.emulator_id, c.game, save)
 			if hash_info.hash != "" and hash_info.hash != rec.local_hash:
-				print("[GameSaveSubManager] Startup sweep: dirty save '" + save.file_name + "' for " + c.game.get_display_name() + _hash_detail(hash_info.hash, rec.get("server_hash", ""), rec.local_hash))
+				if DEBUG_LOG: print("[GameSaveSubManager] Startup sweep: dirty save '" + save.file_name + "' for " + c.game.get_display_name() + _hash_detail(hash_info.hash, rec.get("server_hash", ""), rec.local_hash))
 				return {"game": c.game, "emulator_id": c.emulator_id}
 		return {}
 	var state := {"done": false, "result": {}}
@@ -3059,7 +3061,7 @@ func _check_most_recent_save_dirty() -> Dictionary:
 	)
 	while not state["done"]:
 		await get_tree().process_frame
-	print("[GameSaveSubManager] Startup sweep worker (resolve+db+discover+hash) elapsed_us=", Time.get_ticks_usec() - worker_start_us)
+	if DEBUG_LOG: print("[GameSaveSubManager] Startup sweep worker (resolve+db+discover+hash) elapsed_us=", Time.get_ticks_usec() - worker_start_us)
 	return state["result"]
 
 ## Gathers everything the sweep needs to check the most recently played game:
@@ -3179,7 +3181,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 	
 	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	var extensions = get_save_extensions(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-	print("[GameSaveSubManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions.size()))
+	if DEBUG_LOG: print("[GameSaveSubManager] auto_download: save_dir=" + save_dir + " extensions=" + str(extensions.size()))
 	if save_dir == "" or extensions.is_empty():
 		print("[GameSaveSubManager] auto_download: ABORT - no save_dir or extensions")
 		if on_complete.is_valid():
@@ -3192,7 +3194,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 	if _save_sync_in_flight.has(sync_key):
 		# Pre-launch must not skip a needed download: wait for the in-flight
 		# sync (e.g. a manual sync started moments ago) to finish, bounded.
-		print("[GameSaveSubManager] auto_download: save sync already in progress, waiting for it to finish")
+		if DEBUG_LOG: print("[GameSaveSubManager] auto_download: save sync already in progress, waiting for it to finish")
 		var wait_ms = 0
 		while _save_sync_in_flight.has(sync_key) and wait_ms < 15000:
 			await get_tree().create_timer(0.1).timeout
@@ -3271,7 +3273,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				await get_tree().process_frame
 			local_saves = scan_state["result"]
 			
-			print("[GameSaveSubManager] auto_download: found " + str(local_saves.size()) + " local saves in " + save_dir)
+			if DEBUG_LOG: print("[GameSaveSubManager] auto_download: found " + str(local_saves.size()) + " local saves in " + save_dir)
 			
 			var local_by_name: Dictionary = {}
 			for save in local_saves:
@@ -3303,7 +3305,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 
 				var verdict = _gavel_decide(emulator_id, game, local, remote, db_rec, resolved_device_id)
 				var action: String = verdict.decision.action
-				print("[GameSaveSubManager] auto_download: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", ""), db_rec.get("local_hash", "") if db_rec else ""))
+				if DEBUG_LOG: print("[GameSaveSubManager] auto_download: gavel verdict for '" + file_name + "': " + action + " (" + verdict.decision.get("reason", "") + ")" + _hash_detail(verdict.hash_info.hash, remote.get("content_hash", ""), db_rec.get("local_hash", "") if db_rec else ""))
 
 				match action:
 					"download":
@@ -3318,7 +3320,7 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 									parity_local = l
 									break
 						if parity_local != null:
-							print("[GameSaveSubManager] auto_download: parity match for '" + file_name + "' - identical content already local as '" + parity_local.file_name + "', adopting baseline (download skipped)")
+							if DEBUG_LOG: print("[GameSaveSubManager] auto_download: parity match for '" + file_name + "' - identical content already local as '" + parity_local.file_name + "', adopting baseline (download skipped)")
 							DataManager.update_save_sync_record(game.romm_id, emulator_id, parity_local.file_name, parity_local.file_path, current_timestamp, save_id, SLOT_DEFAULT, ch, ch, parity_local._hash_info.size)
 						else:
 							state.pending += 1

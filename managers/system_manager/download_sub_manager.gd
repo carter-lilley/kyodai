@@ -233,7 +233,7 @@ func _get_partial_file_path(destination_path: String) -> String:
 
 ## Creates a sparse file of the given size on supported filesystems.
 ## Returns true if the file was created and sized successfully.
-## On Windows this uses fsutil; on Linux/macOS it relies on seek+write holes.
+## On Windows this uses fsutil; on Linux/Android it relies on seek+write holes.
 ## NOTE: spawns fsutil/stat subprocesses — call via _create_sparse_file_async
 ## so they never run on the main thread.
 var _fsutil_unavailable: bool = false
@@ -286,8 +286,8 @@ func _create_sparse_file(path: String, size: int) -> bool:
 			file.store_8(0)
 			file.close()
 	else:
-		# On Linux/macOS/Android, seeking past EOF and writing creates a sparse
-		# hole on filesystems that support it (ext4, btrfs, apfs, etc.).
+		# On Linux/Android, seeking past EOF and writing creates a sparse
+		# hole on filesystems that support it (ext4, btrfs, etc.).
 		file = FileAccess.open(path, FileAccess.WRITE_READ)
 		if file == null:
 			push_error("[SystemManager.download] Failed to open destination file for sizing: " + path)
@@ -304,8 +304,6 @@ func _create_sparse_file(path: String, size: int) -> bool:
 		if not SystemManager.platform.is_windows():
 			var native_path = FSM.resolve_native_path(path)
 			var stat_args = ["-c", "%b %B", native_path]
-			if SystemManager.platform.is_macos():
-				stat_args = ["-f", "%b %B", native_path]
 			var output: Array = []
 			var exit_code = OS.execute("stat", stat_args, output, true)
 			if exit_code == 0 and output.size() > 0:
@@ -395,7 +393,7 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 		if plugin != null:
 			flush_dest_size = int(plugin.call("androidFileSize", chunked_info.final_path))
 		if flush_dest_size < 0:
-			print("[SystemManager.download] Flush-mode resume: destination missing/unreadable, flushed chunks will be re-downloaded")
+			if DEBUG_LOG: print("[SystemManager.download] Flush-mode resume: destination missing/unreadable, flushed chunks will be re-downloaded")
 
 	for chunk_state in chunks_data:
 		if not (chunk_state is Dictionary):
@@ -459,7 +457,7 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 								if expected.is_empty() or disk_hash == expected:
 									verified = true
 								else:
-									print("[SystemManager.download] Resume hash mismatch for chunk " + str(chunk.index) + ", will re-download")
+									if DEBUG_LOG: print("[SystemManager.download] Resume hash mismatch for chunk " + str(chunk.index) + ", will re-download")
 						else:
 							partial_file.close()
 			else:
@@ -796,7 +794,7 @@ func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_si
 	if update_game_resource and FSM.file_exists(destination_path) and not FSM.file_exists(_get_state_file_path(destination_path)):
 		var on_disk_size := FSM.get_file_size(destination_path)
 		if file_size <= 0 or on_disk_size == file_size:
-			print("[SystemManager.download] File already on disk, marking downloaded instead of redownloading: " + destination_path)
+			if DEBUG_LOG: print("[SystemManager.download] File already on disk, marking downloaded instead of redownloading: " + destination_path)
 			game.mark_sibling_downloaded(disc_id)
 			if disc_id == game.romm_id:
 				game.file_path = destination_path
@@ -1048,14 +1046,14 @@ func _start_download(item: QueueItem):
 	var should_use_chunking = is_large_file and item.expected_file_size > CHUNKED_DOWNLOAD_THRESHOLD
 
 	if should_use_chunking:
-		print("[SystemManager.download] Checking Range support for chunked download: " + item.name + " (size=" + str(item.expected_file_size) + ")")
+		if DEBUG_LOG: print("[SystemManager.download] Checking Range support for chunked download: " + item.name + " (size=" + str(item.expected_file_size) + ")")
 		_check_range_and_start_chunked(item, headers)
 		return
 
 	# All downloads now stream directly to disk via HTTPRequest.download_file
 	# This avoids memory issues with large files (games, emulators, cores)
 	print("[SystemManager.download] Using file-based download for: " + item.name + " (type=" + item.type + ")")
-	print("[SystemManager.download] Destination path: " + item.destination_path)
+	if DEBUG_LOG: print("[SystemManager.download] Destination path: " + item.destination_path)
 	item.download_info = SystemManager.network.http_download_file(
 		item.url,
 		item.destination_path,
@@ -1165,14 +1163,14 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 			# Validate and update expected file size from server's Content-Length
 			if content_length > 0:
 				if item.expected_file_size != content_length:
-					print("[SystemManager.download] File size mismatch for " + item.name + ": expected " + str(item.expected_file_size) + " bytes, server reports " + str(content_length) + " bytes")
-					print("[SystemManager.download] Using server-reported size: " + str(content_length) + " bytes")
+					if DEBUG_LOG: print("[SystemManager.download] File size mismatch for " + item.name + ": expected " + str(item.expected_file_size) + " bytes, server reports " + str(content_length) + " bytes")
+					if DEBUG_LOG: print("[SystemManager.download] Using server-reported size: " + str(content_length) + " bytes")
 					item.expected_file_size = content_length
 					# Also update the game resource if available
 					if item.game_resource:
 						item.game_resource.file_size = content_length
 			else:
-				print("[SystemManager.download] Warning: Server did not provide Content-Length for " + item.name + ", using expected size: " + str(item.expected_file_size))
+				if DEBUG_LOG: print("[SystemManager.download] Warning: Server did not provide Content-Length for " + item.name + ", using expected size: " + str(item.expected_file_size))
 
 			_start_chunked_download(item, headers)
 		else:
@@ -1272,11 +1270,11 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		if SystemManager.platform.is_android():
 			if _prepare_flush_destination(chunked_info, file_size):
 				chunked_info.flush_mode = true
-				print("[SystemManager.download] Using flush-mode chunked download for: " + item.name)
+				if DEBUG_LOG: print("[SystemManager.download] Using flush-mode chunked download for: " + item.name)
 			else:
 				chunked_info.partial_path = temp_dir + "/partial"
 				in_place_assembly = true
-				print("[SystemManager.download] Flush mode unavailable, using Android temp-dir in-place assembly for: " + item.name)
+				if DEBUG_LOG: print("[SystemManager.download] Flush mode unavailable, using Android temp-dir in-place assembly for: " + item.name)
 		else:
 			chunked_info.partial_path = _get_partial_file_path(item.destination_path)
 			var state_path = _get_state_file_path(item.destination_path)
@@ -1301,12 +1299,12 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 
 			if partial_ok:
 				in_place_assembly = true
-				print("[SystemManager.download] Resuming in-place sparse assembly for: " + item.name)
+				if DEBUG_LOG: print("[SystemManager.download] Resuming in-place sparse assembly for: " + item.name)
 			elif await _create_sparse_file_async(chunked_info.partial_path, file_size):
 				in_place_assembly = true
-				print("[SystemManager.download] Using in-place sparse assembly for: " + item.name)
+				if DEBUG_LOG: print("[SystemManager.download] Using in-place sparse assembly for: " + item.name)
 			else:
-				print("[SystemManager.download] In-place sparse assembly not available, using temp files for: " + item.name)
+				if DEBUG_LOG: print("[SystemManager.download] In-place sparse assembly not available, using temp files for: " + item.name)
 				if FSM.file_exists(chunked_info.partial_path):
 					FSM.delete_file(chunked_info.partial_path)
 	else:
@@ -1333,7 +1331,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	# Load any existing resume state and skip already-complete chunks
 	var state = _load_download_state(item.destination_path, item.url, file_size)
 	if not state.is_empty():
-		print("[SystemManager.download] Resuming download from state file for: " + item.name + " (" + str(state.get("chunks", []).size()) + " chunks recorded)")
+		if DEBUG_LOG: print("[SystemManager.download] Resuming download from state file for: " + item.name + " (" + str(state.get("chunks", []).size()) + " chunks recorded)")
 	_apply_download_state(chunked_info, state)
 	_save_download_state(chunked_info, true)
 
@@ -1385,7 +1383,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	_connection_pool_mutex.unlock()
 
 	print("[SystemManager.download] Starting chunked download with " + str(num_chunks) + " chunks for: " + item.name)
-	print("[SystemManager.download] Using concurrency=" + str(concurrency) + " (thread pool=" + str(thread_count) + ")")
+	if DEBUG_LOG: print("[SystemManager.download] Using concurrency=" + str(concurrency) + " (thread pool=" + str(thread_count) + ")")
 
 	# If every chunk is already complete on disk, go straight to verification/reassembly
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
@@ -1417,7 +1415,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 			"thread_index": thread_index
 		})
 
-	print("[SystemManager.download] Queuing " + str(chunk_items.size()) + " pending chunks to thread pool for: " + item.name)
+	if DEBUG_LOG: print("[SystemManager.download] Queuing " + str(chunk_items.size()) + " pending chunks to thread pool for: " + item.name)
 
 	# Start a watchdog that detects stuck chunk workers and falls back to single-stream.
 	_start_chunked_watchdog_timer(item.id, headers)
@@ -1610,7 +1608,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 					result.success = false
 					result.should_delete_partial = true
 					result.error = "Hash mismatch on existing complete chunk"
-					print("[SystemManager.download] Chunk " + str(chunk_index) + " existing file hash mismatch, will re-download")
+					if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " existing file hash mismatch, will re-download")
 					return result
 
 				result.success = true
@@ -1619,7 +1617,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 				_connection_pool_mutex.lock()
 				_thread_chunk_finish_times[verified_thread_key] = Time.get_ticks_msec()
 				_connection_pool_mutex.unlock()
-				print("[SystemManager.download] Chunk " + str(chunk_index) + " already complete on disk, verified " + str(partial_size) + " bytes")
+				if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " already complete on disk, verified " + str(partial_size) + " bytes")
 				return result
 			elif partial_size > 0:
 				resume_offset = partial_size
@@ -1634,7 +1632,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 						hasher.update(buf)
 						remaining -= buf.size()
 					hash_file.close()
-				print("[SystemManager.download] Chunk " + str(chunk_index) + " resuming from byte " + str(start_byte) + " (already have " + str(partial_size) + " bytes)")
+				if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " resuming from byte " + str(start_byte) + " (already have " + str(partial_size) + " bytes)")
 
 	# Add Range header (uses possibly resumed start_byte)
 	request_headers.append("Range: bytes=%d-%d" % [start_byte, end_byte])
@@ -1831,7 +1829,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			_record_chunk_bytes_downloaded(chunk_data.item_id, chunk_index, bytes_downloaded)
 			if DEBUG_LOG and bytes_downloaded - last_progress_emit >= 10 * 1024 * 1024:
 				last_progress_emit = bytes_downloaded
-				print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
+				if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " progress: " + str(bytes_downloaded / (1024.0 * 1024.0)) + "MB")
 		else:
 			# No data available, wait a bit before checking again
 			OS.delay_usec(1000)  # 1ms micro-sleep to prevent busy-waiting
@@ -1903,7 +1901,7 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 
 	result.success = true
 	result.bytes_downloaded = bytes_downloaded
-	print("[SystemManager.download] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (hash=" + actual_hash + ")")
+	if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " completed successfully with " + str(bytes_downloaded) + " bytes (hash=" + actual_hash + ")")
 	return result
 
 ## Updates progress when a chunk completes via thread pool
@@ -1946,7 +1944,7 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 			chunk.actual_hash = actual_hash
 			chunk.expected_hash = expected_hash
 			chunked_info.chunks_completed += 1
-			print("[SystemManager.download] Chunk " + str(chunk_index) + " completed successfully (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+			if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " completed successfully (total: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
 			if chunked_info.flush_mode:
 				_flush_chunk_async(item_id, chunk_index)
 	else:
@@ -1961,9 +1959,9 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 		# Delete corrupt/mismatched partial files so the retry starts clean
 		if should_delete_partial and FSM.file_exists(chunk.temp_path):
 			FSM.delete_file(chunk.temp_path)
-			print("[SystemManager.download] Deleted partial chunk file after failure: " + chunk.temp_path)
+			if DEBUG_LOG: print("[SystemManager.download] Deleted partial chunk file after failure: " + chunk.temp_path)
 
-		print("[SystemManager.download] Chunk " + str(chunk_index) + " failed (total completed: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
+		if DEBUG_LOG: print("[SystemManager.download] Chunk " + str(chunk_index) + " failed (total completed: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + ")")
 
 	# Persist the updated bitmap after every chunk status change, but coalesce
 	# rapid writes to avoid disk I/O throttling fast downloads.
@@ -1996,7 +1994,7 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
 
-	print("[SystemManager.download] Thread pool callback: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + " chunks done")
+	if DEBUG_LOG: print("[SystemManager.download] Thread pool callback: " + str(chunked_info.chunks_completed) + "/" + str(chunked_info.total_chunks) + " chunks done")
 
 	# Flush mode: chunk data is already in the destination (or in flight).
 	# Skip file-based verification/reassembly; finalize once flushes settle.
@@ -2010,7 +2008,7 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 
 	# Check if all chunks completed successfully
 	if chunked_info.chunks_completed >= chunked_info.total_chunks:
-		print("[SystemManager.download] All chunks marked complete for: " + item.name + ", verifying before finalising...")
+		if DEBUG_LOG: print("[SystemManager.download] All chunks marked complete for: " + item.name + ", verifying before finalising...")
 
 		var missing_or_bad_chunks = []
 		if chunked_info.in_place_assembly:
@@ -2058,7 +2056,7 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 						missing_or_bad_chunks.append(chunk)
 
 		if missing_or_bad_chunks.size() > 0:
-			print("[SystemManager.download] Found " + str(missing_or_bad_chunks.size()) + " chunks marked complete but files missing/bad. Resetting for retry...")
+			if DEBUG_LOG: print("[SystemManager.download] Found " + str(missing_or_bad_chunks.size()) + " chunks marked complete but files missing/bad. Resetting for retry...")
 			for chunk in missing_or_bad_chunks:
 				chunk.completed = false
 				chunked_info.chunks_completed -= 1
@@ -2077,7 +2075,7 @@ func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictiona
 			_reassemble_chunks(item_id)
 	else:
 		# Some chunks failed - check if we should retry
-		print("[SystemManager.download] Not all chunks completed, checking for retries...")
+		if DEBUG_LOG: print("[SystemManager.download] Not all chunks completed, checking for retries...")
 		_handle_failed_chunks_thread_pool(item_id, headers)
 
 ## Exponential cooldown for chunk retries (copyparty-style chill).
@@ -2105,7 +2103,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			failed_chunks.append(chunk)
 
 	if failed_chunks.size() > 0:
-		print("[SystemManager.download] Retrying " + str(failed_chunks.size()) + " failed chunks for: " + item.name)
+		if DEBUG_LOG: print("[SystemManager.download] Retrying " + str(failed_chunks.size()) + " failed chunks for: " + item.name)
 
 		var concurrency = chunked_info.concurrency if chunked_info.concurrency > 0 else _get_max_chunk_concurrency()
 		var chunk_sem = _chunk_concurrency_semaphores.get(item_id)
@@ -2131,7 +2129,7 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 
 		# The download may have been cancelled while we were waiting
 		if not _chunked_downloads.has(item_id):
-			print("[SystemManager.download] Retry aborted for " + item_id + " (chunked download cleaned up)")
+			if DEBUG_LOG: print("[SystemManager.download] Retry aborted for " + item_id + " (chunked download cleaned up)")
 			return
 
 		# Prepare retry items (include expected hash so corrupt partials are detected)
@@ -2530,14 +2528,14 @@ func _on_chunked_watchdog(item_id: String):
 		chunked_info.watchdog_last_progress_time_ms = now
 	elif now - chunked_info.watchdog_last_progress_time_ms > CHUNK_STALL_TIMEOUT_MS * 2:
 		var elapsed_since_progress: int = now - chunked_info.watchdog_last_progress_time_ms
-		print("[SystemManager.download] [Watchdog] Chunked download stalled for: " + item.name + " (no progress for " + str(elapsed_since_progress) + "ms, total_bytes=" + str(total_bytes) + ", in_progress=" + str(in_progress_count) + "). Falling back to single-stream.")
+		if DEBUG_LOG: print("[SystemManager.download] [Watchdog] Chunked download stalled for: " + item.name + " (no progress for " + str(elapsed_since_progress) + "ms, total_bytes=" + str(total_bytes) + ", in_progress=" + str(in_progress_count) + "). Falling back to single-stream.")
 		stalled = true
 
 	if not stalled:
 		var elapsed: int = now - chunked_info.start_time_ms
 		var max_total_time := maxi(30 * 60 * 1000, item.expected_file_size / 2048)
 		if elapsed > max_total_time:
-			print("[SystemManager.download] [Watchdog] Chunked download exceeded max total time for: " + item.name + " (elapsed=" + str(elapsed) + "ms, max_total_time=" + str(max_total_time) + "ms). Falling back to single-stream.")
+			if DEBUG_LOG: print("[SystemManager.download] [Watchdog] Chunked download exceeded max total time for: " + item.name + " (elapsed=" + str(elapsed) + "ms, max_total_time=" + str(max_total_time) + "ms). Falling back to single-stream.")
 			stalled = true
 
 	if stalled:
@@ -2569,7 +2567,7 @@ func _reassemble_chunks(item_id: String):
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
 
-	print("[SystemManager.download] Starting chunk reassembly for: " + item.name)
+	if DEBUG_LOG: print("[SystemManager.download] Starting chunk reassembly for: " + item.name)
 
 	# Show reassembly notification immediately
 	if not item.suppress_notification:
@@ -2603,7 +2601,7 @@ func _reassemble_chunks(item_id: String):
 				missing_chunks.append(chunk)
 
 	if missing_chunks.size() > 0:
-		print("[SystemManager.download] [Reassembly] Found " + str(missing_chunks.size()) + " missing/bad chunks before reassembly. This should have been caught earlier - failing download.")
+		if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Found " + str(missing_chunks.size()) + " missing/bad chunks before reassembly. This should have been caught earlier - failing download.")
 		item.status = "failed"
 		item.error_message = "Chunk files missing or corrupted before reassembly"
 		_cleanup_chunked_download(item_id)
@@ -2631,7 +2629,7 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	var chunk_paths_json = JSON.stringify(chunk_paths)
 	var output_absolute_path = ProjectSettings.globalize_path(reassembly_temp_path)
 
-	print("[SystemManager.download] [Reassembly] Calling native reassembly for: " + item.name + " (" + str(chunk_paths.size()) + " chunks) -> " + output_absolute_path)
+	if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Calling native reassembly for: " + item.name + " (" + str(chunk_paths.size()) + " chunks) -> " + output_absolute_path)
 
 	# Call native Java reassembly on the main thread.
 	# NOTE: This blocks the UI for the duration of reassembly, but a clear
@@ -2652,7 +2650,7 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 
 	var success = plugin.call("reassembleChunks", chunk_paths_json, output_absolute_path)
 
-	print("[SystemManager.download] [Reassembly] Native reassembly returned: " + str(success) + " for: " + item.name)
+	if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Native reassembly returned: " + str(success) + " for: " + item.name)
 
 	if not success:
 		push_error("[SystemManager.download] Native reassembly failed for: " + item.name)
@@ -2687,7 +2685,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 
 	# Create the reassembly callable for the extraction thread
 	var reassembly_callable = func() -> bool:
-		print("[SystemManager.download] [Reassembly] Starting desktop reassembly for: " + item.name + " -> " + final_path)
+		if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Starting desktop reassembly for: " + item.name + " -> " + final_path)
 
 		# Open final file for writing
 		var final_file = FileAccess.open(final_path, FileAccess.WRITE)
@@ -2701,7 +2699,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		for chunk_data in chunks_data:
 			var chunk_path = chunk_data.temp_path
 
-			print("[SystemManager.download] [Reassembly] Appending chunk " + str(chunk_data.index + 1) + "/" + str(chunks_data.size()) + ": " + chunk_path)
+			if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Appending chunk " + str(chunk_data.index + 1) + "/" + str(chunks_data.size()) + ": " + chunk_path)
 
 			if not FileAccess.file_exists(chunk_path):
 				push_error("[SystemManager.download] [Reassembly] Chunk file missing: " + chunk_path)
@@ -2725,7 +2723,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 				bytes_remaining -= buffer.size()
 
 			chunk_file.close()
-			print("[SystemManager.download] [Reassembly] Finished chunk " + str(chunk_data.index + 1) + " (" + str(chunk_size) + " bytes)")
+			if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Finished chunk " + str(chunk_data.index + 1) + " (" + str(chunk_size) + " bytes)")
 
 		final_file.close()
 
@@ -2733,15 +2731,15 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 		if FSM.file_exists(final_path):
 			final_size = FSM.get_file_size(final_path)
 
-		print("[SystemManager.download] [Reassembly] Desktop reassembly complete for: " + item.name + ". Final size: " + str(final_size) + " bytes")
+		if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Desktop reassembly complete for: " + item.name + ". Final size: " + str(final_size) + " bytes")
 		return true
 
-	print("[SystemManager.download] [Reassembly] Queueing desktop reassembly to extraction thread for: " + item.name)
+	if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Queueing desktop reassembly to extraction thread for: " + item.name)
 
 	# Queue to extraction thread - callback runs on main thread
 	SystemManager.memory.queue_extraction_task(reassembly_callable, func(success: bool):
 		if not _chunked_downloads.has(item_id):
-			print("[SystemManager.download] [Reassembly] Reassembly callback ignored: download was cancelled or cleaned up for: " + item.name)
+			if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Reassembly callback ignored: download was cancelled or cleaned up for: " + item.name)
 			return
 
 		if not success:
@@ -2761,7 +2759,7 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			_process_queue()
 			return
 
-		print("[SystemManager.download] [Reassembly] Desktop reassembly callback success for: " + item.name)
+		if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Desktop reassembly callback success for: " + item.name)
 		# Success - clean up and finish
 		_finish_reassembly_success(item_id, item, reassembly_temp_path)
 	)
@@ -2776,7 +2774,7 @@ func _rename_final_file(item_id: String):
 	var partial_path = chunked_info.partial_path
 	var final_path = chunked_info.final_path
 
-	print("[SystemManager.download] [InPlace] Renaming sparse partial to final: " + partial_path + " -> " + final_path)
+	if DEBUG_LOG: print("[SystemManager.download] [InPlace] Renaming sparse partial to final: " + partial_path + " -> " + final_path)
 
 	if FSM.file_exists(final_path):
 		FSM.delete_file(final_path)
@@ -2794,7 +2792,7 @@ func _rename_final_file(item_id: String):
 		return
 
 	# Rename failed (usually cross-filesystem). Capture the exact error for diagnostics.
-	print("[SystemManager.download] [InPlace] Move failed, falling back to copy: %s -> %s" % [partial_path, final_path])
+	if DEBUG_LOG: print("[SystemManager.download] [InPlace] Move failed, falling back to copy: %s -> %s" % [partial_path, final_path])
 	_copy_partial_to_final(item_id, partial_path, final_path)
 
 func _copy_partial_to_final(item_id: String, partial_path: String, final_path: String):
@@ -2987,7 +2985,7 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 			final_size = size_file.get_length()
 			size_file.close()
 
-	print("[SystemManager.download] [Reassembly] Finishing reassembly success for: " + item.name + " path=" + reassembly_temp_path + " size=" + str(final_size) + " bytes")
+	if DEBUG_LOG: print("[SystemManager.download] [Reassembly] Finishing reassembly success for: " + item.name + " path=" + reassembly_temp_path + " size=" + str(final_size) + " bytes")
 
 	# Validate final size against expected size
 	if item.expected_file_size > 0 and final_size != item.expected_file_size:
@@ -3252,7 +3250,7 @@ func _start_extraction(item: QueueItem):
 	var archive_path = item.destination_path
 	var extract_dir = item.extract_dir
 
-	print("[SystemManager.download] _start_extraction: archive_path=" + archive_path + ", extract_dir=" + extract_dir)
+	if DEBUG_LOG: print("[SystemManager.download] _start_extraction: archive_path=" + archive_path + ", extract_dir=" + extract_dir)
 
 	FSM.extract_archive_async(
 		archive_path,

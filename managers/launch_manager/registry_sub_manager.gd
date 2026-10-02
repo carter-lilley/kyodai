@@ -16,7 +16,7 @@ const LEGACY_ID_ALIASES := {
 }
 
 ## OS keys an install step's "platforms" dictionary is allowed to declare.
-const STEP_PLATFORM_KEYS := ["windows", "linux", "android", "macos"]
+const STEP_PLATFORM_KEYS := ["windows", "linux", "android"]
 
 ## Maps a possibly-legacy emulator id to its canonical id.
 func canonicalize_emulator_id(emulator_id: String) -> String:

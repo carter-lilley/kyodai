@@ -780,7 +780,7 @@ func get_android_plugin():
 
 func supports_window_chrome() -> bool:
 	## Custom title bar only replaces the frame on the platforms we export to
-	## (Windows + Linux). Android has no decorations; macOS is not planned.
+	## (Windows + Linux). Android has no decorations.
 	if SystemManager and SystemManager.platform:
 		return SystemManager.platform.is_windows() or SystemManager.platform.is_linux()
 	return false

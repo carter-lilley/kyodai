@@ -1,6 +1,8 @@
 extends Manager
 class_name SyncSubManager
 
+const DEBUG_LOG: bool = false
+
 var data_manager: Node
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
@@ -219,16 +221,16 @@ func _is_sync_active() -> bool:
 	return _sync_state != SyncState.IDLE
 
 func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bool = false) -> void:
-	print("[Sync] ==========================================")
+	if DEBUG_LOG: print("[Sync] ==========================================")
 	print("[Sync] sync_enabled_platforms called")
-	print("[Sync] Current state: %s" % get_sync_state_name())
-	print("[Sync] Force full sync: %s" % force_full_sync)
-	print("[Sync] Callback valid: %s" % callback.is_valid())
-	print("[Sync] ==========================================")
+	if DEBUG_LOG: print("[Sync] Current state: %s" % get_sync_state_name())
+	if DEBUG_LOG: print("[Sync] Force full sync: %s" % force_full_sync)
+	if DEBUG_LOG: print("[Sync] Callback valid: %s" % callback.is_valid())
+	if DEBUG_LOG: print("[Sync] ==========================================")
 
 	# Dismiss any existing sync notification from previous syncs
 	if _sync_notification_id != -1:
-		print("[Sync] Dismissing existing notification ID: %d" % _sync_notification_id)
+		if DEBUG_LOG: print("[Sync] Dismissing existing notification ID: %d" % _sync_notification_id)
 		SystemManager.notifications.dismiss_notification(_sync_notification_id)
 		_sync_notification_id = -1
 
@@ -328,7 +330,7 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 			_run_sync_threaded(enabled, disabled_platforms, force_full_sync)
 			return true,
 		func(_result):
-			print("[Sync] Sync thread task completed")
+			if DEBUG_LOG: print("[Sync] Sync thread task completed")
 	)
 
 
@@ -338,11 +340,11 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 	# 1. Remove disabled platforms
 	if disabled_platforms.size() > 0:
-		print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
+		if DEBUG_LOG: print("[SyncThread] Removing %d disabled platforms..." % disabled_platforms.size())
 		_defer_on_main("_show_removal_notification", [disabled_platforms.size()])
 		for i in range(disabled_platforms.size()):
 			var slug = disabled_platforms[i]
-			print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
+			if DEBUG_LOG: print("[SyncThread] Removing platform %d/%d: %s" % [i + 1, disabled_platforms.size(), slug])
 			_defer_on_main("_update_removal_notification", [i + 1, disabled_platforms.size(), slug])
 			_remove_platform_sync_threaded(slug)
 			# Small yield to prevent blocking other sync thread tasks
@@ -351,7 +353,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 	# 2. Check if there are platforms to sync
 	if enabled_platforms.size() == 0:
-		print("[SyncThread] No platforms enabled, completing immediately")
+		if DEBUG_LOG: print("[SyncThread] No platforms enabled, completing immediately")
 		_sync_state = SyncState.IDLE  # Entry guard keys on this; must reset on every exit
 		_defer_on_main("_emit_sync_completed", [true, "No platforms enabled"])
 		_defer_on_main("_invoke_sync_callback", [true, "", 0, 0])
@@ -389,7 +391,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		# Don't block - just keep going
 		OS.delay_usec(500)
 
-	print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
+	if DEBUG_LOG: print("[SyncThread] Discovered %d/%d platform totals, ~%d total games" % [platform_totals_discovered, enabled_platforms.size(), _sync_total])
 
 	# Size the cover download budget from the cache cap before any covers are
 	# collected: downloading past the cap only feeds evict-on-insert churn.
@@ -434,13 +436,13 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				var one_week_ago = Time.get_unix_time_from_system() - (7 * 24 * 60 * 60)
 				if last_sync_time > one_week_ago:
 					_sync_current_updated_after = last_sync
-					print("[SyncThread] Platform '%s' - incremental sync (after: %s)" % [platform.name, last_sync])
+					if DEBUG_LOG: print("[SyncThread] Platform '%s' - incremental sync (after: %s)" % [platform.name, last_sync])
 				else:
-					print("[SyncThread] Platform '%s' - full sync (last sync over a week ago)" % platform.name)
+					if DEBUG_LOG: print("[SyncThread] Platform '%s' - full sync (last sync over a week ago)" % platform.name)
 			else:
-				print("[SyncThread] Platform '%s' - full sync (no previous sync)" % platform.name)
+				if DEBUG_LOG: print("[SyncThread] Platform '%s' - full sync (no previous sync)" % platform.name)
 		else:
-			print("[SyncThread] Platform '%s' - force full sync" % platform.name)
+			if DEBUG_LOG: print("[SyncThread] Platform '%s' - force full sync" % platform.name)
 
 		# Fetch and process this platform
 		_sync_state = SyncState.PLATFORM_FETCHING
@@ -478,7 +480,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				parallel_fetch.result = null
 				parallel_fetch.mutex.unlock()
 				fetch_time = Time.get_ticks_msec() - fetch_start
-				print("[SyncThread] Using pre-fetched batch at offset %d" % _sync_current_offset)
+				if DEBUG_LOG: print("[SyncThread] Using pre-fetched batch at offset %d" % _sync_current_offset)
 			else:
 				# Fetch synchronously
 				result = SystemManager.network.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
@@ -512,7 +514,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 					# Paged past the end with games still unprocessed (a batch
 					# failed or the server total drifted): leave last_sync alone
 					# so the next sync retries the full window.
-					print("[SyncThread] Platform '%s' ended early at offset %d (%d/%d synced) - last_sync NOT updated" % [platform.name, _sync_current_offset, _sync_current_synced, _sync_current_total])
+					if DEBUG_LOG: print("[SyncThread] Platform '%s' ended early at offset %d (%d/%d synced) - last_sync NOT updated" % [platform.name, _sync_current_offset, _sync_current_synced, _sync_current_total])
 				platform_complete = true
 				continue
 
@@ -578,7 +580,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				_sync_state = SyncState.PLATFORM_BATCHING
 				OS.delay_usec(10000)  # 10ms yield to prevent blocking and reduce CPU
 
-		print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
+		if DEBUG_LOG: print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
 
 		# Server-deletion reconciliation: only safe after a complete full
 		# enumeration of this platform (incremental syncs never see deletions,
@@ -728,7 +730,7 @@ func _queue_backfill_covers() -> void:
 	_sync_covers_mutex.unlock()
 
 	if queued > 0:
-		print("[SyncThread] Queued %d backfill covers for interleaved download" % queued)
+		if DEBUG_LOG: print("[SyncThread] Queued %d backfill covers for interleaved download" % queued)
 		_dispatch_covers_to_main_thread()
 
 
@@ -755,7 +757,7 @@ func _wait_for_all_cover_downloads() -> void:
 	sync, so this just drains the in-flight tail. Polls with a timeout
 	(Semaphore has no timed wait) so a stalled download can't block forever.
 	"""
-	print("[SyncThread] Draining remaining cover downloads...")
+	if DEBUG_LOG: print("[SyncThread] Draining remaining cover downloads...")
 	var start := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - start < COVER_DRAIN_TIMEOUT_MS:
 		if MemorySubManager.is_shutting_down():
@@ -820,7 +822,7 @@ func _dispatch_covers_to_main_thread():
 	_sync_covers_mutex.unlock()
 
 	_defer_on_main("_download_covers_on_main_thread", [urls, _on_cover_processed])
-	print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads])
+	if DEBUG_LOG: print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads])
 
 
 func _download_covers_on_main_thread(urls: Array[String], on_complete: Callable = Callable()):
@@ -939,7 +941,7 @@ func _reconcile_platform_deletions(platform_slug: String) -> int:
 	if local_count == 0:
 		return 0
 	if seen_ids.size() < int(ceil(local_count * RECONCILE_MIN_SEEN_FRACTION)):
-		print("[SyncThread] Reconciliation aborted for %s: server enumeration (%d) is suspiciously small vs %d local rows - nothing deleted" % [platform_slug, seen_ids.size(), local_count])
+		if DEBUG_LOG: print("[SyncThread] Reconciliation aborted for %s: server enumeration (%d) is suspiciously small vs %d local rows - nothing deleted" % [platform_slug, seen_ids.size(), local_count])
 		return 0
 
 	# Dry run: compute the doomed set without deleting anything.
@@ -1033,7 +1035,7 @@ func confirm_server_deletions(platform_slug: String) -> bool:
 		return false
 	var doomed: Array = _pending_server_deletions[platform_slug]
 	_pending_server_deletions.erase(platform_slug)
-	print("[Sync] User confirmed %d server deletions for %s" % [doomed.size(), platform_slug])
+	if DEBUG_LOG: print("[Sync] User confirmed %d server deletions for %s" % [doomed.size(), platform_slug])
 	_queue_reconciliation_commit(platform_slug, doomed)
 	return true
 
@@ -1148,7 +1150,7 @@ func _cleanup_reconciled_games(platform_slug: String, count: int, cover_urls: Ar
 		if FSM.file_exists(cache_path):
 			if FSM.delete_file(cache_path):
 				covers_deleted += 1
-	print("[Sync] Reconciled %s: removed %d server-deleted games (%d covers deleted)" % [platform_slug, count, covers_deleted])
+	if DEBUG_LOG: print("[Sync] Reconciled %s: removed %d server-deleted games (%d covers deleted)" % [platform_slug, count, covers_deleted])
 
 
 func _lookup_platform_id_sync(platform_slug: String) -> int:

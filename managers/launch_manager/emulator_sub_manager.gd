@@ -3,6 +3,7 @@ class_name EmulatorSubManager
 
 ## Emulator install/update/download management
 
+const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 
@@ -239,7 +240,7 @@ func _flatten_extracted_directory(emulator_id: String, extract_to: String, targe
 				
 				# Move to parent directory
 				var move_success = FSM.move(source_path, dest_path)
-				print("[EmulatorManager] Flattening: move result=" + str(move_success))
+				if DEBUG_LOG: print("[EmulatorManager] Flattening: move result=" + str(move_success))
 				if not move_success:
 					push_warning("[EmulatorManager] Failed to flatten item: " + source_path + " -> " + dest_path)
 			
@@ -405,7 +406,7 @@ func _end_force_install(emulator_id: String) -> void:
 ## Executes a single install step by index
 func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var emulator = launch_manager.registry.get_emulator(emulator_id)
-	print("[EmulatorManager] _execute_install_step: emulator=%s step_index=%d" % [emulator_id, step_index])
+	if DEBUG_LOG: print("[EmulatorManager] _execute_install_step: emulator=%s step_index=%d" % [emulator_id, step_index])
 	if emulator.is_empty():
 		push_error("[EmulatorManager] Unknown emulator: " + emulator_id)
 		return false
@@ -523,8 +524,8 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		return false
 	
 	print("[EmulatorManager] Executing APK install step...")
-	print("[EmulatorManager]   - package_name: '" + package_name + "'")
-	print("[EmulatorManager]   - expected_file: '" + expected_file + "'")
+	if DEBUG_LOG: print("[EmulatorManager]   - package_name: '" + package_name + "'")
+	if DEBUG_LOG: print("[EmulatorManager]   - expected_file: '" + expected_file + "'")
 	
 	# APKs are downloaded to the emulator directory (same as other platforms)
 	var emulator_dir = launch_manager.registry._get_emulator_directory(emulator_id)
@@ -535,22 +536,22 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	for file_name in entries:
 		if file_name.match(expected_file):
 			apk_path = FSM.join_paths(emulator_dir, file_name)
-			print("[EmulatorManager] Found APK: " + apk_path)
+			if DEBUG_LOG: print("[EmulatorManager] Found APK: " + apk_path)
 			break
 	
 	# If no APK found, retry download
 	if apk_path == "":
-		print("[EmulatorManager] No APK found in emulator directory, retrying download")
+		if DEBUG_LOG: print("[EmulatorManager] No APK found in emulator directory, retrying download")
 		return _retry_previous_step(emulator_id, step_index)
 	
 	# Validate APK file exists and has content
 	var file_size = FSM.get_file_size(apk_path)
-	print("[EmulatorManager] APK file size: " + str(file_size) + " bytes")
+	if DEBUG_LOG: print("[EmulatorManager] APK file size: " + str(file_size) + " bytes")
 	if file_size < 0:
-		print("[EmulatorManager] ERROR: Cannot access APK file!")
+		if DEBUG_LOG: print("[EmulatorManager] ERROR: Cannot access APK file!")
 		return _retry_previous_step(emulator_id, step_index)
 	elif file_size < 1000:
-		print("[EmulatorManager] ERROR: APK file is too small or empty!")
+		if DEBUG_LOG: print("[EmulatorManager] ERROR: APK file is too small or empty!")
 		SystemManager.notifications.show_notification(
 			"APK download incomplete!\nFile size: " + str(file_size) + " bytes",
 			SystemManager.notifications.Type.ERROR,
@@ -560,7 +561,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		_emulator_install_progress[emulator_id] = "APK download incomplete"
 		return false
 	
-	print("[EmulatorManager] Installing APK: " + apk_path)
+	if DEBUG_LOG: print("[EmulatorManager] Installing APK: " + apk_path)
 	
 	# On Android, use plugin to install APK with content:// URI (required for Android N+)
 	var plugin = null
@@ -572,7 +573,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		# Convert Godot virtual path (user://) to an absolute filesystem path
 		# so the Java plugin can create a File object from it.
 		var absolute_apk_path = FSM.resolve_path(apk_path, {"format": FSM.PathFormat.ABSOLUTE})
-		print("[EmulatorManager] Resolved APK path for plugin: " + absolute_apk_path)
+		if DEBUG_LOG: print("[EmulatorManager] Resolved APK path for plugin: " + absolute_apk_path)
 		var success = plugin.call("installApk", absolute_apk_path)
 		if success:
 			result = Error.OK
@@ -591,7 +592,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		# Try to open the folder
 		var folder_result = OS.shell_open(FSM.resolve_path(emulator_dir, {"format": FSM.PathFormat.ABSOLUTE}))
 		if folder_result == Error.OK:
-			print("[EmulatorManager] Opened folder containing APK")
+			if DEBUG_LOG: print("[EmulatorManager] Opened folder containing APK")
 		
 		_emulator_install_progress[emulator_id] = "APK install failed"
 		return false
@@ -782,22 +783,22 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	# Single archive mode (default behavior)
 	# First, check for explicit expected_file pattern in extract_config
 	var expected_file = extract_config.get("expected_file", "")
-	print("[EmulatorManager] _execute_extract_step: expected_file pattern='" + expected_file + "'")
+	if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: expected_file pattern='" + expected_file + "'")
 	if expected_file != "":
 		var files = FSM.list_dir(emulator_dir)
-		print("[EmulatorManager] _execute_extract_step: files in emulator_dir=" + str(files))
+		if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: files in emulator_dir=" + str(files))
 		for file_name in files:
-			print("[EmulatorManager] _execute_extract_step: checking if '" + file_name + "' matches pattern '" + expected_file + "'")
+			if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: checking if '" + file_name + "' matches pattern '" + expected_file + "'")
 			if file_name.match(expected_file):
 				var full_path = FSM.join_paths(emulator_dir, file_name)
-				print("[EmulatorManager] _execute_extract_step: MATCH! full_path=" + full_path)
+				if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: MATCH! full_path=" + full_path)
 				if FSM.file_exists(full_path):
 					archive_path = full_path
-					print("[EmulatorManager] _execute_extract_step: archive_path set to " + archive_path)
+					if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: archive_path set to " + archive_path)
 					break
 				else:
-					print("[EmulatorManager] _execute_extract_step: file exists check failed for " + full_path)
-		print("[EmulatorManager] _execute_extract_step: after expected_file loop, archive_path=" + archive_path)
+					if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: file exists check failed for " + full_path)
+		if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: after expected_file loop, archive_path=" + archive_path)
 	
 	# If no expected_file match, scan for common archive extensions (first match only)
 	if archive_path == "":
@@ -859,10 +860,10 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 		# Handle post-extraction flattening
 		print("[EmulatorManager] Extraction callback called, strip_top=" + str(strip_top) + ", flatten_target=" + flatten_target)
 		if strip_top:
-			print("[EmulatorManager] Calling _flatten_extracted_directory with extract_dir=" + extract_dir)
+			if DEBUG_LOG: print("[EmulatorManager] Calling _flatten_extracted_directory with extract_dir=" + extract_dir)
 			_flatten_extracted_directory(emulator_id, extract_dir, flatten_target)
 		else:
-			print("[EmulatorManager] Skipping flattening, strip_top is false")
+			if DEBUG_LOG: print("[EmulatorManager] Skipping flattening, strip_top is false")
 		
 		# Validate extraction
 		var validate_config = extract_config.get("validate", {})
@@ -1266,7 +1267,7 @@ func _handle_create_folders_step(emulator_id: String, _step_name: String, step_i
 	
 	return _execute_install_step(emulator_id, step_index + 1)
 
-## Helper function for chmod action (Linux/macOS/Android binary permissions)
+## Helper function for chmod action (Linux/Android binary permissions)
 ## Config keys:
 ##   - file: specific file path relative to emulator_dir
 ##   - files: array of file paths relative to emulator_dir
@@ -1347,7 +1348,7 @@ func _on_chmod_target_done(result: Dictionary, emulator_id: String, step_index: 
 		push_error("[EmulatorManager] chmod failed for " + abs_target + " with mode " + mode)
 		state.all_success = false
 	else:
-		print("[EmulatorManager] chmod " + mode + " " + abs_target)
+		if DEBUG_LOG: print("[EmulatorManager] chmod " + mode + " " + abs_target)
 	state.pending -= 1
 	if state.pending > 0:
 		return
@@ -1435,7 +1436,7 @@ func _execute_move_step(emulator_id: String, step_index: int, platform_config: D
 				push_error("[EmulatorManager] move failed: " + full_src + " -> " + full_dest)
 				all_success = false
 			else:
-				print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
+				if DEBUG_LOG: print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
 	else:
 		# Move a single file or directory
 		var full_src: String = FSM.resolve_emulator_path(source, emulator_id)
@@ -1446,7 +1447,7 @@ func _execute_move_step(emulator_id: String, step_index: int, platform_config: D
 			# move as already completed (idempotent resume after interruption).
 			var validate_config = platform_config.get("validate", {})
 			if _validate_step(emulator_id, validate_config):
-				print("[EmulatorManager] move source missing but destination valid, skipping: " + full_src)
+				if DEBUG_LOG: print("[EmulatorManager] move source missing but destination valid, skipping: " + full_src)
 				return _execute_install_step(emulator_id, step_index + 1)
 			push_error("[EmulatorManager] move source missing: " + full_src)
 			return false
@@ -1454,14 +1455,14 @@ func _execute_move_step(emulator_id: String, step_index: int, platform_config: D
 		# If replace is requested and destination exists as a directory, remove it
 		# first so the move can succeed (used for re-installing core directories).
 		if replace and FSM.dir_exists(full_dest):
-			print("[EmulatorManager] move replace: removing existing destination " + full_dest)
+			if DEBUG_LOG: print("[EmulatorManager] move replace: removing existing destination " + full_dest)
 			FSM.delete_dir_recursive(full_dest)
 		
 		if not FSM.move(full_src, full_dest):
 			push_error("[EmulatorManager] move failed: " + full_src + " -> " + full_dest)
 			all_success = false
 		else:
-			print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
+			if DEBUG_LOG: print("[EmulatorManager] moved " + full_src + " -> " + full_dest)
 	
 	if not all_success:
 		return false
@@ -1485,7 +1486,7 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 	if not _force_install_step.get(emulator_id, false):
 		var validate_config = platform_config.get("validate", {})
 		if _validate_step(emulator_id, validate_config):
-			print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
+			if DEBUG_LOG: print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
 			return _execute_install_step(emulator_id, step_index + 1)
 
 	# Find AppImage matching pattern
@@ -1509,7 +1510,7 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 	# Remove any existing squashfs-root to ensure clean extraction
 	var squashfs_dir = FSM.join_paths(emulator_dir, "squashfs-root")
 	if FSM.dir_exists(squashfs_dir):
-		print("[EmulatorManager] Removing existing squashfs-root before extraction: " + squashfs_dir)
+		if DEBUG_LOG: print("[EmulatorManager] Removing existing squashfs-root before extraction: " + squashfs_dir)
 		FSM.delete_dir_recursive(squashfs_dir)
 
 	var step_name = ""
@@ -1522,7 +1523,7 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 	launch_manager.emulator_extraction_started.emit(emulator_id)
 
 	var inner_cmd = 'cd %s && %s --appimage-extract' % [_escape_sh_arg(abs_emulator_dir), _escape_sh_arg(abs_appimage)]
-	print("[EmulatorManager] Extracting AppImage: sh -c ", inner_cmd)
+	if DEBUG_LOG: print("[EmulatorManager] Extracting AppImage: sh -c ", inner_cmd)
 
 	var extract_callback = func(result: Dictionary):
 		if result.get("exit_code", -1) != 0:
@@ -1705,7 +1706,7 @@ func _handle_validate_only_step(emulator_id: String, step_name: String, step_ind
 		push_error("[EmulatorManager] validate_only step has no validate config: " + step_name)
 		return false
 	
-	print("[EmulatorManager] Validating step '%s' (index %d)" % [step_name, step_index])
+	if DEBUG_LOG: print("[EmulatorManager] Validating step '%s' (index %d)" % [step_name, step_index])
 	if not _validate_step(emulator_id, validate_config):
 		print("[EmulatorManager] Validation failed for step '%s' (index %d)" % [step_name, step_index])
 		return false
@@ -1731,7 +1732,7 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 			return
 		
 		if FSM.dir_exists(save_dir):
-			print("[EmulatorManager] Save directory already exists for " + emulator_id + ": " + save_dir)
+			if DEBUG_LOG: print("[EmulatorManager] Save directory already exists for " + emulator_id + ": " + save_dir)
 			return
 		
 		print("[EmulatorManager] Creating save directory for " + emulator_id + ": " + save_dir)

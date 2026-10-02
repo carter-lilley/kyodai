@@ -2,6 +2,7 @@
 ## Extracts game identifiers from ROM files for save sync purposes
 class_name TitleIDParser
 
+const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 # Sigil CLI runner for platforms routed through argosy-sigil
@@ -183,14 +184,14 @@ static func extract_wii_wad_title_id(wad_path: String) -> String:
 		if ticket_size > 0:
 			var title_id = _wad_title_id_at(file, ticket_off, _WAD_TICKET_TITLE_ID_OFFSET)
 			if title_id != "":
-				print("[TitleIDParser] Wii WAD title id from ticket: " + title_id)
+				if DEBUG_LOG: print("[TitleIDParser] Wii WAD title id from ticket: " + title_id)
 				return title_id
 		if tmd_size > 0:
 			var tmd_off = _wad_align64(ticket_off + ticket_size)
 			for id_offset in _WAD_TMD_TITLE_ID_OFFSETS:
 				var title_id = _wad_title_id_at(file, tmd_off, id_offset)
 				if title_id != "":
-					print("[TitleIDParser] Wii WAD title id from TMD: " + title_id)
+					if DEBUG_LOG: print("[TitleIDParser] Wii WAD title id from TMD: " + title_id)
 					return title_id
 		push_error("[TitleIDParser] Failed to extract title id from Wii WAD: " + wad_path)
 		return ""
@@ -240,7 +241,7 @@ static func extract_vita_title_id(zip_path: String) -> String:
 			var title_id := get_title_id_from_sfo_bytes(sfo_bytes)
 			if _is_vita_title_id(title_id):
 				reader.close()
-				print("[TitleIDParser] Vita TitleID from param.sfo: " + title_id.to_upper())
+				if DEBUG_LOG: print("[TitleIDParser] Vita TitleID from param.sfo: " + title_id.to_upper())
 				return title_id.to_upper()
 		push_warning("[TitleIDParser] param.sfo present but no valid TITLE_ID in: " + zip_path)
 
@@ -258,7 +259,7 @@ static func extract_vita_title_id(zip_path: String) -> String:
 				break
 	reader.close()
 	if best != "":
-		print("[TitleIDParser] Vita TitleID from folder layout: " + best)
+		if DEBUG_LOG: print("[TitleIDParser] Vita TitleID from folder layout: " + best)
 		return best
 
 	push_error("[TitleIDParser] No Vita TitleID (param.sfo or folder layout) found in: " + zip_path)
@@ -300,7 +301,7 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 	if ext == "zar":
 		return _extract_xbox360_title_id_zar(iso_path)
 	return _with_open_file(iso_path, func(file: FileAccess) -> String:
-		print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
+		if DEBUG_LOG: print("[TitleIDParser] Parsing Xbox 360 ISO: " + iso_path)
 		
 		# Step 1: Find GDFX partition
 		var game_offset = _find_gdfx_partition(file)
@@ -308,7 +309,7 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 			push_error("[TitleIDParser] Failed to find GDFX partition in Xbox 360 ISO: " + iso_path)
 			return ""
 		
-		print("[TitleIDParser] GDFX partition found at offset: 0x" + "%x" % game_offset)
+		if DEBUG_LOG: print("[TitleIDParser] GDFX partition found at offset: 0x" + "%x" % game_offset)
 		
 		# Step 2: Read root directory info from sector 32
 		file.seek(game_offset + (32 * _XEX_SECTOR_SIZE) + 20)
@@ -323,7 +324,7 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 		var root_size = _read_le32(root_size_bytes, 0)
 		var root_offset = game_offset + (root_sector * _XEX_SECTOR_SIZE)
 		
-		print("[TitleIDParser] GDFX root directory: sector=" + str(root_sector) + ", size=" + str(root_size) + ", offset=0x" + "%x" % root_offset)
+		if DEBUG_LOG: print("[TitleIDParser] GDFX root directory: sector=" + str(root_sector) + ", size=" + str(root_size) + ", offset=0x" + "%x" % root_offset)
 		
 		# Validate root directory is within file bounds
 		if root_offset > file.get_length():
@@ -331,29 +332,29 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 			return ""
 		
 		# Step 3: Parse directory tree to find default.xex
-		print("[TitleIDParser] Searching for default.xex in GDFX directory tree...")
+		if DEBUG_LOG: print("[TitleIDParser] Searching for default.xex in GDFX directory tree...")
 		var xex_entry = _find_file_in_gdfx(file, game_offset, root_offset, "default.xex")
 		
 		# Step 4: If default.xex not found, try GameInfo.bin (XNA/Indie games)
 		if xex_entry.is_empty():
-			print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
+			if DEBUG_LOG: print("[TitleIDParser] default.xex not found, trying GameInfo.bin...")
 			var gameinfo_entry = _find_file_in_gdfx(file, game_offset, root_offset, "GameInfo.bin")
 			if not gameinfo_entry.is_empty():
 				var parsed_title_id = _parse_gameinfo_title_id(file, gameinfo_entry)
 				if parsed_title_id != "":
-					print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
+					if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
 					return parsed_title_id.to_upper()
 			
 			push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ISO")
 			return ""
 		
-		print("[TitleIDParser] Found default.xex at offset 0x" + "%x" % xex_entry["offset"] + ", length=" + str(xex_entry["length"]))
+		if DEBUG_LOG: print("[TitleIDParser] Found default.xex at offset 0x" + "%x" % xex_entry["offset"] + ", length=" + str(xex_entry["length"]))
 		
 		# Step 5: Read XEX header and extract Title ID
 		var title_id = _read_xex_title_id(file, xex_entry["offset"], xex_entry["length"])
 		
 		if title_id != "":
-			print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
+			if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
 			return title_id.to_upper()
 		
 		push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ISO")
@@ -364,7 +365,7 @@ static func extract_xbox360_title_id(iso_path: String) -> String:
 ## The archive contains the extracted filesystem, so default.xex is looked up
 ## directly in the archive's file tree instead of parsing GDFX
 static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
-	print("[TitleIDParser] Parsing Xbox 360 ZAR: " + zar_path)
+	if DEBUG_LOG: print("[TitleIDParser] Parsing Xbox 360 ZAR: " + zar_path)
 
 	var reader = _ZarReader.open(zar_path)
 	if reader == null:
@@ -377,7 +378,7 @@ static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
 
 	# If default.xex not found, try GameInfo.bin (XNA/Indie games)
 	if xex_entry.is_empty():
-		print("[TitleIDParser] default.xex not found in ZAR, trying GameInfo.bin...")
+		if DEBUG_LOG: print("[TitleIDParser] default.xex not found in ZAR, trying GameInfo.bin...")
 		var gameinfo_entry = reader.find_file("GameInfo.bin")
 		if not gameinfo_entry.is_empty():
 			# Node-relative entry: offset 0 = start of GameInfo.bin
@@ -385,14 +386,14 @@ static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
 			var parsed_title_id = _parse_gameinfo_title_id(reader.create_node_io(gameinfo_entry), node_entry)
 			reader.close()
 			if parsed_title_id != "":
-				print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
+				if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found from GameInfo.bin: " + parsed_title_id.to_upper())
 				return parsed_title_id.to_upper()
 
 		push_error("[TitleIDParser] Failed to find default.xex or GameInfo.bin in Xbox 360 ZAR")
 		reader.close()
 		return ""
 
-	print("[TitleIDParser] Found default.xex in ZAR, length=" + str(xex_entry["size"]))
+	if DEBUG_LOG: print("[TitleIDParser] Found default.xex in ZAR, length=" + str(xex_entry["size"]))
 
 	# Reuse the XEX header parser against a node-relative IO view (offset 0 = file start)
 	var xex_io = reader.create_node_io(xex_entry)
@@ -400,7 +401,7 @@ static func _extract_xbox360_title_id_zar(zar_path: String) -> String:
 	reader.close()
 
 	if title_id != "":
-		print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
+		if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found: " + title_id.to_upper())
 		return title_id.to_upper()
 
 	push_error("[TitleIDParser] Failed to extract Title ID from XEX in Xbox 360 ZAR")
@@ -476,7 +477,7 @@ static func _collect_files_recursive(dir_path: String, results: Array[String], m
 ## Extracts Xbox 360 Title ID from an already-extracted XBLA game folder
 ## Primary: <TitleID>/<ContentType>/ folder layout; Fallback: STFS header parse
 static func _extract_xbox360_title_id_folder(folder_path: String) -> String:
-	print("[TitleIDParser] Parsing Xbox 360 folder: " + folder_path)
+	if DEBUG_LOG: print("[TitleIDParser] Parsing Xbox 360 folder: " + folder_path)
 
 	var files: Array[String] = []
 	_collect_files_recursive(folder_path, files)
@@ -487,14 +488,14 @@ static func _extract_xbox360_title_id_folder(folder_path: String) -> String:
 	for file_path in files:
 		var title_id = _xbox360_title_id_from_path(file_path)
 		if title_id != "":
-			print("[TitleIDParser] Xbox 360 Title ID found from folder layout: " + title_id)
+			if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found from folder layout: " + title_id)
 			return title_id
 
-	print("[TitleIDParser] No TitleID/ContentType layout found, sniffing STFS headers...")
+	if DEBUG_LOG: print("[TitleIDParser] No TitleID/ContentType layout found, sniffing STFS headers...")
 	for file_path in files:
 		var title_id = _xbox360_title_id_from_stfs_file(file_path)
 		if title_id != "":
-			print("[TitleIDParser] Xbox 360 Title ID found from STFS header: " + title_id)
+			if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found from STFS header: " + title_id)
 			return title_id
 
 	push_error("[TitleIDParser] Failed to find Title ID in Xbox 360 folder: " + folder_path)
@@ -504,12 +505,12 @@ static func _extract_xbox360_title_id_folder(folder_path: String) -> String:
 ## Matches the <TitleID>/<ContentType>/ layout in the archive's file listing;
 ## archive contents are never read, so this is fast even for large packages
 static func _extract_xbox360_title_id_archive(archive_path: String) -> String:
-	print("[TitleIDParser] Parsing Xbox 360 XBLA archive: " + archive_path)
+	if DEBUG_LOG: print("[TitleIDParser] Parsing Xbox 360 XBLA archive: " + archive_path)
 
 	for entry_name in _list_zip_entries(archive_path):
 		var title_id = _xbox360_title_id_from_path(entry_name)
 		if title_id != "":
-			print("[TitleIDParser] Xbox 360 Title ID found from archive listing: " + title_id)
+			if DEBUG_LOG: print("[TitleIDParser] Xbox 360 Title ID found from archive listing: " + title_id)
 			return title_id
 
 	push_error("[TitleIDParser] Failed to find Title ID in Xbox 360 archive: " + archive_path)
@@ -753,7 +754,7 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 	
 	# If ZIPReader fails (e.g., ZIP64 large files), try 7-Zip fallback
 	if err != OK:
-		print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
+		if DEBUG_LOG: print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
 		var title_id_from_7z = _extract_ps4_title_id_with_7z(zip_path)
 		if title_id_from_7z != "":
 			return title_id_from_7z
@@ -775,7 +776,7 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 			var potential_id = parts[0]
 			if potential_id.begins_with("CUSA") and potential_id.length() == 9:
 				title_id = potential_id
-				print("[TitleIDParser] Found PS4 TitleID in ZIP: " + title_id + " (from path: " + file_path + ")")
+				if DEBUG_LOG: print("[TitleIDParser] Found PS4 TitleID in ZIP: " + title_id + " (from path: " + file_path + ")")
 				break
 	
 	reader.close()
@@ -784,7 +785,7 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 		push_error("[TitleIDParser] No CUSA TitleID found in PS4 ZIP: " + zip_path)
 		return ""
 	
-	print("[TitleIDParser] PS4 TitleID extracted from ZIP: " + title_id)
+	if DEBUG_LOG: print("[TitleIDParser] PS4 TitleID extracted from ZIP: " + title_id)
 	return title_id
 
 
@@ -792,10 +793,10 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 static func _extract_ps4_title_id_with_7z(zip_path: String) -> String:
 	var binary_path = FSM._get_7z_binary_path()
 	if binary_path == "":
-		print("[TitleIDParser] 7-Zip binary not available")
+		if DEBUG_LOG: print("[TitleIDParser] 7-Zip binary not available")
 		return ""
 	
-	print("[TitleIDParser] Using 7-Zip fallback for PS4 TitleID: " + binary_path)
+	if DEBUG_LOG: print("[TitleIDParser] Using 7-Zip fallback for PS4 TitleID: " + binary_path)
 	
 	# List archive contents
 	var list_args = ["l", "-slt", zip_path]
@@ -824,14 +825,14 @@ static func _extract_ps4_title_id_with_7z(zip_path: String) -> String:
 				var potential_id = parts[0]
 				if potential_id.begins_with("CUSA") and potential_id.length() == 9:
 					title_id = potential_id
-					print("[TitleIDParser] Found PS4 TitleID in 7-Zip output: " + title_id + " (from path: " + path + ")")
+					if DEBUG_LOG: print("[TitleIDParser] Found PS4 TitleID in 7-Zip output: " + title_id + " (from path: " + path + ")")
 					break
 	
 	if title_id == "":
 		push_error("[TitleIDParser] No CUSA TitleID found via 7-Zip listing")
 		return ""
 	
-	print("[TitleIDParser] PS4 TitleID extracted via 7-Zip fallback: " + title_id)
+	if DEBUG_LOG: print("[TitleIDParser] PS4 TitleID extracted via 7-Zip fallback: " + title_id)
 	return title_id
 
 
@@ -853,7 +854,7 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 	
 	# If ZIPReader fails (e.g., ZIP64 large files), try 7-Zip fallback
 	if err != OK:
-		print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
+		if DEBUG_LOG: print("[TitleIDParser] ZIPReader failed, attempting 7-Zip fallback for: " + zip_path)
 		var title_id_from_7z = _extract_ps3_title_id_with_7z(zip_path)
 		if title_id_from_7z != "":
 			return title_id_from_7z
@@ -878,7 +879,7 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 		reader.close()
 		return ""
 	
-	print("[TitleIDParser] Found PARAM.SFO in ZIP at: " + sfo_path)
+	if DEBUG_LOG: print("[TitleIDParser] Found PARAM.SFO in ZIP at: " + sfo_path)
 	
 	# Read PARAM.SFO bytes from ZIP
 	var sfo_bytes = reader.read_file(sfo_path)
@@ -895,7 +896,7 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 		push_error("[TitleIDParser] Failed to extract TitleID from PARAM.SFO in: " + zip_path)
 		return ""
 	
-	print("[TitleIDParser] PS3 TitleID extracted from ZIP: " + title_id)
+	if DEBUG_LOG: print("[TitleIDParser] PS3 TitleID extracted from ZIP: " + title_id)
 	return title_id
 
 
@@ -904,10 +905,10 @@ static func extract_ps3_title_id(zip_path: String) -> String:
 static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 	var binary_path = FSM._get_7z_binary_path()
 	if binary_path == "":
-		print("[TitleIDParser] 7-Zip binary not available")
+		if DEBUG_LOG: print("[TitleIDParser] 7-Zip binary not available")
 		return ""
 	
-	print("[TitleIDParser] Using 7-Zip fallback: " + binary_path)
+	if DEBUG_LOG: print("[TitleIDParser] Using 7-Zip fallback: " + binary_path)
 	
 	# Step 1: List archive contents to find PARAM.SFO path
 	var list_args = ["l", "-slt", zip_path]
@@ -936,7 +937,7 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 		push_error("[TitleIDParser] PARAM.SFO not found via 7-Zip listing")
 		return ""
 	
-	print("[TitleIDParser] Found PARAM.SFO via 7-Zip at: " + sfo_path)
+	if DEBUG_LOG: print("[TitleIDParser] Found PARAM.SFO via 7-Zip at: " + sfo_path)
 	
 	# Step 2: Extract PARAM.SFO to temp directory
 	var temp_dir = "user://temp_ps3_sfo/"
@@ -978,7 +979,7 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 		push_error("[TitleIDParser] Failed to extract TitleID from 7-Zip extracted PARAM.SFO")
 		return ""
 	
-	print("[TitleIDParser] PS3 TitleID extracted via 7-Zip fallback: " + title_id)
+	if DEBUG_LOG: print("[TitleIDParser] PS3 TitleID extracted via 7-Zip fallback: " + title_id)
 	return title_id
 
 
@@ -1034,8 +1035,8 @@ static func _read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
 	var num_entries := data.decode_u32(pos)
 	pos += 4
 	
-	print("[TitleIDParser] SFO Header: version=" + str(version) + ", entries=" + str(num_entries))
-	print("[TitleIDParser] SFO Key table at offset " + str(key_table_offset) + ", data table at offset " + str(data_table_offset))
+	if DEBUG_LOG: print("[TitleIDParser] SFO Header: version=" + str(version) + ", entries=" + str(num_entries))
+	if DEBUG_LOG: print("[TitleIDParser] SFO Key table at offset " + str(key_table_offset) + ", data table at offset " + str(data_table_offset))
 	
 	# Read index table entries
 	var entries := []
@@ -1105,7 +1106,7 @@ static func _read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
 ## Extracts the TitleID from a PARAM.SFO file
 ## Returns empty string if TitleID cannot be found
 static func get_sfo_title_id(path: String) -> String:
-	print("[TitleIDParser] get_sfo_title_id called for: " + path)
+	if DEBUG_LOG: print("[TitleIDParser] get_sfo_title_id called for: " + path)
 	
 	var sfo_data := read_sfo(path)
 	return _extract_title_id_from_sfo_data(sfo_data)
@@ -1114,7 +1115,7 @@ static func get_sfo_title_id(path: String) -> String:
 ## Extracts the TitleID from PARAM.SFO byte data
 ## Returns empty string if TitleID cannot be found
 static func get_title_id_from_sfo_bytes(data: PackedByteArray) -> String:
-	print("[TitleIDParser] get_title_id_from_sfo_bytes called")
+	if DEBUG_LOG: print("[TitleIDParser] get_title_id_from_sfo_bytes called")
 	
 	var sfo_data := _read_sfo_from_bytes(data)
 	return _extract_title_id_from_sfo_data(sfo_data)
@@ -1122,20 +1123,20 @@ static func get_title_id_from_sfo_bytes(data: PackedByteArray) -> String:
 
 static func _extract_title_id_from_sfo_data(sfo_data: Dictionary) -> String:
 	if sfo_data.is_empty():
-		print("[TitleIDParser] SFO data is empty")
+		if DEBUG_LOG: print("[TitleIDParser] SFO data is empty")
 		return ""
 	
-	print("[TitleIDParser] SFO data keys: " + str(sfo_data.keys()))
+	if DEBUG_LOG: print("[TitleIDParser] SFO data keys: " + str(sfo_data.keys()))
 	
 	# TitleID is stored in the "TITLE_ID" field
 	var title_id: String = sfo_data.get("TITLE_ID", "")
-	print("[TitleIDParser] TITLE_ID value: '" + title_id + "'")
+	if DEBUG_LOG: print("[TitleIDParser] TITLE_ID value: '" + title_id + "'")
 	
 	if title_id == "" or title_id == "<binary>":
 		# Try alternative field names
 		title_id = sfo_data.get("title_id", "")
 		if title_id != "":
-			print("[TitleIDParser] Found title_id (lowercase): '" + title_id + "'")
+			if DEBUG_LOG: print("[TitleIDParser] Found title_id (lowercase): '" + title_id + "'")
 	
 	return title_id
 

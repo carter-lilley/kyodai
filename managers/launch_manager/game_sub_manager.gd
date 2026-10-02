@@ -3,6 +3,7 @@ class_name GameSubManager
 
 ## Per-emulator/per-platform game preparation
 
+const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const _SigilRunner = preload("res://utils/sigil_runner.gd")
@@ -18,16 +19,16 @@ func _ready():
 
 ## Helper to store title_id for the active game or sibling
 func _store_file_path(game: GameResource, file_path: String) -> void:
-	print("[GameManager] _store_file_path: current=" + game.file_path + " new=" + file_path)
+	if DEBUG_LOG: print("[GameManager] _store_file_path: current=" + game.file_path + " new=" + file_path)
 	if game.file_path != file_path:
 		game.file_path = file_path
 		DataManager.update_game(game, func(ok: bool):
 			if not ok:
 				push_error("[GameManager] _store_file_path: DB persist FAILED for " + game.title + " (path=" + file_path + ")")
 		)
-		print("[GameManager] _store_file_path: UPDATED and persisted to DB")
+		if DEBUG_LOG: print("[GameManager] _store_file_path: UPDATED and persisted to DB")
 	else:
-		print("[GameManager] _store_file_path: path already correct, no update needed")
+		if DEBUG_LOG: print("[GameManager] _store_file_path: path already correct, no update needed")
 
 func _store_title_id(game: GameResource, title_id: String, sigil_result: Dictionary = {}) -> void:
 	var save_id: String = sigil_result.get("save_id", "")
@@ -86,7 +87,7 @@ func _ensure_save_identity(game: GameResource, rom_path: String, emulator_id: St
 	if rom_path == "" or not FSM.file_exists(rom_path):
 		return
 
-	print("[GameManager] ID pass: extracting title id from " + rom_path)
+	if DEBUG_LOG: print("[GameManager] ID pass: extracting title id from " + rom_path)
 	var sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
 	var title_id = sigil_result.get("title_id", "")
 	if title_id == "" and game.platform_slug == "wii" and rom_path.get_extension().to_lower() == "wad":
@@ -112,15 +113,15 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 	var temp_intent = LaunchIntent.new()
 	if rom_path_override != "":
 		temp_intent.rom_path = rom_path_override
-		print("[GameManager] _prepare_game_for_launch: Using shuffler override path = " + rom_path_override)
+		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Using shuffler override path = " + rom_path_override)
 	elif game.file_path != "":
 		temp_intent.rom_path = game.file_path
-		print("[GameManager] _prepare_game_for_launch: Using game.file_path = " + game.file_path)
+		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Using game.file_path = " + game.file_path)
 	else:
 		var root_folder = DataManager.get_setting("games_root_folder")
 		var root_path = root_folder.value if root_folder else "user://roms/"
 		temp_intent.rom_path = FSM.join_paths(root_path, game.platform_slug, game.get_active_file_name())
-		print("[GameManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
+		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Constructed path = " + temp_intent.rom_path)
 	
 	temp_intent.emulator_id = emulator_id
 
@@ -135,7 +136,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 		if rel.begins_with("roms/"):
 			rel = rel.substr(5)
 		temp_intent.rom_path = FSM.join_paths(library_root, rel)
-		print("[GameManager] _prepare_game_for_launch: Resolved relative ROM path -> " + temp_intent.rom_path)
+		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Resolved relative ROM path -> " + temp_intent.rom_path)
 
 	# Generic ID pass: any launch whose save flow keys on the title ID gets one
 	# extraction attempt, regardless of emulator family. Per-family prep flows
@@ -152,7 +153,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 		if game.get_active_disc_number() <= 1:
 			var m3u_path: String = launch_manager.m3u.ensure_m3u(game)
 			if m3u_path != "":
-				print("[GameManager] _prepare_game_for_launch: Multi-disc launch via m3u = " + m3u_path)
+				if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Multi-disc launch via m3u = " + m3u_path)
 				temp_intent.rom_path = m3u_path
 
 	var result = true
@@ -161,51 +162,51 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 	# x360-mobile, ...) share their parent emulator's preparation logic.
 	match launch_manager.registry.get_emulator_architecture(emulator_id):
 		"azahar":
-			print("[GameManager] _prepare_game_for_launch: Preparing Azahar game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Azahar game...")
 			result = _prepare_azahar_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: Azahar prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Azahar prep result = " + str(result))
 		"cemu":
-			print("[GameManager] _prepare_game_for_launch: Preparing Cemu game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Cemu game...")
 			result = _prepare_cemu_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: Cemu prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Cemu prep result = " + str(result))
 		"eden":
-			print("[GameManager] _prepare_game_for_launch: Preparing Eden game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Eden game...")
 			result = _prepare_eden_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: Eden prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Eden prep result = " + str(result))
 		"melonds":
-			print("[GameManager] _prepare_game_for_launch: Preparing melonDS game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing melonDS game...")
 			result = _prepare_melonds_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: melonDS prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: melonDS prep result = " + str(result))
 		"dolphin":
-			print("[GameManager] _prepare_game_for_launch: Preparing Dolphin game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Dolphin game...")
 			result = _prepare_dolphin_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: Dolphin prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Dolphin prep result = " + str(result))
 		"pcsx2":
-			print("[GameManager] _prepare_game_for_launch: Preparing PCSX2 game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing PCSX2 game...")
 			result = _prepare_pcsx2_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: PCSX2 prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: PCSX2 prep result = " + str(result))
 		"ppsspp":
-			print("[GameManager] _prepare_game_for_launch: Preparing PPSSPP game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing PPSSPP game...")
 			result = _prepare_ppsspp_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: PPSSPP prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: PPSSPP prep result = " + str(result))
 		"vita3k", "vita3k-canary":
-			print("[GameManager] _prepare_game_for_launch: Preparing Vita3K game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Vita3K game...")
 			result = await _prepare_vita3k_game(game, temp_intent, is_shuffler)
-			print("[GameManager] _prepare_game_for_launch: Vita3K prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Vita3K prep result = " + str(result))
 		"rpcs3":
-			print("[GameManager] _prepare_game_for_launch: Preparing RPCS3 game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing RPCS3 game...")
 			result = await _prepare_rpcs3_game(game, temp_intent, is_shuffler)
-			print("[GameManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: RPCS3 prep result = " + str(result))
 		"shadps4":
-			print("[GameManager] _prepare_game_for_launch: Preparing shadPS4 game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing shadPS4 game...")
 			result = await _prepare_shadps4_game(game, temp_intent)
-			print("[GameManager] _prepare_game_for_launch: shadPS4 prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: shadPS4 prep result = " + str(result))
 		"xenia":
-			print("[GameManager] _prepare_game_for_launch: Preparing Xenia game...")
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Xenia game...")
 			result = await _prepare_xenia_game(game, temp_intent, is_shuffler)
-			print("[GameManager] _prepare_game_for_launch: Xenia prep result = " + str(result))
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Xenia prep result = " + str(result))
 		_:
-			print("[GameManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
+			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: No prep needed for emulator: " + emulator_id)
 	
 	print("[GameManager] _prepare_game_for_launch: END result = " + str(result))
 	if result:
@@ -217,7 +218,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
 	var sigil_result = _SigilRunner.extract(rom_path, "3ds")
@@ -227,7 +228,7 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 		SystemManager.notifications.show_notification("Failed to extract 3DS game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
 	
-	print("[GameManager] Azahar: TitleID from ROM: " + title_id)
+	if DEBUG_LOG: print("[GameManager] Azahar: TitleID from ROM: " + title_id)
 	
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != title_id:
@@ -243,7 +244,7 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
 	var sigil_result = _SigilRunner.extract(rom_path, "wiiu")
@@ -253,7 +254,7 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 		SystemManager.notifications.show_notification("Failed to extract Wii U game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
 	
-	print("[GameManager] Cemu: TitleID from WUA: " + title_id)
+	if DEBUG_LOG: print("[GameManager] Cemu: TitleID from WUA: " + title_id)
 	
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != title_id:
@@ -282,25 +283,25 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 	
 	for root in search_roots:
 		var db_path = root + "/cache/game_list/game_list.db"
-		print("[GameManager] Eden DB lookup: checking " + db_path)
+		if DEBUG_LOG: print("[GameManager] Eden DB lookup: checking " + db_path)
 		if not FSM.file_exists(db_path):
-			print("[GameManager] Eden DB lookup: file does not exist")
+			if DEBUG_LOG: print("[GameManager] Eden DB lookup: file does not exist")
 			continue
-		print("[GameManager] Eden DB lookup: file exists, opening...")
+		if DEBUG_LOG: print("[GameManager] Eden DB lookup: file exists, opening...")
 		var db = SQLite.new()
 		db.path = db_path
 		db.verbosity_level = SQLite.VERBOSE
 		if not db.open_db():
-			print("[GameManager] Eden DB lookup: failed to open DB")
+			if DEBUG_LOG: print("[GameManager] Eden DB lookup: failed to open DB")
 			continue
-		print("[GameManager] Eden DB lookup: DB opened")
+		if DEBUG_LOG: print("[GameManager] Eden DB lookup: DB opened")
 		
 		var tables = db.query("SELECT name FROM sqlite_master WHERE type='table';")
 		if tables == null or not tables is Array:
-			print("[GameManager] Eden DB lookup: no tables found")
+			if DEBUG_LOG: print("[GameManager] Eden DB lookup: no tables found")
 			db.close_db()
 			continue
-		print("[GameManager] Eden DB lookup: tables count = " + str(tables.size()))
+		if DEBUG_LOG: print("[GameManager] Eden DB lookup: tables count = " + str(tables.size()))
 		
 		for table_dict in tables:
 			var table_name = table_dict.get("name", "")
@@ -323,7 +324,7 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 			if id_col == "" or name_col == "":
 				continue
 			
-			print("[GameManager] Eden DB lookup: scanning table '" + table_name + "' (id_col=" + id_col + ", name_col=" + name_col + ")")
+			if DEBUG_LOG: print("[GameManager] Eden DB lookup: scanning table '" + table_name + "' (id_col=" + id_col + ", name_col=" + name_col + ")")
 			var query = "SELECT " + id_col + " FROM " + table_name + " WHERE " + name_col + " LIKE ? LIMIT 1;"
 			var rows = db.query_with_bindings(query, ["%" + game_name + "%"])
 			if rows != null and rows is Array and rows.size() > 0:
@@ -333,7 +334,7 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 					tid = "%016x" % raw
 				elif raw is String:
 					tid = raw.to_upper().replace("0X", "")
-				print("[GameManager] Eden DB lookup: raw result = " + str(raw) + ", parsed tid = " + tid)
+				if DEBUG_LOG: print("[GameManager] Eden DB lookup: raw result = " + str(raw) + ", parsed tid = " + tid)
 				if tid.length() == 16:
 					var valid = true
 					for c in tid:
@@ -342,22 +343,22 @@ func _resolve_eden_title_id_from_db(game_name: String, emulator_id: String) -> S
 							break
 					if valid and tid.begins_with("01"):
 						db.close_db()
-						print("[GameManager] Eden: TitleID from DB (" + root + "): " + tid)
+						if DEBUG_LOG: print("[GameManager] Eden: TitleID from DB (" + root + "): " + tid)
 						return tid
 					else:
-						print("[GameManager] Eden DB lookup: parsed tid invalid or doesn't start with 01")
+						if DEBUG_LOG: print("[GameManager] Eden DB lookup: parsed tid invalid or doesn't start with 01")
 			else:
-				print("[GameManager] Eden DB lookup: no match in table '" + table_name + "' for '" + game_name + "'")
+				if DEBUG_LOG: print("[GameManager] Eden DB lookup: no match in table '" + table_name + "' for '" + game_name + "'")
 		
 		db.close_db()
 	
-	print("[GameManager] Eden DB lookup: exhausted all roots, no title id found")
+	if DEBUG_LOG: print("[GameManager] Eden DB lookup: exhausted all roots, no title id found")
 	return ""
 
 func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] Eden: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] Eden: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
 	var title_id = ""
@@ -372,14 +373,14 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 				break
 		if valid and game.title_id.to_upper().begins_with("01"):
 			title_id = game.title_id.to_upper()
-			print("[GameManager] Eden: Using stored TitleID from database: " + title_id)
+			if DEBUG_LOG: print("[GameManager] Eden: Using stored TitleID from database: " + title_id)
 	
 	if title_id == "":
 		var prod_keys = TitleIDParser._get_prod_keys_path(launch_manager.registry._get_emulator_directory("eden"))
 		sigil_result = _SigilRunner.extract(rom_path, "switch", prod_keys)
 		title_id = sigil_result.get("title_id", "")
 	if title_id == "":
-		print("[GameManager] Eden: ROM extraction failed, trying game_list.db lookup...")
+		if DEBUG_LOG: print("[GameManager] Eden: ROM extraction failed, trying game_list.db lookup...")
 		title_id = _resolve_eden_title_id_from_db(game.get_display_name(), intent.emulator_id)
 	
 	if title_id == "":
@@ -387,7 +388,7 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 		SystemManager.notifications.show_notification("Failed to extract Switch game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
 	
-	print("[GameManager] Eden: TitleID resolved: " + title_id)
+	if DEBUG_LOG: print("[GameManager] Eden: TitleID resolved: " + title_id)
 	
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != title_id:
@@ -405,7 +406,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var is_upgrade_pass = _needs_wii_id_upgrade(game, existing_id)
 	if existing_id != "" and not is_upgrade_pass:
 		return true
-	print("[GameManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] Dolphin: Preparing game from ROM path: " + intent.rom_path)
 
 	var rom_path = intent.rom_path
 	var game_id = ""
@@ -422,7 +423,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 		game_id = _full_wii_title_id(game_id)
 
 	if game_id == "" and existing_id == "":
-		print("[GameManager] Dolphin: Could not extract Game ID from ROM, trying existing saves...")
+		if DEBUG_LOG: print("[GameManager] Dolphin: Could not extract Game ID from ROM, trying existing saves...")
 		var emulator_dir = launch_manager.registry._get_emulator_directory("dolphin")
 		game_id = TitleIDParser.extract_gamecube_game_id_from_existing_saves(emulator_dir)
 
@@ -435,7 +436,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 		SystemManager.notifications.show_notification("Failed to extract GameCube/Wii game ID", SystemManager.notifications.Type.ERROR)
 		return false
 
-	print("[GameManager] Dolphin: Game ID: " + game_id)
+	if DEBUG_LOG: print("[GameManager] Dolphin: Game ID: " + game_id)
 
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != game_id:
@@ -472,13 +473,13 @@ func _prepare_melonds_game(game: GameResource, intent: LaunchIntent) -> bool:
 		var ds: Dictionary = sections.get("DS", {})
 		if _melonds_paths_exist(ds, ["FirmwarePath", "BIOS7Path", "BIOS9Path"], base_dir):
 			if CSM.set_value(toml_path, "ExternalBIOSEnable", true, "Emu"):
-				print("[GameManager] melonDS: enabled Emu.ExternalBIOSEnable (DS BIOS/firmware files present)")
+				if DEBUG_LOG: print("[GameManager] melonDS: enabled Emu.ExternalBIOSEnable (DS BIOS/firmware files present)")
 
 	var dsi: Dictionary = sections.get("DSi", {})
 	if dsi.get("ExternalBIOSEnable", false) != true:
 		if _melonds_paths_exist(dsi, ["FirmwarePath", "BIOS7Path", "BIOS9Path", "NANDPath"], base_dir):
 			if CSM.set_value(toml_path, "ExternalBIOSEnable", true, "DSi"):
-				print("[GameManager] melonDS: enabled DSi.ExternalBIOSEnable (DSi BIOS/firmware/NAND files present)")
+				if DEBUG_LOG: print("[GameManager] melonDS: enabled DSi.ExternalBIOSEnable (DSi BIOS/firmware/NAND files present)")
 
 	return true
 
@@ -520,7 +521,7 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	# ISO/ZAR: only Title ID extraction is needed, xenia reads these directly
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] Xenia: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] Xenia: Preparing game from ROM path: " + intent.rom_path)
 
 	var title_id = TitleIDParser.extract_xbox360_title_id(rom_path)
 	if title_id == "":
@@ -528,7 +529,7 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		SystemManager.notifications.show_notification("Failed to extract Xbox 360 game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
 
-	print("[GameManager] Xenia: TitleID from ISO: " + title_id)
+	if DEBUG_LOG: print("[GameManager] Xenia: TitleID from ISO: " + title_id)
 
 	var active_title_id = game.get_active_title_id()
 	if active_title_id != "" and active_title_id != title_id:
@@ -580,12 +581,12 @@ func _prepare_xenia_archive_game(game: GameResource, intent: LaunchIntent, rom_p
 		print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
 
 	var extract_path = FSM.join_paths(archive_path.get_base_dir(), title_id)
-	print("[GameManager] Xenia: XBLA extraction path: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] Xenia: XBLA extraction path: " + extract_path)
 
 	if not _xbox360_game_has_files(extract_path):
 		# Remove stale/partial extraction before re-extracting
 		if FSM.dir_exists(extract_path):
-			print("[GameManager] Xenia: Removing stale extraction: " + extract_path)
+			if DEBUG_LOG: print("[GameManager] Xenia: Removing stale extraction: " + extract_path)
 			FSM.delete_dir_recursive(extract_path)
 
 		var extract_success := await _extract_xenia_archive(archive_path, extract_path, is_shuffler)
@@ -623,7 +624,7 @@ func _await_extraction(item_id: String, log_tag: String, timeout_sec: float = 18
 			return
 		tracker.complete = true
 		tracker.success = success
-		print("[%s] Extraction callback - success=%s" % [log_tag, str(success)])
+		if DEBUG_LOG: print("[%s] Extraction callback - success=%s" % [log_tag, str(success)])
 		# Disconnect once matched so we don't keep listening for other items.
 		if SystemManager.download.extraction_completed.is_connected(on_complete):
 			SystemManager.download.extraction_completed.disconnect(on_complete)
@@ -661,7 +662,7 @@ func _extract_xenia_archive(archive_path: String, extract_to: String, suppress_n
 func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] PCSX2: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] PCSX2: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
 	var serial = ""
@@ -672,7 +673,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 		sigil_result = _SigilRunner.extract(rom_path, "ps2")
 		serial = sigil_result.get("title_id", "")
 		if serial != "":
-			print("[GameManager] PCSX2: Serial from ROM: " + serial)
+			if DEBUG_LOG: print("[GameManager] PCSX2: Serial from ROM: " + serial)
 	
 	if serial == "":
 		push_error("[GameManager] PCSX2: Failed to extract serial from: " + rom_path)
@@ -695,7 +696,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] PPSSPP: Preparing game from ROM path: " + intent.rom_path)
+	if DEBUG_LOG: print("[GameManager] PPSSPP: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
 	var game_id = ""
@@ -706,7 +707,7 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 		sigil_result = _SigilRunner.extract(rom_path, "psp")
 		game_id = sigil_result.get("title_id", "")
 		if game_id != "":
-			print("[GameManager] PPSSPP: Game ID from ROM: " + game_id)
+			if DEBUG_LOG: print("[GameManager] PPSSPP: Game ID from ROM: " + game_id)
 	
 	if game_id == "":
 		push_error("[GameManager] PPSSPP: Failed to extract game ID from: " + rom_path)
@@ -727,10 +728,10 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## Handles Vita3K game extraction and launch preparation
 ## Returns true if ready to launch, false if error
 func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:
-	print("[GameManager] _prepare_vita3k_game: ENTER for " + game.get_display_name() + " (shuffler=" + str(is_shuffler) + ")")
+	if DEBUG_LOG: print("[GameManager] _prepare_vita3k_game: ENTER for " + game.get_display_name() + " (shuffler=" + str(is_shuffler) + ")")
 	
 	var rom_path = intent.rom_path
-	print("[GameManager] Vita3K: Preparing game from ROM path: " + rom_path)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Preparing game from ROM path: " + rom_path)
 	
 	# Get emulator directory for checking existing games
 	# Platform-specific: Android uses fixed external storage path, desktop uses install path
@@ -757,24 +758,24 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 			# Emulator not installed yet, use the default emulator directory
 			# We can still extract the TitleID and prepare the game files
 			emulator_dir = launch_manager.registry._get_emulator_directory("vita3k").rstrip("/")
-			print("[GameManager] Vita3K: Emulator not installed yet, using default directory: " + emulator_dir)
+			if DEBUG_LOG: print("[GameManager] Vita3K: Emulator not installed yet, using default directory: " + emulator_dir)
 		
 		ux0_app_path = emulator_dir + "/ux0/app"
 	
-	print("[GameManager] Vita3K: ux0_app_path = " + ux0_app_path)
+	if DEBUG_LOG: print("[GameManager] Vita3K: ux0_app_path = " + ux0_app_path)
 	
 	# Always extract TitleID from ZIP to ensure we have the correct one for this ROM
-	print("[GameManager] Vita3K: Extracting TitleID from ZIP...")
+	if DEBUG_LOG: print("[GameManager] Vita3K: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_vita_title_id(rom_path)
 	if zip_title_id == "" or not TitleIDParser._is_vita_title_id(zip_title_id):
 		push_error("[GameManager] Vita3K: Failed to extract a valid TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract Vita game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
-	print("[GameManager] Vita3K: TitleID from ZIP: " + zip_title_id)
+	if DEBUG_LOG: print("[GameManager] Vita3K: TitleID from ZIP: " + zip_title_id)
 	
 	# If stored title_id doesn't match the ZIP, update it
 	var active_title_id = game.get_active_title_id()
-	print("[GameManager] Vita3K: active_title_id from DB = '" + active_title_id + "', zip_title_id = '" + zip_title_id + "'")
+	if DEBUG_LOG: print("[GameManager] Vita3K: active_title_id from DB = '" + active_title_id + "', zip_title_id = '" + zip_title_id + "'")
 	if active_title_id != "" and active_title_id != zip_title_id:
 		print("[GameManager] Vita3K: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
 		print("[GameManager] Vita3K: Updating to correct TitleID from ZIP")
@@ -783,10 +784,10 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		_store_title_id(game, zip_title_id)
 		print("[GameManager] Vita3K: Updated database with TitleID: " + zip_title_id)
 	else:
-		print("[GameManager] Vita3K: TitleID already matches, skipping DB update")
+		if DEBUG_LOG: print("[GameManager] Vita3K: TitleID already matches, skipping DB update")
 	
 	var title_id = game.get_active_title_id()
-	print("[GameManager] Vita3K: Using TitleID: " + title_id)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Using TitleID: " + title_id)
 	
 	# Platform-specific Vita3K app path
 	var vita_app_path: String
@@ -796,11 +797,11 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		# Desktop - use emulator directory (already obtained above)
 		vita_app_path = emulator_dir + "/ux0/app/" + title_id
 	
-	print("[GameManager] Vita3K: Checking extracted files at: " + vita_app_path)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Checking extracted files at: " + vita_app_path)
 	
 	# Check if already extracted by looking for actual game files, not just directory existence
 	var is_extracted = _vita_app_has_game_files(vita_app_path)
-	print("[GameManager] Vita3K: has_game_files = " + str(is_extracted))
+	if DEBUG_LOG: print("[GameManager] Vita3K: has_game_files = " + str(is_extracted))
 	if is_extracted:
 		_ensure_vita3k_license(rom_path, emulator_dir, title_id)
 		return true
@@ -820,7 +821,7 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		true,  # Pulsing
 		true  # pinned
 	)
-	print("[GameManager] Vita3K: Extracting ZIP to: " + extract_parent)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Extracting ZIP to: " + extract_parent)
 	
 	var extract_success = await _extract_vita_zip(rom_path, extract_parent, title_id)
 	
@@ -840,11 +841,11 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 		var sentinel_path = vita_app_path + "/.kyodai_shuffler"
 		if not FSM.file_exists(sentinel_path):
 			if FSM.write_file(sentinel_path, ""):
-				print("[GameManager] Vita3K: Created shuffler sentinel at " + sentinel_path)
+				if DEBUG_LOG: print("[GameManager] Vita3K: Created shuffler sentinel at " + sentinel_path)
 			else:
 				push_warning("[GameManager] Vita3K: Failed to create shuffler sentinel at " + sentinel_path)
 	
-	print("[GameManager] _prepare_vita3k_game: EXIT with true")
+	if DEBUG_LOG: print("[GameManager] _prepare_vita3k_game: EXIT with true")
 	return true
 
 ## Checks whether the given Vita3K app path contains actual game files
@@ -856,28 +857,28 @@ func _vita_app_has_game_files(vita_app_path: String) -> bool:
 	for f in files:
 		if f != "." and f != "..":
 			actual_files += 1
-	print("[GameManager] Vita3K: _vita_app_has_game_files: found " + str(actual_files) + " actual files in " + vita_app_path)
+	if DEBUG_LOG: print("[GameManager] Vita3K: _vita_app_has_game_files: found " + str(actual_files) + " actual files in " + vita_app_path)
 	return actual_files > 0
 
 ## Extracts Vita game ZIP with progress tracking
 func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -> bool:
-	print("[GameManager] _extract_vita_zip: ENTER zip_path=" + zip_path + ", extract_to=" + extract_to)
+	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: ENTER zip_path=" + zip_path + ", extract_to=" + extract_to)
 	
 	var parent_dir = extract_to.get_base_dir()
-	print("[GameManager] Vita3K: Creating parent directory: " + parent_dir)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Creating parent directory: " + parent_dir)
 	if not FSM.make_dir_recursive(parent_dir):
 		push_error("[GameManager] Failed to create Vita3K app directory: " + parent_dir)
-		print("[GameManager] _extract_vita_zip: EXIT false (mkdir failed)")
+		if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT false (mkdir failed)")
 		return false
 	
 	# Use SystemManager.download's extraction for progress tracking.
-	print("[GameManager] Vita3K: Queueing extraction via SystemManager.download")
+	if DEBUG_LOG: print("[GameManager] Vita3K: Queueing extraction via SystemManager.download")
 	var item_id = SystemManager.download.queue_extraction(zip_path, extract_to, "vita_game", title_id, false)
 	if item_id == "":
 		push_error("[GameManager] Failed to queue Vita game extraction")
-		print("[GameManager] _extract_vita_zip: EXIT false (queue failed)")
+		if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT false (queue failed)")
 		return false
-	print("[GameManager] Vita3K: Extraction queued with item_id=" + item_id)
+	if DEBUG_LOG: print("[GameManager] Vita3K: Extraction queued with item_id=" + item_id)
 	
 	# Use Dictionary for thread-safe state tracking (reference type)
 	var future = {"complete": false, "success": false, "message": ""}
@@ -887,14 +888,14 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 			future.complete = true
 			future.success = success
 			future.message = message
-			print("[GameManager] Vita3K: Extraction callback received - success=" + str(success) + ", message=" + message)
+			if DEBUG_LOG: print("[GameManager] Vita3K: Extraction callback received - success=" + str(success) + ", message=" + message)
 	
 	SystemManager.download.extraction_completed.connect(on_complete)
 	
 	# Wait for completion (with timeout)
 	var timeout = 300.0  # 5 minutes timeout
 	var elapsed = 0.0
-	print("[GameManager] _extract_vita_zip: Starting poll loop")
+	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: Starting poll loop")
 	while not future.complete and elapsed < timeout:
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
@@ -903,10 +904,10 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 	
 	if not future.complete:
 		push_error("[GameManager] Vita game extraction timed out")
-		print("[GameManager] _extract_vita_zip: EXIT false (timeout)")
+		if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT false (timeout)")
 		return false
 	
-	print("[GameManager] _extract_vita_zip: EXIT " + str(future.success))
+	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT " + str(future.success))
 	return future.success
 
 
@@ -932,7 +933,7 @@ func _ensure_vita3k_license(rom_path: String, emulator_dir: String, title_id: St
 				var src = vita_app_path + "/" + f
 				var dst = license_dir + "/" + f
 				if FSM.move(src, dst):
-					print("[GameManager] Vita3K: Installed license " + f + " -> " + license_dir)
+					if DEBUG_LOG: print("[GameManager] Vita3K: Installed license " + f + " -> " + license_dir)
 					moved = true
 				else:
 					push_warning("[GameManager] Vita3K: Failed to move license file: " + src)
@@ -953,7 +954,7 @@ func _ensure_vita3k_license(rom_path: String, emulator_dir: String, title_id: St
 		if parts.size() == 2 and parts[0] == title_id and entry.to_lower().ends_with(".rif"):
 			var dst = license_dir + "/" + parts[1]
 			if FSM.make_dir_recursive(license_dir) and FSM.write_file_bytes(dst, zr.read_file(entry)):
-				print("[GameManager] Vita3K: Installed license from zip: " + dst)
+				if DEBUG_LOG: print("[GameManager] Vita3K: Installed license from zip: " + dst)
 			else:
 				push_warning("[GameManager] Vita3K: Failed to write license file: " + dst)
 
@@ -969,7 +970,7 @@ func _rpcs3_game_has_files(game_path: String) -> bool:
 	for f in files:
 		if f != "." and f != "..":
 			actual_files += 1
-	print("[GameManager] RPCS3: _rpcs3_game_has_files: found " + str(actual_files) + " actual files in " + game_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: _rpcs3_game_has_files: found " + str(actual_files) + " actual files in " + game_path)
 	return actual_files > 0
 
 
@@ -977,14 +978,14 @@ func _rpcs3_game_has_files(game_path: String) -> bool:
 ## The extracted folder path is passed to aPS3e via the game_dir intent extra
 ## Works on both desktop and Android
 func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: bool = false) -> bool:
-	print("[GameManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
+	if DEBUG_LOG: print("[GameManager] RPCS3: _prepare_rpcs3_game called for: " + game.get_display_name())
 	
 	if not game or not intent:
 		print("[GameManager] RPCS3: ERROR - game or intent is null")
 		return false
 	
 	var rom_path := intent.rom_path if intent.rom_path != "" else game.file_path
-	print("[GameManager] RPCS3: ROM path: " + rom_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: ROM path: " + rom_path)
 	
 	if rom_path == "":
 		push_error("[GameManager] RPCS3: No ROM path for game: " + game.get_display_name())
@@ -997,7 +998,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if FSM.dir_exists(rom_path):
 		# This might be an extracted folder. Check if it has actual game files.
 		if _ps3_game_has_files(rom_path):
-			print("[GameManager] RPCS3: ROM path is extracted folder with valid game files")
+			if DEBUG_LOG: print("[GameManager] RPCS3: ROM path is extracted folder with valid game files")
 			
 			# First, try to get TitleID from existing PARAM.SFO in the extracted folder
 			# This is more reliable than searching for ZIPs when multiple games share a folder
@@ -1007,7 +1008,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				if not sfo_bytes.is_empty():
 					var title_id_from_sfo = TitleIDParser.get_title_id_from_sfo_bytes(sfo_bytes)
 					if title_id_from_sfo != "":
-						print("[GameManager] RPCS3: Got TitleID from PARAM.SFO: " + title_id_from_sfo)
+						if DEBUG_LOG: print("[GameManager] RPCS3: Got TitleID from PARAM.SFO: " + title_id_from_sfo)
 						
 						# Verify this matches the folder name or update if needed
 						var folder_name = rom_path.get_file()
@@ -1028,7 +1029,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			
 			# Fallback: find the original ZIP
 			# This handles cases where we can't read PARAM.SFO
-			print("[GameManager] RPCS3: Could not get TitleID from PARAM.SFO, searching for ZIP...")
+			if DEBUG_LOG: print("[GameManager] RPCS3: Could not get TitleID from PARAM.SFO, searching for ZIP...")
 			
 			# On desktop, the extracted folder might be in the emulator directory
 			# but the ZIP is in the games library. Check both.
@@ -1057,7 +1058,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			
 			if matching_zip != "":
 				zip_path = matching_zip
-				print("[GameManager] RPCS3: Found matching ZIP by game name: " + zip_path)
+				if DEBUG_LOG: print("[GameManager] RPCS3: Found matching ZIP by game name: " + zip_path)
 			elif all_zip_files.size() > 0:
 				# Fallback to first ZIP (old behavior, but warn about it)
 				zip_path = all_zip_files[0]
@@ -1068,13 +1069,13 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				return false
 		else:
 			# Directory exists but is empty - files were deleted. Look for ZIP.
-			print("[GameManager] RPCS3: Extracted folder is empty, looking for original ZIP...")
+			if DEBUG_LOG: print("[GameManager] RPCS3: Extracted folder is empty, looking for original ZIP...")
 			zip_path = ""
 			var parent_dir = rom_path.get_base_dir()
 			var zip_files = _find_zip_files_in_dir(parent_dir)
 			if zip_files.size() > 0:
 				zip_path = zip_files[0]
-				print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
+				if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 			else:
 				# On desktop, the extracted folder might be in the emulator directory
 				# but the ZIP is in the games library. Check the library folder.
@@ -1082,11 +1083,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 					var root_folder = DataManager.get_setting("games_root_folder")
 					var root_path = root_folder.value if root_folder else "user://roms/"
 					var library_dir = FSM.join_paths(root_path, game.platform_slug)
-					print("[GameManager] RPCS3: Checking games library: " + library_dir)
+					if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
 					zip_files = _find_zip_files_in_dir(library_dir)
 					if zip_files.size() > 0:
 						zip_path = zip_files[0]
-						print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
+						if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
 				
 				if zip_path == "":
 					push_error("[GameManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
@@ -1094,7 +1095,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 					return false
 	elif not FSM.file_exists(rom_path):
 		# Path doesn't exist at all (deleted extracted folder). Look for ZIP in parent.
-		print("[GameManager] RPCS3: ROM path does not exist, looking for original ZIP...")
+		if DEBUG_LOG: print("[GameManager] RPCS3: ROM path does not exist, looking for original ZIP...")
 		zip_path = ""
 		
 		# First try the parent directory of the deleted folder
@@ -1102,7 +1103,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		var zip_files = _find_zip_files_in_dir(parent_dir)
 		if zip_files.size() > 0:
 			zip_path = zip_files[0]
-			print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 		else:
 			# On desktop, the extracted folder might be in the emulator directory
 			# but the ZIP is in the games library. Check the library folder.
@@ -1110,11 +1111,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				var root_folder = DataManager.get_setting("games_root_folder")
 				var root_path = root_folder.value if root_folder else "user://roms/"
 				var library_dir = FSM.join_paths(root_path, game.platform_slug)
-				print("[GameManager] RPCS3: Checking games library: " + library_dir)
+				if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
 				zip_files = _find_zip_files_in_dir(library_dir)
 				if zip_files.size() > 0:
 					zip_path = zip_files[0]
-					print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
+					if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
 			
 			if zip_path == "":
 				push_error("[GameManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
@@ -1122,13 +1123,13 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				return false
 	
 	# Step 1: Extract TitleID from ZIP
-	print("[GameManager] RPCS3: Extracting TitleID from ZIP: " + zip_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: Extracting TitleID from ZIP: " + zip_path)
 	var zip_title_id = TitleIDParser.extract_ps3_title_id(zip_path)
 	if zip_title_id == "":
 		push_error("[GameManager] RPCS3: Failed to extract TitleID from: " + zip_path)
 		SystemManager.notifications.show_notification("Failed to extract PS3 game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
-	print("[GameManager] RPCS3: TitleID from ZIP: " + zip_title_id)
+	if DEBUG_LOG: print("[GameManager] RPCS3: TitleID from ZIP: " + zip_title_id)
 	
 	# If stored title_id doesn't match the ZIP, update it
 	var active_title_id = game.get_active_title_id()
@@ -1141,7 +1142,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		print("[GameManager] RPCS3: Updated database with TitleID: " + zip_title_id)
 	
 	var title_id = game.get_active_title_id()
-	print("[GameManager] RPCS3: Using TitleID: " + title_id)
+	if DEBUG_LOG: print("[GameManager] RPCS3: Using TitleID: " + title_id)
 	
 	# On desktop, determine the correct RPCS3 directory
 	var rpcs3_install_dir := ""
@@ -1153,41 +1154,41 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			rpcs3_install_dir = emulator_install_path.get_base_dir()
 			desktop_disc_path = FSM.join_paths(rpcs3_install_dir, "games", title_id)
 			desktop_digital_path = FSM.join_paths(rpcs3_install_dir, "dev_hdd0", "game", title_id)
-			print("[GameManager] RPCS3: Desktop disc path: " + desktop_disc_path)
-			print("[GameManager] RPCS3: Desktop digital path: " + desktop_digital_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Desktop disc path: " + desktop_disc_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Desktop digital path: " + desktop_digital_path)
 	
 	# Step 2: Determine final extraction path (next to the ZIP)
 	var rom_parent_dir = zip_path.get_base_dir()
 	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
-	print("[GameManager] RPCS3: Extraction path: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted
 	# On desktop, check RPCS3 directories first
 	if not SystemManager.platform.is_android():
 		if _ps3_game_has_files(desktop_disc_path):
-			print("[GameManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
 			intent.rom_path = desktop_disc_path
 			if not is_shuffler:
 				_store_file_path(game, desktop_disc_path)
 			return true
 		elif _ps3_game_has_files(desktop_digital_path):
-			print("[GameManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
 			intent.rom_path = desktop_digital_path
 			if not is_shuffler:
 				_store_file_path(game, desktop_digital_path)
 			return true
 	
 	if _ps3_game_has_files(extract_path):
-		print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
 		# Update intent to point to extracted folder
 		intent.rom_path = extract_path
-		print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
 		if not is_shuffler:
 			_store_file_path(game, extract_path)
-		print("[GameManager] RPCS3: After _store_file_path, game.file_path=" + game.file_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: After _store_file_path, game.file_path=" + game.file_path)
 		return true
 	
-	print("[GameManager] RPCS3: Game not extracted, will extract to: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: Game not extracted, will extract to: " + extract_path)
 	
 	# Step 4: Extract ZIP
 	var rpcs3_notify_id = SystemManager.notifications.show_notification(
@@ -1208,11 +1209,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		# On desktop, extract directly to RPCS3 directory.
 		# We default to disc path; if the game is digital format we'll handle it after extraction.
 		extract_target = desktop_disc_path
-		print("[GameManager] RPCS3: Desktop - extracting directly to: " + extract_target)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Desktop - extracting directly to: " + extract_target)
 	else:
 		# On Android, extract to temp first (same drive, no permission issues)
 		extract_target = extract_path + "_tmp"
-		print("[GameManager] RPCS3: Android - extracting to temp: " + extract_target)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Android - extracting to temp: " + extract_target)
 	
 	# Remove stale/partial game folders so re-extraction starts clean and the
 	# unwrap/move steps don't collide with leftover files (e.g. a PARAM.SFO left
@@ -1220,10 +1221,10 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if is_desktop:
 		for stale_path in [desktop_disc_path, desktop_digital_path]:
 			if FSM.dir_exists(stale_path):
-				print("[GameManager] RPCS3: Removing stale game folder: " + stale_path)
+				if DEBUG_LOG: print("[GameManager] RPCS3: Removing stale game folder: " + stale_path)
 				FSM.delete_dir_recursive(stale_path)
 	elif FSM.dir_exists(extract_path):
-		print("[GameManager] RPCS3: Removing stale game folder: " + extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Removing stale game folder: " + extract_path)
 		FSM.delete_dir_recursive(extract_path)
 	
 	var extract_success := await _extract_ps3_zip(zip_path, extract_target)
@@ -1250,19 +1251,19 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	
 	# Determine if disc or digital format
 	var is_disc_format = sfo_dir.get_file().to_upper() == "PS3_GAME"
-	print("[GameManager] RPCS3: Format detected: " + ("disc" if is_disc_format else "digital"))
+	if DEBUG_LOG: print("[GameManager] RPCS3: Format detected: " + ("disc" if is_disc_format else "digital"))
 	
 	# Determine final path
 	var final_extract_path = extract_path
 	if is_desktop:
 		final_extract_path = desktop_disc_path if is_disc_format else desktop_digital_path
-		print("[GameManager] RPCS3: Desktop final path: " + final_extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Desktop final path: " + final_extract_path)
 	
 	# Step 6: Handle wrapper folder (e.g., "Soulcalibur IV/PS3_GAME/" -> "PS3_GAME/")
 	var game_root = sfo_dir.get_base_dir() if is_disc_format else sfo_dir
 	if is_desktop and game_root != final_extract_path:
-		print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
-		print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
+		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
 		
 		# Move contents of wrapper folder up to final_extract_path
 		var items = FSM.list_dir(game_root)
@@ -1277,10 +1278,10 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		
 		# Try to delete empty wrapper folder (may fail on Windows due to permissions, that's OK)
 		FSM.delete_dir_recursive(game_root)
-		print("[GameManager] RPCS3: Unwrapped successfully")
+		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapped successfully")
 	elif not is_desktop:
 		# Android: move from temp to final
-		print("[GameManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
 		if not FSM.move_dir_contents(game_root, final_extract_path):
 			push_error("[GameManager] RPCS3: Failed to move game files to " + final_extract_path)
 			FSM.delete_dir_recursive(extract_target)
@@ -1341,7 +1342,7 @@ func _ps3_game_has_files(game_path: String) -> bool:
 		sfo_path = FSM.find_file_recursive(game_path, "PARAM.sfo")
 	
 	if sfo_path == "":
-		print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO not found in " + game_path)
+		if DEBUG_LOG: print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO not found in " + game_path)
 		return false
 	
 	# PARAM.SFO alone isn't enough - a partially deleted game folder still has it.
@@ -1349,7 +1350,7 @@ func _ps3_game_has_files(game_path: String) -> bool:
 	# disc and digital layouts) so broken folders trigger re-extraction.
 	var usrdir = FSM.join_paths(sfo_path.get_base_dir(), "USRDIR")
 	var has_eboot = FSM.file_exists(FSM.join_paths(usrdir, "EBOOT.BIN")) or FSM.file_exists(FSM.join_paths(usrdir, "eboot.bin"))
-	print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO found, EBOOT.BIN present=" + str(has_eboot) + " in " + game_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO found, EBOOT.BIN present=" + str(has_eboot) + " in " + game_path)
 	return has_eboot
 
 
@@ -1372,13 +1373,13 @@ func _find_zip_files_in_dir(dir_path: String) -> Array[String]:
 				result.append(full_path)
 		file_name = dir.get_next()
 	
-	print("[GameManager] RPCS3: _find_zip_files_in_dir: found " + str(result.size()) + " ZIP files in " + dir_path)
+	if DEBUG_LOG: print("[GameManager] RPCS3: _find_zip_files_in_dir: found " + str(result.size()) + " ZIP files in " + dir_path)
 	return result
 
 
 ## Extracts a PS3 game ZIP file to the specified directory
 func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
-	print("[GameManager] RPCS3: Extracting ZIP: " + zip_path + " to: " + extract_to)
+	if DEBUG_LOG: print("[GameManager] RPCS3: Extracting ZIP: " + zip_path + " to: " + extract_to)
 	
 	# Create extraction directory
 	if not FSM.dir_exists(extract_to):
@@ -1401,27 +1402,27 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
 		return true
-	print("[GameManager] shadPS4: _prepare_shadps4_game called for: " + game.get_display_name())
+	if DEBUG_LOG: print("[GameManager] shadPS4: _prepare_shadps4_game called for: " + game.get_display_name())
 	
 	if not game or not intent:
 		print("[GameManager] shadPS4: ERROR - game or intent is null")
 		return false
 	
 	var rom_path := game.file_path
-	print("[GameManager] shadPS4: ROM path: " + rom_path)
+	if DEBUG_LOG: print("[GameManager] shadPS4: ROM path: " + rom_path)
 	
 	if rom_path == "":
 		push_error("[GameManager] shadPS4: No ROM path for game: " + game.get_display_name())
 		return false
 	
 	# Step 1: Extract TitleID from ZIP
-	print("[GameManager] shadPS4: Extracting TitleID from ZIP...")
+	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_ps4_title_id(rom_path)
 	if zip_title_id == "":
 		push_error("[GameManager] shadPS4: Failed to extract TitleID from: " + rom_path)
 		SystemManager.notifications.show_notification("Failed to extract PS4 game TitleID", SystemManager.notifications.Type.ERROR)
 		return false
-	print("[GameManager] shadPS4: TitleID from ZIP: " + zip_title_id)
+	if DEBUG_LOG: print("[GameManager] shadPS4: TitleID from ZIP: " + zip_title_id)
 	
 	# If stored title_id doesn't match the ZIP, update it
 	var active_title_id = game.get_active_title_id()
@@ -1434,23 +1435,23 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] shadPS4: Updated database with TitleID: " + zip_title_id)
 	
 	var title_id = game.get_active_title_id()
-	print("[GameManager] shadPS4: Using TitleID: " + title_id)
+	if DEBUG_LOG: print("[GameManager] shadPS4: Using TitleID: " + title_id)
 	
 	# Step 2: Determine extraction path (next to the ZIP in the ps4 roms folder)
 	var rom_parent_dir = rom_path.get_base_dir()
 	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
-	print("[GameManager] shadPS4: Extraction path: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] shadPS4: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted
 	if _shadps4_game_has_files(extract_path):
-		print("[GameManager] shadPS4: Game already extracted at: " + extract_path)
+		if DEBUG_LOG: print("[GameManager] shadPS4: Game already extracted at: " + extract_path)
 		return true
 	
-	print("[GameManager] shadPS4: Game not extracted, will extract to: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] shadPS4: Game not extracted, will extract to: " + extract_path)
 	
 	# Step 4: Create extraction directory
 	if not FSM.dir_exists(extract_path):
-		print("[GameManager] shadPS4: Creating extraction directory: " + extract_path)
+		if DEBUG_LOG: print("[GameManager] shadPS4: Creating extraction directory: " + extract_path)
 		if not FSM.make_dir_recursive(extract_path):
 			push_error("[GameManager] shadPS4: Failed to create extraction directory: " + extract_path)
 			return false
@@ -1466,14 +1467,14 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		true,  # pulsing
 		true  # pinned
 	)
-	print("[GameManager] shadPS4: Extracting ZIP to: " + extract_path)
+	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting ZIP to: " + extract_path)
 	
 	var extract_success := await _extract_shadps4_zip(rom_path, extract_path)
 	
 	# Dismiss the extraction notification
 	SystemManager.notifications.dismiss_notification(shadps4_notify_id)
 	
-	print("[GameManager] shadPS4: _extract_shadps4_zip returned: " + str(extract_success))
+	if DEBUG_LOG: print("[GameManager] shadPS4: _extract_shadps4_zip returned: " + str(extract_success))
 	
 	if not extract_success:
 		push_error("[GameManager] shadPS4: Failed to extract PS4 game ZIP: " + rom_path)
@@ -1496,13 +1497,13 @@ func _shadps4_game_has_files(game_path: String) -> bool:
 			continue
 		actual_files += 1
 	
-	print("[GameManager] shadPS4: _shadps4_game_has_files: found " + str(actual_files) + " entries in " + game_path)
+	if DEBUG_LOG: print("[GameManager] shadPS4: _shadps4_game_has_files: found " + str(actual_files) + " entries in " + game_path)
 	return actual_files > 0
 
 
 ## Extracts a PS4 game ZIP file to the specified directory (NO TIMEOUT)
 func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
-	print("[GameManager] shadPS4: Extracting ZIP: " + zip_path + " to: " + extract_to)
+	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting ZIP: " + zip_path + " to: " + extract_to)
 	
 	# Use SystemManager.download's extraction functionality
 	var item_id: String = SystemManager.download.queue_extraction(zip_path, extract_to, "ps4_game", "Extracting PS4 Game", false)

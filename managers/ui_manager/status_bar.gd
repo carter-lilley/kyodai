@@ -524,8 +524,7 @@ func _update_battery_icon() -> void:
 
 func _apply_colors() -> void:
 	if _background:
-		# Match the navigation bar background so the top strip blends in.
-		_background.bg_color = M3Theme.get_surface_container()
+		_background.bg_color = Color.BLACK if M3Theme.is_dark_mode else Color.WHITE
 	if _clock_font == null:
 		_clock_font = _create_clock_font()
 	if _clock_label:

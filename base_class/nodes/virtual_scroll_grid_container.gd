@@ -1,6 +1,8 @@
 class_name VirtualScrollGridContainer
 extends Control
 
+const DEBUG_LOG: bool = false
+
 # Global startup guard: suppresses all layout work until Main is ready for the
 # single final settle. This prevents visible "jank" from layout passes before
 # the saved window size and saved zoom are stable.
@@ -115,7 +117,7 @@ func _apply_zoom_ratio(p_ratio: float) -> bool:
 	# grid is explicitly settled after the window size is stable.
 	var new_ratio = clamped if startup_layout_suppressed else _calculate_snapped_ratio(clamped)
 	if debug_mode:
-		print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " new_ratio=", new_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+		if DEBUG_LOG: print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " new_ratio=", new_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	if is_equal_approx(target_card_width_ratio, new_ratio):
 		return false
 	_batching_layout = true
@@ -154,7 +156,7 @@ func _batch_apply_layout_state() -> void:
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
 	if debug_mode:
-		print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio, " state.level=", state.card_zoom_level)
+		if DEBUG_LOG: print("[Grid] _batch_apply_layout_state before zoom: target_ratio=", target_card_width_ratio, " base_size=", base_card_size, " card_size=", card_size, " state.zoom=", state.card_zoom_ratio, " state.level=", state.card_zoom_level)
 	var zoom_changed: bool
 	if new_mode == ViewMode.GRID:
 		if state.card_zoom_level >= 0:
@@ -165,7 +167,7 @@ func _batch_apply_layout_state() -> void:
 		# LIST/CAROUSEL have their own per-mode zoom ratio.
 		zoom_changed = _apply_zoom_ratio(state.card_zoom_list_ratio)
 	if debug_mode:
-		print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
+		if DEBUG_LOG: print("[Grid] _batch_apply_layout_state after zoom: target_ratio=", target_card_width_ratio, " zoom_changed=", zoom_changed, " card_size=", card_size)
 	var focus_changed: bool = _apply_focus_scale(1.0 + state.focus_scale_ratio)
 	# Apply the flag (also converged in _refresh_cached_settings), but detect
 	# changes against the layout-applied cache: it reflects what is actually
@@ -180,7 +182,7 @@ func _batch_apply_layout_state() -> void:
 		return
 
 	if debug_mode:
-		print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, " pagination=", pagination_changed, " staggered=", staggered_changed)
+		if DEBUG_LOG: print("[Grid] _batch_apply_layout_state: structure=", structure_changed, " zoom=", zoom_changed, " padding=", padding_changed, " focus=", focus_changed, " pagination=", pagination_changed, " staggered=", staggered_changed)
 
 	if structure_changed:
 		# One rebuild path: configure flags then refresh buffer, which recalculates layout.
@@ -352,7 +354,7 @@ var target_card_width_ratio: float = 0.15:
 		# Calculate snapped ratio to ensure whole cards fit per row/column
 		var snapped_ratio = _calculate_snapped_ratio(clamped)
 		if debug_mode:
-			print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
+			if DEBUG_LOG: print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
 		target_card_width_ratio = snapped_ratio
 		_recalculate_layout()
@@ -637,12 +639,12 @@ func _get_available_size() -> Vector2:
 	# than the grid's own size, which may not reflect the final container size yet.
 	if _deterministic_available_size.x > 0.0 and _deterministic_available_size.y > 0.0:
 		if debug_mode:
-			print("[Grid] _get_available_size: using deterministic available size=", _deterministic_available_size)
+			if DEBUG_LOG: print("[Grid] _get_available_size: using deterministic available size=", _deterministic_available_size)
 		return Vector2(maxf(_deterministic_available_size.x - inset.x, 1.0), maxf(_deterministic_available_size.y - inset.y, 1.0))
 
 	var result = Vector2(maxf(size.x - inset.x, 1.0), maxf(size.y - inset.y, 1.0))
 	if debug_mode:
-		print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " result=", result)
+		if DEBUG_LOG: print("[Grid] _get_available_size: vertical=", vertical, " size=", size, " result=", result)
 	return result
 
 func _get_normal_stride() -> float:
@@ -877,7 +879,7 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	var state = UIManager.card_settings_state
 
 	if debug_mode:
-		print("[Grid] settings changed mask=", mask, " display_mode=", state.display_mode, " media_ratio=", state.media_aspect_ratio, " cached_display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+		if DEBUG_LOG: print("[Grid] settings changed mask=", mask, " display_mode=", state.display_mode, " media_ratio=", state.media_aspect_ratio, " cached_display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
 
 	# Refresh cached media/display settings before any layout work so that
 	# _batch_apply_layout_state() snaps target_card_width_ratio against the
@@ -885,14 +887,14 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	_refresh_cached_settings()
 
 	if debug_mode:
-		print("[Grid] after refresh cached display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
+		if DEBUG_LOG: print("[Grid] after refresh cached display=", _cached_card_display_mode, " cached_ratio=", _cached_media_aspect_ratio)
 
 	# Layout-affecting settings: orientation, zoom, padding, focus scale
 	if mask & CardSettingsState.ChangeMask.LAYOUT:
 		if debug_mode: print("[Grid] applying LAYOUT batch, target_ratio before=", target_card_width_ratio)
 		_batch_apply_layout_state()
 		if debug_mode:
-			print("[Grid] after LAYOUT batch, target_ratio=", target_card_width_ratio, " card_size=", card_size, " base_card_size=", base_card_size)
+			if DEBUG_LOG: print("[Grid] after LAYOUT batch, target_ratio=", target_card_width_ratio, " card_size=", card_size, " base_card_size=", base_card_size)
 
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
@@ -1031,7 +1033,7 @@ func _process(_delta: float):
 
 func _on_resize_debounced():
 	if debug_mode:
-		print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+		if DEBUG_LOG: print("[Grid] _on_resize_debounced: size=", size, " target_ratio=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	if size.y > 0:
 		if debug_mode:
 			_log_parent_chain_sizes()
@@ -1080,7 +1082,7 @@ func _log_parent_chain_sizes() -> void:
 	var current: Node = self
 	var i := 0
 	while current != null and i < labels.size():
-		print("[Grid] layout chain ", labels[i], " size=", current.size)
+		if DEBUG_LOG: print("[Grid] layout chain ", labels[i], " size=", current.size)
 		current = current.get_parent()
 		i += 1
 
@@ -1090,7 +1092,7 @@ func settle_startup() -> void:
 	Main calls this once after the final window size is known so the grid
 	settles at a valid internal snap stop for the current viewport, while the
 	slider and saved zoom stay consistent."""
-	print("[Grid] settle_startup: size=", size, " target_ratio=", target_card_width_ratio)
+	if DEBUG_LOG: print("[Grid] settle_startup: size=", size, " target_ratio=", target_card_width_ratio)
 	if _is_recalculating_layout:
 		return
 
@@ -1120,7 +1122,7 @@ func settle_startup_with_buffer(startup_buffer_lines: int) -> void:
 	This creates only the visible cards plus a small synchronous buffer at
 	startup, then fills the rest of the visual buffer over subsequent frames
 	so the initial frame is not blocked by dozens of off-screen cards."""
-	print("[Grid] settle_startup_with_buffer: startup_buffer_lines=", startup_buffer_lines, " final_buffer_lines=", visual_buffer_lines)
+	if DEBUG_LOG: print("[Grid] settle_startup_with_buffer: startup_buffer_lines=", startup_buffer_lines, " final_buffer_lines=", visual_buffer_lines)
 	var previous_buffer_lines: int = _current_buffer_lines
 	_current_buffer_lines = startup_buffer_lines
 	settle_startup()
@@ -1152,7 +1154,7 @@ func _process_buffer_expansion() -> void:
 	var current_first = _active_cards[0].get_meta("virtual_index", 0)
 
 	if debug_mode:
-		print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
+		if DEBUG_LOG: print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
 
 	var added: int = 0
 	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "grid_buffer"):
@@ -1167,7 +1169,7 @@ func _process_buffer_expansion() -> void:
 		added += 1
 
 	if debug_mode:
-		print("[Grid] _process_buffer_expansion: added=", added, " current_first=", current_first, " current_last=", current_last)
+		if DEBUG_LOG: print("[Grid] _process_buffer_expansion: added=", added, " current_first=", current_first, " current_last=", current_last)
 
 	# Keep the internal virtual range consistent with the active card list so
 	# later scroll/recycle math and preload checks don't use stale bounds.
@@ -1190,14 +1192,14 @@ func _process_buffer_expansion() -> void:
 	if current_first <= _buffer_target_start and current_last >= _buffer_target_end - 1:
 		_pending_buffer_expansion = false
 		if debug_mode:
-			print("[Grid] async buffer expansion complete")
+			if DEBUG_LOG: print("[Grid] async buffer expansion complete")
 
 func _process_pending_visual_setup() -> void:
 	if _pending_visual_setup.is_empty():
 		return
 
 	if debug_mode:
-		print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
+		if DEBUG_LOG: print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
 	var processed: int = 0
 	var keys := _pending_visual_setup.keys()
 	# Not budget-gated: this drain services ACTIVE cards (a pending card has
@@ -1224,7 +1226,7 @@ func _process_pending_visual_setup() -> void:
 			_pending_visual_setup.erase(idx)
 			_pending_visual_setup[idx] = card
 	if debug_mode:
-		print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
+		if DEBUG_LOG: print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
 
 func _flush_pending_visual_setup_for_visible_zone() -> void:
 	if _pending_visual_setup.is_empty():
@@ -1686,7 +1688,7 @@ func _update_page_snap_state() -> void:
 	_scroll_container.page_snap_offset = 0.0
 	_scroll_container.page_snap_max_target = (_get_page_count() - 1) * _get_page_period()
 	if debug_mode:
-		print("[Grid] _update_page_snap_state: period=", _get_page_period(), " max_target=", _scroll_container.page_snap_max_target, " pages=", _get_page_count(), " lpp=", get_lines_per_page(), " stride=", _get_normal_stride(), " axis=", (_get_available_size().y if vertical else _get_available_size().x))
+		if DEBUG_LOG: print("[Grid] _update_page_snap_state: period=", _get_page_period(), " max_target=", _scroll_container.page_snap_max_target, " pages=", _get_page_count(), " lpp=", get_lines_per_page(), " stride=", _get_normal_stride(), " axis=", (_get_available_size().y if vertical else _get_available_size().x))
 	var current := _get_current_scroll_pos()
 	var snapped := _clamp_scroll_to_range(_snap_to_page_target(current))
 	if not is_equal_approx(snapped, current):
@@ -1728,7 +1730,7 @@ func _on_page_step_request(direction: int) -> float:
 	var page := int(round(base / period))
 	var target := _get_page_scroll_target(page + direction)
 	if debug_mode:
-		print("[Grid] page step: base=", base, " period=", period, " page=", page, " dir=", direction, " target=", target)
+		if DEBUG_LOG: print("[Grid] page step: base=", base, " period=", period, " page=", page, " dir=", direction, " target=", target)
 	return target
 
 # --- Page spacers -----------------------------------------------------------
@@ -1974,7 +1976,7 @@ func _recalculate_layout():
 	var base_dims = _get_base_dimensions_for_mode()
 
 	if debug_mode:
-		print("[Grid] _recalculate_layout: zoom=", current_zoom, " target_ratio=", target_card_width_ratio, " base_dims=", base_dims, " view_mode=", view_mode, " vertical=", vertical, " available=", _get_available_size(), " elapsed_us=", Time.get_ticks_usec() - start_us)
+		if DEBUG_LOG: print("[Grid] _recalculate_layout: zoom=", current_zoom, " target_ratio=", target_card_width_ratio, " base_dims=", base_dims, " view_mode=", view_mode, " vertical=", vertical, " available=", _get_available_size(), " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 	if current_zoom <= 0:
 		push_warning("[VirtualScrollGridContainer] Invalid zoom value: %f, skipping layout" % current_zoom)
@@ -2043,7 +2045,7 @@ func _recalculate_layout():
 	var old_total_items = _total_items
 	_total_items = _pad_total_items(_source_total_items)
 	if debug_mode and old_total_items != _total_items:
-		print("[Grid] re-pad: source=", _source_total_items, " total ", old_total_items, " -> ", _total_items)
+		if DEBUG_LOG: print("[Grid] re-pad: source=", _source_total_items, " total ", old_total_items, " -> ", _total_items)
 
 	# Determine which parts of the layout actually changed
 	var structure_changed = view_mode != _last_layout_view_mode or grid_vertical != _last_layout_grid_vertical
@@ -2064,7 +2066,7 @@ func _recalculate_layout():
 	var display_or_ratio_changed = current_display_mode != _last_layout_display_mode or current_media_ratio != _last_layout_media_aspect_ratio
 
 	if debug_mode:
-		print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed, " pagination=", pagination_changed)
+		if DEBUG_LOG: print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed, " pagination=", pagination_changed)
 
 	if not _force_layout_once and not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed and not pagination_changed and not staggered_changed:
 		# Resets (_refresh_buffer, refresh_dimensions) can zero the flow
@@ -2096,7 +2098,7 @@ func _recalculate_layout():
 	_cached_normal_stride = _get_normal_stride()
 
 	if debug_mode:
-		print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
+		if DEBUG_LOG: print("[Grid] _recalculate_layout: available=", available, " card_size=", card_size, " item_width=", item_width, " item_height=", item_height, " items_per_line=", _cached_items_per_line, " normal_stride=", _cached_normal_stride)
 
 	# items_per_line is by design 1 for LIST/CAROUSEL; only GRID can collapse.
 	if debug_mode and _cached_items_per_line == 1 and view_mode == ViewMode.GRID:
@@ -2160,7 +2162,7 @@ func _recalculate_layout():
 			restored_scroll = new_scroll
 			var zb_cur: float = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
 			if debug_mode:
-				print("[Grid] anchor restore: idx=", anchor_index, " frac=", anchor_frac, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
+				if DEBUG_LOG: print("[Grid] anchor restore: idx=", anchor_index, " frac=", anchor_frac, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
 
 	var _active_before: int = _active_cards.size()
 	var _first_before: int = -1
@@ -2192,7 +2194,7 @@ func _recalculate_layout():
 		_first_after = _active_cards[0].get_meta("virtual_index", -1)
 		_last_after = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
 	if debug_mode:
-		print("[Grid] recalc recycle: active ", _active_before, " -> ", _active_after, " (", _first_before, "-", _last_before, " -> ", _first_after, "-", _last_after, ")")
+		if DEBUG_LOG: print("[Grid] recalc recycle: active ", _active_before, " -> ", _active_after, " (", _first_before, "-", _last_before, " -> ", _first_after, "-", _last_after, ")")
 
 	# Sync the scrollbar to the restored position via the guarded writer (the
 	# window above was built from the computed position, so even if the stale
@@ -2260,13 +2262,13 @@ func _get_items_per_line() -> int:
 		var effective_width = maxf(1.0, available.x + grid_separation)
 		var result = max(1, int(effective_width / item_width + 0.0001))
 		if debug_mode:
-			print("[Grid] _get_items_per_line: vertical effective_width=", effective_width, " item_width=", item_width, " result=", result)
+			if DEBUG_LOG: print("[Grid] _get_items_per_line: vertical effective_width=", effective_width, " item_width=", item_width, " result=", result)
 		return result
 	else:
 		var effective_height = maxf(1.0, available.y + grid_separation)
 		var result = max(1, int(effective_height / item_height + 0.0001))
 		if debug_mode:
-			print("[Grid] _get_items_per_line: horizontal effective_height=", effective_height, " item_height=", item_height, " result=", result)
+			if DEBUG_LOG: print("[Grid] _get_items_per_line: horizontal effective_height=", effective_height, " item_height=", item_height, " result=", result)
 		return result
 
 func _get_media_aspect_ratio() -> float:
@@ -2461,7 +2463,7 @@ func setup(card_scene_resource: PackedScene, total_items: int, initial_target_ra
 	if initial_target_ratio >= 0.0:
 		var max_ratio = _calculate_max_ratio()
 		var clamped = clampf(initial_target_ratio, 0.05, max_ratio)
-		print("[Grid] setup initial_target_ratio=", initial_target_ratio, " clamped=", clamped)
+		if DEBUG_LOG: print("[Grid] setup initial_target_ratio=", initial_target_ratio, " clamped=", clamped)
 		_batching_layout = true
 		target_card_width_ratio = clamped
 		_batching_layout = false
@@ -2501,7 +2503,7 @@ func _instantiate_card_pool():
 	var available = _get_available_size()
 	if _has_valid_available_size():
 		_max_pool_size = _compute_pool_size(available)
-		print("[Grid] _instantiate_card_pool dynamic max_pool_size=", _max_pool_size, " available=", available, " total_items=", _total_items)
+		if DEBUG_LOG: print("[Grid] _instantiate_card_pool dynamic max_pool_size=", _max_pool_size, " available=", available, " total_items=", _total_items)
 
 	for card in _card_pool:
 		if is_instance_valid(card):
@@ -2581,7 +2583,7 @@ func _instantiate_card_pool():
 	_card_has_begin_bulk_layout = flags["begin_bulk_layout"]
 	_card_has_end_bulk_layout = flags["end_bulk_layout"]
 	if debug_mode:
-		print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
+		if DEBUG_LOG: print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 var _pending_pool_growth: int = 0
 var _last_computed_visible_count: int = 0
@@ -2747,7 +2749,7 @@ func _pad_total_items(count: int) -> int:
 			unit = (2 * items_per_line - 1) * maxi(1, get_lines_per_page() / 2)
 	var padded = int(ceil(float(count) / unit) * unit)
 	if debug_mode and padded != count:
-		print("[Grid] _pad_total_items: source=", count, " ipl=", items_per_line, " lpp=", get_lines_per_page(), " unit=", unit, " padded=", padded)
+		if DEBUG_LOG: print("[Grid] _pad_total_items: source=", count, " ipl=", items_per_line, " lpp=", get_lines_per_page(), " unit=", unit, " padded=", padded)
 	return padded
 
 func _update_layout():
@@ -2805,7 +2807,7 @@ func _initial_load():
 	_update_visual_draw_order()
 	_request_missing_data()
 	_flush_pending_visual_setup_for_visible_zone()
-	print("[Grid] _initial_load: card_count=", _buffer_target_end - _buffer_target_start, " elapsed_us=", Time.get_ticks_usec() - start_us)
+	if DEBUG_LOG: print("[Grid] _initial_load: card_count=", _buffer_target_end - _buffer_target_start, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
 	"""Compute visible range and buffer target range for the current scroll position.
@@ -2850,7 +2852,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	if _is_processing_scroll:
 		_grid_trace_stuck_count += 1
 		if trace_verbose and (_grid_trace_stuck_count <= 3 or _grid_trace_stuck_count % 100 == 0):
-			print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
+			if DEBUG_LOG: print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
 		return
 	_grid_trace_stuck_count = 0
 	# Ignore the clamp echo from a guarded recalc-time scroll write: the stale
@@ -2860,11 +2862,11 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	if _guarded_scroll_target >= 0.0 and not force_recycle:
 		if absf(value - _guarded_scroll_target) > maxf(_get_normal_stride(), 1.0):
 			if trace_verbose:
-				print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
+				if DEBUG_LOG: print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
 			return
 	_is_processing_scroll = true
 	if trace_verbose:
-		print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " guarded_target=", _guarded_scroll_target, " suppress_until=", _suppress_recycle_until_frame, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " guarded_target=", _guarded_scroll_target, " suppress_until=", _suppress_recycle_until_frame, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 	if _total_items == 0 or not _scroll_container:
 		_is_processing_scroll = false
@@ -2907,7 +2909,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 		visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
 		_try_apply_pending_focus()
 		if trace_verbose:
-			print("[GridTrace] pass-end (light): scroll=", scroll_pos, " active=", _active_cards.size(), " buffer=", _buffer_target_start, "-", _buffer_target_end, " t=", Time.get_ticks_msec())
+			if DEBUG_LOG: print("[GridTrace] pass-end (light): scroll=", scroll_pos, " active=", _active_cards.size(), " buffer=", _buffer_target_start, "-", _buffer_target_end, " t=", Time.get_ticks_msec())
 		_is_processing_scroll = false
 		return
 
@@ -2960,7 +2962,7 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 		var gt_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
 		var gt_expected_pos := -float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
 		var gt_actual_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
-		print("[GridTrace] pass-end: scroll=", scroll_pos, " active=", _active_cards.size(), " window=", gt_first, "-", gt_last, " buffer=", _buffer_target_start, "-", _buffer_target_end, " pending_setup=", _pending_visual_setup.size(), " margin_pos=", gt_actual_pos, " expected_pos=", gt_expected_pos, " margin_delta=", gt_actual_pos - gt_expected_pos, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] pass-end: scroll=", scroll_pos, " active=", _active_cards.size(), " window=", gt_first, "-", gt_last, " buffer=", _buffer_target_start, "-", _buffer_target_end, " pending_setup=", _pending_visual_setup.size(), " margin_pos=", gt_actual_pos, " expected_pos=", gt_expected_pos, " margin_delta=", gt_actual_pos - gt_expected_pos, " t=", Time.get_ticks_msec())
 
 	_is_processing_scroll = false
 
@@ -3062,7 +3064,7 @@ func _reset_transient_scroll_state(reason: String) -> void:
 	_scroll_velocity = 0.0
 	_pending_buffer_expansion = false
 	if trace_verbose:
-		print("[GridTrace] reset-transient: reason=", reason, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] reset-transient: reason=", reason, " t=", Time.get_ticks_msec())
 
 
 ## External suppression (A-Z carousel scrub): turns network cover loads off
@@ -3269,7 +3271,7 @@ func _on_frame_post_draw_audit() -> void:
 		var last_delta: int = _drawaudit_last_deltas.get(worst_idx, -1000)
 		if delta_key != last_delta:
 			_drawaudit_last_deltas[worst_idx] = delta_key
-			print("[DrawAudit] MISMATCH: worst=", worst, " idx=", worst_idx, " stamp=", worst_stamp, " exp=", worst_exp, " scroll=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal, " margin=", _last_margin_top if vertical else _last_margin_left, " first=", _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+			if DEBUG_LOG: print("[DrawAudit] MISMATCH: worst=", worst, " idx=", worst_idx, " stamp=", worst_stamp, " exp=", worst_exp, " scroll=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal, " margin=", _last_margin_top if vertical else _last_margin_left, " first=", _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 var _drawaudit_last_deltas: Dictionary = {}
 
@@ -3347,7 +3349,7 @@ func _audit_structure(tag: String) -> void:
 			flow_cards += 1
 	if dup >= 0 or nonmono >= 0 or flow_cards != _active_cards.size():
 		var first: int = _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
-		print("[GridInv] VIOLATION tag=", tag, " dup=", dup, " nonmono=", nonmono, " active=", _active_cards.size(), " flow_cards=", flow_cards, " spacers=", spacers, " first=", first, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridInv] VIOLATION tag=", tag, " dup=", dup, " nonmono=", nonmono, " active=", _active_cards.size(), " flow_cards=", flow_cards, " spacers=", spacers, " first=", first, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func _audit_visual_holes() -> void:
 	if not debug_mode:
@@ -3363,13 +3365,13 @@ func _audit_visual_holes() -> void:
 		if _card_has_mark_visuals_position_synced and card.get("_visuals_position_synced") == false:
 			unsynced.append(vidx)
 	if unsynced.size() > 0 or invisible.size() > 0:
-		print("[VisHole] unsynced=", unsynced, " invisible=", invisible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[VisHole] unsynced=", unsynced, " invisible=", invisible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func soak_test(iterations: int = 20) -> void:
 	"""Debug stress test: random teleports + scroll bursts with all violation
 	audits active. Any [GridInv]/[VisHole]/[RsAudit]/[DrawAudit] output during
 	the run indicates a broken invariant. Call from the debugger or a hotkey."""
-	print("[SoakTest] starting: iterations=", iterations, " items=", _source_total_items, " mode=", view_mode)
+	if DEBUG_LOG: print("[SoakTest] starting: iterations=", iterations, " items=", _source_total_items, " mode=", view_mode)
 	for i in iterations:
 		if _source_total_items <= 0 or not _scroll_container:
 			break
@@ -3381,7 +3383,7 @@ func soak_test(iterations: int = 20) -> void:
 			_scroll_container.scroll_to(_get_current_scroll_pos() + dir * _get_normal_stride() * 2.5, false)
 			await get_tree().process_frame
 		_audit_structure("soak")
-	print("[SoakTest] complete: iterations=", iterations, " mode=", view_mode)
+	if DEBUG_LOG: print("[SoakTest] complete: iterations=", iterations, " mode=", view_mode)
 
 func _update_visual_draw_order() -> void:
 	var focused_idx = _get_focused_virtual_index()
@@ -3404,7 +3406,7 @@ func _audit_render_state(tag: String) -> void:
 		return
 	var layer_pos := _visual_layer.global_position
 	if _visual_layer.position != Vector2.ZERO or not _visual_layer.top_level or not _visual_layer.visible:
-		print("[LayerAudit] tag=", tag, " pos=", _visual_layer.position, " global=", layer_pos, " top_level=", _visual_layer.top_level, " visible=", _visual_layer.visible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[LayerAudit] tag=", tag, " pos=", _visual_layer.position, " global=", layer_pos, " top_level=", _visual_layer.top_level, " visible=", _visual_layer.visible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 	var mc_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
 	var scroll_now: float = float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
 	var mc_delta: float = absf(mc_pos + scroll_now)
@@ -3434,7 +3436,7 @@ func _audit_render_state(tag: String) -> void:
 			worst_exp = exp_origin
 			worst_cs = cs
 	if worst > 2.0 or mc_delta > 2.0:
-		print("[RsAudit] tag=", tag, " worst=", worst, " idx=", worst_idx, " rs=", worst_rs, " exp=", worst_exp, " cs=", worst_cs, " margin_lag=", mc_delta, " scroll=", scroll_now, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[RsAudit] tag=", tag, " worst=", worst, " idx=", worst_idx, " rs=", worst_rs, " exp=", worst_exp, " cs=", worst_cs, " margin_lag=", mc_delta, " scroll=", scroll_now, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 func _show_skeleton_if_unloaded(card: Control, virtual_index: int) -> void:
 	# Cards entering the flow before their data is cached would render blank
@@ -3528,7 +3530,7 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		# Stale pending entry: the card was recycled and now shows a different
 		# index. Never apply the wrong game's data; re-queue under the card's
 		# current index so it still gets set up.
-		print("[CardApply] MISMATCH: card_meta=", actual_idx, " arg=", virtual_index, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[CardApply] MISMATCH: card_meta=", actual_idx, " arg=", virtual_index, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 		if actual_idx >= 0 and _active_cards_by_index.get(actual_idx) == card:
 			_pending_visual_setup[actual_idx] = card
 		else:
@@ -3559,7 +3561,7 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		card.game = _data_cache[virtual_index]
 	_update_cache_access_order(virtual_index)
 	if debug_mode:
-		print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data applied, size=", card.size, " min=", card.custom_minimum_size)
+		if DEBUG_LOG: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data applied, size=", card.size, " min=", card.custom_minimum_size)
 	# The card may have been marked as position-synced before its data was
 	# applied, in which case its visual items were hidden because headline was
 	# empty. Re-evaluate visibility now that the game/title is set.
@@ -3774,7 +3776,7 @@ func _update_margin():
 			_last_margin_top = int(margin_top)
 			_last_margin_bottom = int(margin_bottom)
 			if trace_verbose:
-				print("[GridTrace] margin: top=", _last_margin_top, " bottom=", _last_margin_bottom, " flow_h=", flow_height, " first=", first_idx, " last=", last_idx, " t=", Time.get_ticks_msec())
+				if DEBUG_LOG: print("[GridTrace] margin: top=", _last_margin_top, " bottom=", _last_margin_bottom, " flow_h=", flow_height, " first=", first_idx, " last=", last_idx, " t=", Time.get_ticks_msec())
 
 		if not is_equal_approx(flow_height, _last_flow_height):
 			_flow_container.custom_minimum_size.y = flow_height
@@ -3853,7 +3855,7 @@ func _prune_pending_loads_outside(range_start: int, range_end: int) -> void:
 	var gt_remaining: int = _pending_loads.size()
 	_pending_loads_mutex.unlock()
 	if trace_verbose:
-		print("[GridTrace] prune-loads: pruned=", gt_pruned, " remaining=", gt_remaining, " window=", range_start, "-", range_end, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] prune-loads: pruned=", gt_pruned, " remaining=", gt_remaining, " window=", range_start, "-", range_end, " t=", Time.get_ticks_msec())
 
 func _request_missing_data():
 	if _active_cards.size() == 0:
@@ -3869,7 +3871,7 @@ func _request_missing_data():
 	if missing_indices.size() == 0:
 		return
 	if trace_verbose:
-		print("[GridTrace] missing-data: count=", missing_indices.size(), " first=", missing_indices[0], " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] missing-data: count=", missing_indices.size(), " first=", missing_indices[0], " t=", Time.get_ticks_msec())
 
 	var batches: Array[Array] = []
 	var current_batch: Array[int] = [missing_indices[0]]
@@ -3914,7 +3916,7 @@ func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	if missing.size() == 0:
 		return
 	if trace_verbose:
-		print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", _scroll_velocity, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", _scroll_velocity, " t=", Time.get_ticks_msec())
 	_request_data(missing[0], missing.size())
 
 func _check_preload_needed():
@@ -4172,7 +4174,7 @@ func _request_data(offset: int, limit: int):
 	limit = mini(limit, MAX_DATA_REQUEST_ITEMS)
 	limit = min(limit, _total_items - offset)
 	if trace_verbose:
-		print("[GridTrace] request-data: offset=", offset, " limit=", limit, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] request-data: offset=", offset, " limit=", limit, " t=", Time.get_ticks_msec())
 	_pending_loads_mutex.lock()
 	_pending_loads[offset] = limit
 	_pending_loads_mutex.unlock()
@@ -4181,9 +4183,9 @@ func _request_data(offset: int, limit: int):
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
 	if trace_verbose:
-		print("[GridTrace] items-loaded: offset=", offset, " count=", items.size(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] items-loaded: offset=", offset, " count=", items.size(), " t=", Time.get_ticks_msec())
 	if debug_mode:
-		print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
+		if DEBUG_LOG: print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
 	_pending_loads_mutex.lock()
 	var was_pending := _pending_loads.has(offset)
 	_pending_loads.erase(offset)
@@ -4463,7 +4465,7 @@ func _apply_guarded_scroll(pos: float) -> void:
 	_guarded_scroll_target = pos
 	_scroll_container.scroll_to(int(pos), false)
 	if trace_verbose:
-		print("[GridTrace] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0, " t=", Time.get_ticks_msec())
 	call_deferred("_correct_guarded_scroll")
 
 func _correct_guarded_scroll() -> void:
@@ -4472,16 +4474,16 @@ func _correct_guarded_scroll() -> void:
 	var target := _guarded_scroll_target
 	if not is_inside_tree() or not _scroll_container:
 		if trace_verbose:
-			print("[GridTrace] corrective: guard cleared (not in tree) target=", target, " t=", Time.get_ticks_msec())
+			if DEBUG_LOG: print("[GridTrace] corrective: guard cleared (not in tree) target=", target, " t=", Time.get_ticks_msec())
 		_guarded_scroll_target = -1.0
 		return
 	var current := _get_current_scroll_pos()
 	if trace_verbose:
-		print("[GridTrace] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts, " t=", Time.get_ticks_msec())
 	if absf(current - target) <= 1.0:
 		# Write stuck (Range emits nothing when the value doesn't change).
 		if trace_verbose:
-			print("[GridTrace] corrective: guard cleared (stuck ok) target=", target, " t=", Time.get_ticks_msec())
+			if DEBUG_LOG: print("[GridTrace] corrective: guard cleared (stuck ok) target=", target, " t=", Time.get_ticks_msec())
 		_guarded_scroll_target = -1.0
 		return
 	_guarded_scroll_attempts += 1

@@ -111,8 +111,7 @@ static func _is_stale_home_path(path: String) -> bool:
 	current_home = current_home.rstrip("/")
 	if not path.begins_with(current_home + "/") and path != current_home:
 		# Path is outside current home; if it looks like a /home/... or
-		# /Users/... path it is likely stale.
-		if path.begins_with("/home/") or path.begins_with("/Users/"):
+		if path.begins_with("/home/"):
 			return true
 	return false
 
