@@ -27,13 +27,14 @@ var _current_category: String = ""
 var _category_button_specs: Dictionary = {}  # id -> {label, icon}
 var _sidebar_built_compact: bool = false
 
-# Built-in ScrollContainer.follow_focus binds to the viewport at
-# NOTIFICATION_READY and never re-binds, so it dies when the dialog is
-# reparented into the dual-screen SubViewport. We track the viewport
-# ourselves and scroll manually instead.
+# Built-in ScrollContainer.follow_focus is enabled, but it binds to the
+# viewport at NOTIFICATION_READY and never re-binds, so it dies when the
+# dialog is reparented into the dual-screen SubViewport. We re-bind it in
+# _reconnect_focus_follow and keep a manual ensure_control_visible fallback.
 var _focus_follow_viewport: Viewport = null
 
 const DEBUG_LAYOUT: bool = false
+const DEBUG_FOCUS_GUARD: bool = true
 
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}
@@ -81,6 +82,16 @@ func _ready():
 	clear_actions()
 	add_action("Cancel", _on_cancel_pressed, false)
 	add_action("OK", _on_ok_pressed, true)
+	# Keep the bottom row out of controller navigation until the user explicitly
+	# reaches the end of the settings page. This is a hard backstop for any
+	# input-propagation path that bypasses the directional guard above.
+	for btn in _actions:
+		btn.focus_mode = Control.FOCUS_CLICK
+	# The basic variant wraps content_slot in a body scroll for generic dialogs,
+	# but the settings two-pane layout manages its own scrolling. Disable the
+	# outer follow-focus so it doesn't fight the per-pane scroll/follow logic.
+	if _body_scroll:
+		_body_scroll.follow_focus = false
 
 func _build_two_pane_layout() -> void:
 	"""Build two-pane HBox inside content_slot: sidebar + divider + content pane."""
@@ -144,8 +155,10 @@ func _build_two_pane_layout() -> void:
 	_right_scroll = ScrollContainer.new()
 	_right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	# Handled manually via _on_focus_follow_changed (viewport-proof).
-	_right_scroll.follow_focus = false
+	# Let Godot auto-scroll the pane for focus changes. We re-bind this after
+	# dual-screen reparents in _reconnect_focus_follow; manual ensure_control_visible
+	# remains as a viewport-proof fallback.
+	_right_scroll.follow_focus = true
 	_right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_right_pane.add_child(_right_scroll)
 	hbox.add_child(_right_pane)
@@ -392,6 +405,11 @@ func _reconnect_focus_follow() -> void:
 	if not viewport.gui_focus_changed.is_connected(_on_focus_follow_changed):
 		viewport.gui_focus_changed.connect(_on_focus_follow_changed)
 	_focus_follow_viewport = viewport
+	# Re-bind built-in follow-focus to the current viewport after dual-screen
+	# reparents. Toggling the flag forces Godot to re-attach to the new viewport.
+	if _right_scroll:
+		_right_scroll.follow_focus = false
+		_right_scroll.follow_focus = true
 
 func _disconnect_focus_follow() -> void:
 	if _focus_follow_viewport and is_instance_valid(_focus_follow_viewport):
@@ -404,8 +422,35 @@ func _on_focus_follow_changed(control: Control) -> void:
 		return
 	if _left_scroll and _left_scroll.is_ancestor_of(control):
 		_left_scroll.ensure_control_visible(control)
-	elif _right_scroll and _right_scroll.is_ancestor_of(control):
-		_right_scroll.ensure_control_visible(control)
+	else:
+		var active_scroll := _get_active_scroll_container()
+		if active_scroll and active_scroll.is_ancestor_of(control):
+			active_scroll.ensure_control_visible(control)
+
+	# Lock the bottom action row out of controller navigation again as soon as
+	# focus leaves it, so the next traversal down the page cannot fall onto it.
+	if not _is_action_button(control):
+		for btn in _actions:
+			if btn.focus_mode != Control.FOCUS_CLICK:
+				btn.focus_mode = Control.FOCUS_CLICK
+
+func _focus_first() -> void:
+	# M3Dialog defaults to the first action button, but we keep action buttons
+	# FOCUS_CLICK until the bottom of the page is reached. Fall back to the
+	# current category button so overlay focus-pullback has a valid target.
+	if _category_buttons.has(_current_category):
+		var btn := _category_buttons[_current_category]
+		if is_instance_valid(btn) and btn.focus_mode != Control.FOCUS_NONE:
+			if UIManager:
+				UIManager.suppress_next_focus_sound()
+			btn.grab_focus()
+			return
+	for child in _left_pane.get_children():
+		if child is Control and child.focus_mode != Control.FOCUS_NONE:
+			if UIManager:
+				UIManager.suppress_next_focus_sound()
+			child.grab_focus()
+			return
 
 func cancel_and_dismiss() -> void:
 	_cancelled = true
@@ -475,30 +520,85 @@ func _input(event: InputEvent) -> void:
 	# reaches the first/last focusable item in the current category. This stops
 	# focus from leaking to the bottom action row while scrolling through a
 	# long settings page.
-	if visible and _right_scroll and _right_content and (event.is_action_pressed("ui_down") or event.is_action_pressed("ui_up")):
+	var active_scroll := _get_active_scroll_container()
+	var is_dir := visible and active_scroll and _right_content and (event.is_action_pressed("ui_down") or event.is_action_pressed("ui_up"))
+	if DEBUG_FOCUS_GUARD and is_dir:
 		var focused := get_viewport().gui_get_focus_owner()
-		if focused and _right_scroll.is_ancestor_of(focused) and _right_scroll.is_ancestor_of(_right_content):
+		print("[SettingsDialogFocus] RAW ", "down" if event.is_action_pressed("ui_down") else "up",
+			" focused=", focused.name if focused else "<null>",
+			" inside_content=", focused != null and _right_content.is_ancestor_of(focused),
+			" handled_already=", get_viewport().is_input_handled())
+	if is_dir:
+		var focused := get_viewport().gui_get_focus_owner()
+		if focused and _right_content.is_ancestor_of(focused):
 			var dir := 1 if event.is_action_pressed("ui_down") else -1
-			if _handle_settings_focus_direction(focused, dir):
+			if _handle_settings_focus_direction(focused, dir, active_scroll):
 				get_viewport().set_input_as_handled()
 				return
 
 	super._input(event)
 
 ## Returns true if the directional event was consumed.
-func _handle_settings_focus_direction(focused: Control, dir: int) -> bool:
+func _handle_settings_focus_direction(focused: Control, dir: int, active_scroll: ScrollContainer) -> bool:
 	var candidate := focused.find_next_valid_focus() if dir == 1 else focused.find_prev_valid_focus()
-	if candidate and _right_scroll.is_ancestor_of(candidate):
+	var focusables := _get_focusable_content_controls()
+	var idx := focusables.find(focused)
+	var boundary_idx := focusables.size() - 1 if dir == 1 else 0
+	var at_boundary := idx >= 0 and idx == boundary_idx
+
+	if DEBUG_FOCUS_GUARD:
+		var v_scroll_bar := active_scroll.get_v_scroll_bar()
+		var max_scroll := int(v_scroll_bar.max_value - v_scroll_bar.page) if v_scroll_bar else 0
+		print("[SettingsDialogFocus] dir=%d focused=%s candidate=%s inside_scroll=%s idx=%d boundary=%d at_boundary=%s scroll=%d/%d page=%d" % [
+			dir,
+			focused.name if focused else "<null>",
+			candidate.name if candidate else "<null>",
+			candidate != null and active_scroll.is_ancestor_of(candidate),
+			idx,
+			boundary_idx,
+			at_boundary,
+			active_scroll.scroll_vertical,
+			max_scroll,
+			int(v_scroll_bar.page) if v_scroll_bar else 0
+		])
+
+	if candidate and active_scroll.is_ancestor_of(candidate) and not candidate is ScrollBar:
 		# Godot's next target is still inside the scrollable content: let it go.
 		return false
 
-	# Candidate would leave the scroll pane. Only allow that at the content boundary.
-	var focusables := _get_focusable_content_controls()
-	var idx := focusables.find(focused)
 	if idx < 0:
 		return false
-	var boundary_idx := focusables.size() - 1 if dir == 1 else 0
-	if idx == boundary_idx:
+
+	if at_boundary:
+		# At the first/last focusable setting. Only allow focus to leave the
+		# scroll pane if the pane is also scrolled all the way to that edge;
+		# otherwise keep focus and scroll so non-focusable content below/above
+		# can still be viewed.
+		if dir == 1 and not _is_scroll_at_bottom(active_scroll):
+			if DEBUG_FOCUS_GUARD:
+				print("[SettingsDialogFocus] at last setting but not scrolled to bottom; scrolling instead")
+			_scroll_content_by(active_scroll, int(M3Units.dp(120)))
+			return true
+		if dir == -1 and not _is_scroll_at_top(active_scroll):
+			if DEBUG_FOCUS_GUARD:
+				print("[SettingsDialogFocus] at first setting but not scrolled to top; scrolling instead")
+			_scroll_content_by(active_scroll, -int(M3Units.dp(120)))
+			return true
+		# Reached the end of the page while scrolled to the edge: unlock the
+		# bottom action row and move focus to the first action.
+		if dir == 1 and not _actions.is_empty():
+			if DEBUG_FOCUS_GUARD:
+				print("[SettingsDialogFocus] at bottom; moving focus to bottom actions")
+			for btn in _actions:
+				btn.focus_mode = Control.FOCUS_ALL
+			var first_action: Control = _actions[0]
+			if is_instance_valid(first_action):
+				if UIManager:
+					UIManager.suppress_next_focus_sound()
+				# Changing focus mode can take a frame to register with the focus
+				# system; defer the grab so it actually succeeds.
+				first_action.call_deferred("grab_focus")
+				return true
 		return false
 
 	# Not at the boundary: move focus to the next/prev focusable inside the
@@ -509,14 +609,26 @@ func _handle_settings_focus_direction(focused: Control, dir: int) -> bool:
 		if UIManager:
 			UIManager.suppress_next_focus_sound()
 		next.grab_focus()
-		_right_scroll.ensure_control_visible(next)
+		active_scroll.ensure_control_visible(next)
 	else:
-		# Fallback: scroll a step without moving focus.
-		var step := int(M3Units.dp(120))
-		var v_scroll_bar := _right_scroll.get_v_scroll_bar()
-		var max_scroll := int(v_scroll_bar.max_value) if v_scroll_bar else 0
-		_right_scroll.scroll_vertical = clampi(_right_scroll.scroll_vertical + dir * step, 0, max_scroll)
+		_scroll_content_by(active_scroll, dir * int(M3Units.dp(120)))
 	return true
+
+func _is_scroll_at_top(scroll: ScrollContainer) -> bool:
+	return scroll.scroll_vertical <= 0
+
+func _is_scroll_at_bottom(scroll: ScrollContainer) -> bool:
+	var v_scroll_bar := scroll.get_v_scroll_bar()
+	if not v_scroll_bar:
+		return true
+	var max_scroll := int(v_scroll_bar.max_value - v_scroll_bar.page)
+	return scroll.scroll_vertical >= max_scroll
+
+func _scroll_content_by(scroll: ScrollContainer, amount: int) -> void:
+	var v_scroll_bar := scroll.get_v_scroll_bar()
+	var max_scroll := int(v_scroll_bar.max_value - v_scroll_bar.page) if v_scroll_bar else 0
+	max_scroll = maxi(max_scroll, 0)
+	scroll.scroll_vertical = clampi(scroll.scroll_vertical + amount, 0, max_scroll)
 
 func _get_focusable_content_controls() -> Array[Control]:
 	var out: Array[Control] = []
@@ -552,13 +664,26 @@ func _is_control_navigable(ctrl: Control) -> bool:
 		return false
 	return true
 
+func _is_action_button(control: Control) -> bool:
+	for btn in _actions:
+		if btn == control:
+			return true
+	return false
+
+func _get_active_scroll_container() -> ScrollContainer:
+	# Scene-based category pages (card designer, background designer, etc.)
+	# bring their own internal ScrollContainer. Use that for focus/scrolling
+	# when present; otherwise fall back to the shared right-hand pane scroll.
+	if _right_content and _right_content.is_inside_tree():
+		var internal := _find_scroll_container_recursive(_right_content)
+		if internal:
+			return internal
+	return _right_scroll
+
 func _get_dialog_scroll_container() -> ScrollContainer:
-	# The basic dialog layout holds both the sidebar scroll and the content
-	# scroll inside content_slot; the generic recursive lookup would find the
-	# sidebar first, so explicitly return the right-hand content scroll.
-	if _right_scroll:
-		return _right_scroll
-	return super._get_dialog_scroll_container()
+	# Right-stick scrolling should target whichever scroll pane the current
+	# category actually uses.
+	return _get_active_scroll_container()
 
 func _on_ok_pressed() -> void:
 	dismiss()

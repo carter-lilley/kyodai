@@ -269,8 +269,8 @@ func refresh_scale() -> void:
 
 func _apply_colors() -> void:
 	if _background:
-		# Match the StatusBar chrome so the two strips read as one block.
-		_background.bg_color = Color.BLACK if M3Theme.is_dark_mode else Color.WHITE
+		# Match the navigation bar background so the desktop chrome blends in.
+		_background.bg_color = M3Theme.get_surface_container()
 	if _title_label:
 		_title_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
 		_title_label.add_theme_font_size_override("font_size", M3Units.dpi(TITLE_FONT_SIZE_DP))
