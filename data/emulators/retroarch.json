@@ -145,13 +145,17 @@
 					"-L",
 					"{core}",
 					"{rom}",
-					"-f"
-				],
-				"environment": {
-					"XDG_CONFIG_HOME": "{emulator_dir}/.config"
-				}
-			},
-			"android": {
+				"-f"
+			],
+			"standalone_args": [
+				"-c",
+				"{emulator_dir}/.config/retroarch/retroarch.cfg"
+			],
+			"environment": {
+				"XDG_CONFIG_HOME": "{emulator_dir}/.config"
+			}
+		},
+		"android": {
 				"action": "android.intent.action.VIEW",
 				"package": "com.retroarch",
 				"class": "com.retroarch.browser.debug.CoreSideloadActivity",

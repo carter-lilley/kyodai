@@ -24,6 +24,9 @@ var _dismissing := false
 # desktop it is a compact always-on-top overlay sized to the button column.
 var _gamemode := false
 var _column_size := Vector2.ZERO
+# XID (hex string) of the current game's window, set by the manager before
+# _ready. Used in gamemode to mark this window transient for the game window.
+var game_window_xid: String = ""
 
 # Controller-accept dedup state. The same physical press can arrive multiple
 # times: some pads register with SDL twice (two device indices), and Godot
@@ -78,6 +81,9 @@ func _ready():
 		transparent = false
 		transparent_bg = false
 		always_on_top = false
+		# Distinctive title so x11_windowctl can target this exact window (our
+		# other windows share the same PID) via pid+hint matching.
+		title = "kyodai-controls"
 		position = DisplayServer.screen_get_position()
 		# The scene anchors the button group full-rect (correct for the compact
 		# desktop window, where window == column). Here it is a menu screen, so
@@ -141,6 +147,14 @@ func _ready():
 		# Gamescope only presents the focused app window; a mapped window that
 		# never takes focus stays invisible. Steal focus on every summon.
 		grab_focus()
+		# grab_focus() is a raw XSetInputFocus, which gamescope's focus
+		# bookkeeping can ignore (notably after a manual window switch from
+		# the Steam menu). Also activate through the EWMH path — the same
+		# _NET_ACTIVE_WINDOW mechanism gamescope itself uses for switching —
+		# and mark this window transient for the game window, so gamescope
+		# draws it above the game as a dialog even when focus moves fail.
+		_activate_self_ewmh()
+		_set_transient_for_game()
 	else:
 		move_to_foreground()
 	var top_btn := _button_group.get_child(0) as Control
@@ -250,6 +264,39 @@ func hide_controls() -> void:
 	if focused and focused.is_inside_tree() and is_ancestor_of(focused):
 		focused.release_focus()
 	queue_free()
+
+## Activates this window through the EWMH _NET_ACTIVE_WINDOW path (via
+## x11_windowctl), which gamescope honors even when it ignores Godot's raw
+## XSetInputFocus from grab_focus().
+func _activate_self_ewmh() -> void:
+	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+	if not FileAccess.file_exists(tool):
+		return
+	MemorySubManager.queue_os_execute(tool, ["show", str(OS.get_process_id()), "kyodai-controls"], func(result: Dictionary):
+		var output := ("".join(result.get("output", []))).strip_edges()
+		print("[ShufflerControlsWindow] EWMH self-activate: exit=" + str(result.get("exit_code", -1)) + " " + output)
+	)
+	# Diagnostic: log which window gamescope considers active shortly after.
+	MemorySubManager.queue_os_execute(tool, ["active"], func(result: Dictionary):
+		var output := ("".join(result.get("output", []))).strip_edges()
+		print("[ShufflerControlsWindow] active window after summon: " + output)
+	)
+
+## Marks this window transient for the current game's window
+## (WM_TRANSIENT_FOR): gamescope draws dialogs above their parent window, so
+## the palette presents over the game without depending on focus moves.
+func _set_transient_for_game() -> void:
+	if game_window_xid == "":
+		print("[ShufflerControlsWindow] no game window xid; skipping transient")
+		return
+	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+	if not FileAccess.file_exists(tool):
+		return
+	var own_xid := "%x" % DisplayServer.window_get_native_handle(DisplayServer.WINDOW_HANDLE, get_window_id())
+	if own_xid == "0":
+		return
+	print("[ShufflerControlsWindow] set-transient: " + own_xid + " -> " + game_window_xid)
+	MemorySubManager.queue_os_execute(tool, ["set-transient", "xid:" + own_xid, "xid:" + game_window_xid])
 
 func _warp_cursor_to_bottom_button() -> void:
 	var btn_size := _pause_btn.size
