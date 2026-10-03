@@ -323,7 +323,13 @@ func _apply_identity_config(firmware_dir: String) -> void:
 ## callback(success: bool, message: String)
 func setup_platform_firmware(platform_slug: String, emulator_id: String, callback: Callable = Callable(), core_id: String = "") -> void:
 	print("[FirmwareManager] Checking firmware for " + platform_slug + " / " + emulator_id)
-	
+
+	# Enforce kyodai-managed config paths before resolving the download target:
+	# on a fresh install the config has no stated keys yet, so resolution would
+	# fall back to the emulator's built-in default dir and the download would
+	# be orphaned once launch-time enforcement repoints the emulator.
+	RSM.enforce_paths(emulator_id, platform_slug, core_id)
+
 	# Check if firmware is already ready
 	if is_platform_firmware_ready(platform_slug, emulator_id, core_id):
 		print("[FirmwareManager] Firmware already ready for " + platform_slug)

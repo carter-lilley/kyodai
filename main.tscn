@@ -382,7 +382,7 @@ script = ExtResource("useravatar")
 [node name="ZoomOutIcon" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207356]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
-text = "⇃"
+text = "↽"
 label_settings = SubResource("LabelSettings_2cqfq")
 script = ExtResource("fonticon")
 icon_settings = SubResource("FontIconSettings_zoom_out")
@@ -402,7 +402,7 @@ metadata/_custom_type_script = "uid://63mocgx1dxi4"
 [node name="ZoomInIcon" type="Label" parent="RootLayout/ContentWrapper/MainContentVBox/controlbar_background/controlbar_hbox" unique_id=1438207357]
 custom_minimum_size = Vector2(32, 0)
 layout_mode = 2
-text = "↿"
+text = "⇁"
 label_settings = SubResource("LabelSettings_yaehf")
 script = ExtResource("fonticon")
 icon_settings = SubResource("FontIconSettings_zoom_in")

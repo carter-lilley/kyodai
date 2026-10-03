@@ -27,8 +27,8 @@
 	"default_firmware": {
 	  "_default": {
 		"directories": {
-		  "windows": "{emulator_dir}",
-		  "linux": "{emulator_dir}"
+		  "windows": "{emulator_dir}/bios",
+		  "linux": "{emulator_dir}/bios"
 		}
 	  }
 	}
@@ -201,7 +201,7 @@
 		  "files": [
 			{
 			  "name": "inis/PCSX2.ini",
-			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
+			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[Folders]\nMemoryCards = {emulator_dir}/memcards\nBIOS = {emulator_dir}/bios\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
 			}
 		  ],
 		  "validate": {
@@ -216,7 +216,7 @@
 		  "files": [
 			{
 			  "name": "{home}/.config/PCSX2/inis/PCSX2.ini",
-			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
+			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[Folders]\nMemoryCards = {emulator_dir}/memcards\nBIOS = {emulator_dir}/bios\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
 			}
 		  ],
 		  "validate": {

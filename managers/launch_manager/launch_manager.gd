@@ -3,6 +3,7 @@ extends Manager
 ## Manages emulator registry, launch intents, and game execution (facade)
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 const RegistryManager := preload("res://managers/launch_manager/registry_sub_manager.gd")
 const EmulatorManager := preload("res://managers/launch_manager/emulator_sub_manager.gd")
 const GameManager := preload("res://managers/launch_manager/game_sub_manager.gd")
@@ -690,7 +691,14 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	var core_id_for_firmware = ""
 	if emulator_id == "retroarch":
 		core_id_for_firmware = intent_manager.resolve_core_for_game(game)
-	
+
+	# Enforce kyodai-managed config paths BEFORE any firmware/save resolution:
+	# on a fresh install the config has no stated keys yet, so resolution would
+	# fall back to the emulator's built-in defaults and the download would land
+	# in a directory the emulator stops reading once launch-time enforcement
+	# runs (process_sub_manager does the same write, but too late for this).
+	RSM.enforce_paths(emulator_id, game.platform_slug, core_id_for_firmware)
+
 	if firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
 		firmware.apply_force_pull_config(game.platform_slug, emulator_id)
 	else:

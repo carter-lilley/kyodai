@@ -768,7 +768,10 @@ func _on_display_size_changed(_new_size: Vector2):
 		print("[DIAG] _on_display_size_changed suppressed (startup_layout_suppressed=true)")
 		return
 
-	print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer.position=", _visual_layer.position, " visual_layer.size=", _visual_layer.size, " viewport_rect=", get_viewport_rect().size, " visual_layer.global_position=", _visual_layer.global_position)
+	if _visual_layer:
+		print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer.position=", _visual_layer.position, " visual_layer.size=", _visual_layer.size, " viewport_rect=", get_viewport_rect().size, " visual_layer.global_position=", _visual_layer.global_position)
+	else:
+		print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer=<null> viewport_rect=", get_viewport_rect().size)
 
 	# Dedupe on the signal's viewport size, not this container's local rect:
 	# display_sub_manager sometimes emits immediately (DS swap, fullscreen
