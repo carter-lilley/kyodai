@@ -106,6 +106,21 @@ func is_android() -> bool:
 func is_packaged() -> bool:
 	return not OS.has_feature("editor")
 
+## Returns true when running inside a gamescope Game Mode session (SteamOS
+## game mode and friends). Game Mode only presents fullscreen windows, so
+## overlay windows must be fullscreen and window switching must bypass EWMH
+## hints the gamescope WM ignores.
+func is_gamemode() -> bool:
+	if not is_linux():
+		return false
+	var haystack := (
+		OS.get_environment("XDG_CURRENT_DESKTOP") + ";"
+		+ OS.get_environment("XDG_SESSION_DESKTOP") + ";"
+		+ OS.get_environment("DESKTOP_SESSION") + ";"
+		+ OS.get_environment("WAYLAND_DISPLAY")
+	).to_lower()
+	return haystack.contains("gamescope")
+
 func get_platform_name() -> String:
 	match current_platform:
 		Platform.WINDOWS:

@@ -18,6 +18,15 @@ var _is_paused: bool = false
 var _is_visible: bool = false
 var _active_tween: Tween = null
 
+# GameMode (gamescope) layout: gamescope only presents fullscreen windows, so
+# the controls window spans the screen like the intro window and the button
+# column slides in/out inside it. _hidden_x/_shown_x are the column's x in
+# window-local coordinates.
+var _gamemode := false
+var _hidden_x := 0.0
+var _shown_x := 0.0
+var _column_size := Vector2.ZERO
+
 # Chord state for toggling the palette. Tracked here because this Window
 # needs to be a real OS window (and stay alive) to receive controller input
 # while the main Kyodai window is unfocused/minimized.
@@ -56,9 +65,14 @@ func _ready():
 	if count > 0:
 		var btn := _button_group.get_child(0) as Control
 		var sep := _button_group.get_theme_constant("separation")
-		var width := int(btn.custom_minimum_size.x)
-		var height := int(btn.custom_minimum_size.y) * count + sep * (count - 1)
-		size = Vector2i(width, height)
+		_column_size = Vector2(int(btn.custom_minimum_size.x), int(btn.custom_minimum_size.y) * count + sep * (count - 1))
+
+	_gamemode = SystemManager.platform.is_gamemode()
+	print("[ShufflerControlsWindow] gamemode=", _gamemode)
+	var screen_size := DisplayServer.screen_get_size()
+	# GameScope presents fullscreen transparent windows as the active layer
+	# (same pattern as the intro window); desktop keeps the compact window.
+	size = screen_size if _gamemode else Vector2i(_column_size)
 
 	# Create the real OS window immediately and keep it alive for the whole
 	# session. A hidden Godot Window node has no OS window and cannot receive
@@ -72,14 +86,26 @@ func _ready():
 	popup()
 	transient = false
 	always_on_top = true
-	var screen_size := DisplayServer.screen_get_size()
-	var y_pos := screen_size.y - size.y - 16
-	# Keep the window at the final on-screen position at all times; we animate
-	# the button column inside it so the window manager never has to place the
-	# OS window at negative/clamped coordinates.
-	position = Vector2i(16, y_pos)
-	# Park the button column off-screen left inside the window.
-	_button_group.position.x = -size.x
+	if _gamemode:
+		# Unfocusable so the emulator keeps input focus; navigation is
+		# handled manually in _input.
+		position = DisplayServer.screen_get_position()
+		unfocusable = true
+		_shown_x = 16.0
+		_hidden_x = -_column_size.x
+		_button_group.position = Vector2(_hidden_x, screen_size.y - _column_size.y - 16)
+		# Clicks fall through to the game while the panel is hidden; the
+		# passthrough region is toggled to the button column on summon.
+		mouse_passthrough_polygon = PackedVector2Array()
+	else:
+		_shown_x = 0.0
+		_hidden_x = -_column_size.x
+		# Keep the window at the final on-screen position at all times; we animate
+		# the button column inside it so the window manager never has to place the
+		# OS window at negative/clamped coordinates.
+		position = Vector2i(16, screen_size.y - size.y - 16)
+		# Park the button column off-screen left inside the window.
+		_button_group.position.x = _hidden_x
 
 	# Connect button signals via the button group and set explicit vertical
 	# focus neighbors so controller navigation reliably moves up/down.
@@ -238,16 +264,24 @@ func show_controls() -> void:
 		_active_tween.kill()
 		_active_tween = null
 	# Make sure the button column starts fully off-screen left inside the window.
-	_button_group.position.x = -size.x
+	_button_group.position.x = _hidden_x
 	visible = true
 	# Ensure the palette is actually stacked above the emulator after being
 	# parked off-screen; always_on_top is not always enough on its own.
 	always_on_top = true
 	move_to_foreground()
+	if _gamemode:
+		# While summoned, mouse clicks land on the button column only;
+		# everything else still passes through to the emulator.
+		var r := Rect2(Vector2(_shown_x, _button_group.position.y), _column_size)
+		mouse_passthrough_polygon = PackedVector2Array([
+			r.position, r.position + Vector2(r.size.x, 0),
+			r.position + r.size, r.position + Vector2(0, r.size.y)
+		])
 	_active_tween = create_tween()
 	_active_tween.set_ease(Tween.EASE_OUT)
 	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", 0.0, 0.3)
+	_active_tween.tween_property(_button_group, "position:x", _shown_x, 0.3)
 	_active_tween.tween_callback(func():
 		var top_btn := _button_group.get_child(0) as Control
 		if top_btn:
@@ -268,13 +302,16 @@ func hide_controls() -> void:
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused and focused.is_inside_tree() and is_ancestor_of(focused):
 		focused.release_focus()
+	if _gamemode:
+		# Back to full click-through so the emulator owns the mouse again.
+		mouse_passthrough_polygon = PackedVector2Array()
 	if _active_tween and is_instance_valid(_active_tween):
 		_active_tween.kill()
 		_active_tween = null
 	_active_tween = create_tween()
 	_active_tween.set_ease(Tween.EASE_IN)
 	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", -float(size.x), 0.3)
+	_active_tween.tween_property(_button_group, "position:x", _hidden_x, 0.3)
 	_active_tween.tween_callback(func():
 		_is_visible = false
 	)
@@ -287,8 +324,10 @@ func _warp_cursor_to_bottom_button() -> void:
 		btn_size = Vector2(40, 40)
 
 	# DisplayServer.warp_mouse() on a sub-Window interprets coordinates as
-	# window-relative, not screen-relative, so pass local button center.
-	var target := Vector2i(_pause_btn.position + btn_size / 2.0)
+	# window-relative, not screen-relative, so pass the button center in this
+	# window's canvas coordinates (global_position includes the button
+	# column's offset, which is nonzero in the fullscreen GameMode layout).
+	var target := Vector2i(_pause_btn.get_global_position() + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
 
 func _apply_custom_cursor() -> void:

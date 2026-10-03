@@ -999,7 +999,12 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		# This might be an extracted folder. Check if it has actual game files.
 		if _ps3_game_has_files(rom_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: ROM path is extracted folder with valid game files")
-			
+
+			# Flatten legacy wrapper layouts ("Game Name/PS3_GAME/") left by
+			# older extractions; RPCS3 only boots the folder that directly
+			# contains PS3_GAME/PARAM.SFO.
+			_unwrap_ps3_wrapper(rom_path)
+
 			# First, try to get TitleID from existing PARAM.SFO in the extracted folder
 			# This is more reliable than searching for ZIPs when multiple games share a folder
 			var existing_sfo_path = FSM.find_file_recursive(rom_path, "PARAM.SFO")
@@ -1167,12 +1172,14 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if not SystemManager.platform.is_android():
 		if _ps3_game_has_files(desktop_disc_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
+			_unwrap_ps3_wrapper(desktop_disc_path)
 			intent.rom_path = desktop_disc_path
 			if not is_shuffler:
 				_store_file_path(game, desktop_disc_path)
 			return true
 		elif _ps3_game_has_files(desktop_digital_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
+			_unwrap_ps3_wrapper(desktop_digital_path)
 			intent.rom_path = desktop_digital_path
 			if not is_shuffler:
 				_store_file_path(game, desktop_digital_path)
@@ -1180,6 +1187,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	
 	if _ps3_game_has_files(extract_path):
 		if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
+		_unwrap_ps3_wrapper(extract_path)
 		# Update intent to point to extracted folder
 		intent.rom_path = extract_path
 		if DEBUG_LOG: print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
@@ -1264,21 +1272,8 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if is_desktop and game_root != final_extract_path:
 		if DEBUG_LOG: print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
 		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
-		
-		# Move contents of wrapper folder up to final_extract_path
-		var items = FSM.list_dir(game_root)
-		for item in items:
-			if item == "." or item == "..":
-				continue
-			var source = FSM.join_paths(game_root, item)
-			var dest = FSM.join_paths(final_extract_path, item)
-			if not FSM.move(source, dest):
-				push_error("[GameManager] RPCS3: Failed to unwrap: " + source + " -> " + dest)
-				return false
-		
-		# Try to delete empty wrapper folder (may fail on Windows due to permissions, that's OK)
-		FSM.delete_dir_recursive(game_root)
-		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapped successfully")
+		if not _unwrap_ps3_wrapper(final_extract_path):
+			return false
 	elif not is_desktop:
 		# Android: move from temp to final
 		if DEBUG_LOG: print("[GameManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
@@ -1344,7 +1339,6 @@ func _ps3_game_has_files(game_path: String) -> bool:
 	if sfo_path == "":
 		if DEBUG_LOG: print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO not found in " + game_path)
 		return false
-	
 	# PARAM.SFO alone isn't enough - a partially deleted game folder still has it.
 	# Require the main executable (USRDIR/EBOOT.BIN, a sibling of PARAM.SFO in both
 	# disc and digital layouts) so broken folders trigger re-extraction.
@@ -1352,6 +1346,45 @@ func _ps3_game_has_files(game_path: String) -> bool:
 	var has_eboot = FSM.file_exists(FSM.join_paths(usrdir, "EBOOT.BIN")) or FSM.file_exists(FSM.join_paths(usrdir, "eboot.bin"))
 	if DEBUG_LOG: print("[GameManager] RPCS3: _ps3_game_has_files: PARAM.SFO found, EBOOT.BIN present=" + str(has_eboot) + " in " + game_path)
 	return has_eboot
+
+
+## Flattens a leftover wrapper folder inside an extracted PS3 game folder,
+## moving the game contents up to folder_path. Covers both layouts:
+##   disc:    <folder>/<Game Name>/PS3_GAME/PARAM.SFO  -> <folder>/PS3_GAME/...
+##   digital: <folder>/<Game Name>/PARAM.SFO          -> <folder>/PARAM.SFO
+## No-op (returns true) when the layout is already flat. Older extractions can
+## retain the wrapper; RPCS3 only boots the folder that directly contains
+## PS3_GAME/PARAM.SFO, so a wrapped folder fails with "Nothing to boot".
+func _unwrap_ps3_wrapper(folder_path: String) -> bool:
+	if not FSM.dir_exists(folder_path):
+		return false
+
+	var sfo_path = FSM.find_file_recursive(folder_path, "PARAM.SFO")
+	if sfo_path == "":
+		sfo_path = FSM.find_file_recursive(folder_path, "PARAM.sfo")
+	if sfo_path == "":
+		return false
+
+	var sfo_dir := sfo_path.get_base_dir()
+	var is_disc := sfo_dir.get_file().to_upper() == "PS3_GAME"
+	var game_root := sfo_dir.get_base_dir() if is_disc else sfo_dir
+	if game_root == folder_path:
+		return true
+
+	print("[GameManager] RPCS3: Wrapper folder detected in existing install: " + game_root.get_file() + ", unwrapping to: " + folder_path)
+	var items = FSM.list_dir(game_root)
+	for item in items:
+		if item == "." or item == "..":
+			continue
+		var source = FSM.join_paths(game_root, item)
+		var dest = FSM.join_paths(folder_path, item)
+		if not FSM.move(source, dest):
+			push_error("[GameManager] RPCS3: Failed to unwrap: " + source + " -> " + dest)
+			return false
+
+	FSM.delete_dir_recursive(game_root)
+	FSM.prune_empty_dirs(folder_path)
+	return true
 
 
 ## Finds ZIP files in a directory (for re-extraction when extracted files are deleted)
