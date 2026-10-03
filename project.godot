@@ -35,6 +35,7 @@ file_logging/log_path="user://logs/session.log"
 [display]
 
 window/subwindows/embed_subwindows=false
+display_server/driver.linuxbsd="wayland"
 
 [editor_plugins]
 

@@ -15,25 +15,15 @@ const CURSOR_PATH := "res://assets/Cursor.png"
 @onready var _shuffle_btn: M3IconButton = $Root/M3ButtonGroup/ShuffleButton
 
 var _is_paused: bool = false
-var _is_visible: bool = false
-var _active_tween: Tween = null
+# Set once dismiss begins: the window frees itself, so every subsequent call
+# (re-summon chord, auto-dismiss, cleanup) is a no-op.
+var _dismissing := false
 
-# GameMode (gamescope) layout: gamescope only presents fullscreen windows, so
-# the controls window spans the screen like the intro window and the button
-# column slides in/out inside it. _hidden_x/_shown_x are the column's x in
-# window-local coordinates.
+# GameMode (gamescope) layout: the palette is a plain top-level fullscreen
+# menu window (gamescope presents one focused app window at a time), while on
+# desktop it is a compact always-on-top overlay sized to the button column.
 var _gamemode := false
-var _hidden_x := 0.0
-var _shown_x := 0.0
 var _column_size := Vector2.ZERO
-
-# Chord state for toggling the palette. Tracked here because this Window
-# needs to be a real OS window (and stay alive) to receive controller input
-# while the main Kyodai window is unfocused/minimized.
-var _select_held: bool = false
-var _l_trigger_held: bool = false
-var _chord_was_held: bool = false
-const TRIGGER_THRESHOLD := 0.5
 
 # Controller-accept dedup state. The same physical press can arrive multiple
 # times: some pads register with SDL twice (two device indices), and Godot
@@ -53,6 +43,14 @@ func set_reroll_enabled(enabled: bool) -> void:
 	if _shuffle_btn and is_instance_valid(_shuffle_btn):
 		_shuffle_btn.disabled = not enabled
 
+## Initializes the pause/play button from the manager's authoritative pause
+## state. The window is recreated on every summon, so this must be re-applied
+## each time or a paused session would show the wrong icon.
+func set_paused(paused: bool) -> void:
+	_is_paused = paused
+	if _pause_btn and is_instance_valid(_pause_btn):
+		_pause_btn.icon_name = "play" if _is_paused else "pause"
+
 func _ready():
 	# Ensure the OS window is fully transparent and doesn't inherit any theme
 	# background styleboxes from the main UI.
@@ -70,42 +68,40 @@ func _ready():
 	_gamemode = SystemManager.platform.is_gamemode()
 	print("[ShufflerControlsWindow] gamemode=", _gamemode)
 	var screen_size := DisplayServer.screen_get_size()
-	# GameScope presents fullscreen transparent windows as the active layer
-	# (same pattern as the intro window); desktop keeps the compact window.
 	size = screen_size if _gamemode else Vector2i(_column_size)
 
-	# Create the real OS window immediately and keep it alive for the whole
-	# session. A hidden Godot Window node has no OS window and cannot receive
-	# controller input, so we popup() and then park it off-screen. popup()
-	# sets transient, so clear it and restore always_on_top afterwards.
-	# popup() will try to make the window transient, but X11 rejects
-	# always-on-top windows becoming transient. Disable always_on_top
-	# temporarily, popup to create the OS window, clear transient, then
-	# restore always_on_top and park just off-screen.
-	always_on_top = false
-	popup()
-	transient = false
-	always_on_top = true
 	if _gamemode:
-		# Unfocusable so the emulator keeps input focus; navigation is
-		# handled manually in _input.
+		# In gamescope the palette is simply a new top-level fullscreen window:
+		# gamescope presents one focused app window at a time and does not
+		# alpha-blend between windows, so transparency and always-on-top are
+		# meaningless there — opaque window, grab focus, done.
+		transparent = false
+		transparent_bg = false
+		always_on_top = false
 		position = DisplayServer.screen_get_position()
-		unfocusable = true
-		_shown_x = 16.0
-		_hidden_x = -_column_size.x
-		_button_group.position = Vector2(_hidden_x, screen_size.y - _column_size.y - 16)
-		# Clicks fall through to the game while the panel is hidden; the
-		# passthrough region is toggled to the button column on summon.
-		mouse_passthrough_polygon = PackedVector2Array()
+		# The scene anchors the button group full-rect (correct for the compact
+		# desktop window, where window == column). Here it is a menu screen, so
+		# re-anchor the group as a fixed column centered on the screen.
+		_button_group.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_button_group.size = _column_size
+		_button_group.position = (Vector2(screen_size) - _column_size) / 2.0
+		# Draw our own scrim so the menu screen has an intentional background.
+		var scrim := ColorRect.new()
+		scrim.color = Color(0.02, 0.02, 0.04, 0.92)
+		scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(scrim)
+		move_child(scrim, 0)
 	else:
-		_shown_x = 0.0
-		_hidden_x = -_column_size.x
-		# Keep the window at the final on-screen position at all times; we animate
-		# the button column inside it so the window manager never has to place the
-		# OS window at negative/clamped coordinates.
+		# Desktop: compact always-on-top overlay window. popup() will try to
+		# make the window transient, but X11 rejects always-on-top windows
+		# becoming transient. Disable always_on_top temporarily, popup to
+		# create the OS window, clear transient, then restore always_on_top.
+		always_on_top = false
+		popup()
+		transient = false
+		always_on_top = true
 		position = Vector2i(16, screen_size.y - size.y - 16)
-		# Park the button column off-screen left inside the window.
-		_button_group.position.x = _hidden_x
 
 	# Connect button signals via the button group and set explicit vertical
 	# focus neighbors so controller navigation reliably moves up/down.
@@ -135,43 +131,33 @@ func _ready():
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 
+	# Created per summon: play the entrance immediately.
+	_input_locked_until_msec = Time.get_ticks_msec() + SUMMON_INPUT_LOCKOUT_MSEC
+	SystemManager.audio.play_sfx("click_04")
+	# Brief haptic blip so the summon has physical feedback on the pad.
+	for device in Input.get_connected_joypads():
+		Input.start_joy_vibration(device, 0.45, 0.55, 0.12)
+	if _gamemode:
+		# Gamescope only presents the focused app window; a mapped window that
+		# never takes focus stays invisible. Steal focus on every summon.
+		grab_focus()
+	else:
+		move_to_foreground()
+	var top_btn := _button_group.get_child(0) as Control
+	if top_btn:
+		top_btn.grab_focus()
+	_warp_cursor_to_bottom_button()
+
 
 
 func _input(event: InputEvent) -> void:
-	var chord_changed := false
-	if event is InputEventJoypadButton:
-		if event.button_index == JOY_BUTTON_BACK:
-			_select_held = event.pressed
-			chord_changed = true
-	elif event is InputEventJoypadMotion:
-		if event.axis == JOY_AXIS_TRIGGER_LEFT:
-			var now_held: bool = event.axis_value >= TRIGGER_THRESHOLD
-			if now_held != _l_trigger_held:
-				_l_trigger_held = now_held
-				chord_changed = true
-
-	if chord_changed:
-		var chord_now := _select_held and _l_trigger_held
-		if chord_now and not _chord_was_held:
-			_chord_was_held = true
-			toggle_controls()
-		elif not chord_now and _chord_was_held:
-			_chord_was_held = false
-
-	# Hidden panel: swallow EVERY controller event this viewport receives.
-	# An unhandled ui_accept that falls through to the viewport's GUI layer
-	# re-triggers whichever button still holds focus (focus release used to
-	# wait for the slide-out tween, leaking presses meant for the game). The
-	# chord above already ran, so summoning still works. The emulator is a
-	# separate OS process, so consuming here never starves the game of input.
-	if not _is_visible:
-		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
-			get_viewport().set_input_as_handled()
+	if _dismissing:
 		return
 
 	# Summon lockout: swallow events so they can't reach the freshly-focused
-	# button through the viewport's GUI router either. The chord state above
-	# already updated, so releasing the chord during the lockout is safe.
+	# button through the viewport's GUI router either. A held or queued press
+	# (chord release, game input already in flight) must not instantly
+	# activate the freshly-focused Pause button and vanish the panel.
 	if Time.get_ticks_msec() < _input_locked_until_msec:
 		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
 			get_viewport().set_input_as_handled()
@@ -239,82 +225,31 @@ func _press_focused_button(btn: Button) -> void:
 ## Reasserts the window stacking after something else (a newly launched
 ## emulator window, a skip/restart raise) has taken foreground.
 func ensure_on_top() -> void:
-	if not _is_visible:
+	if _dismissing:
 		return
 	visible = true
 	always_on_top = true
-	move_to_foreground()
-
-func toggle_controls() -> void:
-	if _is_visible:
-		hide_controls()
-	else:
-		show_controls()
-
-func show_controls() -> void:
-	if _is_visible:
-		return
-	_is_visible = true
-	_input_locked_until_msec = Time.get_ticks_msec() + SUMMON_INPUT_LOCKOUT_MSEC
-	SystemManager.audio.play_sfx("click_04")
-	# Brief haptic blip so the summon has physical feedback on the pad.
-	for device in Input.get_connected_joypads():
-		Input.start_joy_vibration(device, 0.45, 0.55, 0.12)
-	if _active_tween and is_instance_valid(_active_tween):
-		_active_tween.kill()
-		_active_tween = null
-	# Make sure the button column starts fully off-screen left inside the window.
-	_button_group.position.x = _hidden_x
-	visible = true
-	# Ensure the palette is actually stacked above the emulator after being
-	# parked off-screen; always_on_top is not always enough on its own.
-	always_on_top = true
-	move_to_foreground()
 	if _gamemode:
-		# While summoned, mouse clicks land on the button column only;
-		# everything else still passes through to the emulator.
-		var r := Rect2(Vector2(_shown_x, _button_group.position.y), _column_size)
-		mouse_passthrough_polygon = PackedVector2Array([
-			r.position, r.position + Vector2(r.size.x, 0),
-			r.position + r.size, r.position + Vector2(0, r.size.y)
-		])
-	_active_tween = create_tween()
-	_active_tween.set_ease(Tween.EASE_OUT)
-	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", _shown_x, 0.3)
-	_active_tween.tween_callback(func():
-		var top_btn := _button_group.get_child(0) as Control
-		if top_btn:
-			top_btn.grab_focus()
-		_warp_cursor_to_bottom_button()
-	)
+		grab_focus()
+	else:
+		move_to_foreground()
 
+## Dismisses the palette by freeing the window. The manager recreates the
+## window on the next summon (create-on-summon), so there is no hidden state
+## to return to; in gamemode the manager re-raises the game on tree exit.
 func hide_controls() -> void:
-	if not _is_visible:
+	if _dismissing:
 		return
-	# Reject input immediately; the tween below is only the visual slide-out.
-	# Waiting for the tween end would leave a ~0.3 s window where the panel
-	# still accepted input while visually leaving.
-	_is_visible = false
-	# Drop focus NOW. If a button keeps focus into the hidden state, the
+	# Reject input immediately; freeing is deferred to end of frame, so
+	# without the guard late events could still reach the buttons.
+	_dismissing = true
+	# Drop focus NOW. If a button keeps focus into the teardown, the
 	# viewport's GUI layer keeps delivering ui_accept to it through the
 	# fallback path even while _input ignores it -> restarts loop forever.
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused and focused.is_inside_tree() and is_ancestor_of(focused):
 		focused.release_focus()
-	if _gamemode:
-		# Back to full click-through so the emulator owns the mouse again.
-		mouse_passthrough_polygon = PackedVector2Array()
-	if _active_tween and is_instance_valid(_active_tween):
-		_active_tween.kill()
-		_active_tween = null
-	_active_tween = create_tween()
-	_active_tween.set_ease(Tween.EASE_IN)
-	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", _hidden_x, 0.3)
-	_active_tween.tween_callback(func():
-		_is_visible = false
-	)
+	queue_free()
 
 func _warp_cursor_to_bottom_button() -> void:
 	var btn_size := _pause_btn.size

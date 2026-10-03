@@ -36,6 +36,11 @@ var _round_timer: Timer = null
 var _countdown_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
+# Persistent invisible window that listens for the summon chord; joypad input
+# only reaches MAPPED OS windows, and the palette is ephemeral.
+var _input_window: Node = null
+# Cached reroll-button state, re-applied to each freshly summoned palette.
+var _controls_reroll_enabled: bool = true
 var _main_window: Window = null
 var _total_downloads: int = 0
 var _pending_downloads: int = 0
@@ -435,6 +440,10 @@ func stop_session() -> void:
 	if _intro_window and is_instance_valid(_intro_window):
 		_intro_window.queue_free()
 		_intro_window = null
+
+	if _input_window and is_instance_valid(_input_window):
+		_input_window.queue_free()
+		_input_window = null
 
 	get_tree().root.gui_disable_input = false
 
@@ -1109,6 +1118,7 @@ func _reset_reroll_state() -> void:
 	_set_controls_reroll_enabled(true)
 
 func _set_controls_reroll_enabled(enabled: bool) -> void:
+	_controls_reroll_enabled = enabled
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.set_reroll_enabled(enabled)
 
@@ -1147,8 +1157,7 @@ func _enter_shuffler_mode() -> void:
 		SystemManager.display.save_last_window_size()
 
 	_hide_main_window()
-
-	_create_controls_window()
+	_create_input_window()
 
 	get_tree().root.gui_disable_input = true
 
@@ -1697,6 +1706,12 @@ func _input(event: InputEvent) -> void:
 			stop_session()
 			get_viewport().set_input_as_handled()
 
+func _toggle_controls() -> void:
+	if _controls_window and is_instance_valid(_controls_window):
+		_controls_window.hide_controls()
+	elif _state == State.ACTIVE or _state == State.PAUSED:
+		_summon_controls()
+
 # ============================================================================
 # WINDOW / PROCESS HELPERS
 # ============================================================================
@@ -1994,12 +2009,24 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 # CONTROLS WINDOW
 # ============================================================================
 
-func _create_controls_window() -> void:
-	if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window")
+## Creates the persistent invisible input listener for the summon chord.
+## Joypad input only reaches viewports backed by a MAPPED OS window, so the
+## chord cannot live in the minimized main window or the ephemeral palette.
+func _create_input_window() -> void:
+	if _input_window and is_instance_valid(_input_window):
+		return
+	_input_window = ShufflerInputWindow.new()
+	_input_window.chord_pressed.connect(_toggle_controls)
+	get_tree().root.add_child(_input_window)
+
+## Creates the controls palette on summon. The window is freed on dismiss and
+## recreated here on the next summon (create-on-summon): gamescope only
+## composites freshly-mapped overlay windows above the focused game, so the
+## panel can never be a persistent window that gets raised.
+func _summon_controls() -> void:
+	if DEBUG_LOG: print("[ShufflerSubManager] _summon_controls")
 	if _controls_window and is_instance_valid(_controls_window):
-		if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
-		_controls_window.queue_free()
-		_controls_window = null
+		return
 
 	var scene = load("res://components/shuffler_controls_window.tscn")
 	if not scene:
@@ -2013,9 +2040,24 @@ func _create_controls_window() -> void:
 	_controls_window.restart_requested.connect(restart_game)
 	_controls_window.remove_requested.connect(remove_game)
 	_controls_window.stop_requested.connect(stop_session)
+	var w = _controls_window
+	w.tree_exited.connect(func():
+		if _controls_window == w:
+			_controls_window = null
+		# Gamescope presents the focused window; once the palette menu closes,
+		# hand focus back to the game (harmless if a choice/intro window is
+		# about to map and take focus itself).
+		if SystemManager.platform.is_gamemode() and (_state == State.ACTIVE or _state == State.PAUSED):
+			var pid: int = _bag.entries[_current_game_index].pid if _current_game_index >= 0 and _current_game_index < _bag.entries.size() else -1
+			if pid > 0:
+				_maximize_with_retry.call_deferred(pid, _bag.entries[_current_game_index].emulator_id)
+	)
 
 	get_tree().root.add_child(_controls_window)
-	print("[ShufflerSubManager] Controls palette created: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
+	# Re-apply session state the fresh window knows nothing about.
+	_controls_window.set_paused(_state == State.PAUSED)
+	_controls_window.set_reroll_enabled(_controls_reroll_enabled)
+	print("[ShufflerSubManager] Controls palette summoned: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
 
 # ============================================================================
 # RETROARCH CONFIG
