@@ -15,16 +15,18 @@ const CURSOR_PATH := "res://assets/Cursor.png"
 @onready var _shuffle_btn: M3IconButton = $Root/M3ButtonGroup/ShuffleButton
 
 var _is_paused: bool = false
-var _is_visible: bool = false
-var _active_tween: Tween = null
+# Set once dismiss begins: the window frees itself, so every subsequent call
+# (re-summon chord, auto-dismiss, cleanup) is a no-op.
+var _dismissing := false
 
-# Chord state for toggling the palette. Tracked here because this Window
-# needs to be a real OS window (and stay alive) to receive controller input
-# while the main Kyodai window is unfocused/minimized.
-var _select_held: bool = false
-var _l_trigger_held: bool = false
-var _chord_was_held: bool = false
-const TRIGGER_THRESHOLD := 0.5
+# GameMode (gamescope) layout: the palette is a plain top-level fullscreen
+# menu window (gamescope presents one focused app window at a time), while on
+# desktop it is a compact always-on-top overlay sized to the button column.
+var _gamemode := false
+var _column_size := Vector2.ZERO
+# XID (hex string) of the current game's window, set by the manager before
+# _ready. Used in gamemode to mark this window transient for the game window.
+var game_window_xid: String = ""
 
 # Controller-accept dedup state. The same physical press can arrive multiple
 # times: some pads register with SDL twice (two device indices), and Godot
@@ -44,6 +46,14 @@ func set_reroll_enabled(enabled: bool) -> void:
 	if _shuffle_btn and is_instance_valid(_shuffle_btn):
 		_shuffle_btn.disabled = not enabled
 
+## Initializes the pause/play button from the manager's authoritative pause
+## state. The window is recreated on every summon, so this must be re-applied
+## each time or a paused session would show the wrong icon.
+func set_paused(paused: bool) -> void:
+	_is_paused = paused
+	if _pause_btn and is_instance_valid(_pause_btn):
+		_pause_btn.icon_name = "play" if _is_paused else "pause"
+
 func _ready():
 	# Ensure the OS window is fully transparent and doesn't inherit any theme
 	# background styleboxes from the main UI.
@@ -56,30 +66,48 @@ func _ready():
 	if count > 0:
 		var btn := _button_group.get_child(0) as Control
 		var sep := _button_group.get_theme_constant("separation")
-		var width := int(btn.custom_minimum_size.x)
-		var height := int(btn.custom_minimum_size.y) * count + sep * (count - 1)
-		size = Vector2i(width, height)
+		_column_size = Vector2(int(btn.custom_minimum_size.x), int(btn.custom_minimum_size.y) * count + sep * (count - 1))
 
-	# Create the real OS window immediately and keep it alive for the whole
-	# session. A hidden Godot Window node has no OS window and cannot receive
-	# controller input, so we popup() and then park it off-screen. popup()
-	# sets transient, so clear it and restore always_on_top afterwards.
-	# popup() will try to make the window transient, but X11 rejects
-	# always-on-top windows becoming transient. Disable always_on_top
-	# temporarily, popup to create the OS window, clear transient, then
-	# restore always_on_top and park just off-screen.
-	always_on_top = false
-	popup()
-	transient = false
-	always_on_top = true
+	_gamemode = SystemManager.platform.is_gamemode()
+	print("[ShufflerControlsWindow] gamemode=", _gamemode)
 	var screen_size := DisplayServer.screen_get_size()
-	var y_pos := screen_size.y - size.y - 16
-	# Keep the window at the final on-screen position at all times; we animate
-	# the button column inside it so the window manager never has to place the
-	# OS window at negative/clamped coordinates.
-	position = Vector2i(16, y_pos)
-	# Park the button column off-screen left inside the window.
-	_button_group.position.x = -size.x
+	size = screen_size if _gamemode else Vector2i(_column_size)
+
+	if _gamemode:
+		# In gamescope the palette is simply a new top-level fullscreen window:
+		# gamescope presents one focused app window at a time and does not
+		# alpha-blend between windows, so transparency and always-on-top are
+		# meaningless there — opaque window, grab focus, done.
+		transparent = false
+		transparent_bg = false
+		always_on_top = false
+		# Distinctive title so x11_windowctl can target this exact window (our
+		# other windows share the same PID) via pid+hint matching.
+		title = "kyodai-controls"
+		position = DisplayServer.screen_get_position()
+		# The scene anchors the button group full-rect (correct for the compact
+		# desktop window, where window == column). Here it is a menu screen, so
+		# re-anchor the group as a fixed column centered on the screen.
+		_button_group.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_button_group.size = _column_size
+		_button_group.position = (Vector2(screen_size) - _column_size) / 2.0
+		# Draw our own scrim so the menu screen has an intentional background.
+		var scrim := ColorRect.new()
+		scrim.color = Color(0.02, 0.02, 0.04, 0.92)
+		scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(scrim)
+		move_child(scrim, 0)
+	else:
+		# Desktop: compact always-on-top overlay window. popup() will try to
+		# make the window transient, but X11 rejects always-on-top windows
+		# becoming transient. Disable always_on_top temporarily, popup to
+		# create the OS window, clear transient, then restore always_on_top.
+		always_on_top = false
+		popup()
+		transient = false
+		always_on_top = true
+		position = Vector2i(16, screen_size.y - size.y - 16)
 
 	# Connect button signals via the button group and set explicit vertical
 	# focus neighbors so controller navigation reliably moves up/down.
@@ -109,43 +137,41 @@ func _ready():
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 
+	# Created per summon: play the entrance immediately.
+	_input_locked_until_msec = Time.get_ticks_msec() + SUMMON_INPUT_LOCKOUT_MSEC
+	SystemManager.audio.play_sfx("click_04")
+	# Brief haptic blip so the summon has physical feedback on the pad.
+	for device in Input.get_connected_joypads():
+		Input.start_joy_vibration(device, 0.45, 0.55, 0.12)
+	if _gamemode:
+		# Gamescope only presents the focused app window; a mapped window that
+		# never takes focus stays invisible. Steal focus on every summon.
+		grab_focus()
+		# grab_focus() is a raw XSetInputFocus, which gamescope's focus
+		# bookkeeping can ignore (notably after a manual window switch from
+		# the Steam menu). Also activate through the EWMH path — the same
+		# _NET_ACTIVE_WINDOW mechanism gamescope itself uses for switching —
+		# and mark this window transient for the game window, so gamescope
+		# draws it above the game as a dialog even when focus moves fail.
+		_activate_self_ewmh()
+		_set_transient_for_game()
+	else:
+		move_to_foreground()
+	var top_btn := _button_group.get_child(0) as Control
+	if top_btn:
+		top_btn.grab_focus()
+	_warp_cursor_to_bottom_button()
+
 
 
 func _input(event: InputEvent) -> void:
-	var chord_changed := false
-	if event is InputEventJoypadButton:
-		if event.button_index == JOY_BUTTON_BACK:
-			_select_held = event.pressed
-			chord_changed = true
-	elif event is InputEventJoypadMotion:
-		if event.axis == JOY_AXIS_TRIGGER_LEFT:
-			var now_held: bool = event.axis_value >= TRIGGER_THRESHOLD
-			if now_held != _l_trigger_held:
-				_l_trigger_held = now_held
-				chord_changed = true
-
-	if chord_changed:
-		var chord_now := _select_held and _l_trigger_held
-		if chord_now and not _chord_was_held:
-			_chord_was_held = true
-			toggle_controls()
-		elif not chord_now and _chord_was_held:
-			_chord_was_held = false
-
-	# Hidden panel: swallow EVERY controller event this viewport receives.
-	# An unhandled ui_accept that falls through to the viewport's GUI layer
-	# re-triggers whichever button still holds focus (focus release used to
-	# wait for the slide-out tween, leaking presses meant for the game). The
-	# chord above already ran, so summoning still works. The emulator is a
-	# separate OS process, so consuming here never starves the game of input.
-	if not _is_visible:
-		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
-			get_viewport().set_input_as_handled()
+	if _dismissing:
 		return
 
 	# Summon lockout: swallow events so they can't reach the freshly-focused
-	# button through the viewport's GUI router either. The chord state above
-	# already updated, so releasing the chord during the lockout is safe.
+	# button through the viewport's GUI router either. A held or queued press
+	# (chord release, game input already in flight) must not instantly
+	# activate the freshly-focused Pause button and vanish the panel.
 	if Time.get_ticks_msec() < _input_locked_until_msec:
 		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
 			get_viewport().set_input_as_handled()
@@ -213,71 +239,64 @@ func _press_focused_button(btn: Button) -> void:
 ## Reasserts the window stacking after something else (a newly launched
 ## emulator window, a skip/restart raise) has taken foreground.
 func ensure_on_top() -> void:
-	if not _is_visible:
+	if _dismissing:
 		return
 	visible = true
 	always_on_top = true
-	move_to_foreground()
-
-func toggle_controls() -> void:
-	if _is_visible:
-		hide_controls()
+	if _gamemode:
+		grab_focus()
 	else:
-		show_controls()
+		move_to_foreground()
 
-func show_controls() -> void:
-	if _is_visible:
-		return
-	_is_visible = true
-	_input_locked_until_msec = Time.get_ticks_msec() + SUMMON_INPUT_LOCKOUT_MSEC
-	SystemManager.audio.play_sfx("click_04")
-	# Brief haptic blip so the summon has physical feedback on the pad.
-	for device in Input.get_connected_joypads():
-		Input.start_joy_vibration(device, 0.45, 0.55, 0.12)
-	if _active_tween and is_instance_valid(_active_tween):
-		_active_tween.kill()
-		_active_tween = null
-	# Make sure the button column starts fully off-screen left inside the window.
-	_button_group.position.x = -size.x
-	visible = true
-	# Ensure the palette is actually stacked above the emulator after being
-	# parked off-screen; always_on_top is not always enough on its own.
-	always_on_top = true
-	move_to_foreground()
-	_active_tween = create_tween()
-	_active_tween.set_ease(Tween.EASE_OUT)
-	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", 0.0, 0.3)
-	_active_tween.tween_callback(func():
-		var top_btn := _button_group.get_child(0) as Control
-		if top_btn:
-			top_btn.grab_focus()
-		_warp_cursor_to_bottom_button()
-	)
-
+## Dismisses the palette by freeing the window. The manager recreates the
+## window on the next summon (create-on-summon), so there is no hidden state
+## to return to; in gamemode the manager re-raises the game on tree exit.
 func hide_controls() -> void:
-	if not _is_visible:
+	if _dismissing:
 		return
-	# Reject input immediately; the tween below is only the visual slide-out.
-	# Waiting for the tween end would leave a ~0.3 s window where the panel
-	# still accepted input while visually leaving.
-	_is_visible = false
-	# Drop focus NOW. If a button keeps focus into the hidden state, the
+	# Reject input immediately; freeing is deferred to end of frame, so
+	# without the guard late events could still reach the buttons.
+	_dismissing = true
+	# Drop focus NOW. If a button keeps focus into the teardown, the
 	# viewport's GUI layer keeps delivering ui_accept to it through the
 	# fallback path even while _input ignores it -> restarts loop forever.
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused and focused.is_inside_tree() and is_ancestor_of(focused):
 		focused.release_focus()
-	if _active_tween and is_instance_valid(_active_tween):
-		_active_tween.kill()
-		_active_tween = null
-	_active_tween = create_tween()
-	_active_tween.set_ease(Tween.EASE_IN)
-	_active_tween.set_trans(Tween.TRANS_LINEAR)
-	_active_tween.tween_property(_button_group, "position:x", -float(size.x), 0.3)
-	_active_tween.tween_callback(func():
-		_is_visible = false
+	queue_free()
+
+## Activates this window through the EWMH _NET_ACTIVE_WINDOW path (via
+## x11_windowctl), which gamescope honors even when it ignores Godot's raw
+## XSetInputFocus from grab_focus().
+func _activate_self_ewmh() -> void:
+	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+	if not FileAccess.file_exists(tool):
+		return
+	MemorySubManager.queue_os_execute(tool, ["show", str(OS.get_process_id()), "kyodai-controls"], func(result: Dictionary):
+		var output := ("".join(result.get("output", []))).strip_edges()
+		print("[ShufflerControlsWindow] EWMH self-activate: exit=" + str(result.get("exit_code", -1)) + " " + output)
 	)
+	# Diagnostic: log which window gamescope considers active shortly after.
+	MemorySubManager.queue_os_execute(tool, ["active"], func(result: Dictionary):
+		var output := ("".join(result.get("output", []))).strip_edges()
+		print("[ShufflerControlsWindow] active window after summon: " + output)
+	)
+
+## Marks this window transient for the current game's window
+## (WM_TRANSIENT_FOR): gamescope draws dialogs above their parent window, so
+## the palette presents over the game without depending on focus moves.
+func _set_transient_for_game() -> void:
+	if game_window_xid == "":
+		print("[ShufflerControlsWindow] no game window xid; skipping transient")
+		return
+	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+	if not FileAccess.file_exists(tool):
+		return
+	var own_xid := "%x" % DisplayServer.window_get_native_handle(DisplayServer.WINDOW_HANDLE, get_window_id())
+	if own_xid == "0":
+		return
+	print("[ShufflerControlsWindow] set-transient: " + own_xid + " -> " + game_window_xid)
+	MemorySubManager.queue_os_execute(tool, ["set-transient", "xid:" + own_xid, "xid:" + game_window_xid])
 
 func _warp_cursor_to_bottom_button() -> void:
 	var btn_size := _pause_btn.size
@@ -287,8 +306,10 @@ func _warp_cursor_to_bottom_button() -> void:
 		btn_size = Vector2(40, 40)
 
 	# DisplayServer.warp_mouse() on a sub-Window interprets coordinates as
-	# window-relative, not screen-relative, so pass local button center.
-	var target := Vector2i(_pause_btn.position + btn_size / 2.0)
+	# window-relative, not screen-relative, so pass the button center in this
+	# window's canvas coordinates (global_position includes the button
+	# column's offset, which is nonzero in the fullscreen GameMode layout).
+	var target := Vector2i(_pause_btn.get_global_position() + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
 
 func _apply_custom_cursor() -> void:

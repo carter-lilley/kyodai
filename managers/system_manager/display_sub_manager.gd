@@ -439,9 +439,9 @@ func _apply_initial_window_size() -> void:
 	# window size is a client-area size, so it must be restored against the
 	# final frame style (custom title bar vs. native title bar).
 	if windowed_setting and not windowed_setting.value:
-		# Fullscreen (windowed = false): restore exclusive fullscreen. The
-		# borderless flag is ignored for fullscreen windows, so leave it alone.
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		# Fullscreen (windowed = false): restore borderless fullscreen. Matches
+		# windowed_toggle(); exclusive mode fights compositors like gamescope.
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 		print("[SystemManager.display] Restored fullscreen mode")
 	elif windowed_setting and windowed_setting.value:
 		# Windowed: strip the native frame (custom title bar on desktop), then

@@ -2,8 +2,8 @@ extends Manager
 class_name CoreSubManager
 
 ## Manager for RetroArch core tracking, validation, and on-demand downloads.
-## Currently focused on Android, where cores are downloaded individually rather
-## than as a single archive like on desktop.
+## Cores are downloaded individually from the libretro nightly buildbot on all
+## platforms, batched during install via the dynamic default-core manifest.
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
@@ -175,7 +175,7 @@ func setup_platform_core(emulator_id: String, platform_slug: String, core_id: St
 		return
 	
 	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id) as String
-	var filename := mapping + "_libretro_android.so.zip"
+	var filename := mapping + _get_core_suffix() + ".zip"
 	var destination_path := FSM.join_paths(emulator_dir, filename)
 	var extract_dir := get_core_directory(emulator_id)
 	

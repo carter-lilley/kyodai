@@ -125,11 +125,11 @@
 					"github_repo": "Vita3K/Vita3K",
 					"asset_pattern": "windows-latest\\.zip"
 				},
-				"linux": {
-					"action_type": "download_repo",
-					"github_repo": "Vita3K/Vita3K",
-					"asset_pattern": "Vita3K-x86_64\\.AppImage"
-				},
+					"linux": {
+						"action_type": "download_repo",
+						"github_repo": "pkgforge-dev/Vita3K-AppImage-Enhanced",
+						"asset_pattern": "anylinux-x86_64\\.AppImage$"
+					},
 				"android": {
 					"action_type": "download_repo",
 					"github_repo": "Vita3K/Vita3K",

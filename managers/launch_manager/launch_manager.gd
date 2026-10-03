@@ -182,6 +182,26 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 	var launch_cfg = emulator_info.get("launch", {}).get("platforms", {})
 	var platform_name = SystemManager.platform.get_platform_name().to_lower()
 	var platform_launch_cfg = launch_cfg.get(platform_name, {})
+
+	# Apply per-platform environment variables and optional standalone args so
+	# the "launch emulator" button shares the game-launch configuration (e.g.
+	# RetroArch's managed retroarch.cfg via -c). Without this, a bare launch
+	# falls back to the emulator's default config and diverges from in-game.
+	var global_emulator_dir = FSM.resolve_path(
+		_get_emulator_directory(emulator_id),
+		{"format": FSM.PathFormat.ABSOLUTE}
+	).rstrip("/")
+	var env_config = platform_launch_cfg.get("environment", {})
+	for var_name in env_config:
+		var formatted_value = str(env_config[var_name])
+		formatted_value = formatted_value.replace("{exe}", exe_path)
+		formatted_value = formatted_value.replace("{emulator_dir}", global_emulator_dir)
+		intent.environment[var_name] = formatted_value
+	for arg in platform_launch_cfg.get("standalone_args", []):
+		var formatted_arg = str(arg).replace("{exe}", exe_path)
+		formatted_arg = formatted_arg.replace("{emulator_dir}", global_emulator_dir)
+		intent.launch_args.append(formatted_arg)
+
 	var working_dir_template = platform_launch_cfg.get("working_directory", "")
 	if working_dir_template != "":
 		var resolved = working_dir_template.replace("{exe}", exe_path)

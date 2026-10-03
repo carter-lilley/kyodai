@@ -36,6 +36,19 @@ var _round_timer: Timer = null
 var _countdown_timer: Timer = null
 var _config: Dictionary = {}
 var _controls_window: Node = null
+# Persistent invisible window that listens for the summon chord; joypad input
+# only reaches MAPPED OS windows, and the palette is ephemeral.
+var _input_window: Node = null
+
+## Platforms with known shuffler lifecycle issues (pico8/win3x suspend
+## problems); their shuffler dialog toggles default to off, but the user can
+## still opt in per session.
+const SHUFFLER_PLATFORM_DEFAULT_DISABLED: Array[String] = ["win3x", "pico8", "model2", "model3", "ps4"]
+
+func is_platform_shuffle_default_disabled(slug: String) -> bool:
+	return slug in SHUFFLER_PLATFORM_DEFAULT_DISABLED
+# Cached reroll-button state, re-applied to each freshly summoned palette.
+var _controls_reroll_enabled: bool = true
 var _main_window: Window = null
 var _total_downloads: int = 0
 var _pending_downloads: int = 0
@@ -143,6 +156,26 @@ func _ready():
 
 
 func _initialize_linux_window_backend() -> void:
+	print("[ShufflerSubManager] window backend detect: gamemode=", SystemManager.platform.is_gamemode(),
+		" XDG_CURRENT_DESKTOP=", OS.get_environment("XDG_CURRENT_DESKTOP"),
+		" XDG_SESSION_DESKTOP=", OS.get_environment("XDG_SESSION_DESKTOP"),
+		" XDG_SESSION_TYPE=", OS.get_environment("XDG_SESSION_TYPE"),
+		" DESKTOP_SESSION=", OS.get_environment("DESKTOP_SESSION"),
+		" WAYLAND_DISPLAY=", OS.get_environment("WAYLAND_DISPLAY"),
+		" DISPLAY=", OS.get_environment("DISPLAY"))
+	# Game Mode (gamescope) is the session compositor; the desktop env vars do
+	# not describe a usable WM, but apps still get X11 via XWayland, so the X11
+	# helper (with unmap/map instead of EWMH hints) is the only working backend.
+	if SystemManager.platform.is_gamemode():
+		_x11_windowctl_path = _resolve_x11_windowctl_path()
+		if _x11_windowctl_path != "" and FileAccess.file_exists(_x11_windowctl_path):
+			_window_backend = WindowBackend.LINUX_X11
+			if DEBUG_LOG: print("[ShufflerSubManager] Linux window backend: X11 helper, GameMode (" + _x11_windowctl_path + ")")
+		else:
+			_window_backend = WindowBackend.NONE
+			push_warning("[ShufflerSubManager] GameMode session but no X11 helper; shuffler window switching will be unavailable")
+		return
+
 	var desktop := (OS.get_environment("XDG_CURRENT_DESKTOP") + ";" + OS.get_environment("XDG_SESSION_DESKTOP")).to_lower()
 	var session_type := OS.get_environment("XDG_SESSION_TYPE").to_lower()
 
@@ -378,7 +411,7 @@ func stop_session() -> void:
 	var kill_pids: Array[int] = []
 	for entry in _bag.entries:
 		if entry.pid != -1:
-			LaunchManager.process.kill_process_async(entry.pid)
+			_kill_entry_processes(entry)
 			kill_pids.append(entry.pid)
 
 	# Wait until the killed processes are actually gone (bounded) before
@@ -415,6 +448,10 @@ func stop_session() -> void:
 	if _intro_window and is_instance_valid(_intro_window):
 		_intro_window.queue_free()
 		_intro_window = null
+
+	if _input_window and is_instance_valid(_input_window):
+		_input_window.queue_free()
+		_input_window = null
 
 	get_tree().root.gui_disable_input = false
 
@@ -1089,6 +1126,7 @@ func _reset_reroll_state() -> void:
 	_set_controls_reroll_enabled(true)
 
 func _set_controls_reroll_enabled(enabled: bool) -> void:
+	_controls_reroll_enabled = enabled
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.set_reroll_enabled(enabled)
 
@@ -1127,8 +1165,7 @@ func _enter_shuffler_mode() -> void:
 		SystemManager.display.save_last_window_size()
 
 	_hide_main_window()
-
-	_create_controls_window()
+	_create_input_window()
 
 	get_tree().root.gui_disable_input = true
 
@@ -1455,7 +1492,10 @@ func _launch_game(entry: Dictionary) -> void:
 				return
 			entry.pid = pid
 			entry.started = true
-			_maximize_with_retry(pid)
+			# New process, new window: drop any XID captured for a previous
+			# launch of this entry so it is re-captured below.
+			entry["window_xid"] = ""
+			_maximize_with_retry(pid, entry.emulator_id)
 		else:
 			push_error("[ShufflerSubManager] Failed to launch game: " + game.title)
 			# Skip immediately instead of idling out the round on a dead launch;
@@ -1540,7 +1580,7 @@ func _confirm_quit_or_kill(entry: Dictionary) -> void:
 		entry.active = false
 		return
 	push_warning("[ShufflerSubManager] Quit command ignored by " + _format_entry(entry) + "; killing pid " + str(pid))
-	LaunchManager.process.kill_process_async(pid)
+	_kill_entry_processes(entry)
 	await LaunchManager.process.confirm_process_dead_async(pid, 3.0)
 	entry.pid = -1
 	entry.started = false
@@ -1559,7 +1599,7 @@ func _suspend_game(entry: Dictionary) -> void:
 	exe_name = pc.get("executable", "")
 
 	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
-	await _hide_window_awaited(entry.pid, exe_name)
+	await _hide_window_awaited(entry.pid, exe_name, entry.emulator_id)
 
 	# Await the suspension before returning: _switch_to_game launches the next
 	# emulator instance immediately after this, and a still-running previous
@@ -1581,7 +1621,7 @@ func _suspend_game(entry: Dictionary) -> void:
 		# alongside the next one. Kill it instead; the slot relaunches fresh
 		# the next time it is picked.
 		push_warning("[ShufflerSubManager] _suspend_game: pssuspend failed for pid " + str(entry.pid) + " (complete=" + str(done.complete) + " exit_code=" + str(done.exit_code) + "); killing to keep only one live game")
-		LaunchManager.process.kill_process_async(entry.pid)
+		_kill_entry_processes(entry)
 		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
 		entry.pid = -1
 		entry.started = false
@@ -1609,7 +1649,7 @@ func _resume_game(entry: Dictionary) -> void:
 
 	await get_tree().create_timer(0.2).timeout
 
-	await _maximize_with_retry(entry.pid)
+	await _maximize_with_retry(entry.pid, entry.emulator_id)
 
 	entry.active = true
 
@@ -1677,11 +1717,17 @@ func _input(event: InputEvent) -> void:
 			stop_session()
 			get_viewport().set_input_as_handled()
 
+func _toggle_controls() -> void:
+	if _controls_window and is_instance_valid(_controls_window):
+		_controls_window.hide_controls()
+	elif _state == State.ACTIVE or _state == State.PAUSED:
+		_summon_controls()
+
 # ============================================================================
 # WINDOW / PROCESS HELPERS
 # ============================================================================
 
-func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callable()) -> void:
+func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callable(), hint: String = "") -> void:
 	match _window_backend:
 		WindowBackend.WINDOWS_AHK:
 			var ahk_script = _tools_dir + "minimize_window.ahk"
@@ -1692,18 +1738,18 @@ func _hide_window_async(pid: int, exe_name: String, callback: Callable = Callabl
 		WindowBackend.LINUX_KWIN:
 			_kwin_minimize_async(pid, callback)
 		WindowBackend.LINUX_X11:
-			_x11_minimize_async(pid, callback)
+			_x11_minimize_async(pid, callback, hint)
 		_:
 			if callback.is_valid():
 				callback.call_deferred({"exit_code": -1, "output": []})
 
-func _hide_window_awaited(pid: int, exe_name: String) -> void:
+func _hide_window_awaited(pid: int, exe_name: String, hint: String = "") -> void:
 	var hide_start := Time.get_ticks_msec()
 	var done := {"complete": false, "exit_code": -1}
 	_hide_window_async(pid, exe_name, func(result: Dictionary):
 		done.complete = true
 		done.exit_code = result.get("exit_code", -1)
-	)
+	, hint)
 	var elapsed := 0.0
 	while not done.complete and elapsed < HIDE_AWAIT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.05).timeout
@@ -1720,7 +1766,7 @@ func _is_current_game_pid(pid: int) -> bool:
 		return false
 	return _bag.entries[_current_game_index].pid == pid
 
-func _maximize_with_retry(pid: int) -> void:
+func _maximize_with_retry(pid: int, hint: String = "") -> void:
 	if DEBUG_LOG: print("[ShufflerSubManager] _maximize_with_retry START pid=" + str(pid))
 	var token := _maximize_token
 	var maximized := false
@@ -1729,7 +1775,7 @@ func _maximize_with_retry(pid: int) -> void:
 			if DEBUG_LOG: print("[ShufflerSubManager] _maximize_with_retry aborted: pid " + str(pid) + " is no longer the foreground game")
 			return
 		if DEBUG_LOG: print("[ShufflerSubManager] Maximizing pid " + str(pid) + " (attempt " + str(i + 1) + "/3)")
-		if await _maximize_window_async(pid, token):
+		if await _maximize_window_async(pid, token, hint):
 			if DEBUG_LOG: print("[ShufflerSubManager] pid " + str(pid) + " maximized successfully")
 			maximized = true
 			break
@@ -1741,20 +1787,20 @@ func _maximize_with_retry(pid: int) -> void:
 		push_error("[ShufflerSubManager] Failed to maximize window for pid " + str(pid) + " after 3 attempts")
 	if maximized:
 		_ensure_controls_on_top()
-		_delayed_remaximize(pid, token)
+		_delayed_remaximize(pid, token, hint)
 
 # Some emulators (e.g. Vita3K) recreate their game window seconds after the
 # first one appears, so a successful maximize can bind to a doomed window.
 # Re-raise once more shortly after; no-ops if we've already switched away.
-func _delayed_remaximize(pid: int, token: int) -> void:
+func _delayed_remaximize(pid: int, token: int, hint: String = "") -> void:
 	await get_tree().create_timer(4.0).timeout
 	if token != _maximize_token or not _is_current_game_pid(pid):
 		return
 	if DEBUG_LOG: print("[ShufflerSubManager] _delayed_remaximize: re-maximizing pid " + str(pid))
-	await _maximize_window_async(pid, token)
+	await _maximize_window_async(pid, token, hint)
 	_ensure_controls_on_top()
 
-func _maximize_window_async(pid: int, token: int = -1) -> bool:
+func _maximize_window_async(pid: int, token: int = -1, hint: String = "") -> bool:
 	var os_state := {"completed": false, "success": false, "output_text": ""}
 
 	match _window_backend:
@@ -1781,7 +1827,7 @@ func _maximize_window_async(pid: int, token: int = -1) -> bool:
 				os_state["completed"] = true
 				os_state["success"] = (result.get("exit_code", -1) == 0)
 				if DEBUG_LOG: print("[ShufflerSubManager] x11 raise result for pid " + str(pid) + ": exit=" + str(result.get("exit_code", -1)))
-			)
+			, hint)
 		_:
 			return false
 
@@ -1873,20 +1919,123 @@ func _kwin_run_script_async(pid: int, action: String, callback: Callable = Calla
 	MemorySubManager.queue_os_execute("/bin/sh", [sh_script_path], callback)
 
 
-func _x11_minimize_async(pid: int, callback: Callable = Callable()) -> void:
+## Wraps an x11_windowctl callback to surface the helper's stderr in the log:
+## failures and name-hint fallbacks are otherwise invisible in release builds.
+func _x11_logging_callback(action: String, pid: int, callback: Callable) -> Callable:
+	return func(result: Dictionary):
+		var output := ("".join(result.get("output", []))).strip_edges()
+		var exit_code: int = result.get("exit_code", -1)
+		if exit_code != 0:
+			print("[ShufflerSubManager] x11_windowctl " + action + " pid=" + str(pid) + " failed: exit=" + str(exit_code) + " " + output)
+		elif output != "":
+			print("[ShufflerSubManager] x11_windowctl " + action + " pid=" + str(pid) + ": " + output)
+		if callback.is_valid():
+			callback.call(result)
+
+
+## Returns the x11_windowctl target for a game's window: the captured XID if
+## we have one (unambiguous when several instances of the same emulator are
+## alive, e.g. suspended games), else the PID for the helper's pid/hint
+## lookup.
+func _windowctl_target(pid: int) -> String:
+	if pid <= 0:
+		return str(pid)
+	if _bag and _bag.entries:
+		for entry in _bag.entries:
+			if entry.pid == pid:
+				var xid: String = entry.get("window_xid", "")
+				if xid != "":
+					return "xid:" + xid
+				break
+	return str(pid)
+
+## Captures the exact X11 window ID the helper matched for this game (same
+## matching rules as show/hide) and stores it on the bag entry, so later
+## hide/show calls target that window unambiguously.
+func _capture_window_xid(pid: int, hint: String) -> void:
+	if _x11_windowctl_path.is_empty():
+		return
+	var args: Array = ["find", str(pid)]
+	if hint != "":
+		args.append(hint)
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, args, func(result: Dictionary):
+		if result.get("exit_code", -1) != 0:
+			return
+		# The helper prints only the hex XID on stdout, but LD_PRELOAD noise
+		# from the Steam overlay can precede it; keep the last hex-only line.
+		var text := ("".join(result.get("output", []))).strip_edges()
+		var xid := ""
+		for line in text.split("\n", false):
+			var l := line.strip_edges().to_lower()
+			if l.length() > 0 and l.is_valid_hex_number(false):
+				xid = l
+		if xid == "":
+			return
+		if _bag and _bag.entries:
+			for entry in _bag.entries:
+				if entry.pid == pid:
+					entry["window_xid"] = xid
+					print("[ShufflerSubManager] captured window xid " + xid + " for pid " + str(pid))
+					break
+	)
+
+
+## Thoroughly terminates a game's process tree. The tracked pid can be a
+## launcher wrapper (AppImage sh/AppRun) whose death orphans the real
+## emulator, so this also SIGKILLs every descendant, and severs the X client
+## that owns the captured game window (the real emulator) as a final
+## insurance. SIGCONT first so SIGSTOPped games can actually die.
+func _kill_entry_processes(entry: Dictionary) -> void:
+	var pid: int = entry.get("pid", -1)
+	var xid: String = entry.get("window_xid", "")
+	if pid <= 0 and xid == "":
+		return
+	if SystemManager.platform.is_windows():
+		if pid > 0:
+			MemorySubManager.queue_os_execute("taskkill", ["/F", "/T", "/PID", str(pid)])
+	else:
+		if pid > 0:
+			# kill_tree: SIGKILLs the pid and all of its descendants,
+			# bottom-up. Plain sh function; no process-group kill because
+			# Godot-spawned children can share our own process group.
+			var script := "kill_tree() { kill -CONT \"$1\" 2>/dev/null; for child in $(ps -o pid= --ppid \"$1\" 2>/dev/null); do kill_tree \"$child\"; done; kill -9 \"$1\" 2>/dev/null; }; kill_tree " + str(pid)
+			MemorySubManager.queue_os_execute("/bin/sh", ["-c", script])
+		if xid != "" and not _x11_windowctl_path.is_empty():
+			MemorySubManager.queue_os_execute(_x11_windowctl_path, ["xkill", "xid:" + xid], _x11_logging_callback("xkill", pid, Callable()))
+
+
+func _x11_minimize_async(pid: int, callback: Callable = Callable(), hint: String = "") -> void:
 	if _x11_windowctl_path.is_empty():
 		if callback.is_valid():
 			callback.call_deferred({"exit_code": -1, "output": []})
 		return
-	MemorySubManager.queue_os_execute(_x11_windowctl_path, ["minimize", str(pid)], callback)
+	# In GameMode use XUnmapWindow: gamescope's WM ignores the EWMH hidden
+	# hint, and unmap works even on a frozen (suspended) client.
+	var action := "hide" if SystemManager.platform.is_gamemode() else "minimize"
+	var args: Array = [action, _windowctl_target(pid)]
+	if hint != "":
+		args.append(hint)
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, args, _x11_logging_callback(action, pid, callback))
 
 
-func _x11_raise_async(pid: int, callback: Callable = Callable()) -> void:
+func _x11_raise_async(pid: int, callback: Callable = Callable(), hint: String = "") -> void:
 	if _x11_windowctl_path.is_empty():
 		if callback.is_valid():
 			callback.call_deferred({"exit_code": -1, "output": []})
 		return
-	MemorySubManager.queue_os_execute(_x11_windowctl_path, ["raise", str(pid)], callback)
+	# In GameMode remap the (previously unmapped) window and raise it in one go.
+	var action := "show" if SystemManager.platform.is_gamemode() else "raise"
+	var args: Array = [action, _windowctl_target(pid)]
+	if hint != "":
+		args.append(hint)
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, args, _x11_logging_callback(action, pid, func(result: Dictionary):
+		if result.get("exit_code", -1) == 0 and _windowctl_target(pid) == str(pid):
+			# Raised via pid/hint lookup: capture the exact window ID so the
+			# next hide/show for this entry is unambiguous.
+			_capture_window_xid(pid, hint)
+		if callback.is_valid():
+			callback.call(result)
+	))
 
 
 func _is_process_running_async(pid: int) -> bool:
@@ -1949,12 +2098,24 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 # CONTROLS WINDOW
 # ============================================================================
 
-func _create_controls_window() -> void:
-	if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window")
+## Creates the persistent invisible input listener for the summon chord.
+## Joypad input only reaches viewports backed by a MAPPED OS window, so the
+## chord cannot live in the minimized main window or the ephemeral palette.
+func _create_input_window() -> void:
+	if _input_window and is_instance_valid(_input_window):
+		return
+	_input_window = ShufflerInputWindow.new()
+	_input_window.chord_pressed.connect(_toggle_controls)
+	get_tree().root.add_child(_input_window)
+
+## Creates the controls palette on summon. The window is freed on dismiss and
+## recreated here on the next summon (create-on-summon): gamescope only
+## composites freshly-mapped overlay windows above the focused game, so the
+## panel can never be a persistent window that gets raised.
+func _summon_controls() -> void:
+	if DEBUG_LOG: print("[ShufflerSubManager] _summon_controls")
 	if _controls_window and is_instance_valid(_controls_window):
-		if DEBUG_LOG: print("[ShufflerSubManager] _create_controls_window: freeing existing controls window")
-		_controls_window.queue_free()
-		_controls_window = null
+		return
 
 	var scene = load("res://components/shuffler_controls_window.tscn")
 	if not scene:
@@ -1968,9 +2129,29 @@ func _create_controls_window() -> void:
 	_controls_window.restart_requested.connect(restart_game)
 	_controls_window.remove_requested.connect(remove_game)
 	_controls_window.stop_requested.connect(stop_session)
+	var w = _controls_window
+	w.tree_exited.connect(func():
+		if _controls_window == w:
+			_controls_window = null
+		# Gamescope presents the focused window; once the palette menu closes,
+		# hand focus back to the game (harmless if a choice/intro window is
+		# about to map and take focus itself).
+		if SystemManager.platform.is_gamemode() and (_state == State.ACTIVE or _state == State.PAUSED):
+			var pid: int = _bag.entries[_current_game_index].pid if _current_game_index >= 0 and _current_game_index < _bag.entries.size() else -1
+			if pid > 0:
+				_maximize_with_retry.call_deferred(pid, _bag.entries[_current_game_index].emulator_id)
+	)
 
+	# The palette marks itself transient for the game window (gamescope draws
+	# dialogs above their parent), so it needs the game's captured window XID
+	# before _ready runs.
+	if _current_game_index >= 0 and _current_game_index < _bag.entries.size():
+		_controls_window.game_window_xid = _bag.entries[_current_game_index].get("window_xid", "")
 	get_tree().root.add_child(_controls_window)
-	print("[ShufflerSubManager] Controls palette created: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
+	# Re-apply session state the fresh window knows nothing about.
+	_controls_window.set_paused(_state == State.PAUSED)
+	_controls_window.set_reroll_enabled(_controls_reroll_enabled)
+	print("[ShufflerSubManager] Controls palette summoned: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
 
 # ============================================================================
 # RETROARCH CONFIG
