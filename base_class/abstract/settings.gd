@@ -21,6 +21,8 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export_subgroup("Display")
 @export var windowed := SettingsVar.new(Type.BOOL,true,State.ENABLED,"Windowed")
 @export var ui_scale := SettingsVar.new(Type.FLOAT, 1.0, State.ENABLED, "UI Scale", "Scale all interface elements (multiplier on top of automatic display scaling)", 0.75, 3.0, 0.05, [], false, {"show_stops": false})
+@export var hdr_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "HDR Output", "Request HDR output on supported displays")
+@export var vrr_enabled := SettingsVar.new(Type.BOOL, false, State.ENABLED, "VRR / High Refresh", "Disable frame pacing limits and vsync for variable-refresh-rate displays")
 @export var resolutions: Array = [
 	Vector2i(2560,1080),
 	Vector2i(1920,1080),

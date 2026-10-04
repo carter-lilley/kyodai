@@ -138,12 +138,20 @@ func is_core_ready(emulator_id: String, platform_slug: String, core_id: String) 
 
 ## Validates that every default core listed in the manifest exists on disk.
 ## This is used as the install-step validation for Android RetroArch.
+## If no manifest has been written yet (legacy install, or the write failed),
+## fall back to the registry's default core set. If all expected cores are
+## present, the manifest is generated on the spot so future scans don't repeat
+## the fallback. If cores are actually missing, the install is simply reported
+## as incomplete without spamming errors during routine scans.
 func validate_core_manifest(emulator_id: String = "retroarch") -> bool:
 	var manifest: Dictionary = read_manifest(emulator_id)
 	var cores: Dictionary = manifest.get("cores", {}) as Dictionary
+	var manifest_was_missing := false
 	if cores.is_empty():
-		push_error("[CoreManager] validate_core_manifest: no manifest found for " + emulator_id)
-		return false
+		cores = build_default_core_manifest(emulator_id)
+		manifest_was_missing = true
+		if cores.is_empty():
+			return false
 	
 	for platform_slug in cores.keys():
 		var platform_data: Dictionary = cores[platform_slug] as Dictionary
@@ -155,6 +163,13 @@ func validate_core_manifest(emulator_id: String = "retroarch") -> bool:
 				var expected_path := get_core_expected_path(emulator_id, platform_slug, core_id)
 				push_error("[CoreManager] validate_core_manifest: missing core %s / %s (expected: %s)" % [platform_slug, core_id, expected_path])
 				return false
+	
+	# Legacy / pre-fix install with cores present but no manifest: write it now
+	# so the next scan uses the fast path and reports complete.
+	if manifest_was_missing:
+		print("[CoreManager] Generating missing core manifest for " + emulator_id)
+		write_manifest(emulator_id, cores)
+	
 	return true
 
 ## Downloads and extracts a single core for the given platform.

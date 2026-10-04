@@ -46,7 +46,7 @@
 	"strategy": "dolphin_ini",
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/User/Config/Dolphin.ini"],
-	  "linux": ["{emulator_dir}/User/Config/Dolphin.ini"],
+	  "linux": ["{emulator_dir}/.config/dolphin-emu/Dolphin.ini"],
 	  "android": ["{app_data}/Config/Dolphin.ini"]
 	},
 	"enforce": {
@@ -58,6 +58,12 @@
 		  },
 		  "General": {
 			"NANDRootPath": "{emulator_dir}/User/Wii"
+		  },
+		  "Display": {
+			"Fullscreen": "True"
+		  },
+		  "Interface": {
+			"ConfirmStop": "False"
 		  }
 		}
 	  },
@@ -65,10 +71,16 @@
 		"sections": {
 		  "Core": {
 			"SlotA": "GCI Folder",
-			"GCIFolderAPath": "{emulator_dir}/User/GC"
+			"GCIFolderAPath": "{emulator_dir}/.local/share/dolphin-emu/GC"
 		  },
 		  "General": {
-			"NANDRootPath": "{emulator_dir}/User/Wii"
+			"NANDRootPath": "{emulator_dir}/.local/share/dolphin-emu/Wii"
+		  },
+		  "Display": {
+			"Fullscreen": "True"
+		  },
+		  "Interface": {
+			"ConfirmStop": "False"
 		  }
 		}
 	  }
@@ -83,17 +95,23 @@
 		  "{exe}",
 		  "-e",
 		  "{rom}",
-		  "--batch",
-		  "--config",
-		  "Dolphin.Display.Fullscreen=True",
-		  "--config",
-          "Dolphin.Interface.ConfirmStop=False"
+		  "--batch"
 		]
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "",
-		"template": []
+		"executable": "squashfs-root/AppRun",
+		"template": [
+		  "{exe}",
+		  "-e",
+		  "{rom}",
+		  "--batch"
+		],
+		"environment": {
+		  "XDG_CONFIG_HOME": "{emulator_dir}/.config",
+		  "XDG_DATA_HOME": "{emulator_dir}/.local/share",
+		  "XDG_CACHE_HOME": "{emulator_dir}/.cache"
+		}
 	  },
 	  "android": {
 		"action": "android.intent.action.MAIN",
@@ -122,8 +140,14 @@
 		  "url_template": "https://dl.dolphin-emu.org/releases/{version}/dolphin-{version}-x64.7z"
 		},
 		"linux": {
-		  "action_type": "download_url",
-		  "url": ""
+		  "action_type": "download_repo",
+		  "github_repo": "pkgforge-dev/Dolphin-emu-AppImage",
+		  "asset_pattern": "Dolphin_Emulator-.*-anylinux-x86_64\\.AppImage",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": ".",
+			"pattern": "Dolphin_Emulator-*.AppImage"
+		  }
 		},
 		"android": {
 		  "action_type": "download_scrape",
@@ -147,11 +171,7 @@
 		  }
 		},
 		"linux": {
-		  "action_type": "validate_only",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": ""
-		  }
+		  "action_type": "none"
 		},
 		"android": {
 		  "action_type": "apk_install",
@@ -161,6 +181,41 @@
 			"action_type": "package_installed",
 			"package": "org.dolphinemu.dolphinemu"
 		  }
+		}
+	  }
+	},
+	{
+	  "step": "chmod_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "chmod",
+		  "pattern": "Dolphin_Emulator-*.AppImage"
+		},
+		"android": {
+		  "action_type": "none"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "Dolphin_Emulator-*.AppImage",
+		  "validate": {
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
+		  }
+		},
+		"android": {
+		  "action_type": "none"
 		}
 	  }
 	},

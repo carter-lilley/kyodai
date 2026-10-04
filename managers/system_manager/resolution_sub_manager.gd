@@ -61,12 +61,13 @@ static func resolve_firmware_dir(emulator_id: String, platform_slug: String = ""
 ## so eden/azahar need a small transformation before lookup.
 static func _paths_already_enforced(config_path: String, sections: Dictionary, strategy: String) -> bool:
 	var fmt := CSM.detect_format(config_path)
-	for section_name in sections:
-		var file_section := section_name
+	for section_name: String in sections:
+		var file_section: String = section_name
 		if strategy == "eden_ini" or strategy == "azahar_ini":
 			file_section = section_name.replace(" ", "%20")
-		for key in sections[section_name]:
-			var expected: String = str(sections[section_name][key])
+		var section_data: Dictionary = sections[section_name]
+		for key: String in section_data:
+			var expected: String = str(section_data[key])
 			var actual: Variant = CSM.get_value(config_path, key, file_section, fmt)
 			if actual == null:
 				return false

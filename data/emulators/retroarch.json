@@ -108,7 +108,8 @@
 						"savefile_directory": "{emulator_dir}/saves",
 						"system_directory": "{emulator_dir}/system",
 						"assets_directory": "{emulator_dir}/.config/retroarch/assets",
-						"joypad_autoconfig_dir": "{emulator_dir}/.config/retroarch/autoconfig"
+						"joypad_autoconfig_dir": "{emulator_dir}/.config/retroarch/autoconfig",
+						"video_shader_dir": "{emulator_dir}/.config/retroarch/shaders"
 					}
 				}
 			},
@@ -145,17 +146,17 @@
 					"-L",
 					"{core}",
 					"{rom}",
-				"-f"
-			],
-			"standalone_args": [
-				"-c",
-				"{emulator_dir}/.config/retroarch/retroarch.cfg"
-			],
-			"environment": {
-				"XDG_CONFIG_HOME": "{emulator_dir}/.config"
-			}
-		},
-		"android": {
+					"-f"
+				],
+				"standalone_args": [
+					"-c",
+					"{emulator_dir}/.config/retroarch/retroarch.cfg"
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config"
+				}
+			},
+			"android": {
 				"action": "android.intent.action.VIEW",
 				"package": "com.retroarch",
 				"class": "com.retroarch.browser.debug.CoreSideloadActivity",
@@ -306,7 +307,9 @@
 					"batch": true,
 					"expected_file": "*_libretro.dll.zip",
 					"validate": {
-						"action_type": "core_manifest"
+						"action_type": "files_exist",
+						"path": "{emulator_dir}/cores",
+						"pattern": "*_libretro.dll"
 					}
 				},
 				"linux": {
@@ -315,7 +318,9 @@
 					"batch": true,
 					"expected_file": "*_libretro.so.zip",
 					"validate": {
-						"action_type": "core_manifest"
+						"action_type": "files_exist",
+						"path": "{emulator_dir}/cores",
+						"pattern": "*_libretro.so"
 					}
 				},
 				"android": {

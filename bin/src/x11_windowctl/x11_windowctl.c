@@ -42,6 +42,16 @@ static Atom net_wm_state;
 static Atom net_wm_state_hidden;
 static Atom net_active_window;
 
+static int x11_error_occurred = 0;
+
+static int x11_error_handler(Display *dpy, XErrorEvent *ev)
+{
+	(void)dpy;
+	(void)ev;
+	x11_error_occurred = 1;
+	return 0;
+}
+
 static int window_pid(Display *dpy, Window win, pid_t *out)
 {
 	Atom type;
@@ -171,7 +181,7 @@ static void send_client_message(Display *dpy, Window win, Atom msg_type,
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|xkill> <pid|xid:HEX> [name_hint] | %s active | %s set-transient <xid:CHILD> <xid:PARENT>\n", argv[0], argv[0], argv[0]);
+		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid|xid:HEX> [name_hint] | %s active | %s set-transient <xid:CHILD> <xid:PARENT>\n", argv[0], argv[0], argv[0]);
 		return 2;
 	}
 
@@ -242,7 +252,7 @@ int main(int argc, char **argv)
 	}
 
 	if (argc < 3 || argc > 4) {
-		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|xkill> <pid|xid:HEX> [name_hint]\n", argv[0]);
+		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid|xid:HEX> [name_hint]\n", argv[0]);
 		XCloseDisplay(dpy);
 		return 2;
 	}
@@ -296,6 +306,24 @@ int main(int argc, char **argv)
 		send_client_message(dpy, win, net_active_window, 2 /* source: pager */, 0);
 	} else if (strcmp(action, "find") == 0) {
 		printf("%lx\n", (unsigned long)win);
+	} else if (strcmp(action, "exists") == 0) {
+		/* Verifies the referenced XID is still a valid window. Gamescope
+		 * manages windows, not PIDs, so this is the reliable liveness signal
+		 * under Game Mode. */
+		x11_error_occurred = 0;
+		XErrorHandler old_handler = XSetErrorHandler(x11_error_handler);
+		XWindowAttributes attrs;
+		int ok = XGetWindowAttributes(dpy, win, &attrs);
+		XSetErrorHandler(old_handler);
+		if (ok && !x11_error_occurred) {
+			printf("%lx\n", (unsigned long)win);
+			XCloseDisplay(dpy);
+			return 0;
+		} else {
+			fprintf(stderr, "Window does not exist: %lx\n", (unsigned long)win);
+			XCloseDisplay(dpy);
+			return 1;
+		}
 	} else if (strcmp(action, "xkill") == 0) {
 		/* Kills the X client that owns the window: the real emulator even
 		 * when our tracked pid is a launcher wrapper. */

@@ -34,7 +34,7 @@ var _sidebar_built_compact: bool = false
 var _focus_follow_viewport: Viewport = null
 
 const DEBUG_LAYOUT: bool = false
-const DEBUG_FOCUS_GUARD: bool = true
+const DEBUG_FOCUS_GUARD: bool = false
 
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}

@@ -103,6 +103,11 @@ var _manual_maximized: bool = false
 var _manual_max_rect: Rect2i = Rect2i()
 var _max_verify_token: int = 0
 
+# Display quality state (HDR / VRR). Populated once the window has settled.
+var _hdr_enabled_user: bool = true
+var _hdr_active: bool = false
+var _vrr_enabled: bool = false
+
 # Dual-screen SubViewports are always 1:1 (no size_2d_override): dp scaling is
 # applied inside them via M3Units (see _calculate_ui_scale). Never reintroduce
 # viewport-level scaling here without disabling M3Units first, or every element
@@ -158,6 +163,10 @@ func _ready() -> void:
 
 	# Try to connect to AynThor screen swap signal (may not exist yet)
 	call_deferred("_connect_ayn_thor_signals")
+
+	# Initialize HDR/VRR/refresh-rate aware quality settings once the window
+	# has settled. VRR is applied immediately; HDR is detected async.
+	call_deferred("_initialize_display_quality")
 
 func _connect_ayn_thor_signals() -> void:
 	_ayn_thor_manager = get_node_or_null("/root/Main/AynThorManager")
@@ -516,6 +525,13 @@ func _on_setting_changed(value: Variant, setting: SettingsVar):
 			if _scale_debounce_timer:
 				_scale_debounce_timer.stop()
 				_scale_debounce_timer.start()
+		"hdr_enabled":
+			_hdr_enabled_user = bool(value)
+			_apply_hdr_user_setting()
+			_detect_hdr()
+		"vrr_enabled":
+			_vrr_enabled = bool(value)
+			_apply_vrr_setting()
 
 func _on_scale_debounced() -> void:
 	"""Stable ui_scale change: recompute, invalidate the M3Units cache, notify."""
@@ -539,6 +555,141 @@ func _load_user_scale_factor() -> void:
 		_emit_ui_scale_changed()
 	M3Debug.geom("display", "user scale factor applied: factor=%.2f ui_scale=%.3f m3units=%.3f" % [
 		_user_scale_factor, _ui_scale, M3Units.get_scale()])
+
+# ============================================================================
+# Display Quality (HDR / VRR / frame pacing)
+# ============================================================================
+
+func _initialize_display_quality() -> void:
+	"""Apply VRR/HDR user settings. VRR is applied immediately; HDR is detected once the window is ready."""
+	var hdr_setting = settings_man.get_setting("hdr_enabled")
+	if hdr_setting and hdr_setting.value is bool:
+		_hdr_enabled_user = hdr_setting.value
+	else:
+		_hdr_enabled_user = true
+	_apply_hdr_user_setting()
+
+	var vrr_setting = settings_man.get_setting("vrr_enabled")
+	if vrr_setting and vrr_setting.value is bool:
+		_vrr_enabled = vrr_setting.value
+	else:
+		_vrr_enabled = false
+	_apply_vrr_setting()
+
+	# HDR detection needs the window/swap-chain to be fully initialized.
+	# Give it a few frames after _apply_initial_window_size has settled.
+	if initial_window_size_settled.get_connections().is_empty():
+		initial_window_size_settled.connect(_detect_hdr, CONNECT_ONE_SHOT)
+	else:
+		# Already settled; defer so callers finish their own _ready first.
+		call_deferred("_detect_hdr")
+
+	# Re-apply HDR 2D if dual-screen SubViewports are created after startup.
+	if not dual_screen_mode_changed.is_connected(_on_dual_screen_mode_changed_for_hdr):
+		dual_screen_mode_changed.connect(_on_dual_screen_mode_changed_for_hdr)
+
+func _apply_hdr_user_setting() -> void:
+	"""Apply the user's HDR request to the main window."""
+	if SystemManager.platform.is_android():
+		return
+	var window := get_window()
+	if window == null:
+		return
+	window.hdr_output_requested = _hdr_enabled_user
+	print("[SystemManager.display] HDR user setting applied: requested=", _hdr_enabled_user)
+
+func _apply_vrr_setting() -> void:
+	"""Toggle low-processor mode and vsync based on the VRR user setting."""
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_SWAP_BUFFERS):
+		return
+	if _vrr_enabled:
+		var target_fps := _get_target_refresh_rate()
+		OS.low_processor_usage_mode = false
+		Engine.max_fps = target_fps
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		print("[SystemManager.display] VRR enabled: low_processor_mode=false max_fps=%d vsync=disabled" % target_fps)
+	else:
+		OS.low_processor_usage_mode = true
+		Engine.max_fps = 0
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
+		print("[SystemManager.display] VRR disabled: low_processor_mode=true max_fps=unlimited vsync=adaptive")
+
+func _get_target_refresh_rate() -> int:
+	"""Best-effort current refresh rate: DisplayServer first, then gamescope/Steam env hints, then 60."""
+	var refresh := DisplayServer.screen_get_refresh_rate()
+	if refresh > 0.0:
+		return int(round(refresh))
+	# Gamescope / Steam sometimes expose a target refresh via environment.
+	for env_key in ["GAMESCOPE_REFRESH", "STEAM_GAMESCOPE_REFRESH", "GAMESCOPE_DYNAMIC_REFRESH"]:
+		var env_val := OS.get_environment(env_key)
+		if env_val.is_valid_int():
+			return int(env_val)
+	return 60
+
+func _detect_hdr() -> void:
+	"""Detect whether HDR output is active and enable/disable HDR 2D on viewports accordingly."""
+	if SystemManager.platform.is_android():
+		return
+	var window := get_window()
+	if window == null:
+		return
+
+	# Ensure the window's HDR request matches the user setting.
+	window.hdr_output_requested = _hdr_enabled_user
+	var use_hdr := _hdr_enabled_user
+	var root_rid := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_use_hdr_2d(root_rid, use_hdr)
+	if UIManager and UIManager.dual_screen:
+		var main_vp: SubViewport = UIManager.dual_screen.get_main_viewport()
+		if main_vp:
+			RenderingServer.viewport_set_use_hdr_2d(main_vp.get_viewport_rid(), use_hdr)
+		var second_vp: SubViewport = UIManager.dual_screen.get_second_viewport()
+		if second_vp:
+			RenderingServer.viewport_set_use_hdr_2d(second_vp.get_viewport_rid(), use_hdr)
+
+	if not use_hdr:
+		if _hdr_active:
+			_hdr_active = false
+			print("[SystemManager.display] HDR disabled by user setting")
+		return
+
+	# Read current output max value; > 1.0 means HDR is actually engaged.
+	var output_max := window.get_output_max_linear_value()
+	var now_active := output_max > 1.0
+	if now_active != _hdr_active or now_active:
+		_hdr_active = now_active
+		print("[SystemManager.display] HDR output max linear value: ", output_max, " active=", _hdr_active)
+
+	# Listen for mid-session HDR state changes (e.g. user toggles HDR in OS).
+	if not window.output_max_linear_value_changed.is_connected(_on_output_max_linear_value_changed):
+		window.output_max_linear_value_changed.connect(_on_output_max_linear_value_changed)
+
+func _on_output_max_linear_value_changed() -> void:
+	var window := get_window()
+	if window == null:
+		return
+	var output_max := window.get_output_max_linear_value()
+	var now_active := output_max > 1.0
+	if now_active != _hdr_active:
+		_hdr_active = now_active
+		print("[SystemManager.display] HDR state changed: output_max=", output_max, " active=", _hdr_active)
+
+func is_hdr_active() -> bool:
+	return _hdr_active
+
+func is_vrr_enabled() -> bool:
+	return _vrr_enabled
+
+func _on_dual_screen_mode_changed_for_hdr(_enabled: bool, _second_screen_index: int) -> void:
+	if SystemManager.platform.is_android():
+		return
+	if UIManager and UIManager.dual_screen:
+		var main_vp: SubViewport = UIManager.dual_screen.get_main_viewport()
+		if main_vp:
+			RenderingServer.viewport_set_use_hdr_2d(main_vp.get_viewport_rid(), _hdr_enabled_user)
+		var second_vp: SubViewport = UIManager.dual_screen.get_second_viewport()
+		if second_vp:
+			RenderingServer.viewport_set_use_hdr_2d(second_vp.get_viewport_rid(), _hdr_enabled_user)
 
 func _on_screens_swapped(_swapped: bool) -> void:
 	# Defer resize notification so SubViewport size changes propagate to
@@ -613,7 +764,6 @@ func save_last_window_size() -> void:
 		print("[SystemManager.display] Saved last window size: ", size)
 
 func windowed_toggle(value : bool):
-	print("[DIAG] windowed_toggle START value=", value, " mode=", DisplayServer.window_get_mode(), " window_size=", DisplayServer.window_get_size(), " viewport_size=", get_viewport().size)
 	if value:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		apply_window_chrome(true)
@@ -632,9 +782,7 @@ func windowed_toggle(value : bool):
 		settings_man.disable_setting("resolution")
 		# Force immediate cascade so consumers (zoom, popups, grid) get the
 		# new fullscreen resolution without waiting for the OS signal + debounce.
-		print("[DIAG] windowed_toggle entering fullscreen, emitting immediate cascade with viewport_size=", get_viewport().size)
 		_on_resize_debounced()
-	print("[DIAG] windowed_toggle END value=", value, " mode=", DisplayServer.window_get_mode(), " window_size=", DisplayServer.window_get_size(), " viewport_size=", get_viewport().size)
 
 # ============================================================================
 # Dual Screen Detection and Management

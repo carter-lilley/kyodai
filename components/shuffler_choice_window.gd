@@ -15,6 +15,9 @@ const HOVER_TURN_DWELL := 0.5
 const HOVER_PHASE_STAGGER := 0.45
 const ENTRANCE_DURATION := 0.6
 const ENTRANCE_STAGGER := 0.12
+# Extra input swallow time after the entrance animation settles, so a held or
+# queued press can't accidentally pick a card the instant the window appears.
+const ENTRANCE_INPUT_LOCKOUT_MSEC := 350
 
 @onready var _card_a: M3Card = $Root/CenterBox/VBox/Row/CardA
 @onready var _card_b: M3Card = $Root/CenterBox/VBox/Row/CardB
@@ -30,6 +33,8 @@ var _card_tweens: Array[Tween] = []
 # Bumped per present: async cover loads from a previous candidate set check
 # it so a late texture can't land on a card showing a different game.
 var _present_generation := 0
+# Input is swallowed until the cards have finished sliding in.
+var _input_locked_until_msec: int = -1
 
 func _ready() -> void:
 	# Same OS-window initialization pattern as ShufflerControlsWindow: a real
@@ -195,6 +200,8 @@ func present(candidates: Array) -> void:
 	if not visible:
 		show()
 		move_to_foreground()
+	var lockout_ms := int((ENTRANCE_DURATION + ENTRANCE_STAGGER * 2.0) * 1000.0) + ENTRANCE_INPUT_LOCKOUT_MSEC
+	_input_locked_until_msec = Time.get_ticks_msec() + lockout_ms
 	_play_entrance_animation()
 	call_deferred("_focus_first_card")
 
@@ -207,13 +214,20 @@ func _kill_card_tweens() -> void:
 func _focus_first_card() -> void:
 	_card_a.grab_focus()
 
+func _input(event: InputEvent) -> void:
+	# Swallow all controller/mouse input while the entrance animation is playing
+	# so a held press from the previous game can't accidentally pick a card.
+	if Time.get_ticks_msec() < _input_locked_until_msec:
+		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction or event is InputEventMouseButton:
+			get_viewport().set_input_as_handled()
+
 func _on_card_hovered(card: M3Card) -> void:
-	if _resolved or card.has_focus():
+	if _resolved or card.has_focus() or Time.get_ticks_msec() < _input_locked_until_msec:
 		return
 	card.grab_focus()
 
 func _on_card_pressed(entry: Dictionary) -> void:
-	if _resolved:
+	if _resolved or Time.get_ticks_msec() < _input_locked_until_msec:
 		return
 	_resolved = true
 	game_chosen.emit(entry, _candidates)
