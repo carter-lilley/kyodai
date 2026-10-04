@@ -421,6 +421,10 @@ func _populate_shuffler_card(
 		is_enabled = platform_config
 	elif platform_config is Dictionary:
 		is_enabled = platform_config.get("enabled", false)
+	# Platforms with known shuffler issues default to excluded; the user can
+	# still opt in per session via the toggle.
+	if LaunchManager.shuffler.is_platform_shuffle_default_disabled(slug):
+		is_enabled = false
 	card.is_sync_enabled = is_enabled
 	if is_enabled and slug not in _selected_platforms:
 		_selected_platforms.append(slug)

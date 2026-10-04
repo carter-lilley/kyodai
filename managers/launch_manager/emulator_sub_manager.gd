@@ -624,12 +624,12 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var extract_to = batch_config.get("extract_to", ".")
 	var dynamic_cores = batch_config.get("dynamic_cores", false)
 	
-	# On Android RetroArch, generate the default-core list from the registry so it
+	# Generate the default-core list from the registry so it
 	# stays in sync with the supported platform/core mappings.
-	if dynamic_cores and emulator_id == "retroarch" and SystemManager.platform.is_android():
+	if dynamic_cores and emulator_id == "retroarch":
 		cores = launch_manager.core.get_default_core_download_list(emulator_id) as Array
 		if cores.is_empty():
-			push_error("[EmulatorManager] No default cores found in registry for Android RetroArch")
+			push_error("[EmulatorManager] No default cores found in registry for RetroArch")
 			return false
 	
 	# Resolve {emulator_dir} templates
@@ -1002,9 +1002,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 			if strip_top:
 				_flatten_extracted_directory(emulator_id, extract_dir, flatten_target)
 			
-			# For Android RetroArch, persist a manifest of expected default cores
+			# Persist a manifest of expected default cores
 			# so validation knows exactly which files should be present.
-			if emulator_id == "retroarch" and SystemManager.platform.is_android():
+			if emulator_id == "retroarch":
 				var manifest: Dictionary = launch_manager.core.build_default_core_manifest(emulator_id) as Dictionary
 				launch_manager.core.write_manifest(emulator_id, manifest)
 			

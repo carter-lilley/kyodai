@@ -39,6 +39,14 @@ var _controls_window: Node = null
 # Persistent invisible window that listens for the summon chord; joypad input
 # only reaches MAPPED OS windows, and the palette is ephemeral.
 var _input_window: Node = null
+
+## Platforms with known shuffler lifecycle issues (pico8/win3x suspend
+## problems); their shuffler dialog toggles default to off, but the user can
+## still opt in per session.
+const SHUFFLER_PLATFORM_DEFAULT_DISABLED: Array[String] = ["win3x", "pico8", "model2", "model3", "ps4"]
+
+func is_platform_shuffle_default_disabled(slug: String) -> bool:
+	return slug in SHUFFLER_PLATFORM_DEFAULT_DISABLED
 # Cached reroll-button state, re-applied to each freshly summoned palette.
 var _controls_reroll_enabled: bool = true
 var _main_window: Window = null
