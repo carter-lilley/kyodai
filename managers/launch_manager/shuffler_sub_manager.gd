@@ -4,6 +4,7 @@ class_name ShufflerSubManager
 ## Manages shuffler sessions: bag building, game switching, process control.
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const ShufflerInputWindowScene = preload("res://components/shuffler_input_window.gd")
 
 # Gate per-download / per-preparation logging: these fire in bursts while
 # the session intro plays, and building _format_bag()/_format_entry() strings
@@ -2104,7 +2105,7 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 func _create_input_window() -> void:
 	if _input_window and is_instance_valid(_input_window):
 		return
-	_input_window = ShufflerInputWindow.new()
+	_input_window = ShufflerInputWindowScene.new()
 	_input_window.chord_pressed.connect(_toggle_controls)
 	get_tree().root.add_child(_input_window)
 

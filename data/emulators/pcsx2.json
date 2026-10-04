@@ -38,8 +38,7 @@
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/inis/PCSX2.ini"],
 	  "linux": [
-		"{home}/.config/PCSX2/inis/PCSX2.ini",
-		"{emulator_dir}/inis/PCSX2.ini"
+		"{emulator_dir}/.config/PCSX2/inis/PCSX2.ini"
 	  ]
 	},
 	"enforce": {
@@ -94,7 +93,12 @@
 		  "-fullscreen",
 		  "-batch",
 		  "{rom}"
-		]
+		],
+		"environment": {
+		  "XDG_CONFIG_HOME": "{emulator_dir}/.config",
+		  "XDG_DATA_HOME": "{emulator_dir}/.local/share",
+		  "XDG_CACHE_HOME": "{emulator_dir}/.cache"
+		}
 	  }
 	}
   },
@@ -215,14 +219,14 @@
 		  "action_type": "create_files",
 		  "files": [
 			{
-			  "name": "{home}/.config/PCSX2/inis/PCSX2.ini",
+			  "name": "{emulator_dir}/.config/PCSX2/inis/PCSX2.ini",
 			  "content": "[UI]\nSetupWizardIncomplete = false\nSettingsVersion = 1\n\n[Filenames]\nBIOS = ps2-0200a-20040614.bin\n\n[Folders]\nMemoryCards = {emulator_dir}/memcards\nBIOS = {emulator_dir}/bios\n\n[MemoryCards]\nSlot1_Enable = true\nSlot1_Filename = main.ps2"
 			}
 		  ],
 		  "validate": {
 			"action_type": "files_exist",
 			"files": [
-              "{home}/.config/PCSX2/inis/PCSX2.ini"
+              "{emulator_dir}/.config/PCSX2/inis/PCSX2.ini"
 			]
 		  }
 		}

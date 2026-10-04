@@ -107,8 +107,8 @@
 						"libretro_directory": "{emulator_dir}/cores",
 						"savefile_directory": "{emulator_dir}/saves",
 						"system_directory": "{emulator_dir}/system",
-					"assets_directory": "{emulator_dir}/RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/assets",
-					"joypad_autoconfig_dir": "{emulator_dir}/RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/autoconfig"
+						"assets_directory": "{emulator_dir}/.config/retroarch/assets",
+						"joypad_autoconfig_dir": "{emulator_dir}/.config/retroarch/autoconfig"
 					}
 				}
 			},
@@ -340,26 +340,6 @@
 				},
 				"linux": {
 					"action_type": "none"
-				}
-			}
-		},
-		{
-			"step": "steam_virtual_pad_profile",
-			"platforms": {
-				"windows": {
-					"action_type": "none"
-				},
-				"android": {
-					"action_type": "none"
-				},
-				"linux": {
-					"action_type": "create_files",
-					"files": [
-						{
-							"name": "RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/autoconfig/udev/Microsoft X-Box 360 pad 0.cfg",
-							"content": "input_device = \"Microsoft X-Box 360 pad 0\"\ninput_device_display_name = \"Steam Virtual Gamepad\"\ninput_vendor_id = \"10462\"\ninput_product_id = \"4607\"\n\ninput_b_btn = \"0\"\ninput_y_btn = \"2\"\ninput_select_btn = \"6\"\ninput_start_btn = \"7\"\ninput_up_btn = \"h0up\"\ninput_down_btn = \"h0down\"\ninput_left_btn = \"h0left\"\ninput_right_btn = \"h0right\"\ninput_a_btn = \"1\"\ninput_x_btn = \"3\"\ninput_l_btn = \"4\"\ninput_r_btn = \"5\"\ninput_l2_axis = \"+2\"\ninput_r2_axis = \"+5\"\ninput_l3_btn = \"9\"\ninput_r3_btn = \"10\"\ninput_l_x_plus_axis = \"+0\"\ninput_l_x_minus_axis = \"-0\"\ninput_l_y_plus_axis = \"+1\"\ninput_l_y_minus_axis = \"-1\"\ninput_r_x_plus_axis = \"+3\"\ninput_r_x_minus_axis = \"-3\"\ninput_r_y_plus_axis = \"+4\"\ninput_r_y_minus_axis = \"-4\"\ninput_menu_toggle_btn = \"8\"\n"
-						}
-					]
 				}
 			}
 		}
