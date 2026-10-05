@@ -1,8 +1,6 @@
 class_name ShufflerControlsWindow
 extends Window
 
-signal pause_requested()
-signal resume_requested()
 signal skip_requested()
 signal restart_requested()
 signal remove_requested()
@@ -10,11 +8,9 @@ signal stop_requested()
 
 const CURSOR_PATH := "res://assets/Cursor.png"
 
-@onready var _pause_btn: M3IconButton = $Root/M3ButtonGroup/PauseButton
 @onready var _button_group: M3ButtonGroup = $Root/M3ButtonGroup
 @onready var _shuffle_btn: M3IconButton = $Root/M3ButtonGroup/ShuffleButton
 
-var _is_paused: bool = false
 # Set once dismiss begins: the window frees itself, so every subsequent call
 # (re-summon chord, auto-dismiss, cleanup) is a no-op.
 var _dismissing := false
@@ -45,14 +41,6 @@ var _input_locked_until_msec: int = -1
 func set_reroll_enabled(enabled: bool) -> void:
 	if _shuffle_btn and is_instance_valid(_shuffle_btn):
 		_shuffle_btn.disabled = not enabled
-
-## Initializes the pause/play button from the manager's authoritative pause
-## state. The window is recreated on every summon, so this must be re-applied
-## each time or a paused session would show the wrong icon.
-func set_paused(paused: bool) -> void:
-	_is_paused = paused
-	if _pause_btn and is_instance_valid(_pause_btn):
-		_pause_btn.icon_name = "play" if _is_paused else "pause"
 
 func _ready():
 	# Ensure the OS window is fully transparent and doesn't inherit any theme
@@ -160,7 +148,7 @@ func _ready():
 	var top_btn := _button_group.get_child(0) as Control
 	if top_btn:
 		top_btn.grab_focus()
-	_warp_cursor_to_bottom_button()
+	_warp_cursor_to_top_button()
 
 
 
@@ -171,7 +159,7 @@ func _input(event: InputEvent) -> void:
 	# Summon lockout: swallow events so they can't reach the freshly-focused
 	# button through the viewport's GUI router either. A held or queued press
 	# (chord release, game input already in flight) must not instantly
-	# activate the freshly-focused Pause button and vanish the panel.
+	# activate the freshly-focused top button and vanish the panel.
 	if Time.get_ticks_msec() < _input_locked_until_msec:
 		if event is InputEventJoypadButton or event is InputEventJoypadMotion or event is InputEventAction:
 			get_viewport().set_input_as_handled()
@@ -298,10 +286,13 @@ func _set_transient_for_game() -> void:
 	print("[ShufflerControlsWindow] set-transient: " + own_xid + " -> " + game_window_xid)
 	MemorySubManager.queue_os_execute(tool, ["set-transient", "xid:" + own_xid, "xid:" + game_window_xid])
 
-func _warp_cursor_to_bottom_button() -> void:
-	var btn_size := _pause_btn.size
+func _warp_cursor_to_top_button() -> void:
+	var top_btn := _button_group.get_child(0) as Control
+	if top_btn == null:
+		return
+	var btn_size := top_btn.size
 	if btn_size == Vector2.ZERO:
-		btn_size = _pause_btn.custom_minimum_size
+		btn_size = top_btn.custom_minimum_size
 	if btn_size == Vector2.ZERO:
 		btn_size = Vector2(40, 40)
 
@@ -309,7 +300,7 @@ func _warp_cursor_to_bottom_button() -> void:
 	# window-relative, not screen-relative, so pass the button center in this
 	# window's canvas coordinates (global_position includes the button
 	# column's offset, which is nonzero in the fullscreen GameMode layout).
-	var target := Vector2i(_pause_btn.get_global_position() + btn_size / 2.0)
+	var target := Vector2i(top_btn.get_global_position() + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
 
 func _apply_custom_cursor() -> void:
@@ -324,20 +315,13 @@ func _restore_default_cursor() -> void:
 
 func _on_button_pressed(index: int):
 	match index:
-		0:  # Pause/Resume
-			_is_paused = not _is_paused
-			_pause_btn.icon_name = "play" if _is_paused else "pause"
-			if _is_paused:
-				pause_requested.emit()
-			else:
-				resume_requested.emit()
-		1:  # Skip
+		0:  # Skip
 			skip_requested.emit()
-		2:  # Restart
+		1:  # Restart
 			restart_requested.emit()
-		3:  # Shuffle / New game
+		2:  # Shuffle / New game
 			remove_requested.emit()
-		4:  # Stop
+		3:  # Stop
 			stop_requested.emit()
 	# Auto-hide after every action: this is a summonable quick panel, not a
 	# persistent dock. If it stayed visible, game input (A/cross presses, mouse

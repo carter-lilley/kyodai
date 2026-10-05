@@ -359,6 +359,12 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		var firmware_list = platform_data.get("firmware", [])
 		if firmware_list.is_empty():
 			print("[FirmwareManager] No firmware available for " + platform_slug + " on RomM")
+			# Cache the platform as ready so callers don't re-enter the firmware
+			# download loop every time the launch path is re-evaluated.
+			var cache_key = platform_slug + ":" + emulator_id
+			if core_id != "":
+				cache_key += ":" + core_id
+			_firmware_ready_cache[cache_key] = true
 			if callback.is_valid():
 				callback.call(true, "No firmware on server")
 			return

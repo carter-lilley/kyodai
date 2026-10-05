@@ -43,8 +43,7 @@
 				"{emulator_dir}/user/config/qt-config.ini"
 			],
 			"linux": [
-				"{emulator_dir}/user/config/qt-config.ini",
-				"{home}/.config/eden/qt-config.ini"
+				"{emulator_dir}/user/config/qt-config.ini"
 			],
 			"android": [
 				"{app_data}/config/config.ini"

@@ -765,13 +765,7 @@ func _on_display_size_changed(_new_size: Vector2):
 		_visual_layer.size = get_viewport_rect().size
 
 	if startup_layout_suppressed:
-		print("[DIAG] _on_display_size_changed suppressed (startup_layout_suppressed=true)")
 		return
-
-	if _visual_layer:
-		print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer.position=", _visual_layer.position, " visual_layer.size=", _visual_layer.size, " viewport_rect=", get_viewport_rect().size, " visual_layer.global_position=", _visual_layer.global_position)
-	else:
-		print("[DIAG] _on_display_size_changed new_size=", _new_size, " grid.size=", size, " visual_layer=<null> viewport_rect=", get_viewport_rect().size)
 
 	# Dedupe on the signal's viewport size, not this container's local rect:
 	# display_sub_manager sometimes emits immediately (DS swap, fullscreen
@@ -3239,16 +3233,6 @@ func _on_frame_pre_draw() -> void:
 			continue
 		var expected_offset := _compute_visual_layer_offset(card)
 		card.sync_visual_transform_with_offset(expected_offset)
-		# Diagnostic: compare stamped RS origin with the card Control's global position
-		var vidx: int = card.get_meta("virtual_index", -1)
-		if vidx == _visible_start_idx:
-			var lt_v = card.get("_last_visual_transform")
-			if lt_v is Transform2D:
-				var stamped_origin: Vector2 = lt_v.origin
-				var card_global: Vector2 = card.global_position
-				var content_scale: Vector2 = card.get("content_scale") if card.get("content_scale") is Vector2 else Vector2.ONE
-				var delta := stamped_origin - card_global
-				print("[DIAG] _on_frame_pre_draw idx=", vidx, " stamped_origin=", stamped_origin, " card.global_position=", card_global, " content_scale=", content_scale, " delta=", delta)
 
 func _on_frame_post_draw_audit() -> void:
 	# Render-time truth check: after the frame was drawn, the stamped origins
@@ -3340,9 +3324,6 @@ func _compute_visual_layer_offset(card: Control) -> Vector2:
 				target_origin = slot_offset
 				use_slot = true
 
-	# Diagnostic: log first visible card's offset math to catch fullscreen drift
-	if vidx == _visible_start_idx:
-		print("[DIAG] _compute_visual_layer_offset idx=", vidx, " use_slot=", use_slot, " card.position=", card.position, " card.global_position=", card.global_position, " visual_layer.global_position=", layer_origin, " target_origin=", target_origin)
 	return target_origin
 
 func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) -> void:

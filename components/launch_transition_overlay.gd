@@ -13,6 +13,7 @@ static var is_transition_active: bool = false
 var _effect_stack: EffectStack = null
 @onready var _margin_container: MarginContainer = $MarginContainer
 @onready var _game_title_label: Label = $MarginContainer/GameTitleLabel
+var _fallback_bg: ColorRect = null
 
 const PHASE1_DURATION: float = 0.5
 const HOLD_DURATION: float = 0.1
@@ -53,6 +54,17 @@ func _ready():
 	_effect_stack = EffectStack.new()
 	_effect_stack.set_parent_rid(get_canvas_item())
 	_effect_stack.set_clip_children(false)
+
+	# Solid-black backing used when no GameCard is focused (e.g. shuffler
+	# launches) so the fallback transition still covers the UI. Placed at the
+	# bottom of the child stack so the title label (z_index 1001) stays on top.
+	_fallback_bg = ColorRect.new()
+	_fallback_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_fallback_bg.color = Color.BLACK
+	_fallback_bg.visible = false
+	_fallback_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_fallback_bg)
+	move_child(_fallback_bg, 0)
 
 	# Connect to LaunchManager signal
 	if LaunchManager:
@@ -114,16 +126,11 @@ func _start_transition():
 	var _card = card_info.card
 	var start_corner_radius = card_info.corner_radius
 
-	if not texture:
-		push_error("[LaunchTransitionOverlay] Failed to get texture from card, aborting")
-		_is_animating = false
-		is_transition_active = false  # Reset global flag
-		return
-
-	if card_rect.size.x <= 0 or card_rect.size.y <= 0:
-		push_error("[LaunchTransitionOverlay] Invalid card rect (size <= 0), aborting")
-		_is_animating = false
-		is_transition_active = false  # Reset global flag
+	# No focused GameCard (e.g. shuffler launches) -> play a simple fade overlay
+	# instead of the card-to-fullscreen hero animation so the launch still
+	# proceeds and input remains blocked during the transition.
+	if not texture or card_rect.size.x <= 0 or card_rect.size.y <= 0:
+		_animate_fallback_transition()
 		return
 
 	_original_card_rect = card_rect
@@ -186,7 +193,7 @@ func _get_focused_card_and_texture() -> Dictionary:
 	var focused = viewport.gui_get_focus_owner()
 
 	if not focused:
-		push_error("[LaunchTransitionOverlay] No focused control")
+		# Expected when the launch didn't originate from a focused library card.
 		return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
 	# Traverse up to find GameCard
@@ -221,7 +228,7 @@ func _get_focused_card_and_texture() -> Dictionary:
 
 		current = current.get_parent()
 
-	push_error("[LaunchTransitionOverlay] No GameCard found in parent chain")
+	# No focused GameCard is expected for non-library launches (e.g. shuffler).
 	return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
 func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float) -> bool:
@@ -377,6 +384,50 @@ func _animate_transition():
 	tween.set_parallel(false)
 
 	# Complete
+	tween.chain().tween_callback(_on_animation_complete)
+
+## Fallback transition used when no GameCard texture is available (e.g.
+## shuffler launches). Fades a black overlay in, emits phase1_completed so the
+## launch can proceed, then settles into the same "black overlay until game
+## exits" state as the normal card-driven transition.
+func _animate_fallback_transition() -> void:
+	visible = true
+	z_index = 1000
+	_fallback_bg.visible = true
+	modulate.a = 0.0
+
+	# Setup the game title label
+	if _game_title_label and _game:
+		var game_name = _game.get_display_name().to_upper()
+		_game_title_label.text = game_name
+		_game_title_label.visible = true
+
+		# Match the sizing logic from the card-driven path.
+		var viewport_width = get_viewport().size.x
+		var max_width = viewport_width * 0.50
+		var label_font = _game_title_label.get_theme_font("font")
+		if not label_font:
+			label_font = ThemeDB.fallback_font
+		var font_size = 200
+		var text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		while text_width > max_width and font_size > 12:
+			font_size -= 5
+			text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		_game_title_label.add_theme_font_size_override("font_size", font_size)
+
+	var tween = get_tree().create_tween()
+	if not tween:
+		push_error("[LaunchTransitionOverlay] Failed to create fallback tween")
+		_is_animating = false
+		is_transition_active = false
+		return
+
+	tween.tween_property(self, "modulate:a", 1.0, PHASE1_DURATION)
+	tween.chain().tween_callback(func():
+		_phase1_completed = true
+		phase1_completed.emit()
+	)
+	tween.chain().tween_interval(HOLD_DURATION)
 	tween.chain().tween_callback(_on_animation_complete)
 
 func _on_animation_complete():

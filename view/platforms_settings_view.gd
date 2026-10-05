@@ -269,7 +269,7 @@ func _normalize_platforms_data(data: Array) -> Array:
 			"id": romm_id,
 			"icon_url": platform_data.get("icon_url", "")
 		})
-	return result
+	return _deduplicate_platforms_by_slug(result)
 
 func _platforms_data_equal(a: Array, b: Array) -> bool:
 	"""Deep-compare two platform data arrays by the fields the UI cares about."""
@@ -288,6 +288,24 @@ func _platforms_data_equal(a: Array, b: Array) -> bool:
 			return false
 	return true
 
+func _deduplicate_platforms_by_slug(data: Array) -> Array:
+	"""Return a copy of the platform array with duplicate slugs collapsed.
+	Keeps the first occurrence and warns so upstream data issues are visible."""
+	var seen: Dictionary = {}
+	var result: Array = []
+	for platform_data in data:
+		if not platform_data is Dictionary:
+			continue
+		var slug = platform_data.get("slug", "")
+		if slug == "":
+			continue
+		if seen.has(slug):
+			push_warning("[PlatformsSettingsView] Duplicate platform slug '%s' in fetched data; ignoring duplicate" % slug)
+			continue
+		seen[slug] = true
+		result.append(platform_data)
+	return result
+
 func _get_platforms_from_database() -> Array:
 	"""Return platforms stored in the local DB, normalized to the same format
 	used by the live RomM response."""
@@ -303,7 +321,7 @@ func _get_platforms_from_database() -> Array:
 			"id": platform.romm_id,
 			"icon_url": platform.icon_url
 		})
-	return result
+	return _deduplicate_platforms_by_slug(result)
 
 func _show_loading_indicator() -> void:
 	_hide_loading_indicator()
@@ -360,8 +378,11 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 
 	# Prepare card payloads up front: loading-state cards are created from
 	# these immediately, while the heavy precompute runs on the DB thread.
+	# Defensive dedup by slug: the slug is the dictionary key for card tracking,
+	# so duplicates would create untracked loading cards that never populate.
 	var fetched_slugs: Array[String] = []
 	var card_payloads: Array[Dictionary] = []
+	var payload_slugs_seen: Dictionary = {}
 	for platform_data in data:
 		if not platform_data is Dictionary:
 			continue
@@ -370,6 +391,10 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 		var romm_id = platform_data.get("id", 0)
 		if slug == "" or romm_id == 0:
 			continue
+		if payload_slugs_seen.has(slug):
+			push_warning("[PlatformsSettingsView] Skipping duplicate slug '%s' while building card payloads" % slug)
+			continue
+		payload_slugs_seen[slug] = true
 		fetched_slugs.append(slug)
 		card_payloads.append({
 			"slug": slug,
@@ -377,6 +402,8 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 			"romm_id": romm_id,
 			"icon_url": platform_data.get("icon_url", "")
 		})
+
+	print("[PlatformsSettingsView] Preparing %d card payloads; first slugs: %s" % [card_payloads.size(), ", ".join(fetched_slugs.slice(0, 10))])
 
 	if card_payloads.is_empty():
 		var no_platforms_label = M3Label.new()
@@ -461,6 +488,7 @@ func _create_loading_card(payload: Dictionary) -> PlatformCard:
 	_add_card_to_flow(card)
 	card.end_bulk_layout()
 	card.visible = true
+	print("[PlatformsSettingsView] Created loading card for slug '%s' (name='%s', node=%s)" % [payload.slug, payload.platform_name, card.name])
 	return card
 
 func _cards_match_data(data: Array) -> bool:
@@ -476,14 +504,22 @@ func _cards_match_data(data: Array) -> bool:
 		valid_count += 1
 		var card: PlatformCard = _platform_cards.get(slug)
 		if card == null or not is_instance_valid(card):
+			print("[PlatformsSettingsView] _cards_match_data: slug '%s' has no tracked card; rebuild needed" % slug)
 			return false
 		# Cards still in their loading state, from a cancelled batch, or with
 		# unpopulated dropdowns are stale; rebuild.
 		if card.is_loading() or card.get_parent() == null or card._defer_dropdown:
+			print("[PlatformsSettingsView] _cards_match_data: slug '%s' card state invalid (loading=%s, no_parent=%s, defer_dropdown=%s); rebuild needed" % [slug, card.is_loading(), card.get_parent() == null, card._defer_dropdown])
 			return false
 		if card.platform_name != platform_data.get("name", slug):
+			print("[PlatformsSettingsView] _cards_match_data: slug '%s' name mismatch ('%s' vs '%s'); rebuild needed" % [slug, card.platform_name, platform_data.get("name", slug)])
 			return false
-	return valid_count == _platform_cards.size() and valid_count > 0
+	if valid_count != _platform_cards.size():
+		print("[PlatformsSettingsView] _cards_match_data: valid count mismatch (%d data vs %d cards); rebuild needed" % [valid_count, _platform_cards.size()])
+		return false
+	if valid_count == 0:
+		return false
+	return true
 
 func _precompute_card_data(data: Array) -> Dictionary:
 	"""Runs on the DB thread: gather emulator lists, defaults, firmware state,
@@ -548,6 +584,7 @@ func _start_populate_batch(enabled_platforms: Dictionary, precomputed: Dictionar
 		func(payload: Dictionary, _index: int) -> PlatformCard:
 			var card: PlatformCard = _platform_cards.get(payload.slug)
 			if card == null or not is_instance_valid(card):
+				push_warning("[PlatformsSettingsView] Populate batch skipped '%s': card missing from slug map" % payload.slug)
 				return null
 			_populate_card(
 				card,
@@ -573,6 +610,22 @@ func _start_populate_batch(enabled_platforms: Dictionary, precomputed: Dictionar
 				if on_complete.is_valid():
 					on_complete.call()
 				return
+
+			# Diagnostic: report any cards that are still loading after Phase B.
+			var still_loading: Array[String] = []
+			for slug in _platform_cards.keys():
+				var card: PlatformCard = _platform_cards[slug]
+				if card and is_instance_valid(card) and card.is_loading():
+					still_loading.append(slug)
+			if still_loading.size() > 0:
+				push_warning("[PlatformsSettingsView] Populate batch finished but %d card(s) still loading: %s" % [still_loading.size(), ", ".join(still_loading)])
+				# Safety net: don't leave skeletons stuck forever. The card may be
+				# incomplete, but a visible incomplete card is easier to diagnose
+				# (and less confusing to users) than a permanent shimmer block.
+				for slug in still_loading:
+					var card: PlatformCard = _platform_cards[slug]
+					if card and is_instance_valid(card):
+						card.set_loading(false)
 
 			# Remove platforms that no longer exist on RomM
 			_remove_deleted_platforms(fetched_slugs)
@@ -727,6 +780,7 @@ func _add_card_to_flow(card: PlatformCard) -> void:
 	_cards_flow.add_child(card)
 
 func _return_all_cards() -> void:
+	# Return tracked cards first
 	for slug in _platform_cards.keys():
 		var card: PlatformCard = _platform_cards[slug]
 		if card:
@@ -735,6 +789,14 @@ func _return_all_cards() -> void:
 	_pending_payloads.clear()
 	_cards_created = false
 	_precompute_pending = false
+	
+	# Defensive: return any PlatformCard children that escaped the slug map.
+	# This prevents stale untracked cards from surviving a rebuild and showing
+	# up as permanent skeletons between populated cards.
+	for child in _cards_flow.get_children():
+		if child is PlatformCard:
+			push_warning("[PlatformsSettingsView] _return_all_cards found untracked PlatformCard '%s'; returning to pool" % child.name)
+			PlatformCardPool.return_card(PlatformCardPool.POOL_PLATFORM_SETTINGS, child)
 
 func _get_card_batch_size() -> int:
 	# One card per frame on Android keeps each frame under budget; desktop can

@@ -6,6 +6,7 @@ class_name ProcessSubManager
 const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
+const AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
 
 # Background state tracking (desktop only)
 var _background_active_pid: int = -1
@@ -20,6 +21,11 @@ var _background_wrapper_pid: int = -1
 var _background_poll_timer: Timer = null
 var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
+# Game Mode (gamescope) tracks the game window rather than the process PID,
+# because the compositor reparents/forks emulator wrappers in ways that defeat
+# /proc polling. The XID is captured once and then polled for existence.
+var _background_window_xid: String = ""
+var _background_window_hint: String = ""
 
 var launch_manager: Node
 
@@ -158,6 +164,13 @@ func _escape_ps_arg(s: String) -> String:
 func _escape_ps_arg_quoted(s: String) -> String:
 	return "'\"" + s.replace("'", "''") + "\"'"
 
+## Resolves the path to the x11_windowctl helper, extracting it from the
+## package if running a shipped build so the binary is executable.
+func _resolve_x11_windowctl_path() -> String:
+	if SystemManager.platform.is_packaged():
+		return AndroidBinaryExtractor.extract_binary("res://bin/linux/x11_windowctl", "x11_windowctl")
+	return ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+
 # ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
 
 ## Returns true if currently in background state (emulator running)
@@ -187,6 +200,10 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 	_background_wrapper_pid = -1
 	_background_active_game = game
 	_is_in_background_state = true
+	_background_window_xid = ""
+	_background_window_hint = ""
+	if intent != null:
+		_background_window_hint = intent.emulator_id
 
 	# Build command-line signatures for /proc fallback scanning. The ROM path is
 	# the most reliable signature because it appears in the actual emulator's
@@ -248,6 +265,8 @@ func exit_background_state(exit_code: int = 0) -> void:
 	_background_active_game = null
 	_background_active_signature = ""
 	_background_active_exe_signature = ""
+	_background_window_xid = ""
+	_background_window_hint = ""
 	_is_in_background_state = false
 
 	launch_manager.background_state_exited.emit(game, exit_code)
@@ -261,6 +280,22 @@ func _on_background_poll_timeout() -> void:
 	if _poll_in_flight:
 		if DEBUG_LOG: print("[ProcessManager] Poll skipped: previous check still in flight")
 		return
+
+	# Game Mode (gamescope): track the game window, not the PID. The compositor
+	# reparents/forks emulator wrappers in ways that make /proc polling unreliable,
+	# but the X11 window lifetime matches what the user actually sees.
+	if SystemManager.platform.is_gamemode():
+		_poll_in_flight = true
+		_poll_gamemode_window(func(exists: bool):
+			_poll_in_flight = false
+			if not _is_in_background_state:
+				return
+			if DEBUG_LOG: print("[ProcessManager] Gamemode window poll result: exists=", exists)
+			if not exists:
+				exit_background_state(0)
+		)
+		return
+
 	_poll_in_flight = true
 	var pid = _background_active_pid
 	if DEBUG_LOG: print("[ProcessManager] Polling PID ", pid)
@@ -307,6 +342,54 @@ func _on_background_poll_timeout() -> void:
 		if DEBUG_LOG: print("[ProcessManager] Process ", pid, " no longer running")
 		exit_background_state(0)
 	)
+
+## Poll callback for Game Mode (gamescope): track the game window by XID.
+## Captures the XID on the first call if needed, then checks whether it still
+## exists. Calls back with true while the window is alive, false once it closes.
+func _poll_gamemode_window(callback: Callable) -> void:
+	var tool := _resolve_x11_windowctl_path()
+	if tool == "" or not FileAccess.file_exists(tool):
+		push_warning("[ProcessManager] x11_windowctl not available in gamemode; falling back to PID poll")
+		callback.call(true)
+		return
+
+	if _background_window_xid == "":
+		# First poll: try to find the game window. We may need a few attempts
+		# while the emulator is still starting up.
+		var args: Array = ["find", str(_background_active_pid)]
+		if _background_window_hint != "":
+			args.append(_background_window_hint)
+		MemorySubManager.queue_os_execute(tool, args, func(result: Dictionary):
+			if not _is_in_background_state:
+				callback.call(true)
+				return
+			if result.get("exit_code", -1) != 0:
+				if DEBUG_LOG: print("[ProcessManager] Gamemode window not found yet; will retry")
+				callback.call(true)
+				return
+			var output: Array = result.get("output", [])
+			var text := ("".join(output)).strip_edges()
+			var xid := ""
+			for line: String in text.split("\n", false):
+				var l := line.strip_edges().to_lower()
+				if l.length() > 0 and l.is_valid_hex_number(false):
+					xid = l
+			if xid == "":
+				callback.call(true)
+				return
+			_background_window_xid = xid
+			print("[ProcessManager] Gamemode captured game window xid: ", xid)
+			callback.call(true)
+		)
+	else:
+		# Subsequent polls: check if the captured window still exists.
+		MemorySubManager.queue_os_execute(tool, ["exists", "xid:" + _background_window_xid], func(result: Dictionary):
+			if not _is_in_background_state:
+				callback.call(true)
+				return
+			var exit_code: int = result.get("exit_code", -1)
+			callback.call(exit_code == 0)
+		)
 
 ## Scans /proc for a live (non-zombie) emulator process whose cmdline contains
 ## the stored launch signature (usually the ROM path). This catches emulators

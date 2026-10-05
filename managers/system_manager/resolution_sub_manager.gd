@@ -56,6 +56,27 @@ static func resolve_save_dir(emulator_id: String, platform_slug: String = "", co
 static func resolve_firmware_dir(emulator_id: String, platform_slug: String = "", core_id: String = "", allow_core_override: bool = true) -> Dictionary:
 	return _resolve("firmware", emulator_id, platform_slug, core_id, allow_core_override)
 
+## Returns true when every key in sections already has the expected value in
+## the config file. Qt-based yuzu-family configs percent-encode section names,
+## so eden/azahar need a small transformation before lookup.
+static func _paths_already_enforced(config_path: String, sections: Dictionary, strategy: String) -> bool:
+	var fmt := CSM.detect_format(config_path)
+	for section_name: String in sections:
+		var file_section: String = section_name
+		if strategy == "eden_ini" or strategy == "azahar_ini":
+			file_section = section_name.replace(" ", "%20")
+		var section_data: Dictionary = sections[section_name]
+		for key: String in section_data:
+			var expected: String = str(section_data[key])
+			var actual: Variant = CSM.get_value(config_path, key, file_section, fmt)
+			if actual == null:
+				return false
+			var actual_str := str(actual).replace("\\", "/").rstrip("/")
+			var expected_str := expected.replace("\\", "/").rstrip("/")
+			if actual_str != expected_str:
+				return false
+	return true
+
 ## Enforces Kyodai-managed data paths in the emulator's live config file.
 ## Uses the same config candidate selection that resolve() uses, so the writer
 ## always targets the config the emulator is actually reading. If no candidate
@@ -115,6 +136,15 @@ static func enforce_paths(emulator_id: String, platform_slug: String = "", core_
 	}
 
 	var strategy: String = block.get("strategy", "")
+
+	# Once every enforced key already has the expected value, leave the file
+	# alone. Kyodai bootstraps a portable layout on first install; after that,
+	# user edits (controller remaps, UI tweaks, per-game settings) must survive
+	# reboots. Only rewrite when a key is missing or points somewhere unexpected.
+	if context.config_status == CSM.Status.OK and _paths_already_enforced(config_path, sections, strategy):
+		print("[ResolutionManager] Config paths already enforced for %s; skipping write" % emulator_id)
+		return true
+
 	match strategy:
 		"eden_ini":
 			return EdenIni.enforce_paths(context, sections)

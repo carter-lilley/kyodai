@@ -4,6 +4,7 @@ class_name ShufflerSubManager
 ## Manages shuffler sessions: bag building, game switching, process control.
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const ShufflerInputWindowScene = preload("res://components/shuffler_input_window.gd")
 
 # Gate per-download / per-preparation logging: these fire in bursts while
 # the session intro plays, and building _format_bag()/_format_entry() strings
@@ -2104,7 +2105,7 @@ func _send_tcp_command(host: String, port: int, command: String) -> void:
 func _create_input_window() -> void:
 	if _input_window and is_instance_valid(_input_window):
 		return
-	_input_window = ShufflerInputWindow.new()
+	_input_window = ShufflerInputWindowScene.new()
 	_input_window.chord_pressed.connect(_toggle_controls)
 	get_tree().root.add_child(_input_window)
 
@@ -2123,8 +2124,6 @@ func _summon_controls() -> void:
 		return
 
 	_controls_window = scene.instantiate()
-	_controls_window.pause_requested.connect(pause_session)
-	_controls_window.resume_requested.connect(resume_session)
 	_controls_window.skip_requested.connect(skip_game)
 	_controls_window.restart_requested.connect(restart_game)
 	_controls_window.remove_requested.connect(remove_game)
@@ -2133,6 +2132,8 @@ func _summon_controls() -> void:
 	w.tree_exited.connect(func():
 		if _controls_window == w:
 			_controls_window = null
+		# The palette is a transient pause menu: dismissing it resumes the round.
+		resume_session()
 		# Gamescope presents the focused window; once the palette menu closes,
 		# hand focus back to the game (harmless if a choice/intro window is
 		# about to map and take focus itself).
@@ -2148,8 +2149,8 @@ func _summon_controls() -> void:
 	if _current_game_index >= 0 and _current_game_index < _bag.entries.size():
 		_controls_window.game_window_xid = _bag.entries[_current_game_index].get("window_xid", "")
 	get_tree().root.add_child(_controls_window)
-	# Re-apply session state the fresh window knows nothing about.
-	_controls_window.set_paused(_state == State.PAUSED)
+	# Summoning the palette pauses the shuffler timers automatically.
+	pause_session()
 	_controls_window.set_reroll_enabled(_controls_reroll_enabled)
 	print("[ShufflerSubManager] Controls palette summoned: window_id=" + str(_controls_window.get_window_id()) + " visible=" + str(_controls_window.visible))
 

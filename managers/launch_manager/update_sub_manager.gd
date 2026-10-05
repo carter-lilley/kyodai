@@ -192,7 +192,10 @@ func _start_next_if_idle() -> void:
 		print("[UpdateManager] Starting update: " + next_id)
 		if launch_manager.registry.trigger_emulator_update(next_id):
 			active += 1
-		else:
+		elif _session.has(next_id):
+			# If trigger_emulator_update failed synchronously, the install step
+			# already emitted install_steps_failed and marked this emulator failed.
+			# Only mark it here if it is still present in the session.
 			_mark_failed(next_id, "install already in progress")
 
 func _mark_done(emulator_id: String) -> void:

@@ -551,7 +551,24 @@ func check_for_updates(callback: Callable, progress_callback: Callable = Callabl
 		if not platform_config:
 			continue
 		
+		# Skip emulators whose download step is present but not actually usable
+		# on this platform (e.g. dolphin on linux has action_type "download_url"
+		# with an empty url). Treat them as up-to-date so they don't crash the
+		# update session with a guaranteed-failure download.
 		var action_type = platform_config.get("action_type", "")
+		var unusable := false
+		match action_type:
+			"download_url":
+				unusable = platform_config.get("url", "").strip_edges() == ""
+			"download_scrape":
+				unusable = platform_config.get("scrape_url", "").strip_edges() == ""
+			"download_repo":
+				unusable = platform_config.get("github_repo", "").strip_edges() == "" \
+					or platform_config.get("asset_pattern", "").strip_edges() == ""
+		if unusable:
+			print("[RegistryManager] Emulator %s has no usable download on this platform, skipping update check" % emulator_id)
+			results.up_to_date.append(emulator_id)
+			continue
 		
 		# If installed but no version stored, force reinstall to get the actual version
 		if not installed_versions.has(emulator_id):

@@ -31,6 +31,7 @@ var _config_guard: Dictionary = {}
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
 var _validation_cache: Dictionary = {}
 var _cache_ttl_ms: int = 5000  # 5 second cache TTL
+var _validation_cache_mutex: Mutex = Mutex.new()  # get_install_progress is called from main + DB threads
 
 ## Emitted when an install step begins executing (step_index is 0-based).
 signal install_step_started(emulator_id: String, step_index: int, total_steps: int)
@@ -51,7 +52,14 @@ func _ready():
 
 ## Clears the validation cache. Call after external install state changes (e.g., APK install).
 func clear_validation_cache() -> void:
+	_validation_cache_mutex.lock()
 	_validation_cache.clear()
+	_validation_cache_mutex.unlock()
+
+func _erase_validation_cache(emulator_id: String) -> void:
+	_validation_cache_mutex.lock()
+	_validation_cache.erase(emulator_id)
+	_validation_cache_mutex.unlock()
 
 ## Reconciles pending launches after potential APK installations.
 ## Call on app resume. Never drops a pending launch without either resuming it
@@ -109,7 +117,7 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 		
 		# Clear validation cache for this emulator
 		if task_info.has("emulator_id"):
-			_validation_cache.erase(task_info.emulator_id)
+			_erase_validation_cache(task_info.emulator_id)
 		
 		if task_info.has("callback"):
 			task_info.callback.call(success, "")
@@ -119,7 +127,7 @@ func _on_download_manager_extraction_completed(item_id: String, success: bool, e
 	for emulator_id in _emulator_install_progress.keys():
 		if extract_dir.begins_with(launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")):
 			# Clear validation cache
-			_validation_cache.erase(emulator_id)
+			_erase_validation_cache(emulator_id)
 			
 			if success:
 				_emulator_install_progress[emulator_id] = ""
@@ -271,7 +279,7 @@ func download_emulator(emulator_id: String) -> bool:
 	for stale_id in stale_ids:
 		push_warning("[EmulatorManager] Cleaning stale pending download entry: " + stale_id)
 		_pending_emulator_downloads.erase(stale_id)
-		_validation_cache.erase(emulator_id)
+		_erase_validation_cache(emulator_id)
 	
 	for item_id in _pending_emulator_downloads:
 		if _pending_emulator_downloads[item_id].emulator_id == emulator_id:
@@ -874,7 +882,7 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 			return
 		
 		# Clear validation cache so UI doesn't show a stale Resume state
-		_validation_cache.erase(emulator_id)
+		_erase_validation_cache(emulator_id)
 		
 		# Notify UI that extraction completed successfully
 		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
@@ -1017,7 +1025,7 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 				return
 			
 			# Clear validation cache so UI doesn't show a stale Resume state
-			_validation_cache.erase(emulator_id)
+			_erase_validation_cache(emulator_id)
 			
 			# Notify UI that extraction completed successfully
 			launch_manager.emulator_extraction_completed.emit(emulator_id, true)
@@ -1481,15 +1489,8 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 	var emulator_dir: String = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
 	var pattern: String = platform_config.get("pattern", "*.AppImage")
 
-	# Skip re-extraction if the output is already valid and this isn't a forced
-	# reinstall/update. This mirrors the Windows extract skip-if-valid guard.
-	if not _force_install_step.get(emulator_id, false):
-		var validate_config = platform_config.get("validate", {})
-		if _validate_step(emulator_id, validate_config):
-			if DEBUG_LOG: print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
-			return _execute_install_step(emulator_id, step_index + 1)
-
-	# Find AppImage matching pattern
+	# Find AppImage matching pattern first; the path is needed for the skip
+	# decision and for locating the bundled <AppImage>.home config tree.
 	var appimage_path: String = ""
 	for entry in FSM.list_dir(emulator_dir):
 		if entry == "." or entry == "..":
@@ -1501,8 +1502,33 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 				break
 
 	if appimage_path == "":
-		push_error("[EmulatorManager] appimage_extract step found no AppImage matching '" + pattern + "' for " + emulator_id)
-		return false
+		push_warning("[EmulatorManager] appimage_extract step found no AppImage matching '" + pattern + "' for " + emulator_id + "; retrying previous download step")
+		return _retry_previous_step(emulator_id, step_index)
+
+	# Detect whether RetroArch's bundled config data (assets, autoconfig, shaders)
+	# is missing so we can repair existing installs without a full re-extraction.
+	var appimage_home_config: String = ""
+	var assets_dst: String = ""
+	var needs_config_copy: bool = false
+	if emulator_id == "retroarch":
+		appimage_home_config = FSM.join_paths(emulator_dir, appimage_path.get_file() + ".home/.config/retroarch")
+		assets_dst = FSM.join_paths(emulator_dir, ".config/retroarch/assets")
+		needs_config_copy = FSM.dir_exists(appimage_home_config) and (not FSM.dir_exists(assets_dst) or _dir_is_empty(assets_dst))
+
+	# Skip re-extraction if the output is already valid and this isn't a forced
+	# reinstall/update. This mirrors the Windows extract skip-if-valid guard.
+	# For RetroArch we also re-run if bundled config data is missing, so existing
+	# installs that extracted before the asset-copy fix get repaired automatically.
+	if not _force_install_step.get(emulator_id, false):
+		var validate_config = platform_config.get("validate", {})
+		var already_valid = _validate_step(emulator_id, validate_config)
+		if already_valid and needs_config_copy:
+			print("[EmulatorManager] RetroArch assets missing, copying bundled config from AppImage home")
+			_copy_retroarch_bundled_config(emulator_dir, appimage_path)
+			return _execute_install_step(emulator_id, step_index + 1)
+		if already_valid:
+			if DEBUG_LOG: print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
+			return _execute_install_step(emulator_id, step_index + 1)
 
 	var abs_appimage = FSM.resolve_path(appimage_path, {"format": FSM.PathFormat.ABSOLUTE})
 	var abs_emulator_dir = FSM.resolve_path(emulator_dir, {"format": FSM.PathFormat.ABSOLUTE})
@@ -1535,8 +1561,18 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 
 		print("[EmulatorManager] AppImage extraction completed for " + emulator_id)
 
+		# Persist a manifest of expected default cores so validation knows exactly
+		# which files should be present (same as the batch-extract path).
+		if emulator_id == "retroarch":
+			var manifest: Dictionary = launch_manager.core.build_default_core_manifest(emulator_id) as Dictionary
+			launch_manager.core.write_manifest(emulator_id, manifest)
+
+		# Copy RetroArch's bundled config data into the enforced XDG config tree.
+		if emulator_id == "retroarch":
+			_copy_retroarch_bundled_config(emulator_dir, appimage_path)
+
 		# Clear validation cache so UI doesn't show a stale Resume state
-		_validation_cache.erase(emulator_id)
+		_erase_validation_cache(emulator_id)
 
 		# Validate extraction
 		var validate_config = platform_config.get("validate", {})
@@ -1551,6 +1587,32 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 		_execute_install_step(emulator_id, step_index + 1)
 
 	MemorySubManager.queue_os_execute("sh", ["-c", inner_cmd], extract_callback)
+	return true
+
+func _copy_retroarch_bundled_config(emulator_dir: String, appimage_path: String) -> void:
+	"""Copy RetroArch's bundled assets, autoconfigs, shaders, overlays, core info,
+	and filters from <AppImage>.home/.config/retroarch into the enforced
+	{emulator_dir}/.config/retroarch tree."""
+	var config_root: String = FSM.join_paths(emulator_dir, ".config/retroarch")
+	var appimage_home_config: String = FSM.join_paths(emulator_dir, appimage_path.get_file() + ".home/.config/retroarch")
+	if not FSM.dir_exists(appimage_home_config):
+		push_warning("[EmulatorManager] RetroArch AppImage home config not found at: " + appimage_home_config)
+		return
+	var dirs_to_copy: Array[String] = ["assets", "autoconfig", "shaders", "overlays", "cores", "filters"]
+	for dir_name in dirs_to_copy:
+		var src_dir: String = FSM.join_paths(appimage_home_config, dir_name)
+		var dst_dir: String = FSM.join_paths(config_root, dir_name)
+		if FSM.dir_exists(src_dir):
+			FSM.copy_dir(src_dir, dst_dir)
+		else:
+			push_warning("[EmulatorManager] RetroArch bundled '%s' not found in AppImage home config" % dir_name)
+
+func _dir_is_empty(path: String) -> bool:
+	if not FSM.dir_exists(path):
+		return true
+	for entry in FSM.list_dir(path):
+		if entry != "." and entry != "..":
+			return false
 	return true
 
 func _handle_create_files_step(emulator_id: String, _step_name: String, step_index: int, platform_config: Dictionary) -> bool:
@@ -1888,21 +1950,26 @@ func _validate_install_step(emulator_id: String, step_index: int, install_steps:
 ## Returns a dictionary with progress info
 ## Uses caching to avoid redundant file system operations
 func get_install_progress(emulator_id: String) -> Dictionary:
-	# Check cache first
+	# Check cache first (thread-safe: DB-thread precompute also reads this).
+	_validation_cache_mutex.lock()
 	if _validation_cache.has(emulator_id):
 		var cached = _validation_cache[emulator_id]
 		var elapsed = Time.get_ticks_msec() - cached.timestamp
 		if elapsed < _cache_ttl_ms:
+			_validation_cache_mutex.unlock()
 			return cached.result
+	_validation_cache_mutex.unlock()
 	
 	# Perform validation
 	var result = _compute_install_progress(emulator_id)
 	
 	# Cache the result
+	_validation_cache_mutex.lock()
 	_validation_cache[emulator_id] = {
 		"result": result,
 		"timestamp": Time.get_ticks_msec()
 	}
+	_validation_cache_mutex.unlock()
 	
 	return result
 
@@ -2088,7 +2155,7 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			return
 		
 		# Clear validation cache so the UI reflects the completed download
-		_validation_cache.erase(emulator_id)
+		_erase_validation_cache(emulator_id)
 		
 		# For non-batch downloads, proceed to next step
 		print("[EmulatorManager] Download completed for %s, advancing to step %d" % [emulator_id, step_index + 1])
