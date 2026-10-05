@@ -371,6 +371,29 @@ func _end_scrub() -> void:
 func _scrub_to(pos: Vector2, is_press: bool) -> void:
 	if size.y <= 0.0:
 		return
+	# Hit-test against the actually laid-out controls: the VBox's realized
+	# slot heights can differ from size.y / slot_count (minimum sizes,
+	# hidden arrows, separators), which made clicks land on the wrong letter.
+	var global_pos: Vector2 = get_global_transform() * pos
+	if _window_mode:
+		if _up_arrow.visible and _up_arrow.get_global_rect().grow(1.0).has_point(global_pos):
+			_magnet_center = 1.0
+			_shift_window(-_window_letter_slots if is_press else -1)
+			return
+		if _down_arrow.visible and _down_arrow.get_global_rect().grow(1.0).has_point(global_pos):
+			_magnet_center = maxf(float(_window_letter_slots), 1.0)
+			_shift_window(_window_letter_slots if is_press else 1)
+			return
+	var hit := _hit_letter(global_pos)
+	if hit != -1:
+		if not _window_mode:
+			_magnet_center = float(hit)
+		else:
+			var slot_count := _window_letter_slots + 2
+			_magnet_center = clampf(float(hit - _window_start + 1), 1.0, slot_count - 2.0)
+		_emit_letter(LETTERS[hit], not is_press)
+		return
+	# Fallback: arithmetic mapping (e.g. drag strayed outside every label).
 	if not _window_mode:
 		var slot_height := size.y / LETTERS.size()
 		_magnet_center = clampf(pos.y / slot_height, 0.0, LETTERS.size() - 1.0)
@@ -391,6 +414,18 @@ func _scrub_to(pos: Vector2, is_press: bool) -> void:
 			_shift_window(_window_letter_slots if is_press else 1)
 		else:
 			_emit_letter(LETTERS[_window_start + slot - 1], not is_press)
+
+
+## Return the LETTERS index of the visible label under the global point,
+## or -1 if none hit.
+func _hit_letter(global_pos: Vector2) -> int:
+	for i in range(LETTERS.size()):
+		var label: M3Label = _labels[LETTERS[i]]
+		if not label.visible:
+			continue
+		if label.get_global_rect().grow(1.0).has_point(global_pos):
+			return i
+	return -1
 
 
 func _shift_window(delta: int) -> void:

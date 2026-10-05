@@ -514,7 +514,7 @@ func show_context_menu(items: Array[Dictionary], anchor: Control, context: Dicti
 	ui_manager.modal_shown.emit(modal_id)
 	return modal_id
 
-func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
+func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true, show_hide: bool = false) -> String:
 	"""Show the standard game context menu."""
 	var items: Array[Dictionary] = [
 		{"id": "launch", "text": "Launch", "icon": "play"},
@@ -536,7 +536,11 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 		items.append({"id": "open_save_location", "text": "Open Save Location", "icon": "folder-open"})
 
 	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})
-	items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
+	# Home view only: hiding removes the game from the Home grid (local-only
+	# flag; the game stays visible in Library, search, and all other modes).
+	# GameNative games have no DB row, so hiding doesn't apply to them.
+	if show_hide and game and game.source != "gamenative":
+		items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
 
 	# Start preloading heavy details while the menu is open.
 	if _game_details_sheet:

@@ -3,7 +3,7 @@ shader_type canvas_item;
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
 uniform float border_inset_ratio = 0.0;
-uniform sampler2D game_texture : filter_linear, repeat_disable;
+uniform sampler2D game_texture : source_color, filter_linear, repeat_disable;
 
 // Distortion parameters
 uniform float distortion : hint_range(0.0, 1.0) = 0.5;

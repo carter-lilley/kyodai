@@ -35,9 +35,8 @@ file_logging/log_path="user://logs/session.log"
 [display]
 
 window/subwindows/embed_subwindows=false
-window/hdr/request_hdr_output=false
-window/hdr/request_hdr_output.android=false
 display_server/driver.linuxbsd="wayland"
+window/hdr/request_hdr_output.android=false
 
 [editor_plugins]
 
@@ -147,15 +146,13 @@ onscreenkeyboard/enabled=true
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
-renderer/rendering_method.android="mobile"
-driver/threads/thread_model=0
 rendering_device/driver.windows="d3d12"
+driver/threads/thread_model=0
 textures/vram_compression/import_etc2_astc=true
 viewport/hdr_2d=true
-viewport/hdr_2d.android=false
 anti_aliasing/quality/msaa_2d=3
-anti_aliasing/quality/msaa_2d.android=1
 anti_aliasing/quality/use_debanding=true
-anti_aliasing/quality/screen_space_aa=0
+renderer/rendering_method.android="mobile"
+viewport/hdr_2d.android=false
+anti_aliasing/quality/msaa_2d.android=1
 anti_aliasing/quality/screen_space_aa.android=1

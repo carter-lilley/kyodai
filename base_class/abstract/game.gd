@@ -64,6 +64,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var backlogged: bool = false
 @export var hidden: bool = false
 
+## Whether this game is hidden from the Home view only (local-only flag, never
+## synced to RomM). Still appears in Library, search, collections, shuffle.
+@export var hidden_from_home: bool = false
+
 ## Whether this game is in the user's RomM "favourites" virtual collection
 @export var is_favorite: bool = false
 

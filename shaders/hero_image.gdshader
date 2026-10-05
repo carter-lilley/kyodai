@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform sampler2D game_texture : filter_linear, repeat_disable;
+uniform sampler2D game_texture : source_color, filter_linear, repeat_disable;
 uniform vec2 hero_size = vec2(1920.0, 640.0);
 
 uniform vec4 shadow_color : source_color = vec4(0.0, 0.0, 0.0, 0.7);

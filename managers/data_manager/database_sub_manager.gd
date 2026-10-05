@@ -21,6 +21,7 @@ const _EXPECTED_SCHEMA := {
 		"has_cover_art": "INTEGER DEFAULT 1", "last_played": "TEXT DEFAULT ''",
 		"status": "TEXT DEFAULT ''", "now_playing": "INTEGER DEFAULT 0",
 		"backlogged": "INTEGER DEFAULT 0", "hidden": "INTEGER DEFAULT 0",
+		"hidden_from_home": "INTEGER DEFAULT 0",
 		"is_favorite": "INTEGER DEFAULT 0", "title_id": "TEXT DEFAULT ''",
 		"save_id": "TEXT DEFAULT ''", "save_usage": "TEXT DEFAULT ''",
 		"cover_group_id": "TEXT DEFAULT ''", "cover_group_master": "INTEGER DEFAULT 1",
@@ -251,6 +252,7 @@ func _create_tables():
 		now_playing INTEGER DEFAULT 0,
 		backlogged INTEGER DEFAULT 0,
 		hidden INTEGER DEFAULT 0,
+		hidden_from_home INTEGER DEFAULT 0,
 		is_favorite INTEGER DEFAULT 0,
 		title_id TEXT DEFAULT '',
 			save_id TEXT DEFAULT '',
@@ -699,6 +701,8 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.now_playing = row.get("now_playing", 0) == 1
 	game.backlogged = row.get("backlogged", 0) == 1
 	game.hidden = row.get("hidden", 0) == 1
+	# Local-only Home hide; row.get default covers pre-migration schemas.
+	game.hidden_from_home = row.get("hidden_from_home", 0) == 1
 	game.is_favorite = row.get("is_favorite", 0) == 1
 
 	# Restore title_id
@@ -1290,6 +1294,21 @@ func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
 	return true
 
 
+func update_game_hidden_from_home(romm_id: int, hidden_from_home: bool) -> bool:
+	"""Update the local-only Home-hide flag for a game. Queued on the DB
+	worker when called from the main thread; synchronous when already on it.
+	Deliberately separate from update_game_user_props: this flag never syncs
+	to RomM."""
+	if not _is_db_ready:
+		return false
+	invalidate_downloaded_games_count_cache()
+	if MemorySubManager.is_db_thread():
+		return query_bool("UPDATE games SET hidden_from_home = ? WHERE romm_id = ?", [1 if hidden_from_home else 0, romm_id])
+	MemorySubManager.queue_db_task(func():
+		query_bool("UPDATE games SET hidden_from_home = ? WHERE romm_id = ?", [1 if hidden_from_home else 0, romm_id]))
+	return true
+
+
 ## Whitelist of user-prop columns that update_game_user_props may write.
 const USER_PROP_COLUMNS := {
 	"status": "status",
@@ -1757,7 +1776,7 @@ func get_downloaded_games_count() -> int:
 		return 0
 
 	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % placeholders
+	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % placeholders
 
 	var query_result = query_array(query, enabled_slugs)
 	if query_result.size() > 0:
@@ -1781,7 +1800,7 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 		return games
 
 	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT ? OFFSET ?" % placeholders
+	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT ? OFFSET ?" % placeholders
 
 	var bindings: Array = []
 	bindings.append_array(enabled_slugs)

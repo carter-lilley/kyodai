@@ -3064,6 +3064,7 @@ func _reset_transient_scroll_state(reason: String) -> void:
 	_guarded_scroll_attempts = 0
 	_scroll_velocity = 0.0
 	_pending_buffer_expansion = false
+	SmoothScrollContainer._strace("reset-transient reason=" + reason)
 	if trace_verbose:
 		if DEBUG_LOG: print("[GridTrace] reset-transient: reason=", reason, " t=", Time.get_ticks_msec())
 
@@ -4608,7 +4609,10 @@ func _on_follow_focus_target_request(control: Control) -> float:
 	var node := control
 	while node and node != self:
 		if node.has_meta("virtual_index"):
-			return get_follow_focus_scroll_target(node.get_meta("virtual_index", -1))
+			var vidx: int = node.get_meta("virtual_index", -1)
+			var ftarget := get_follow_focus_scroll_target(vidx)
+			SmoothScrollContainer._strace("follow-focus idx=" + str(vidx) + " target=" + str(ftarget) + " current=" + str(_get_current_scroll_pos()))
+			return ftarget
 		node = node.get_parent()
 	return _get_current_scroll_pos()
 
@@ -4635,6 +4639,7 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 	var target := get_follow_focus_scroll_target(index)
 	var current := _get_current_scroll_pos()
 	var needs_scroll := not is_equal_approx(target, current)
+	SmoothScrollContainer._strace("grid-jump idx=" + str(index) + " target=" + str(target) + " current=" + str(current) + " animate=" + str(animate))
 
 	if not needs_scroll or not animate:
 		# Inside the trigger margin (or instant jump): no animation, focus immediately.
@@ -4704,6 +4709,7 @@ func _apply_focus_to_card(card: Control) -> void:
 			_pending_focus_index = idx
 		return
 	card.set_meta("_suppress_smooth_scroll", true)
+	SmoothScrollContainer._strace("focus-card idx=" + str(card.get_meta("virtual_index", -1)))
 	card.grab_focus()
 	_pending_focus_index = -1
 

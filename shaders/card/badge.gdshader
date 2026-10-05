@@ -15,7 +15,7 @@ uniform float border_inset_pixels = 0.0;
 uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 
 // Icon uniforms
-uniform sampler2D icon_texture;
+uniform sampler2D icon_texture : source_color;
 uniform bool has_icon_texture = false;
 uniform vec4 icon_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float icon_padding = 0.5;

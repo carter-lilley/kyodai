@@ -100,6 +100,13 @@ icon_name = "heart-outline"
 icon_button_size = 1
 icon_button_variant = 2
 
+[node name="HideButton" type="Button" parent="MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow"]
+script = ExtResource("m3iconbutton")
+layout_mode = 2
+icon_name = "eye-off"
+icon_button_size = 1
+icon_button_variant = 2
+
 [node name="StudioRow" type="HBoxContainer" parent="MarginContainer/HBoxContainer/ContentVBox"]
 visible = false
 clip_contents = true

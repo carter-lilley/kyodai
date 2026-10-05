@@ -13,6 +13,10 @@ signal sync_completed(success: bool, message: String)
 signal sync_progress(percent: float, current: int, total: int)
 @warning_ignore("unused_signal")
 signal game_updated(game: GameResource)
+## Emitted when a game's Home-grid membership changes (local hide/unhide).
+## Home rebuilds on this; other views ignore it (nothing displays the flag).
+@warning_ignore("unused_signal")
+signal game_home_visibility_changed(game: GameResource)
 @warning_ignore("unused_signal")
 signal games_removed(platform_slug: String)
 @warning_ignore("unused_signal")
@@ -324,6 +328,12 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 
 func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
 	return database.update_game_unwrapped(romm_id, unwrapped)
+
+
+## Set the local-only Home-hide flag. Never syncs to RomM (unlike
+## set_game_user_props/hidden).
+func update_game_hidden_from_home(romm_id: int, hidden_from_home: bool) -> bool:
+	return database.update_game_hidden_from_home(romm_id, hidden_from_home)
 
 
 # ==================== ROMM USER PROPS / FAVORITES ====================

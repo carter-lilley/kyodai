@@ -8,12 +8,12 @@ shader_type canvas_item;
 // Additional case styles get new IDs and their own branch in fragment().
 uniform int template_id = 0;
 
-uniform sampler2D banner_gradient : filter_linear, repeat_disable;
+uniform sampler2D banner_gradient : source_color, filter_linear, repeat_disable;
 uniform float banner_height_ratio : hint_range(0.02, 0.4) = 0.10;
 uniform vec4 line_color : source_color = vec4(0.75, 0.05, 0.10, 1.0);
 uniform float line_thickness_pixels : hint_range(0.0, 16.0) = 2.0;
 
-uniform sampler2D spine_gradient : filter_linear, repeat_disable;
+uniform sampler2D spine_gradient : source_color, filter_linear, repeat_disable;
 uniform float spine_width_ratio : hint_range(0.03, 0.4) = 0.12;
 
 uniform vec4 swoop_color : source_color = vec4(0.07, 0.64, 0.78, 1.0);

@@ -26,6 +26,22 @@ signal scroll_completed()
 var _wheel_chase_active: bool = false
 var _chase_pos: float = 0.0
 var _last_wheel_tick_msec: int = -10000
+
+## Diagnostic scroll trace, enabled with KYODAI_SCROLL_TRACE=1 in the
+## environment. Logs every scroll-state transition with timestamps so a
+## jump-then-wheel repro shows exactly who moves the scroll and when.
+## Off by default; a single bool check when off.
+static var trace_enabled: bool = true  # TEMP diagnostics; revert to env-gated.
+
+static func _strace(msg: String) -> void:
+	if trace_enabled:
+		print("[ScrollTrace] t=", Time.get_ticks_msec(), " ", msg)
+
+static func _strace_caller() -> String:
+	var stack := get_stack()
+	if stack.size() > 1:
+		return str(stack[1].get("function", "?"))
+	return "?"
 @export var vertical: bool = true:
 	set(value):
 		if vertical != value:
@@ -89,6 +105,7 @@ func _process(delta: float) -> void:
 	var diff := _target_scroll - _chase_pos
 	if absf(diff) < 0.05:
 		_set_current_scroll(_target_scroll)
+		_strace("chase-done target=" + str(_target_scroll))
 		_wheel_chase_active = false
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
@@ -237,6 +254,7 @@ func _on_internal_scroll_changed(value: float):
 	# recalcs). Without this the next wheel tick accumulates from a stale
 	# target and jumps to a far position.
 	if not _is_smooth_scrolling:
+		_strace("resync target " + str(_target_scroll) + " -> " + str(value))
 		_target_scroll = value
 	scroll_value_changed.emit(value)
 
@@ -325,8 +343,10 @@ func _on_gui_input(event: InputEvent):
 			if event.factor > 1.0:
 				step *= event.factor
 
-			if not _wheel_chase_active:
-				_chase_pos = _get_current_scroll()
+			# Rebase the chase on the actual position every tick: a stale
+			# _chase_pos (engine clamp, direct set, finished tween) must never
+			# become the accumulation base. Accumulation lives in _target_scroll.
+			_chase_pos = _get_current_scroll()
 			var current := _chase_pos
 			var dir := -1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
 			# Reversing direction discards any accumulated backlog so the view
@@ -343,6 +363,7 @@ func _on_gui_input(event: InputEvent):
 				_scroll_tween.kill()
 			_wheel_chase_active = true
 			_is_smooth_scrolling = true
+			_strace("wheel dir=" + str(dir) + " target=" + str(_target_scroll) + " chase_pos=" + str(_chase_pos) + " actual=" + str(_get_current_scroll()))
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
@@ -393,7 +414,11 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
-		_wheel_chase_active = false
+
+	# Single-writer invariant: the tween owns the scroll position from here,
+	# so stand down the wheel chase. Otherwise both write every frame and a
+	# stale chase glides back toward its old target when the tween finishes.
+	_wheel_chase_active = false
 
 	var start_value = _get_current_scroll()
 	var target_value = _target_scroll
@@ -415,7 +440,8 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 
 	# Apply duration multiplier for faster/slower animations
 	duration = clampf(duration * duration_multiplier, 0.0, smooth_scroll_max_duration)
-	
+
+	_strace("tween-start target=" + str(target_value) + " start=" + str(start_value) + " dur=" + str(duration) + " caller=" + _strace_caller() + " chase_was=" + str(_wheel_chase_active))
 	_is_smooth_scrolling = true
 
 	_scroll_tween = create_tween()
@@ -433,6 +459,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	_scroll_tween.finished.connect(func():
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
+		SmoothScrollContainer._strace("tween-done target=" + str(target_value) + " actual=" + str(_get_current_scroll()))
 		scroll_completed.emit()
 	)
 
@@ -469,6 +496,7 @@ func _on_native_scroll_ended() -> void:
 	snap_to_page()
 
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0):
+	_strace("scroll_to target=" + str(target) + " animate=" + str(animate) + " caller=" + _strace_caller())
 	# Kill any running tween first to prevent conflicts
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
@@ -488,6 +516,7 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 
 func stop_smooth_scroll() -> void:
 	"""Stop any active smooth-scroll tween without changing the target."""
+	_strace("stop chase_was=" + str(_wheel_chase_active) + " tween_valid=" + str(_scroll_tween != null and _scroll_tween.is_valid()))
 	_wheel_chase_active = false
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()

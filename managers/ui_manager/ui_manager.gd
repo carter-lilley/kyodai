@@ -564,8 +564,8 @@ func set_card_designer_preview_game(romm_id: int) -> void:
 func get_settings_dialog_platforms_view() -> PlatformsSettingsView:
 	return overlay.get_settings_dialog_platforms_view()
 
-func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true) -> String:
-	return overlay.show_game_context_menu(romm_id, anchor, show_delete)
+func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = true, show_hide: bool = false) -> String:
+	return overlay.show_game_context_menu(romm_id, anchor, show_delete, show_hide)
 
 func show_add_to_collection_picker(romm_id: int) -> void:
 	overlay.show_add_to_collection_picker(romm_id)

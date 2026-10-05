@@ -1078,11 +1078,32 @@ func _get_show_delete() -> bool:
 	set_meta("_cached_show_delete", false)
 	return false
 
+func _is_in_home_view() -> bool:
+	# The Hide menu item is Home-only; cache like _get_show_delete.
+	# NOTE: deliberately no CollectionView check here — naming that class
+	# from game_card completes a game_card -> collection_view -> view
+	# dependency cycle that breaks global class compilation. A card's
+	# ancestor chain can only pass through its own view, so stopping at
+	# LibraryView (and falling through anything else to false) is exact.
+	if has_meta("_cached_in_home_view"):
+		return get_meta("_cached_in_home_view")
+
+	var parent = get_parent()
+	while parent:
+		if parent is HomeView:
+			set_meta("_cached_in_home_view", true)
+			return true
+		if parent is LibraryView:
+			break
+		parent = parent.get_parent()
+	set_meta("_cached_in_home_view", false)
+	return false
+
 func _on_card_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if game and UIManager:
-				UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
+				UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete(), _is_in_home_view())
 
 func _on_card_mouse_entered() -> void:
 	if not _can_accept_focus():
@@ -1132,7 +1153,7 @@ func _gui_input(event: InputEvent) -> void:
 		if focused == self and game and UIManager:
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
+			UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete(), _is_in_home_view())
 			accept_event()
 
 	if SystemManager.platform.is_android() and event is InputEventScreenTouch:
@@ -1223,7 +1244,7 @@ func _trigger_long_press() -> void:
 	_suppress_next_press = true
 	if SystemManager.audio:
 		SystemManager.audio.play_sfx_modulate("click_03", 1.2, 1.2, 0.0)
-	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete())
+	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete(), _is_in_home_view())
 
 func _can_accept_focus() -> bool:
 	if is_instance_valid(_cached_home_view) and _cached_home_view.has_method("are_intro_animations_complete"):

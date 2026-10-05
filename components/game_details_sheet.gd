@@ -59,6 +59,7 @@ const STAR_GAP_DP := 2.0
 @onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/ActionButton
 @onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/SyncButton
 @onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/FavoriteButton
+@onready var hide_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/HideButton
 
 ## RomM play-status options. The first five map to the mutually exclusive
 ## rom_user.status enum; the last three are independent boolean flags.
@@ -316,6 +317,8 @@ func _setup_focus_neighbors() -> void:
 		sync_button.focus_neighbor_bottom = sync_button.get_path_to(content_tabs)
 	if favorite_button:
 		favorite_button.focus_neighbor_bottom = favorite_button.get_path_to(content_tabs)
+	if hide_button:
+		hide_button.focus_neighbor_bottom = hide_button.get_path_to(content_tabs)
 	content_tabs.focus_neighbor_top = content_tabs.get_path_to(action_button)
 	if desc_fold_button:
 		desc_fold_button.focus_neighbor_top = desc_fold_button.get_path_to(content_tabs)
@@ -383,6 +386,8 @@ func _connect_signals() -> void:
 		status_dropdown.item_selected.connect(_on_status_item_selected)
 	if favorite_button:
 		favorite_button.pressed.connect(_on_favorite_button_pressed)
+	if hide_button:
+		hide_button.pressed.connect(_on_hide_button_pressed)
 	if desc_fold_button:
 		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
 	if desc_scroll:
@@ -667,6 +672,7 @@ func _populate_basic_info(game: GameResource) -> void:
 	_setup_sibling_dropdown(game)
 	_setup_status_dropdown(game)
 	_update_favorite_button()
+	_update_hide_button()
 	_update_file_info_display(game)
 	_update_action_button()
 	description_label.text = game.description if game.description else "No description available."
@@ -752,6 +758,8 @@ func _update_chips_focus_chain() -> void:
 		sync_button.focus_neighbor_bottom = sync_button.get_path_to(first)
 	if favorite_button:
 		favorite_button.focus_neighbor_bottom = favorite_button.get_path_to(first)
+	if hide_button:
+		hide_button.focus_neighbor_bottom = hide_button.get_path_to(first)
 	first.focus_neighbor_top = first.get_path_to(action_button)
 	last.focus_neighbor_bottom = last.get_path_to(content_tabs)
 	content_tabs.focus_neighbor_top = content_tabs.get_path_to(last)
@@ -1094,8 +1102,7 @@ func _update_screenshots_header() -> void:
 func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1) -> void:
 	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
 	# Media-only M3Card: no text, so the media fills the card with the card's
-	# rounded-corner rendering. Focusable so the strip is controller-scrollable;
-	# not clickable (no press action yet).
+	# rounded-corner rendering. Clickable: opens the fullscreen lightbox.
 	var card := M3Card.new()
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
@@ -1104,9 +1111,12 @@ func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1)
 	# No text band: the screenshot covers the whole card, aspect-covered by
 	# the card's media shader (no stretch), corners rounded the same way.
 	card.show_text_margin = false
-	card.clickable = false
+	card.clickable = true
 	card.focus_mode = Control.FOCUS_ALL
+	card.tooltip_text = "View screenshot"
+	card.set_meta("screenshot_url", url)
 	card.set_placeholder(true)
+	card.pressed.connect(_on_screenshot_thumb_pressed.bind(card))
 	screenshots_row.add_child(card)
 	if at_position >= 0:
 		screenshots_row.move_child(card, at_position)
@@ -1117,6 +1127,17 @@ func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1)
 			card.media_texture = texture
 			card.set_placeholder(false)
 	)
+
+## Open the pressed thumb in the fullscreen lightbox. Passes the loaded
+## texture when available (instant); the URL covers the still-loading case.
+func _on_screenshot_thumb_pressed(card: M3Card) -> void:
+	if not is_instance_valid(card):
+		return
+	var texture := card.media_texture as Texture2D
+	var url := str(card.get_meta("screenshot_url", ""))
+	if texture == null and url == "":
+		return
+	ScreenshotLightbox.show_image(texture, url, card)
 
 func _add_screenshot_upload_card() -> void:
 	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
@@ -1583,6 +1604,37 @@ func _on_favorite_button_pressed() -> void:
 	DataManager.set_game_favorite(_current_game, not _current_game.is_favorite)
 	_update_favorite_button()
 
+## Local-only Home hide toggle (eye button). Unlike the status-dropdown
+## Hidden checkbox (a RomM server flag), this never leaves the device.
+func _update_hide_button() -> void:
+	if not hide_button or not _current_game:
+		return
+	var is_romm_game := _current_game.source == "romm"
+	hide_button.disabled = not is_romm_game
+	if not is_romm_game:
+		hide_button.icon_name = "eye-off"
+		hide_button.tooltip_text = "Hiding is only available for library games"
+		return
+	if _current_game.hidden_from_home:
+		hide_button.icon_name = "eye"
+		hide_button.tooltip_text = "Show in Home"
+	else:
+		hide_button.icon_name = "eye-off"
+		hide_button.tooltip_text = "Hide from Home"
+
+func _on_hide_button_pressed() -> void:
+	if not _current_game or _current_game.source != "romm":
+		return
+	_current_game.hidden_from_home = not _current_game.hidden_from_home
+	DataManager.update_game_hidden_from_home(_current_game.romm_id, _current_game.hidden_from_home)
+	_update_hide_button()
+	if _current_game.hidden_from_home:
+		SystemManager.notifications.show_notification("Hidden from Home", SystemManager.notifications.Type.INFO)
+	else:
+		SystemManager.notifications.show_notification("Shown in Home", SystemManager.notifications.Type.INFO)
+	# Home rebuilds its grid on this; other views have no use for the flag.
+	DataManager.game_home_visibility_changed.emit(_current_game)
+
 func _update_file_info_display(game: GameResource) -> void:
 	# Get the active file info (either main game or selected sibling)
 	var active_file_name = game.get_active_file_name()
@@ -1821,6 +1873,7 @@ func _on_game_updated(game: GameResource) -> void:
 		return
 	_current_game = game
 	_update_action_button()
+	_update_hide_button()
 	_update_file_info_display(_current_game)
 	_update_sync_ui()
 

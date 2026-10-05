@@ -30,6 +30,8 @@ var _active_filters: Dictionary = {}
 
 # A-Z letter navigation overlay (child of games_grid; does not affect layout)
 var _az_carousel: AZLetterCarousel = null
+# Big-letter flash shown when the carousel swaps letters (child of games_grid).
+var _az_flash: AZLetterFlash = null
 var _letter_first_index: Dictionary = {}  # letter -> first grid index
 # Right-stick letter stepping: one step per flick (mirrors the zoom
 # press-guard so the stick's ramp doesn't multi-step).
@@ -185,6 +187,12 @@ func _setup_az_carousel() -> void:
 	_az_carousel.scrub_ended.connect(func(): games_grid.set_scrub_cover_suppressed(false))
 	games_grid.add_child(_az_carousel)
 
+	# Grid-centered big-letter flash for carousel letter swaps. Added after the
+	# carousel so it draws above it; mouse_filter IGNORE so it never eats input.
+	_az_flash = AZLetterFlash.new()
+	_az_flash.name = "AZLetterFlash"
+	games_grid.add_child(_az_flash)
+
 func _load_letter_index() -> void:
 	"""Query first-character run lengths and derive the letter -> index map."""
 	if not _az_carousel:
@@ -247,7 +255,21 @@ func _jump_to_letter(letter: String, idx: int) -> void:
 	_az_jump_until_ms = Time.get_ticks_msec() + AZ_JUMP_INTENT_MS
 	if _az_carousel:
 		_az_carousel.set_active_letter(letter)
+	_flash_az_letter(letter)
 	games_grid.scroll_to_index_and_focus(idx, false)
+
+## Show the grid-centered big-letter flash for a carousel letter swap.
+## Skipped while hidden so map reloads and background scrolls never flash.
+func _flash_az_letter(letter: String) -> void:
+	if letter.is_empty():
+		return
+	if not visible or not is_inside_tree():
+		return
+	if not _az_flash or not is_instance_valid(_az_flash):
+		return
+	if not _az_carousel or not is_instance_valid(_az_carousel) or not _az_carousel.visible:
+		return
+	_az_flash.flash(letter)
 
 func _on_filter_button_clicked() -> void:
 	"""Handle filter button click — open the library filter side sheet."""
@@ -506,7 +528,15 @@ func _input(event: InputEvent) -> void:
 		accept_event()
 		return
 
-	# Letter stepping with right stick up/down (one step per flick)
+	# Letter stepping with right stick up/down (one step per flick).
+	# A visible overlay (e.g. the settings dialog) owns the right stick while
+	# open — set_input_as_handled() doesn't stop other _input() handlers, so
+	# yield here to keep the carousel from stepping behind settings.
+	if event.is_action_pressed("az_letter_prev") or event.is_action_pressed("az_letter_next"):
+		if get_viewport().is_input_handled():
+			return
+		if M3Overlay._get_topmost_overlay() != null:
+			return
 	if event.is_action_pressed("az_letter_prev"):
 		if not _az_prev_engaged:
 			_az_prev_engaged = true
@@ -782,7 +812,11 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 			_az_carousel.set_active_letter(_az_jump_letter)
 		else:
 			_az_jump_letter = ""
+			var before := _az_carousel.get_active_letter()
 			_az_carousel.set_active_from_index(start_index)
+			var after := _az_carousel.get_active_letter()
+			if after != "" and after != before:
+				_flash_az_letter(after)
 
 func _get_current_platform_name() -> String:
 	"""Get the display name of the current platform."""
@@ -924,6 +958,8 @@ func on_view_hide():
 	# is_current_view guard returns early), so reset on the way out.
 	_az_prev_engaged = false
 	_az_next_engaged = false
+	if _az_flash and is_instance_valid(_az_flash):
+		_az_flash.hide_flash()
 
 func _on_modal_item_selected(item_id: String, context: Dictionary):
 	# Only handle modal actions if this view is currently active

@@ -6,19 +6,19 @@ uniform float border_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float border_fade_in_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform bool use_gradient = false;
-uniform sampler2D gradient_texture : filter_linear, repeat_disable;
+uniform sampler2D gradient_texture : source_color, filter_linear, repeat_disable;
 uniform float border_gradient_angle = 180.0;  // degrees, 0 = up, clockwise
 uniform bool border_gradient_radial = false;
 
 uniform float inner_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_inner_stroke_gradient = false;
-uniform sampler2D inner_stroke_gradient_texture : filter_linear, repeat_disable;
+uniform sampler2D inner_stroke_gradient_texture : source_color, filter_linear, repeat_disable;
 uniform vec4 inner_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float inner_stroke_gradient_angle = 180.0;
 uniform bool inner_stroke_gradient_radial = false;
 uniform float outer_stroke_width_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform bool use_outer_stroke_gradient = false;
-uniform sampler2D outer_stroke_gradient_texture : filter_linear, repeat_disable;
+uniform sampler2D outer_stroke_gradient_texture : source_color, filter_linear, repeat_disable;
 uniform vec4 outer_stroke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float outer_stroke_gradient_angle = 180.0;
 uniform bool outer_stroke_gradient_radial = false;

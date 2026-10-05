@@ -105,6 +105,8 @@ func _connect_signals() -> void:
 			DataManager.database_failed.connect(_on_database_failed)
 		if not DataManager.game_updated.is_connected(_on_game_updated):
 			DataManager.game_updated.connect(_on_game_updated)
+		if not DataManager.game_home_visibility_changed.is_connected(_on_game_home_visibility_changed):
+			DataManager.game_home_visibility_changed.connect(_on_game_home_visibility_changed)
 		if not DataManager.scan_for_downloaded_games_completed.is_connected(_on_scan_completed):
 			DataManager.scan_for_downloaded_games_completed.connect(_on_scan_completed)
 		if not DataManager.sync_completed.is_connected(_on_sync_completed):
@@ -133,6 +135,8 @@ func _exit_tree() -> void:
 			DataManager.database_failed.disconnect(_on_database_failed)
 		if DataManager.game_updated.is_connected(_on_game_updated):
 			DataManager.game_updated.disconnect(_on_game_updated)
+		if DataManager.game_home_visibility_changed.is_connected(_on_game_home_visibility_changed):
+			DataManager.game_home_visibility_changed.disconnect(_on_game_home_visibility_changed)
 		if DataManager.scan_for_downloaded_games_completed.is_connected(_on_scan_completed):
 			DataManager.scan_for_downloaded_games_completed.disconnect(_on_scan_completed)
 		if DataManager.sync_completed.is_connected(_on_sync_completed):
@@ -597,6 +601,19 @@ func _on_gamenative_games_updated():
 	# Reload total count and refresh grid (don't preserve cache)
 	_load_total_count(false)
 
+func _on_game_home_visibility_changed(_game: GameResource):
+	"""A Home hide/unhide (details-sheet eye) needs a grid rebuild in both
+	directions; the sheet dismiss doesn't retrigger on_view_show. Skipped
+	when this view isn't current — on_view_show catches up on return."""
+	if not UIManager.is_current_view(view_name):
+		return
+	_gamenative_indices.clear()
+	_merged_games_cache.clear()
+	_merged_cache_start = 0
+	_merged_cache_end = 0
+	_merged_cache_dirty = true
+	_load_total_count(false, false)
+
 func _refresh_grid_dimensions() -> void:
 	"""Recalculate grid layout using the deterministic available size."""
 	if not games_grid:
@@ -755,7 +772,18 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				)
 		"hide":
-			pass
+			var game = DataManager.get_game_by_id(romm_id)
+			if game and game.source != "gamenative" and not game.hidden_from_home:
+				game.hidden_from_home = true
+				DataManager.update_game_hidden_from_home(romm_id, true)
+				SystemManager.notifications.show_notification("Hidden from Home - find it in Library to unhide", SystemManager.notifications.Type.INFO)
+				# Drop cached windows holding the hidden game, then reload.
+				_gamenative_indices.clear()
+				_merged_games_cache.clear()
+				_merged_cache_start = 0
+				_merged_cache_end = 0
+				_merged_cache_dirty = true
+				_load_total_count(false, false)
 		"add_to_steam":
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:

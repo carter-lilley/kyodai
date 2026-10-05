@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform sampler2D game_texture : repeat_disable;
+uniform sampler2D game_texture : source_color, repeat_disable;
 uniform float border_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width
 uniform float glass_inset_ratio = 0.0;  // 0.0 to 1.0, relative to card width (additional inset from glass effect)
 uniform float alpha = 1.0;  // Global alpha multiplier for fade animations

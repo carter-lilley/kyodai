@@ -1322,6 +1322,13 @@ func _execute_chmod_step(emulator_id: String, step_index: int, platform_config: 
 						targets.append(full_path)
 	
 	if targets.is_empty():
+		# If the step specified files/patterns to chmod but none were found, the
+		# previous download step probably failed or the file was deleted. Retry it
+		# instead of silently advancing to a step that will fail on the missing file.
+		var expected_something: bool = file != "" or (files is Array and files.size() > 0) or pattern != ""
+		if expected_something:
+			push_warning("[EmulatorManager] chmod targets missing for " + emulator_id + "; retrying previous step")
+			return _retry_previous_step(emulator_id, step_index)
 		push_warning("[EmulatorManager] chmod step has no targets for " + emulator_id)
 		return _execute_install_step(emulator_id, step_index + 1)
 

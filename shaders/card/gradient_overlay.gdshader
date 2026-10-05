@@ -2,7 +2,7 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform sampler2D gradient_texture : filter_linear, repeat_disable;
+uniform sampler2D gradient_texture : source_color, filter_linear, repeat_disable;
 uniform float gradient_angle = 180.0;  // degrees, 0 = up, clockwise
 uniform bool gradient_radial = false;  // vignette: center -> edge
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
