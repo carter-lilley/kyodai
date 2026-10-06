@@ -4,7 +4,7 @@ class_name ShufflerSubManager
 ## Manages shuffler sessions: bag building, game switching, process control.
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
-const ShufflerInputWindowScene = preload("res://components/shuffler_input_window.gd")
+const ShufflerInputWindowScene = preload("res://components/shuffler/shuffler_input_window.gd")
 
 # Gate per-download / per-preparation logging: these fire in bursts while
 # the session intro plays, and building _format_bag()/_format_entry() strings
@@ -99,8 +99,8 @@ var _window_backend: int = WindowBackend.NONE
 # Balatro-style "choose 1 of 3" interstitial. Every 3-5 completed shuffles the
 # current game closes and the player picks one seen game to keep; the rejected
 # games are removed from the bag.
-const CHOICE_SCENE := "res://components/shuffler_choice_window.tscn"
-const INTRO_SCENE := "res://components/shuffler_intro_window.tscn"
+const CHOICE_SCENE := "res://components/shuffler/shuffler_choice_window.tscn"
+const INTRO_SCENE := "res://components/shuffler/shuffler_intro_window.tscn"
 const CHOICE_MIN_CANDIDATES := 3
 const CHOICE_MIN_SHUFFLES := 3
 const CHOICE_MAX_SHUFFLES := 5
@@ -2118,7 +2118,7 @@ func _summon_controls() -> void:
 	if _controls_window and is_instance_valid(_controls_window):
 		return
 
-	var scene = load("res://components/shuffler_controls_window.tscn")
+	var scene = load("res://components/shuffler/shuffler_controls_window.tscn")
 	if not scene:
 		push_error("[ShufflerSubManager] Failed to load controls window scene")
 		return

@@ -6,7 +6,7 @@ class_name GameSubManager
 const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
-const _SigilRunner = preload("res://utils/sigil_runner.gd")
+const _SigilRunner = preload("res://utils/identity/sigil_runner.gd")
 
 var launch_manager: Node
 

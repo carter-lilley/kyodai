@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://c3xal6n2o5r7y"]
-
-[ext_resource type="Script" uid="uid://d2v8k5m9n1q4x" path="res://components/romm_connection_panel.gd" id="1_rommcp"]
-
-[node name="RommConnectionPanel" type="VBoxContainer"]
-script = ExtResource("1_rommcp")

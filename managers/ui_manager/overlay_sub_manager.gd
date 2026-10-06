@@ -8,7 +8,7 @@ var ui_manager: Node
 # Settings dialog
 var _settings_dialog = null
 
-const SETTINGS_DIALOG_SCRIPT_PATH := "res://components/settings_dialog.gd"
+const SETTINGS_DIALOG_SCRIPT_PATH := "res://components/dialogs/settings_dialog.gd"
 
 # Shuffler dialog
 var _shuffler_dialog: ShufflerConfigDialog = null
@@ -425,7 +425,7 @@ func show_shuffler_dialog() -> void:
 		return
 
 	if not _shuffler_dialog or not is_instance_valid(_shuffler_dialog):
-		var scene = load("res://components/shuffler_config_dialog.tscn")
+		var scene = load("res://components/shuffler/shuffler_config_dialog.tscn")
 		if scene:
 			_shuffler_dialog = scene.instantiate() as ShufflerConfigDialog
 			if _shuffler_dialog:
@@ -433,7 +433,7 @@ func show_shuffler_dialog() -> void:
 				_shuffler_dialog.persistent = false
 				_shuffler_dialog.start_session_requested.connect(_on_shuffler_start_requested)
 		else:
-			var dialog_script = load("res://components/shuffler_config_dialog.gd")
+			var dialog_script = load("res://components/shuffler/shuffler_config_dialog.gd")
 			if dialog_script:
 				_shuffler_dialog = dialog_script.new() as ShufflerConfigDialog
 				_shuffler_dialog.start_session_requested.connect(_on_shuffler_start_requested)
@@ -601,7 +601,7 @@ func _focus_restore_to_current_grid() -> void:
 func _ensure_game_details_sheet() -> void:
 	if _game_details_sheet and is_instance_valid(_game_details_sheet):
 		return
-	var sheet_scene = load("res://components/game_details_sheet.tscn")
+	var sheet_scene = load("res://components/sheets/game_details_sheet.tscn")
 	if sheet_scene:
 		_game_details_sheet = sheet_scene.instantiate() as GameDetailsSheet
 		_game_details_sheet.visible = false

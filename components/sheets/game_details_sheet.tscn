@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://djkus7351box3" path="res://addons/m3/components/M3OptionButton.gd" id="m3optionbutton"]
 [ext_resource type="Script" path="res://addons/m3/components/M3IconButton.gd" id="m3iconbutton"]
 
-[ext_resource type="Script" path="res://components/game_details_sheet.gd" id="1_sheet"]
+[ext_resource type="Script" path="res://components/sheets/game_details_sheet.gd" id="1_sheet"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="2_m3label"]
 [ext_resource type="Script" uid="uid://dv82iypo8etp8" path="res://addons/m3/components/M3Button.gd" id="3_m3button"]
 [ext_resource type="Script" path="res://addons/m3/components/M3Chip.gd" id="4_m3chip"]

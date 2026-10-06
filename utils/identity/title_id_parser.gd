@@ -6,10 +6,10 @@ const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 # Sigil CLI runner for platforms routed through argosy-sigil
-const _SigilRunner = preload("res://utils/sigil_runner.gd")
+const _SigilRunner = preload("res://utils/identity/sigil_runner.gd")
 
 # ZArchive reader for Xbox 360 .zar ROMs (compressed ISO contents)
-const _ZarReader = preload("res://utils/zar_reader.gd")
+const _ZarReader = preload("res://utils/identity/zar_reader.gd")
 
 # ============================================================================
 # UTILITY FUNCTIONS

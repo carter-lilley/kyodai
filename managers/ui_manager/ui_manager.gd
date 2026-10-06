@@ -4,7 +4,7 @@ const DEBUG_LOG: bool = false
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const TITLE_BAR_SCRIPT := preload("res://components/title_bar.gd")
-const RESIZE_GRIPS_SCRIPT := preload("res://components/window_resize_grips.gd")
+const RESIZE_GRIPS_SCRIPT := preload("res://components/overlays/window_resize_grips.gd")
 
 # UIManager - Facade for UI orchestration.
 # Child managers own views, navigation, hero/background, overlays, theme, and dual-screen logic.

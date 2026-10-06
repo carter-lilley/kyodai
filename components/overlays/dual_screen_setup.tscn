@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://dso7s4qnsrhox"]
 
-[ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/hero_image.tscn" id="1_heroimg"]
+[ext_resource type="PackedScene" uid="uid://heroimage001" path="res://components/cards/hero_image.tscn" id="1_heroimg"]
 
 [node name="DualScreenSetup" type="Control"]
 visible = false

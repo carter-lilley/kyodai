@@ -4,14 +4,14 @@ on:
   push:
     branches: [ main, master ]
     paths:
-      - 'utils/gavel.gd'
-      - 'utils/run_gavel_vectors.gd'
+      - 'utils/sync/gavel.gd'
+      - 'utils/sync/run_gavel_vectors.gd'
       - 'bin/src/romm-gavel/**'
       - '.github/workflows/test-gavel.yml'
   pull_request:
     paths:
-      - 'utils/gavel.gd'
-      - 'utils/run_gavel_vectors.gd'
+      - 'utils/sync/gavel.gd'
+      - 'utils/sync/run_gavel_vectors.gd'
       - 'bin/src/romm-gavel/**'
       - '.github/workflows/test-gavel.yml'
   workflow_dispatch:
@@ -45,4 +45,4 @@ jobs:
       run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . --import
 
     - name: Run gavel conformance vectors
-      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . -s utils/run_gavel_vectors.gd
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . -s utils/sync/run_gavel_vectors.gd

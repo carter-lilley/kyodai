@@ -10,8 +10,8 @@ signal save_sync_completed(game: GameResource, success: bool, message: String)
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
-const _ContentHash = preload("res://utils/content_hash.gd")
-const Gavel = preload("res://utils/gavel.gd")
+const _ContentHash = preload("res://utils/sync/content_hash.gd")
+const Gavel = preload("res://utils/sync/gavel.gd")
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
 

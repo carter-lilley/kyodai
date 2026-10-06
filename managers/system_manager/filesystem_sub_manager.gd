@@ -1506,8 +1506,8 @@ static func _get_7z_binary_path() -> String:
 		_:
 			return ""
 
-	# Runtime load avoids a cyclic preload with utils/android_binary_extractor.gd
-	var extractor = load("res://utils/android_binary_extractor.gd")
+	# Runtime load avoids a cyclic preload with utils/launch/android_binary_extractor.gd
+	var extractor = load("res://utils/launch/android_binary_extractor.gd")
 	return extractor.extract_binary(res_path, res_path.get_file())
 
 ## Gets the directory portion of a path

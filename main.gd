@@ -1,8 +1,8 @@
 extends Control
 
 const DEBUG_LOG: bool = false
-const ShaderPrewarmer := preload("res://utils/shader_prewarmer.gd")
-const StartupBenchmark := preload("res://utils/startup_benchmark.gd")
+const ShaderPrewarmer := preload("res://utils/perf/shader_prewarmer.gd")
+const StartupBenchmark := preload("res://utils/perf/startup_benchmark.gd")
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var tab_container: TabContainer
@@ -217,7 +217,7 @@ func _ready():
 	call_deferred("_post_ready_startup")
 
 	# Headless benchmark modes (--benchmark-startup / --benchmark-shutdown and
-	# related flags) live in utils/startup_benchmark.gd.
+	# related flags) live in utils/perf/startup_benchmark.gd.
 	if await StartupBenchmark.run_from_args(self):
 		return
 

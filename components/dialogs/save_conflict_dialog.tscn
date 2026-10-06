@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://c7x4n4x4x4x4"]
 
-[ext_resource type="Script" uid="uid://21v66vgngl5s" path="res://components/save_conflict_dialog.gd" id="1_x4x4x"]
+[ext_resource type="Script" uid="uid://21v66vgngl5s" path="res://components/dialogs/save_conflict_dialog.gd" id="1_x4x4x"]
 
 [node name="SaveConflictDialog" type="Control"]
 layout_mode = 3

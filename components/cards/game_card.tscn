@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://gamecard0001"]
 
-[ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/game_card.gd" id="1_gamecard"]
+[ext_resource type="Script" uid="uid://dxxbtr4c6pxjf" path="res://components/cards/game_card.gd" id="1_gamecard"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_gamecard"]
 

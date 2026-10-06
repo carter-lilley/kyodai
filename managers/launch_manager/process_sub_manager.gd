@@ -6,7 +6,7 @@ class_name ProcessSubManager
 const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
-const AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
+const AndroidBinaryExtractor = preload("res://utils/launch/android_binary_extractor.gd")
 
 # Background state tracking (desktop only)
 var _background_active_pid: int = -1

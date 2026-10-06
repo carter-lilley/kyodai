@@ -5,7 +5,7 @@
 class_name SigilRunner
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
-const _AndroidBinaryExtractor = preload("res://utils/android_binary_extractor.gd")
+const _AndroidBinaryExtractor = preload("res://utils/launch/android_binary_extractor.gd")
 
 ## Kyodai slug -> sigil slug (all others match 1:1)
 const SLUG_MAP := {

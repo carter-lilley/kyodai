@@ -155,7 +155,7 @@ func _setup_ui():
 	preview_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	right_container.add_child(preview_container)
 	
-	_preview_card = preload("res://components/game_card.tscn").instantiate()
+	_preview_card = preload("res://components/cards/game_card.tscn").instantiate()
 	_preview_card.preview_mode = true
 	_preview_card.focus_mode = Control.FOCUS_NONE
 	_preview_card.preview_show_focus = false

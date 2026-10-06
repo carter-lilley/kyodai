@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://cchoice0001x2"]
 
-[ext_resource type="Script" uid="uid://drxfl3114kaxo" path="res://components/shuffler_choice_window.gd" id="1_choice"]
+[ext_resource type="Script" uid="uid://drxfl3114kaxo" path="res://components/shuffler/shuffler_choice_window.gd" id="1_choice"]
 [ext_resource type="Script" uid="uid://cvgbxtf1hrqqc" path="res://addons/m3/components/M3Card.gd" id="2_card"]
 [ext_resource type="Script" uid="uid://dai80ong4t12f" path="res://addons/m3/components/M3Label.gd" id="3_label"]
 [ext_resource type="PackedScene" uid="uid://c8yvxg3ulq3a8" path="res://components/library_background.tscn" id="4_libbg"]

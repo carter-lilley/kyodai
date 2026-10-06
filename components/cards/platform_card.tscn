@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://bddbvlt1vytc6"]
 [ext_resource type="Script" uid="uid://dv82iypo8etp8" path="res://addons/m3/components/M3Button.gd" id="m3button"]
 
-[ext_resource type="Script" uid="uid://dylr5kau2wua2" path="res://components/platform_card.gd" id="1_platformcard"]
+[ext_resource type="Script" uid="uid://dylr5kau2wua2" path="res://components/cards/platform_card.gd" id="1_platformcard"]
 
 [node name="PlatformCard" type="Button" unique_id=1329366812]
 script = ExtResource("m3button")

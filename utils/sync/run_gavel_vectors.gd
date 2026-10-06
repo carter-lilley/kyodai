@@ -1,11 +1,11 @@
 ## Headless conformance runner for the gavel GDScript port.
 ## Executes every JSON vector under bin/src/romm-gavel/vectors/ against
-## utils/gavel.gd and diffs against each vector's expected value.
-## Usage: godot --headless --path . -s utils/run_gavel_vectors.gd
+## utils/sync/gavel.gd and diffs against each vector's expected value.
+## Usage: godot --headless --path . -s utils/sync/run_gavel_vectors.gd
 ## Exit code 0 = all vectors pass, 1 = any failure.
 extends SceneTree
 
-const Gavel = preload("res://utils/gavel.gd")
+const Gavel = preload("res://utils/sync/gavel.gd")
 
 const VECTOR_FILES := [
 	"res://bin/src/romm-gavel/vectors/ladder/named-cases.json",

@@ -53,7 +53,7 @@ func _ready():
 		return
 	
 	var phase_start_us := Time.get_ticks_usec()
-	var card_scene = load("res://components/game_card.tscn") as PackedScene
+	var card_scene = load("res://components/cards/game_card.tscn") as PackedScene
 	var initial_zoom: float = 0.25
 	if UIManager and UIManager.card_settings_state:
 		var zoom_state = UIManager.card_settings_state
