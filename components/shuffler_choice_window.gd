@@ -6,7 +6,7 @@ extends Window
 
 signal game_chosen(chosen: Dictionary, candidates: Array)
 
-const CoverLoader = preload("res://utils/shuffler_cover_loader.gd")
+const CoverLoader = preload("res://components/shuffler_cover_loader.gd")
 const MAX_COVER_TEXTURE_SIZE := 512
 const TILT_DEGREES := 4.0
 const HOVER_AMPLITUDE_DP := 12.0

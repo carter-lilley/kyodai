@@ -8,7 +8,7 @@ var ui_manager: Node
 # Settings dialog
 var _settings_dialog = null
 
-const SETTINGS_DIALOG_SCRIPT_PATH := "res://view/settings_dialog.gd"
+const SETTINGS_DIALOG_SCRIPT_PATH := "res://components/settings_dialog.gd"
 
 # Shuffler dialog
 var _shuffler_dialog: ShufflerConfigDialog = null

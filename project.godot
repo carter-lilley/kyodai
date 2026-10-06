@@ -46,11 +46,14 @@ enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/Packa
 
 folder_colors={
 "res://addons/": "purple",
+"res://android/": "purple",
 "res://assets/": "green",
 "res://base_class/": "orange",
 "res://bin/": "red",
 "res://build/": "red",
 "res://data/": "green",
+"res://dist/": "purple",
+"res://effects/": "yellow",
 "res://managers/": "red",
 "res://shaders/": "yellow",
 "res://themes/": "teal",

@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://wry1o8o78dia"]
 
-[ext_resource type="Script" path="res://view/settings_dialog.gd" id="1_abc12"]
+[ext_resource type="Script" uid="uid://du0iemtnmtcs7" path="res://components/settings_dialog.gd" id="1_abc12"]
 
 [node name="SettingsDialog" type="CanvasLayer"]
 layer = 90

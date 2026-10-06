@@ -3,7 +3,7 @@
 ##   - vectors/decision-table/ (full sync decision model)
 ## Pure functions: hashes/state in, decision out. No I/O, no engine deps.
 ## null and "" both mean "unknown" and never prove anything.
-## Conformance is verified by tools/run_gavel_vectors.gd.
+## Conformance is verified by utils/run_gavel_vectors.gd.
 class_name Gavel
 
 const SHRINK_RATIO := 0.5

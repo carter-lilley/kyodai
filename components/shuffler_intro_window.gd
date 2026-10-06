@@ -10,7 +10,7 @@ extends Window
 
 signal intro_finished()
 
-const CoverLoader = preload("res://utils/shuffler_cover_loader.gd")
+const CoverLoader = preload("res://components/shuffler_cover_loader.gd")
 const MAX_COVER_TEXTURE_SIZE := 512
 
 const COVER_ASPECT_FALLBACK := 0.75  # 3:4 placeholder when no cover exists

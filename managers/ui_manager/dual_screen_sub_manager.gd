@@ -26,7 +26,7 @@ var _hero_original_parent: Node = null
 var _root_control: Control = null
 var _hero_image: HeroImage = null
 
-var _dual_screen_setup_scene: PackedScene = preload("res://scenes/dual_screen_setup.tscn")
+var _dual_screen_setup_scene: PackedScene = preload("res://components/dual_screen_setup.tscn")
 var _dual_screen_setup: Control = null
 var _main_viewport: SubViewport = null
 var _second_viewport: SubViewport = null
