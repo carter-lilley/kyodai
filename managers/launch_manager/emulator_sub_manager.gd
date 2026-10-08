@@ -332,12 +332,12 @@ func repair_emulator_config(emulator_id: String) -> bool:
 
 ## Returns the on-disk backup directory for an in-progress update guard.
 func _config_guard_dir(emulator_id: String) -> String:
-	return "user://update_backups/" + emulator_id
+	return "user://backups/" + emulator_id
 
 ## Snapshots user config files before an update/reinstall overwrites them.
 ## The preserve-list is built from the emulator's resolution config candidates
 ## and its create_files install seeds; every existing file is copied to
-## user://update_backups/<emulator_id>/. The update then overwrites everything
+## user://backups/<emulator_id>/. The update then overwrites everything
 ## and _restore_config_guard() puts the configs back afterwards.
 ## No-op on Android: APK updates go through the package manager and preserve
 ## app-private data, so there is nothing to guard.

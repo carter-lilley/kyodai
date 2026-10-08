@@ -940,7 +940,7 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 	if DEBUG_LOG: print("[TitleIDParser] Found PARAM.SFO via 7-Zip at: " + sfo_path)
 	
 	# Step 2: Extract PARAM.SFO to temp directory
-	var temp_dir = "user://temp_ps3_sfo/"
+	var temp_dir = "user://temp/ps3_sfo/"
 	if not DirAccess.dir_exists_absolute(temp_dir):
 		DirAccess.make_dir_recursive_absolute(temp_dir)
 	

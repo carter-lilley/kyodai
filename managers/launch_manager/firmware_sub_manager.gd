@@ -383,8 +383,8 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			return
 		
 		# Download to temp location first
-		var temp_path = "user://temp_firmware/" + file_name
-		FSM.make_dir_recursive("user://temp_firmware")
+		var temp_path = "user://temp/firmware/" + file_name
+		FSM.make_dir_recursive("user://temp/firmware")
 		if FSM.file_exists(temp_path):
 			FSM.delete_file(temp_path)
 
@@ -392,7 +392,7 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 		var firmware_size: int = firmware.get("file_size_bytes", 0)
 		if firmware_size > 0:
 			var required_bytes := int(firmware_size * 1.1)
-			var space_left := FSM.get_space_left("user://temp_firmware")
+			var space_left := FSM.get_space_left("user://temp/firmware")
 			if space_left >= 0 and space_left < required_bytes:
 				var needed_mb := required_bytes / (1024 * 1024)
 				var free_mb := space_left / (1024 * 1024)

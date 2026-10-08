@@ -116,7 +116,7 @@ var _intro_window: Node = null
 # cost mid-animation.
 var _intro_scene: PackedScene = null
 
-const TEMP_DIR := "user://shuffler_temp/"
+const TEMP_DIR := "user://temp/shuffler/"
 
 const RETROARCH_SHUFFLER_CFG := {
 	"network_cmd_enable": "true",

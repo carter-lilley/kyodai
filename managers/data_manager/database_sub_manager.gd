@@ -3,7 +3,7 @@ class_name DatabaseSubManager
 
 var data_manager: Node
 
-const DB_PATH = "user://database/kyodai.db"
+const DB_PATH = "user://kyodai.db"
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Expected schema (table -> column -> DDL fragment). Single source of truth for
@@ -201,10 +201,6 @@ func initialize_database() -> bool:
 	print("[DatabaseManager] initialize_database() starting...")
 	# Database is being (re)opened; any previous count cache is no longer valid.
 	invalidate_downloaded_games_count_cache()
-	if not FSM.make_dir_recursive("user://database"):
-		push_error("[DatabaseManager] Failed to create database directory: user://database/")
-		_db_init_failed = true
-		return false
 
 	_db = SQLite.new()
 	_db.path = DB_PATH

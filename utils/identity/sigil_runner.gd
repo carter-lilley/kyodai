@@ -117,11 +117,12 @@ static func _stage_prod_keys_if_needed(prod_keys_path: String) -> String:
 	if not (normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")):
 		return prod_keys_path
 
-	var staged_path = "user://temp_sigil_prod.keys"
+	var staged_path = "user://temp/sigil/prod.keys"
 	var data = FSM.read_file_bytes(prod_keys_path)
 	if data.is_empty():
 		push_warning("[SigilRunner] Failed to read prod keys for staging: " + prod_keys_path)
 		return ""
+	FSM.make_dir_recursive("user://temp/sigil")
 	if not FSM.write_file_bytes(staged_path, data):
 		push_warning("[SigilRunner] Failed to stage prod keys to: " + staged_path)
 		return ""

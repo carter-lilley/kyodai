@@ -769,7 +769,7 @@ static func zip_directory(source_dir: String, dest_zip: String, max_file_size: i
 	var stage_dir = ""
 	
 	if not root_name.is_empty():
-		stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "/"
+		stage_dir = "user://temp/saves/stage_" + str(Time.get_ticks_msec()) + "/"
 		var stage_root = stage_dir + root_name
 		DirAccess.make_dir_recursive_absolute(stage_root)
 		var copy_success = copy_dir(source_dir, stage_root)

@@ -1239,7 +1239,7 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	var thread_count = strategy.thread_count
 
 	# Create temp directory for chunks (deterministic so resume can find it)
-	var temp_dir = "user://downloads/chunks/" + _get_chunk_temp_dir_name(item.destination_path)
+	var temp_dir = "user://temp/chunks/" + _get_chunk_temp_dir_name(item.destination_path)
 	if not FSM.make_dir_recursive(temp_dir):
 		push_error("[SystemManager.download] Failed to create chunk temp directory: " + temp_dir)
 		item.status = "failed"

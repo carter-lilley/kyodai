@@ -76,11 +76,11 @@ func _schedule_temp_dir_cleanup() -> void:
 	await get_tree().create_timer(5.0).timeout
 	if not is_inside_tree():
 		return
-	_run_io_task("user://temp_saves", _cleanup_all_temp_dirs, Callable())
+	_run_io_task("user://temp/saves", _cleanup_all_temp_dirs, Callable())
 
-## Cleans up all temp directories under user://temp_saves/
+## Cleans up all temp directories under user://temp/saves/
 func _cleanup_all_temp_dirs() -> void:
-	var temp_base = "user://temp_saves"
+	var temp_base = "user://temp/saves"
 	if not FSM.dir_exists(temp_base):
 		return
 	var items = FSM.list_dir(temp_base + "/")
@@ -691,7 +691,7 @@ func discover_local_dolphin_gc_save(directory: String, game_id: String) -> Array
 		return results
 	
 	# Create a temp zip bundle with all matching GCI files
-	var zip_path = "user://temp_saves/" + game_id + ".zip"
+	var zip_path = "user://temp/saves/" + game_id + ".zip"
 	FSM.make_dir_recursive(zip_path.get_base_dir())
 	
 	var zip_success = _zip_gci_files(gci_files, zip_path)
@@ -1834,7 +1834,7 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 	var normalized_path = source_path.rstrip("/").rstrip("\\")
 	
 	# Use timestamp + random to avoid stage dir collisions when called rapidly
-	var stage_dir = "user://temp_saves/stage_" + str(Time.get_ticks_msec()) + "_" + str(randi()) + "/"
+	var stage_dir = "user://temp/saves/stage_" + str(Time.get_ticks_msec()) + "_" + str(randi()) + "/"
 	
 	# Determine if source_path is an individual save folder or the SAVEDATA directory
 	# Individual save folders contain the title_id in their name (e.g., NPJH50333DAT)
@@ -2495,7 +2495,7 @@ func _execute_save_upload(game: GameResource, emulator_id: String, upload: Dicti
 
 	if is_folder_save:
 		var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
-		var zip_path = "user://temp_saves/" + str(game.romm_id) + "/" + save_name + ".zip"
+		var zip_path = "user://temp/saves/" + str(game.romm_id) + "/" + save_name + ".zip"
 		FSM.make_dir_recursive(zip_path.get_base_dir())
 		var zip_state := {"done": false, "success": false}
 		_run_io_task(original_path,
@@ -2524,7 +2524,7 @@ func _execute_save_upload(game: GameResource, emulator_id: String, upload: Dicti
 		SystemManager.network.upload_save(
 			game.romm_id, original_path, emulator_id, SLOT_DEFAULT, device_id, force,
 			func(data: Dictionary, error: String):
-				if original_path.contains("user://temp_saves/") and FSM.file_exists(original_path):
+				if original_path.contains("user://temp/saves/") and FSM.file_exists(original_path):
 					FSM.delete_file(original_path)
 				_on_upload_response(game, emulator_id, upload, data, error, device_id, current_timestamp, on_done)
 		)
@@ -2628,7 +2628,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 			record_path = FSM.join_paths(save_dir, file_name)
 
 	if is_folder_save:
-		zip_path = "user://temp_saves/download_" + str(Time.get_ticks_msec()) + ".zip"
+		zip_path = "user://temp/saves/download_" + str(Time.get_ticks_msec()) + ".zip"
 		FSM.make_dir_recursive(zip_path.get_base_dir())
 		local_path = zip_path
 
