@@ -281,12 +281,32 @@ func _sync_zoom_model_inputs() -> void:
 	_zoom_model.configure(int(view_mode), vertical, grid_separation, _get_base_dimensions_for_mode())
 	_zoom_model.set_available_size(_get_available_size() if _has_valid_available_size() else Vector2.ZERO)
 
-# Scroll anchor snapshot (x = virtual index, y = intra-line fraction; x < 0 =
-# unset). Captured by _set_grid_n_silent BEFORE items-per-line changes so
-# _recalculate_layout can restore the view in index space; capturing after the
-# N change would compute the anchor against the NEW items-per-line, which
-# preserves the line number instead of the content (teleport on zoom).
-var _scroll_anchor: Vector2 = Vector2(-1.0, 0.0)
+## SINGLE implementation of the line/slot/page offset formula (pinned by
+## grid_offset_identity_test). Inputs are pushed per call (cheap field
+## assignments); the math itself is pure and has no caches to invalidate.
+var _geometry := GridGeometry.new()
+
+func _sync_geometry() -> void:
+	_geometry.mode = int(view_mode)
+	_geometry.vertical = vertical
+	_geometry.separation = grid_separation
+	_geometry.staggered = _is_staggered_active()
+	_geometry.paginated = _is_pagination_active()
+	_geometry.items_per_line = _get_items_per_line()
+	_geometry.stride = _get_normal_stride()
+	_geometry.card_scroll = card_size.y if vertical else card_size.x
+	var overflow := _get_focus_overflow()
+	_geometry.focus_overflow = overflow.y if vertical else overflow.x
+	var available := _get_available_size()
+	_geometry.viewport = available.y if vertical else available.x
+	_geometry.total_items = _total_items
+
+# Scroll anchor snapshot (null = unset). Captured by _set_grid_n_silent BEFORE
+# items-per-line changes so _recalculate_layout can restore the view in index
+# space; capturing after the N change would compute the anchor against the NEW
+# items-per-line, which preserves the line number instead of the content
+# (teleport on zoom). See GridScrollAnchor for the three slots.
+var _scroll_anchor: GridScrollAnchor = null
 
 # Scroll writes during layout recalcs go through
 # SmoothScrollContainer.write_immediate_with_extent(): the extent is pre-raised
@@ -663,17 +683,8 @@ func _get_normal_stride() -> float:
 
 func _get_slot_position_for_index(idx: int, items_per_line: int = -1, stride: float = -1.0) -> float:
 	"""Returns the scroll-axis pixel position where slot `idx` begins."""
-	if items_per_line < 0:
-		items_per_line = _get_items_per_line()
-	if stride < 0.0:
-		stride = _get_normal_stride()
-	var line = _get_line_for_index(idx, items_per_line)
-	var pos = line * stride
-	if _is_pagination_active():
-		# Page groups are separated by a spacer gap in the scroll direction;
-		# the leading pad lets page 0 sit centered at scroll 0.
-		pos += _get_page_leading_pad() + int(line / get_lines_per_page()) * _get_page_gap()
-	return pos
+	_sync_geometry()
+	return _geometry.slot_position(idx, items_per_line, stride)
 
 func set_focused_card(virtual_index: int) -> void:
 	if _focused_virtual_index == virtual_index:
@@ -682,27 +693,35 @@ func set_focused_card(virtual_index: int) -> void:
 	_update_layout()
 	_update_margin()
 
-## Captures the current scroll position as an index-space anchor:
-## Vector2(x = anchor virtual index, y = intra-line fraction), or x = -1 when
-## no valid anchor exists. The anchor is the focused card when there is one,
-## else the first slot of the top visible line. MUST be called before any
-## geometry change (items-per-line / card size) it is meant to survive.
-func _capture_scroll_anchor(focus_index: int) -> Vector2:
+## Captures the current scroll position as a three-slot anchor (index,
+## intra-line fraction, viewport edge — see GridScrollAnchor). The anchor is
+## the focused card when there is one, else the first slot of the top visible
+## line. MUST be called before any geometry change (items-per-line / card
+## size) it is meant to survive. allow_end_pin: inline recalc captures
+## (resize, library shrink) may pin the restore to the content end when
+## captured at max scroll; zoom-path captures pass false because the focused
+## card is the better zoom anchor.
+func _capture_scroll_anchor(focus_index: int, allow_end_pin: bool = false) -> GridScrollAnchor:
+	var anchor := GridScrollAnchor.new()
 	if not _scroll_container or _source_total_items <= 0:
-		return Vector2(-1.0, 0.0)
+		return anchor
 	var scroll_pos: float = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
 	var stride: float = _get_normal_stride()
 	var items_per_line: int = _get_items_per_line()
 	if stride <= 0.0 or items_per_line <= 0:
-		return Vector2(-1.0, 0.0)
+		return anchor
 	if focus_index >= 0:
-		var anchor_index = mini(focus_index, _source_total_items - 1)
-		var frac = (scroll_pos - _get_slot_position_for_index(anchor_index, items_per_line, stride)) / stride
-		return Vector2(anchor_index, frac)
-	var top_line = int(floor(scroll_pos / stride))
-	var anchor_index2 = clampi(_get_first_index_for_line(top_line, items_per_line), 0, _source_total_items - 1)
-	var frac2 = (scroll_pos - top_line * stride) / stride
-	return Vector2(anchor_index2, frac2)
+		anchor.index = mini(focus_index, _source_total_items - 1)
+		anchor.frac = (scroll_pos - _get_slot_position_for_index(anchor.index, items_per_line, stride)) / stride
+	else:
+		var top_line := int(floor(scroll_pos / stride))
+		anchor.index = clampi(_get_first_index_for_line(top_line, items_per_line), 0, _source_total_items - 1)
+		anchor.frac = (scroll_pos - top_line * stride) / stride
+	if allow_end_pin:
+		_sync_geometry()
+		if scroll_pos >= _geometry.max_scroll() - 1.0:
+			anchor.edge = GridScrollAnchor.Edge.FAR
+	return anchor
 
 func _ready():
 	_setup_ui()
@@ -1461,17 +1480,8 @@ func _get_effective_grid_n() -> int:
 ## Whole lines (rows when vertical, columns when horizontal) that fit in the
 ## viewport on the scroll axis. Groundwork for paged scrolling.
 func get_lines_per_page() -> int:
-	var stride = _get_normal_stride()
-	if stride <= 0.0:
-		return 1
-	var available = _get_available_size()
-	var axis = available.y if vertical else available.x
-	var lpp = maxi(1, int((axis + grid_separation) / stride))
-	# Staggered pages must start on a full (even) row so every page has the
-	# same composition: round down to an even line count.
-	if _is_staggered_active() and lpp >= 2:
-		lpp -= lpp % 2
-	return lpp
+	_sync_geometry()
+	return _geometry.lines_per_page()
 
 # ---------------------------------------------------------------------------
 # Pagination (GRID mode only)
@@ -1498,159 +1508,107 @@ func _is_staggered_active() -> bool:
 
 ## Scroll-axis extent of one page's cards (no trailing separation).
 func _get_page_content_size() -> float:
-	return get_lines_per_page() * _get_normal_stride() - grid_separation
+	_sync_geometry()
+	return _geometry.page_content_size()
 
 ## Blank space between page groups in the scroll direction: the leftover slack
 ## plus one full stride, so the next page always starts beyond the viewport's
 ## far edge and neighbors are never visible at rest (no culling needed).
 func _get_page_gap() -> float:
-	if not _is_pagination_active():
-		return 0.0
-	var available = _get_available_size()
-	var axis = available.y if vertical else available.x
-	return (axis - _get_page_content_size()) + _get_normal_stride()
+	_sync_geometry()
+	return _geometry.page_gap()
 
 ## Scroll-axis distance from one page start to the next (page + gap).
 func _get_page_period() -> float:
-	if not _is_pagination_active():
-		return 0.0
-	return get_lines_per_page() * _get_normal_stride() + _get_page_gap()
+	_sync_geometry()
+	return _geometry.page_period()
 
 ## Scroll offset subtracted from page-start targets so each page sits centered
 ## in the viewport (blank slack split into balanced gutters on both sides).
 func _get_page_center_offset() -> float:
-	if not _is_pagination_active():
-		return 0.0
-	var available = _get_available_size()
-	var axis = available.y if vertical else available.x
-	return maxf(0.0, (axis - _get_page_content_size()) / 2.0)
+	_sync_geometry()
+	return _geometry.page_center_offset()
 
 ## Total line count (rows/columns) across all items.
 func _get_total_lines() -> int:
-	var items_per_line = _get_items_per_line()
-	if items_per_line <= 0 or _total_items <= 0:
-		return 0
-	if _is_staggered_active():
-		return _get_stagger_line_for_index(_total_items - 1) + 1
-	return ceili(float(_total_items) / items_per_line)
+	_sync_geometry()
+	return _geometry.total_lines()
 
 func _get_page_count() -> int:
-	var lpp = get_lines_per_page()
-	var total_lines = _get_total_lines()
-	if lpp <= 0 or total_lines <= 0:
-		return 1
-	return int((total_lines - 1) / lpp) + 1
+	_sync_geometry()
+	return _geometry.page_count()
 
 ## Leading blank pad before slot 0: equals the center offset so page 0's
 ## centered target lands exactly at scroll 0 instead of clamping flush-left.
 func _get_page_leading_pad() -> float:
-	return _get_page_center_offset()
+	_sync_geometry()
+	return _geometry.page_leading_pad()
 
 ## Trailing blank pad after the last line: enough for even a PARTIAL last page
 ## to reach its centered scroll target (its content plus this pad spans the
 ## same centered extent as a full page).
 func _get_page_trailing_pad() -> float:
-	if not _is_pagination_active():
-		return 0.0
-	var stride = _get_normal_stride()
-	var lpp = get_lines_per_page()
-	var total_lines = _get_total_lines()
-	if stride <= 0.0 or lpp <= 0 or total_lines <= 0:
-		return 0.0
-	var last_page = int((total_lines - 1) / lpp)
-	var lines_in_last = total_lines - last_page * lpp
-	var last_content = lines_in_last * stride - grid_separation
-	return (_get_page_content_size() - last_content) + _get_page_center_offset()
+	_sync_geometry()
+	return _geometry.page_trailing_pad()
 
 ## Snapped scroll position for page `page` (centered, clamped to range).
 ## With the leading pad in the slot transform, targets are simply k * period.
 func _get_page_scroll_target(page: int) -> float:
-	page = clampi(page, 0, _get_page_count() - 1)
-	return _clamp_scroll_to_range(page * _get_page_period())
+	_sync_geometry()
+	return _geometry.page_scroll_target(page)
 
 ## Page index containing slot `idx`.
 func _get_page_for_index(idx: int) -> int:
-	var items_per_line = _get_items_per_line()
-	if items_per_line <= 0:
-		return 0
-	return int(float(_get_line_for_index(idx, items_per_line)) / get_lines_per_page())
+	_sync_geometry()
+	return _geometry.page_for_index(idx)
 
 # --- Staggered rows ---------------------------------------------------------
-# In staggered mode (vertical GRID only) rows alternate capacities: even rows
-# hold N cards, odd rows hold N-1 and start half a stride to the right via a
-# leading half-cell spacer in the flow. All scroll-axis math stays line-based
-# (uniform row stride); only the index<->line mapping changes.
+# The stagger math itself lives in GridGeometry; these facades keep the call
+# sites (and tests) stable.
 
 ## Items in one full two-row stagger unit (N even-row + N-1 odd-row).
 func _get_stagger_pair_count() -> int:
-	return maxi(1, 2 * _get_items_per_line() - 1)
+	_sync_geometry()
+	return _geometry.stagger_pair_count()
 
 func _get_stagger_line_for_index(idx: int) -> int:
-	var n = _get_items_per_line()
-	var pair = _get_stagger_pair_count()
-	var unit = int(idx / pair)
-	var rem = idx - unit * pair
-	return unit * 2 + (0 if rem < n else 1)
+	_sync_geometry()
+	return _geometry.stagger_line_for_index(idx)
 
 ## Cards on a staggered row (N on even rows, N-1 on offset/odd rows).
 func _get_stagger_line_capacity(line: int) -> int:
-	return _get_items_per_line() - (1 if line % 2 == 1 else 0)
+	_sync_geometry()
+	return _geometry.stagger_line_capacity(line)
 
 func _get_stagger_first_index_for_line(line: int) -> int:
-	var pair = _get_stagger_pair_count()
-	var unit = int(line / 2)
-	return unit * pair + (_get_items_per_line() if line % 2 == 1 else 0)
+	_sync_geometry()
+	return _geometry.stagger_first_index_for_line(line)
 
 ## Line an item sits on (uniform mapping unless staggered).
 func _get_line_for_index(idx: int, items_per_line: int = -1) -> int:
-	if _is_staggered_active():
-		return _get_stagger_line_for_index(idx)
-	if items_per_line < 0:
-		items_per_line = _get_items_per_line()
-	return int(float(idx) / items_per_line)
+	_sync_geometry()
+	return _geometry.line_for_index(idx, items_per_line)
 
 ## First item index of a line (uniform mapping unless staggered).
 func _get_first_index_for_line(line: int, items_per_line: int = -1) -> int:
-	if _is_staggered_active():
-		return _get_stagger_first_index_for_line(line)
-	if items_per_line < 0:
-		items_per_line = _get_items_per_line()
-	return line * items_per_line
+	_sync_geometry()
+	return _geometry.first_index_for_line(line, items_per_line)
 
 ## Inverse of the (page-gapped) slot position transform.
 func _get_line_for_scroll_pos(pos: float) -> int:
-	var stride = _get_normal_stride()
-	if stride <= 0.0:
-		return 0
-	if not _is_pagination_active():
-		return int(pos / stride)
-	var lpp = get_lines_per_page()
-	var period = _get_page_period()
-	if period <= 0.0:
-		return int(pos / stride)
-	var rel = pos - _get_page_leading_pad()
-	if rel <= 0.0:
-		return 0
-	var page = int(rel / period)
-	var rem = rel - page * period
-	# A position inside the gap clamps to the last line of that page.
-	var line_in_page = mini(int(rem / stride), lpp - 1)
-	return page * lpp + maxi(0, line_in_page)
+	_sync_geometry()
+	return _geometry.line_for_scroll(pos)
 
 ## Scroll-axis position of the end of the last line, including the trailing
 ## pad that lets partial last pages center (no trailing page gap).
 func _get_content_end_position() -> float:
-	if _total_items <= 0:
-		return 0.0
-	return _get_slot_position_for_index(_total_items - 1) + _get_normal_stride() + _get_page_trailing_pad()
+	_sync_geometry()
+	return _geometry.content_end()
 
 ## Nearest snapped page target to `pos`.
 func _snap_to_page_target(pos: float) -> float:
-	var period = _get_page_period()
-	if period <= 0.0:
-		return pos
-	var page = clampi(int(round(pos / period)), 0, _get_page_count() - 1)
-	return page * period
+	_sync_geometry()
+	return _geometry.snap_to_page_target(pos)
 
 ## Pushes the snap period/offset to the scroll container and re-aligns the
 ## current scroll to a page target. Called after layout recalcs so the view
@@ -1908,12 +1866,11 @@ func _recalculate_layout():
 	# Resolve the scroll anchor for this recalc. Prefer the snapshot taken by
 	# _set_grid_n_silent BEFORE items-per-line changed (zoom path); otherwise
 	# capture inline, which is correct because N is unchanged in that case.
-	var anchor: Vector2 = _scroll_anchor
-	_scroll_anchor = Vector2(-1.0, 0.0)
-	if anchor.x < 0.0:
-		anchor = _capture_scroll_anchor(saved_focus_index)
-	var anchor_index: int = int(anchor.x)
-	var anchor_frac: float = anchor.y
+	# Inline captures (resize, library shrink) may pin to the content end.
+	var anchor: GridScrollAnchor = _scroll_anchor
+	_scroll_anchor = null
+	if anchor == null or not anchor.valid():
+		anchor = _capture_scroll_anchor(saved_focus_index, true)
 
 	var current_zoom = _calculate_zoom()
 	var base_dims = _get_base_dimensions_for_mode()
@@ -2049,10 +2006,13 @@ func _recalculate_layout():
 	# forces a full card rebuild). The clamp uses computed content-end math,
 	# never the live scrollbar range (which is stale until end-of-frame sort).
 	var restored_scroll: float = -1.0
-	if anchor_index >= 0:
+	if anchor.valid():
 		var new_stride: float = _cached_normal_stride
 		var new_ipl: int = _cached_items_per_line
 		if new_stride > 0.0 and new_ipl > 0:
+			var overflow_axis: float = _get_focus_overflow().y if vertical else _get_focus_overflow().x
+			var viewport_axis: float = available.y if vertical else available.x
+			var max_scroll: float = maxf(0.0, _get_content_end_position() + 2.0 * overflow_axis - viewport_axis)
 			var new_scroll: float
 			if _is_pagination_active():
 				# Pages rest snapped: restore directly to the anchor's page
@@ -2063,19 +2023,21 @@ func _recalculate_layout():
 				# from the guarded anchor write, get echo-skipped, or be yanked
 				# back by the guard's deferred corrective — the page then
 				# rested off-center.
-				new_scroll = _get_page_scroll_target(_get_page_for_index(anchor_index))
+				new_scroll = _get_page_scroll_target(_get_page_for_index(anchor.index))
+			elif anchor.edge == GridScrollAnchor.Edge.FAR:
+				# Pinned to the content end at capture (inline resize / library
+				# shrink with the view at the bottom): keep the end in view.
+				new_scroll = max_scroll
 			else:
-				new_scroll = _get_slot_position_for_index(anchor_index, new_ipl, new_stride) + anchor_frac * new_stride
-			var overflow_axis: float = _get_focus_overflow().y if vertical else _get_focus_overflow().x
-			var viewport_axis: float = available.y if vertical else available.x
-			var max_scroll: float = maxf(0.0, _get_content_end_position() + 2.0 * overflow_axis - viewport_axis)
+				new_scroll = _get_slot_position_for_index(anchor.index, new_ipl, new_stride) + anchor.frac * new_stride
 			new_scroll = clampf(new_scroll, 0.0, max_scroll)
 			# Keep the focused card inside the viewport in the NEW geometry. The
 			# anchor preserves its scroll-relative position, which can strand it
 			# fully offscreen when the stride grows past the viewport (zoom-in).
 			# Computed math only — never the live scrollbar range. In paginated
-			# mode the focus card shares the anchor page by construction.
-			if not _is_pagination_active() and saved_focus_index >= 0 and saved_focus_index < _source_total_items:
+			# mode the focus card shares the anchor page by construction, and an
+			# end-pinned restore deliberately leaves an offscreen focus alone.
+			if not _is_pagination_active() and anchor.edge != GridScrollAnchor.Edge.FAR and saved_focus_index >= 0 and saved_focus_index < _source_total_items:
 				var focus_slot := _get_slot_position_for_index(saved_focus_index, new_ipl, new_stride)
 				var edge_margin := float(grid_separation)
 				if focus_slot - edge_margin < new_scroll:
@@ -2086,7 +2048,7 @@ func _recalculate_layout():
 			restored_scroll = new_scroll
 			var zb_cur: float = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
 			if debug_mode:
-				if DEBUG_LOG: print("[Grid] anchor restore: idx=", anchor_index, " frac=", anchor_frac, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
+				if DEBUG_LOG: print("[Grid] anchor restore: idx=", anchor.index, " frac=", anchor.frac, " edge=", anchor.edge, " ipl=", new_ipl, " stride=", new_stride, " scroll ", zb_cur, " -> ", new_scroll, " max=", max_scroll)
 
 	var _active_before: int = _active_cards.size()
 	var _first_before: int = -1
@@ -4762,12 +4724,13 @@ func update_cached_game(game: GameResource) -> void:
 func _clamp_scroll_to_range(offset: float) -> float:
 	if not _scroll_container:
 		return offset
+	_sync_geometry()
 	if _is_pagination_active():
 		# Clamp against the page composition instead of the live scrollbar range:
 		# the scrollbar's max is stale while a layout recalc's margin changes are
 		# still propagating, which let zoom snaps clamp to (or get undone to)
 		# positions between pages.
-		return clampf(offset, 0.0, (_get_page_count() - 1) * _get_page_period())
+		return _geometry.clamp_to_range(offset)
 	# Clamp against COMPUTED content end, never the live scrollbar: the
 	# scrollbar's max is stale for a frame after a library shrink / rebuild
 	# (it updates on the next sort), and a stale-large max lets out-of-range
@@ -4778,11 +4741,7 @@ func _clamp_scroll_to_range(offset: float) -> float:
 		if not fallback_sb:
 			return offset
 		return clampf(offset, fallback_sb.min_value, maxf(fallback_sb.min_value, fallback_sb.max_value - fallback_sb.page))
-	var available := _get_available_size()
-	var viewport_axis: float = available.y if vertical else available.x
-	var overflow_axis: float = _get_focus_overflow().y if vertical else _get_focus_overflow().x
-	var max_scroll: float = maxf(0.0, _get_content_end_position() + 2.0 * overflow_axis - viewport_axis)
-	return clampf(offset, 0.0, max_scroll)
+	return _geometry.clamp_to_range(offset)
 
 func _get_current_scroll_pos() -> float:
 	if not _scroll_container:
@@ -4809,79 +4768,16 @@ func get_centered_scroll_for_index(idx: int) -> float:
 	"""Scroll position that places the center of slot `idx` at the viewport
 	center (clamped to the scrollable range). Cards grow around their center
 	when focused, so the unfocused card_size is the correct centering basis."""
-	if _is_pagination_active():
-		# Page alignment wins over centering when paginated.
-		return _get_page_scroll_target(_get_page_for_index(idx))
-	var slot_pos := _get_slot_position_for_index(idx)
-	var focus_overflow := _get_focus_overflow()
-	var available := _get_available_size()
-	var offset: float
-	if vertical:
-		offset = slot_pos + focus_overflow.y + card_size.y / 2.0 - available.y / 2.0
-	else:
-		offset = slot_pos + focus_overflow.x + card_size.x / 2.0 - available.x / 2.0
-	return _clamp_scroll_to_range(offset)
+	_sync_geometry()
+	return _clamp_scroll_to_range(_geometry.center_offset(idx))
 
 func get_follow_focus_scroll_target(idx: int) -> float:
 	"""Where to scroll when card `idx` gains focus, honoring the centering mode.
 	Both modes are edge-triggered: no scroll happens until the focused card's
 	visual bounds (including its focus scale-up) cross a thin margin at a
 	viewport edge. Returns the current scroll position when no scroll is needed."""
-	if _is_pagination_active():
-		# Page alignment wins over centering: focus moves within the current
-		# page need no scroll; crossing a boundary jumps to the new page.
-		return _get_page_scroll_target(_get_page_for_index(idx))
-	var current := _get_current_scroll_pos()
-	var slot_pos := _get_slot_position_for_index(idx)
-	var focus_overflow := _get_focus_overflow()
-	var available := _get_available_size()
-
-	var card_start: float
-	var card_end: float
-	var viewport_axis: float
-	var overflow_axis: float
-	if vertical:
-		card_start = slot_pos + focus_overflow.y
-		card_end = card_start + card_size.y
-		viewport_axis = available.y
-		overflow_axis = focus_overflow.y
-	else:
-		card_start = slot_pos + focus_overflow.x
-		card_end = card_start + card_size.x
-		viewport_axis = available.x
-		overflow_axis = focus_overflow.x
-
-	# Visual bounds of the focused card (it grows around its center).
-	var visual_start := card_start - overflow_axis
-	var visual_end := card_end + overflow_axis
-
-	# Thin trigger margin: flush-plus-grid_separation from each viewport edge.
-	var margin := float(grid_separation)
-	var view_start := current + margin
-	var view_end := current + viewport_axis - margin
-
-	# On cramped screens the focused card (including its grow overflow) plus
-	# both margins can exceed the viewport, making both-edge containment
-	# impossible. Without a stability out, the MARGIN branch below ping-pongs
-	# between top-align and bottom-align on every same-row focus hop.
-	var fits := (visual_end - visual_start) <= viewport_axis - 2.0 * margin
-	if fits:
-		if visual_start >= view_start and visual_end <= view_end:
-			return current
-	elif absf(visual_start - view_start) < 1.0 or absf(visual_end - view_end) < 1.0:
-		# Doesn't fit: stable once either edge is flush.
-		return current
-
-	if _focus_centering_mode == FocusCentering.CENTER:
-		return get_centered_scroll_for_index(idx)
-
-	# MARGIN: minimal scroll — slide the card just back inside the margin.
-	var target := current
-	if visual_start < view_start:
-		target = visual_start - margin
-	elif visual_end > view_end:
-		target = visual_end + margin - viewport_axis
-	return _clamp_scroll_to_range(target)
+	_sync_geometry()
+	return _clamp_scroll_to_range(_geometry.reveal_offset(idx, _get_current_scroll_pos(), float(grid_separation), _focus_centering_mode == FocusCentering.CENTER))
 
 func _on_follow_focus_target_request(control: Control) -> float:
 	"""Provider callback for SmoothScrollContainer follow-focus scrolling.
