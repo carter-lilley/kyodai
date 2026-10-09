@@ -4,7 +4,7 @@ xemu raw hdd save sync
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 no cemu save sync?
-
+retroarch unknown ver.?
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs
 	- user/identity profile resolver for emulator installs and saves

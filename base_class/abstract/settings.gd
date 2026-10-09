@@ -69,6 +69,9 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Internal platform sync settings (not displayed in auto-generated menu)
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 
+# Internal shuffler preferences (set from the shuffler config dialog)
+@export var shuffler_platform_balance := SettingsVar.new(Type.INT, 50, State.INTERNAL, "Shuffler: Platform Balance", "How evenly platforms are represented in the shuffle bag: 0% is proportional to library size, 100% is equal shares", 0.0, 100.0, 5.0)
+
 # Internal card effect configuration (managed by Card Designer)
 @export var card_effect_config := _preset(SettingsVar.new(Type.DICTIONARY, {
 	"card_orientation": 2,

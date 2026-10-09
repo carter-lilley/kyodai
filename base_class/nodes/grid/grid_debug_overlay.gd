@@ -3,8 +3,8 @@ extends Node
 
 ## Debug/audit tooling for VirtualScrollGridContainer: debug-mode card panels,
 ## zoomed-out debug camera, flow panel outline, and the frame-post-draw audits
-## (DrawAudit stamp-vs-formula, FlickerWatch stamp-vs-reality, RsAudit,
-## GridInv, VisHole). Pure introspection: READS grid state via the backref but
+## (DrawAudit stamp-vs-formula, RsAudit, GridInv, VisHole).
+## Pure introspection: READS grid state via the backref but
 ## never writes it (writes go through the grid's own methods).
 
 const DEBUG_LOG: bool = false
@@ -22,31 +22,10 @@ var _debug_style_buffer_loading: StyleBoxFlat
 
 var _drawaudit_last_deltas: Dictionary = {}
 
-## Env-gated flicker detector (KYODAI_FLICKER_WATCH=1). Unlike the debug-mode
-## DrawAudit (stamp vs the offset FORMULA — self-consistent by construction),
-## this compares each visible card's stamped visual origin against its REAL
-## on-screen position (global_position minus the layer origin). That is the
-## ground truth the user sees: any frame where the visual layer is detached
-## from the actual content is a flicker, regardless of which inputs fed it.
-## Threshold 2px absorbs the designed <=0.5px float-glide vs int-content and
-## the focus-scale pivot correction.
-var _flicker_key: int = -1
-var _flicker_announced := false
-
 func setup(grid: VirtualScrollGridContainer) -> void:
 	_grid = grid
 
-func _ready() -> void:
-	# The flicker watcher (stamp vs REAL on-screen position) is ON BY DEFAULT so
-	# editor runs catch detached-visual frames without any setup; set
-	# KYODAI_FLICKER_WATCH=0 to disable.
-	if OS.get_environment("KYODAI_FLICKER_WATCH") != "0":
-		if not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_reality_check):
-			RenderingServer.frame_post_draw.connect(_on_frame_post_draw_reality_check)
-
 func _exit_tree() -> void:
-	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_reality_check):
-		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_reality_check)
 	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
 		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)
 
@@ -275,125 +254,6 @@ func _on_frame_post_draw_audit() -> void:
 		if delta_key != last_delta:
 			_drawaudit_last_deltas[worst_idx] = delta_key
 			if DEBUG_LOG: print("[DrawAudit] MISMATCH: worst=", worst, " idx=", worst_idx, " stamp=", worst_stamp, " exp=", worst_exp, " scroll=", _grid._scroll_container.scroll_vertical if _grid.vertical else _grid._scroll_container.scroll_horizontal, " margin=", _grid._last_margin_top if _grid.vertical else _grid._last_margin_left, " first=", _grid._active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_grid._active_cards[0]) else -1, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
-
-func _on_frame_post_draw_reality_check() -> void:
-	if not _grid._card_has_sync_visual_offset or not _grid._scroll_container or not _grid._visual_sync.layer:
-		return
-	if not _flicker_announced:
-		_flicker_announced = true
-		print("[FlickerWatch] active on grid=", _grid.name, " view=", _grid.get_parent().get_parent().get_parent().name if _grid.get_parent() and _grid.get_parent().get_parent() and _grid.get_parent().get_parent().get_parent() else "?")
-	if _grid._active_cards.size() == 0:
-		return
-	var layer_origin := _grid._visual_sync.layer.global_position
-	var worst := 0.0
-	var worst_idx := -1
-	var worst_kind := ""
-	var worst_a := Vector2.ZERO
-	var worst_b := Vector2.ZERO
-	for card in _grid._active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		if card.get("_visuals_position_synced") != true:
-			continue
-		var lt_v = card.get("_last_visual_transform")
-		if not lt_v is Transform2D:
-			continue
-		var stamp: Vector2 = lt_v.origin
-		var real: Vector2 = card.global_position - layer_origin
-		var exp: Vector2 = _grid._visual_sync.compute_offset(card)
-		var cs_v = card.get("content_scale")
-		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
-		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
-			real += pivot - cs * pivot
-			exp += pivot - cs * pivot
-		# (a) visual layer detached from the real content.
-		var d_vis := stamp.distance_to(real)
-		if d_vis > worst:
-			worst = d_vis
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_kind = "VISUAL-vs-CONTENT"
-			worst_a = stamp
-			worst_b = real
-		# (b) content detached from the deterministic expectation (margin/chain
-		# lag): the whole card jumps even though the visual layer tracks it.
-		var d_exp := real.distance_to(exp)
-		if d_exp > worst:
-			worst = d_exp
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_kind = "CONTENT-vs-EXPECTED"
-			worst_a = real
-			worst_b = exp
-		# (c) STALE COVER: the visible card's texture belongs to a different
-		# game than the card currently shows — the classic recycle flash where
-		# the previous game's art lingers for a frame (or the skeleton shows).
-		if card.has_meta("virtual_index"):
-			var game_v = card.get("game")
-			var tex_id: String = card.get("_current_texture_game_id") if card.get("_current_texture_game_id") != null else ""
-			if game_v != null and tex_id != "" and game_v.id != tex_id:
-				var skey := 500000000 + int(card.get_meta("virtual_index", -1))
-				if skey != _flicker_key:
-					_flicker_key = skey
-					print("[FlickerWatch] STALE-COVER: idx=", card.get_meta("virtual_index", -1),
-						" mode=", _grid.view_mode,
-						" game=", game_v.id, " (", game_v.title, ")",
-						" texture_for=", tex_id,
-						" needs_setup=", card.has_meta("needs_visual_setup"),
-						" loading=", card.get("_media_loading"),
-						" scroll_float=", _grid._scroll_container.get_scroll_float(),
-						" gen=", _grid._layout_generation,
-						" frame=", Engine.get_process_frames(),
-						" t=", Time.get_ticks_msec())
-			elif game_v != null and card.has_meta("needs_visual_setup"):
-				# Revealed (visible) before its data was applied: skeleton/blank.
-				var rkey := 600000000 + int(card.get_meta("virtual_index", -1))
-				if rkey != _flicker_key:
-					_flicker_key = rkey
-					print("[FlickerWatch] REVEALED-NO-DATA: idx=", card.get_meta("virtual_index", -1),
-						" mode=", _grid.view_mode,
-						" game=", game_v.id,
-						" scroll_float=", _grid._scroll_container.get_scroll_float(),
-						" gen=", _grid._layout_generation,
-						" frame=", Engine.get_process_frames(),
-						" t=", Time.get_ticks_msec())
-			# (d) PLACEHOLDER-VISIBLE: data applied but the cover hasn't landed —
-			# the shimmer/blank flash during fast recycling ("images loading in").
-			elif game_v != null:
-				var cur_tex = card.get("_current_texture")
-				var loading_tex = card.get("_loading_texture")
-				var is_loading_state: bool = card.get("_media_loading") if card.get("_media_loading") != null else false
-				if cur_tex != null and loading_tex != null and cur_tex == loading_tex:
-					var pkey := 700000000 + int(card.get_meta("virtual_index", -1))
-					if pkey != _flicker_key:
-						_flicker_key = pkey
-						print("[FlickerWatch] PLACEHOLDER-VISIBLE: idx=", card.get_meta("virtual_index", -1),
-							" mode=", _grid.view_mode,
-							" game=", game_v.id,
-							" shimmer=", is_loading_state,
-							" scroll_float=", _grid._scroll_container.get_scroll_float(),
-							" gen=", _grid._layout_generation,
-							" frame=", Engine.get_process_frames(),
-							" t=", Time.get_ticks_msec())
-	if worst > 2.0:
-		var key := int(round(worst * 2.0)) * 100000 + worst_idx
-		if key != _flicker_key:
-			_flicker_key = key
-			var center_pos: Vector2 = _grid._center_container.position if _grid._center_container else Vector2.ZERO
-			var flow_pos: Vector2 = _grid._flow_container.position if _grid._flow_container else Vector2.ZERO
-			print("[FlickerWatch] ", worst_kind, ": worst=", worst,
-				" idx=", worst_idx,
-				" mode=", _grid.view_mode,
-				" a=", worst_a,
-				" b=", worst_b,
-				" scroll_float=", _grid._scroll_container.get_scroll_float(),
-				" scroll_int=", _grid._scroll_container.scroll_vertical if _grid.vertical else _grid._scroll_container.scroll_horizontal,
-				" margin(L/T)=", _grid._last_margin_left, "/", _grid._last_margin_top,
-				" center.pos=", center_pos,
-				" flow.pos=", flow_pos,
-				" card.pos=", _grid._active_cards_by_index.get(worst_idx).position if _grid._active_cards_by_index.get(worst_idx) else Vector2.ZERO,
-				" gen=", _grid._layout_generation,
-				" frame=", Engine.get_process_frames(),
-				" t=", Time.get_ticks_msec())
 
 func audit_structure(tag: String) -> void:
 	if not _grid.debug_mode:

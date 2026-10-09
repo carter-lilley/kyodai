@@ -17,6 +17,7 @@ var _toggle_all_button: M3Button
 var _bag_size_slider: M3Slider
 var _round_time_min_slider: M3Slider
 var _round_time_max_slider: M3Slider
+var _balance_slider: M3Slider
 
 # Paging: 0 = Setup (platforms + controls), 1 = Filters
 var _page: int = 0
@@ -138,6 +139,29 @@ func _build_content() -> void:
 	time_hbox.add_child(max_vbox)
 	
 	vbox.add_child(time_hbox)
+	
+	# Balance platforms section
+	vbox.add_child(_create_section_label("Balance Platforms"))
+	
+	_balance_slider = M3Slider.new()
+	_balance_slider.min_value = 0
+	_balance_slider.max_value = 100
+	_balance_slider.step = 5
+	_balance_slider.value = _get_platform_balance_setting()
+	_balance_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_balance_slider)
+	
+	var balance_value_label = _create_value_label(_format_balance_value(_balance_slider.value))
+	_balance_slider.value_changed.connect(func(v):
+		balance_value_label.text = _format_balance_value(v)
+		_on_balance_changed(int(v))
+	)
+	vbox.add_child(balance_value_label)
+	
+	var balance_hint = _create_sub_label("How evenly platforms are represented in the shuffle bag. 0% is proportional to library size; 100% gives every platform an equal share.")
+	balance_hint.use_on_surface_variant = true
+	balance_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(balance_hint)
 	
 	# Platforms section
 	var platforms_header = HBoxContainer.new()
@@ -455,6 +479,26 @@ func _get_enabled_platforms() -> Dictionary:
 		return setting.value
 	return {}
 
+func _get_platform_balance_setting() -> int:
+	var setting = DataManager.get_setting("shuffler_platform_balance")
+	if setting and (setting.value is int or setting.value is float):
+		return clampi(int(setting.value), 0, 100)
+	return 50
+
+func _format_balance_value(value: float) -> String:
+	var pct := int(value)
+	if pct <= 0:
+		return "0% · Proportional"
+	if pct >= 100:
+		return "100% · Equal"
+	return str(pct) + "%"
+
+func _on_balance_changed(value: int) -> void:
+	var setting = DataManager.get_setting("shuffler_platform_balance")
+	if setting:
+		# Written on every drag tick, but only saved to disk on dismiss.
+		DataManager.set_setting(value, setting)
+
 func _on_toggle_all_pressed() -> void:
 	var all_selected = _selected_platforms.size() == _platform_cards.size() and _platform_cards.size() > 0
 	for slug in _platform_cards:
@@ -498,12 +542,15 @@ func _on_start_pressed() -> void:
 		"round_time_min": min_time,
 		"round_time_max": max_time,
 		"filters": _filters_panel.get_active_filters() if _filters_panel else {},
+		"platform_balance": int(_balance_slider.value) if _balance_slider else 50,
 	}
 	
 	dismiss()
 	start_session_requested.emit(config)
 
 func dismiss() -> void:
+	# Persist the balance slider (set_setting only marks it dirty).
+	DataManager.save_settings()
 	_return_all_cards()
 	super.dismiss()
 

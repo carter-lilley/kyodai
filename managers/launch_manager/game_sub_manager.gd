@@ -10,6 +10,11 @@ const _SigilRunner = preload("res://utils/identity/sigil_runner.gd")
 
 var launch_manager: Node
 
+## One-shot awaitable used by _await_extraction so it can wake on either the
+## extraction_completed signal or the timeout timer, whichever fires first.
+class _ExtractionWaiter:
+	signal done
+
 # Set by _prepare_game_for_launch to the final ROM path used during preparation.
 # LaunchManager reads this after calling prepare_game_for_shuffler() to update bag entries.
 var _last_prepared_rom_path: String = ""
@@ -616,25 +621,29 @@ func _locate_xenia_archive(game: GameResource) -> String:
 ## signal + SceneTreeTimer instead of polling process_frame, so large
 ## extractions don't burn a frame every tick. Disconnects on match or timeout.
 func _await_extraction(item_id: String, log_tag: String, timeout_sec: float = 1800.0) -> bool:
-	var tracker := {"complete": false, "success": false}
-	# Declared before assignment so the lambda can reference itself for disconnect.
-	var on_complete := Callable()
-	on_complete = func(completed_item_id: String, success: bool, _message: String):
+	var waiter := _ExtractionWaiter.new()
+	# The callable lives in the tracker Dictionary: lambdas capture locals by
+	# value, so a captured Callable variable would stay null inside the lambda.
+	var tracker := {"complete": false, "success": false, "cb": Callable()}
+	tracker.cb = func(completed_item_id: String, success: bool, _message: String):
 		if completed_item_id != item_id:
 			return
 		tracker.complete = true
 		tracker.success = success
 		if DEBUG_LOG: print("[%s] Extraction callback - success=%s" % [log_tag, str(success)])
 		# Disconnect once matched so we don't keep listening for other items.
-		if SystemManager.download.extraction_completed.is_connected(on_complete):
-			SystemManager.download.extraction_completed.disconnect(on_complete)
+		SystemManager.download.extraction_completed.disconnect(tracker.cb)
+		waiter.done.emit()
 
-	SystemManager.download.extraction_completed.connect(on_complete)
-	await get_tree().create_timer(timeout_sec).timeout
+	SystemManager.download.extraction_completed.connect(tracker.cb)
+	# Wake on timeout too; if the callback already fired, this emit is a no-op
+	# since nobody is still awaiting the waiter.
+	get_tree().create_timer(timeout_sec).timeout.connect(func(): waiter.done.emit())
+	await waiter.done
 
 	if not tracker.complete:
-		if SystemManager.download.extraction_completed.is_connected(on_complete):
-			SystemManager.download.extraction_completed.disconnect(on_complete)
+		if SystemManager.download.extraction_completed.is_connected(tracker.cb):
+			SystemManager.download.extraction_completed.disconnect(tracker.cb)
 		push_error("[%s] Extraction timed out after %d minutes" % [log_tag, int(timeout_sec / 60.0)])
 		return false
 

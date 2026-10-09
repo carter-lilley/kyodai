@@ -572,6 +572,27 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	if not _try_begin_launch(game):
 		return
 
+	# Never launch while any part of this game is still downloading: multi-disc
+	# games would launch with a partial/incomplete disc set, and single-disc
+	# games would just re-attach to the in-flight download and appear broken.
+	# Tell the user instead. Placed before game_launch_initiated so a blocked
+	# launch produces no overlay, sound, or focus changes.
+	if game.source != "gamenative" and SystemManager.download.is_game_download_in_progress(game):
+		var summary: Dictionary = SystemManager.download.get_game_download_summary(game)
+		var msg := game.get_display_name() + " is still downloading"
+		if int(summary.get("discs_total", 0)) > 1:
+			msg += " (disc %d/%d, %d%%)" % [
+				mini(int(summary.discs_done) + 1, int(summary.discs_total)),
+				int(summary.discs_total),
+				int(float(summary.progress) * 100),
+			]
+		else:
+			msg += " (%d%%)" % int(float(summary.progress) * 100)
+		print("[LaunchManager] " + msg + " - launch blocked")
+		SystemManager.notifications.show_notification(msg + " - launch when it finishes", SystemManager.notifications.Type.INFO)
+		_end_launch(game.romm_id)
+		return
+
 	# Emit signal immediately so focus can be saved before any suspension happens
 	print("[LaunchManager] Emitting game_launch_initiated signal")
 	game_launch_initiated.emit(game, focus_index)

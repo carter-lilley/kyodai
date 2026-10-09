@@ -42,6 +42,7 @@ class QueueItem:
 	var update_game_resource: bool = true  # If false, skip DataManager.update_game() on completion
 	var extracted_count: int = 0  # Files extracted so far
 	var total_count: int = 0  # Total files in archive
+	var group_id: String = ""  # Non-empty for multi-disc batch downloads: per-item notifications are folded into one group notification
 
 # Unified queue
 var _queue: Array[QueueItem] = []
@@ -553,6 +554,7 @@ func _ready():
 	if DataManager:
 		DataManager.setting_changed.connect(_on_setting_changed)
 	download_completed.connect(_on_completion_watcher)
+	download_completed.connect(_on_group_download_completed)
 	Performance.add_custom_monitor("download/image_active", _get_image_active_count)
 	Performance.add_custom_monitor("download/image_pending", _get_image_pending_count)
 
@@ -636,7 +638,7 @@ func _stop_foreground_service():
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)
 ## Returns the item ID or empty string if failed
-func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true, suppress_sound: bool = false) -> String:
+func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true, suppress_sound: bool = false, group_id: String = "") -> String:
 	# Generate unique ID
 	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
 
@@ -667,6 +669,7 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	item.suppress_notification = suppress_notification
 	item.suppress_sound = suppress_sound
 	item.update_game_resource = update_game_resource
+	item.group_id = group_id
 
 	# Store expected file size for progress tracking
 	item.expected_file_size = expected_file_size
@@ -726,8 +729,10 @@ func queue_game_download(game: GameResource, on_all_complete: Callable = Callabl
 			if on_all_complete.is_valid():
 				on_all_complete.call(true)
 			return
-		SystemManager.notifications.show_notification("Queued " + str(missing.size()) + " disc(s) for " + game.get_display_name(), SystemManager.notifications.Type.INFO)
-		queue_disc_files(game, missing, platform_dir, true, false, Callable(), on_all_complete)
+		# Multi-disc batches get one unified progress notification instead of
+		# one snackbar per disc (see _create_download_group).
+		var group_id := _create_download_group(game, missing, false)
+		queue_disc_files(game, missing, platform_dir, true, false, Callable(), on_all_complete, false, group_id)
 		return
 
 	_queue_disc_entry(game, {
@@ -742,7 +747,7 @@ func queue_game_download(game: GameResource, on_all_complete: Callable = Callabl
 ## Queues downloads for a set of disc entries (from GameResource.get_disc_entries)
 ## into dest_dir. on_entry_done(entry, success) fires per disc;
 ## on_all_done(success) fires once when every disc has settled.
-func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: String, update_game_resource: bool, suppress_notification: bool = false, on_entry_done: Callable = Callable(), on_all_done: Callable = Callable(), suppress_sound: bool = false) -> void:
+func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: String, update_game_resource: bool, suppress_notification: bool = false, on_entry_done: Callable = Callable(), on_all_done: Callable = Callable(), suppress_sound: bool = false, group_id: String = "") -> void:
 	if entries.is_empty():
 		if on_all_done.is_valid():
 			on_all_done.call(true)
@@ -757,19 +762,20 @@ func queue_disc_files(game: GameResource, entries: Array[Dictionary], dest_dir: 
 				on_entry_done.call(entry, success)
 			if state.pending <= 0 and on_all_done.is_valid():
 				on_all_done.call(not state.failed)
-		_queue_disc_entry(game, entry, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
+		_queue_disc_entry(game, entry, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound, group_id)
 
-func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable = Callable(), suppress_sound: bool = false) -> void:
+func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable = Callable(), suppress_sound: bool = false, group_id: String = "") -> void:
 	var disc_id: int = entry["id"]
 	var file_name: String = entry["file_name"]
 	# Sibling file names from sync lack an extension (fs_name_no_ext) until full
 	# details are fetched; resolve the real file name before queueing.
 	if file_name != "" and file_name.contains("."):
-		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
+		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound, group_id)
 		return
 	SystemManager.network.fetch_game_details(disc_id, func(data: Dictionary, error: String):
 		if error != "" or not data.has("fs_name"):
 			SystemManager.notifications.show_notification("Failed to fetch disc info for " + game.get_display_name() + ": " + error, SystemManager.notifications.Type.ERROR)
+			_settle_group_disc(group_id, disc_id, false, file_name)
 			if on_done.is_valid():
 				on_done.call(false)
 			return
@@ -782,10 +788,10 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 				game.siblings[i]["file_size"] = file_size
 				DataManager.update_game_siblings(game.romm_id, game.siblings)
 				break
-		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound)
+		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound, group_id)
 	)
 
-func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable, suppress_sound: bool = false) -> void:
+func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable, suppress_sound: bool = false, group_id: String = "") -> void:
 	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
 	var destination_path = dest_dir + "/" + file_name
 	# Never blindly redownload: a complete archive already on disk only needs its
@@ -797,35 +803,225 @@ func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_si
 			if DEBUG_LOG: print("[SystemManager.download] File already on disk, marking downloaded instead of redownloading: " + destination_path)
 			# Per-row truth: stamp the variant's own row + rebuild group cache.
 			DataManager.record_variant_download(game, disc_id, destination_path)
-			if not suppress_notification:
+			if not suppress_notification and group_id == "":
 				SystemManager.notifications.show_notification(game.get_display_name() + " is already downloaded", SystemManager.notifications.Type.INFO)
 			# No QueueItem exists on this path, but listeners (HomeView) still need
 			# to refresh; synthesized IDs are ignored by item-based consumers.
 			download_completed.emit("ondisk_" + str(disc_id) + "_" + str(Time.get_ticks_msec()), true, destination_path)
+			_settle_group_disc(group_id, disc_id, true)
 			on_done.call(true)
 			return
-	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource, suppress_sound)
+	var item_id = queue_download(download_url, destination_path, "game", game.get_display_name(), false, "", game, {}, disc_id, true, suppress_notification, file_size, update_game_resource, suppress_sound, group_id)
 	if item_id == "":
+		# queue_download rejects duplicates with "" - if this disc is already
+		# queued/downloading (e.g. user re-launched mid-batch), attach to the
+		# in-flight item instead of reporting a bogus failure.
+		var existing_id := _find_item_id_by_url(download_url)
+		if existing_id != "":
+			if DEBUG_LOG: print("[SystemManager.download] Disc already in flight, attaching watcher: " + file_name)
+			_register_group_item(group_id, existing_id, disc_id, file_size)
+			if on_done.is_valid():
+				if not _completion_watchers.has(existing_id):
+					_completion_watchers[existing_id] = []
+				_completion_watchers[existing_id].append(on_done)
+			return
 		if not suppress_notification:
 			SystemManager.notifications.show_notification("Failed to queue download: " + file_name, SystemManager.notifications.Type.ERROR)
+		_settle_group_disc(group_id, disc_id, false, file_name)
 		if on_done.is_valid():
 			on_done.call(false)
 		return
+	_register_group_item(group_id, item_id, disc_id, file_size)
 	if on_done.is_valid():
-		_completion_watchers[item_id] = on_done
+		if not _completion_watchers.has(item_id):
+			_completion_watchers[item_id] = []
+		_completion_watchers[item_id].append(on_done)
 
 # Item completion watchers for batched disc downloads (queue_disc_files). The
 # download_completed signal fires after game-resource updates and the m3u hook
 # on success, and on every failure path, so watchers always settle.
-var _completion_watchers: Dictionary = {}  # item_id -> Callable
+var _completion_watchers: Dictionary = {}  # item_id -> Array[Callable]
+
+# Multi-disc download groups: one pinned notification aggregates progress for
+# every disc of a single game instead of one snackbar per disc.
+# group_id -> {
+#   label: String, total: int, settled: int, failed: Array[String],
+#   sizes: Dictionary (disc_id -> expected bytes),
+#   done: Dictionary (disc_id -> true),
+#   item_map: Dictionary (item_id -> disc_id),
+#   notification_id: int,
+# }
+var _groups: Dictionary = {}
 
 func _on_completion_watcher(item_id: String, success: bool, _message: String) -> void:
 	if not _completion_watchers.has(item_id):
 		return
-	var watcher: Callable = _completion_watchers[item_id]
+	var watchers: Array = _completion_watchers[item_id]
 	_completion_watchers.erase(item_id)
-	if watcher.is_valid():
-		watcher.call(success)
+	for watcher in watchers:
+		if watcher.is_valid():
+			watcher.call(success)
+
+# ==================== MULTI-DISC DOWNLOAD GROUPS ====================
+
+## Creates a download group for a multi-disc batch: one pinned notification
+## aggregates progress for every disc instead of one snackbar per disc.
+## Returns "" when the batch doesn't warrant grouping (single disc).
+func _create_download_group(game: GameResource, entries: Array[Dictionary], suppress_notification: bool) -> String:
+	if suppress_notification or entries.size() < 2:
+		return ""
+	var group_id := "discs_" + str(game.romm_id)
+	# Fold into an still-open group for the same game rather than stacking a
+	# second notification (e.g. re-queue while the first batch is in flight).
+	var group: Dictionary = _groups.get(group_id, {
+		"label": game.get_display_name(),
+		"total": 0,
+		"failed": [],
+		"sizes": {},        # disc_id -> expected bytes
+		"settled_ids": {},  # disc_id -> true
+		"item_map": {},     # item_id -> disc_id
+		"notification_id": -1,
+	})
+	for entry in entries:
+		var disc_id: int = entry["id"]
+		if group.sizes.has(disc_id):
+			continue
+		group.sizes[disc_id] = int(entry.get("file_size", 0))
+		group.total += 1
+	_groups[group_id] = group
+	return group_id
+
+## Links a queued download item to a group disc and shows the group
+## notification on first use.
+func _register_group_item(group_id: String, item_id: String, disc_id: int, expected_size: int) -> void:
+	if group_id == "" or not _groups.has(group_id):
+		return
+	var group: Dictionary = _groups[group_id]
+	group.item_map[item_id] = disc_id
+	if expected_size > 0:
+		group.sizes[disc_id] = expected_size
+	elif not group.sizes.has(disc_id):
+		group.sizes[disc_id] = 0
+	_ensure_group_notification(group_id)
+
+## Marks a group disc as terminally settled (success or failure). When every
+## disc has settled, dismisses the group notification and shows one summary.
+func _settle_group_disc(group_id: String, disc_id: int, success: bool, disc_label: String = "") -> void:
+	if group_id == "" or not _groups.has(group_id):
+		return
+	var group: Dictionary = _groups[group_id]
+	if group.settled_ids.has(disc_id):
+		return
+	group.settled_ids[disc_id] = true
+	if not success:
+		group.failed.append(disc_label if disc_label != "" else "Disc " + str(disc_id))
+	if group.settled_ids.size() >= group.total:
+		_finish_download_group(group_id)
+
+func _on_group_download_completed(item_id: String, success: bool, _message: String) -> void:
+	for group_id in _groups:
+		var group: Dictionary = _groups[group_id]
+		if group.item_map.has(item_id):
+			var disc_id: int = group.item_map[item_id]
+			var label := ""
+			# Item is still live when download_completed fires (emit happens
+			# before _active_items.erase), so grab its file name for errors.
+			var item := get_item(item_id)
+			if item:
+				label = item.destination_path.get_file()
+			_settle_group_disc(group_id, disc_id, success, label)
+			return
+
+func _ensure_group_notification(group_id: String) -> void:
+	var group: Dictionary = _groups.get(group_id, {})
+	if group.is_empty() or group.notification_id != -1:
+		return
+	group.notification_id = SystemManager.notifications.show_notification(
+		group.label + "...",
+		SystemManager.notifications.Type.INFO,
+		null,
+		0.0,
+		func() -> float:
+			return _group_progress(group_id),
+		func(progress_frac: float) -> String:
+			return _group_progress_text(group_id, progress_frac),
+		false,  # pulsing
+		true  # pinned
+	)
+
+## Returns [done_bytes, total_bytes] across every disc in the group. Settled
+## discs count in full; in-flight discs contribute progress x expected size.
+func _group_bytes(group_id: String) -> Array:
+	var group: Dictionary = _groups.get(group_id, {})
+	var total_bytes: int = 0
+	var done_bytes: int = 0
+	for disc_id in group.get("sizes", {}):
+		var size: int = group.sizes[disc_id]
+		total_bytes += size
+		if group.settled_ids.has(disc_id):
+			done_bytes += size
+		else:
+			var item := _find_group_item(group_id, disc_id)
+			if item:
+				done_bytes += int(item.progress * size)
+	return [done_bytes, total_bytes]
+
+func _group_progress(group_id: String) -> float:
+	var group: Dictionary = _groups.get(group_id, {})
+	if group.is_empty():
+		return 1.0
+	var bytes: Array = _group_bytes(group_id)
+	if bytes[1] > 0:
+		return clampf(float(bytes[0]) / float(bytes[1]), 0.0, 1.0)
+	# Sizes unknown: fall back to disc fraction
+	return float(group.settled_ids.size()) / max(1, group.total)
+
+func _group_progress_text(group_id: String, progress_frac: float) -> String:
+	var group: Dictionary = _groups.get(group_id, {})
+	if group.is_empty():
+		return ""
+	var text := "%s: %d/%d discs" % [group.label, group.settled_ids.size(), group.total]
+	var bytes: Array = _group_bytes(group_id)
+	if bytes[1] > 0:
+		text += " - %.1f/%.1f GB (%d%%)" % [bytes[0] / 1e9, bytes[1] / 1e9, int(progress_frac * 100)]
+	else:
+		text += " (%d%%)" % int(progress_frac * 100)
+	if not group.failed.is_empty():
+		text += " - %d failed" % group.failed.size()
+	return text
+
+func _finish_download_group(group_id: String) -> void:
+	var group: Dictionary = _groups.get(group_id, {})
+	if group.is_empty():
+		return
+	_groups.erase(group_id)
+	if group.notification_id != -1:
+		SystemManager.notifications.dismiss_notification(group.notification_id)
+	if group.failed.is_empty():
+		SystemManager.notifications.show_notification(
+			"All %d discs downloaded for %s" % [group.total, group.label],
+			SystemManager.notifications.Type.SUCCESS,
+			null,
+			5.0
+		)
+	else:
+		SystemManager.notifications.show_notification(
+			"%s: failed to download %s" % [group.label, ", ".join(group.failed)],
+			SystemManager.notifications.Type.ERROR,
+			null,
+			10.0
+		)
+
+## Finds the queued/active download item for a group disc
+func _find_group_item(group_id: String, disc_id: int) -> QueueItem:
+	for item in _queue:
+		if item.group_id == group_id and item.romm_id == disc_id:
+			return item
+	for active_id in _active_items:
+		var item: QueueItem = _active_items[active_id]
+		if item.group_id == group_id and item.romm_id == disc_id:
+			return item
+	return null
 
 ## Queues an extraction task (for already-downloaded archives)
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true)
@@ -872,6 +1068,10 @@ func cancel(item_id: String) -> bool:
 			_cleanup_item(item)
 			_queue.remove_at(i)
 			queue_changed.emit()
+			# Settle completion watchers / download groups: without this a
+			# cancelled batched disc would leave on_all_done (and the unified
+			# group notification) pending forever.
+			download_completed.emit(item_id, false, "Cancelled")
 			return true
 
 	# Cancel if active
@@ -956,6 +1156,60 @@ func get_item(item_id: String) -> QueueItem:
 			return item
 	return null
 
+## Finds the ID of a queued or active item by URL ("" if none). queue_download
+## rejects duplicate URLs with "", so callers can use this to attach to the
+## in-flight item instead of treating the rejection as a failure.
+func _find_item_id_by_url(url: String) -> String:
+	for item in _queue:
+		if item.url == url:
+			return item.id
+	for active_id in _active_items:
+		if _active_items[active_id].url == url:
+			return active_id
+	return ""
+
+## Returns true if any download belonging to this game (main rom or any disc
+## sibling) is currently queued or in flight.
+func is_game_download_in_progress(game: GameResource) -> bool:
+	if not game:
+		return false
+	var ids := {game.romm_id: true}
+	for entry in game.get_disc_entries():
+		ids[entry["id"]] = true
+	return has_item(func(item: QueueItem) -> bool:
+		return item.type == "game" and (item.game_resource == game or ids.has(item.romm_id))
+	)
+
+## Aggregate progress for a game's in-flight downloads, for user-facing
+## messaging: {active, discs_total, discs_done, progress (0.0-1.0)}.
+func get_game_download_summary(game: GameResource) -> Dictionary:
+	var summary := {"active": false, "discs_total": 0, "discs_done": 0, "progress": 0.0}
+	if not game:
+		return summary
+	var group_id := "discs_" + str(game.romm_id)
+	if _groups.has(group_id):
+		var group: Dictionary = _groups[group_id]
+		summary.active = true
+		summary.discs_total = group.total
+		summary.discs_done = group.settled_ids.size()
+		summary.progress = _group_progress(group_id)
+		return summary
+	# No group: aggregate any loose game items for this game
+	var ids := {game.romm_id: true}
+	for entry in game.get_disc_entries():
+		ids[entry["id"]] = true
+	var total := 0
+	var frac_sum := 0.0
+	for item in get_queued() + get_active():
+		if item.type == "game" and (item.game_resource == game or ids.has(item.romm_id)):
+			total += 1
+			frac_sum += item.progress
+	if total > 0:
+		summary.active = true
+		summary.discs_total = total
+		summary.progress = frac_sum / total
+	return summary
+
 # ==================== INTERNAL METHODS ====================
 
 func _process_queue():
@@ -991,8 +1245,9 @@ func _start_download(item: QueueItem):
 	prog.last_downloaded_bytes = 0
 	_download_progress[item.id] = prog
 
-	# Show notification with progress (unless suppressed for batch downloads)
-	if not item.suppress_notification:
+	# Show notification with progress (unless suppressed for batch downloads).
+	# Grouped (multi-disc) items fold into a single shared group notification.
+	if not item.suppress_notification and item.group_id == "":
 		if item.expected_file_size > 0:
 			item.notification_id = SystemManager.notifications.show_notification(
 				item.name + "...",
@@ -2196,10 +2451,11 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 	var item = chunked_info.item
 
 	print("[SystemManager.download] Starting single-stream fallback for: " + item.name)
-	SystemManager.notifications.update_notification_text(
-		item.notification_id,
-		"Server throttling detected; switching to single-stream download..."
-	)
+	if item.notification_id != -1:
+		SystemManager.notifications.update_notification_text(
+			item.notification_id,
+			"Server throttling detected; switching to single-stream download..."
+		)
 
 	_cleanup_chunked_download(item_id)
 	_delete_download_state(item.destination_path)
@@ -2550,6 +2806,9 @@ func _show_reassembly_notification(item_id: String, _item_name: String) -> void:
 	if not _chunked_downloads.has(item_id):
 		return
 	var item = _chunked_downloads[item_id].item
+	# Grouped (multi-disc) items fold into the shared group notification
+	if item.group_id != "":
+		return
 	item.notification_id = SystemManager.notifications.show_notification(
 		"Reassembling chunks, please wait...",
 		SystemManager.notifications.Type.INFO,
@@ -2808,23 +3067,25 @@ func _copy_partial_to_final(item_id: String, partial_path: String, final_path: S
 	var item = chunked_info.item
 
 	# Switch the notification to a copy progress indicator
-	if item.notification_id != -1:
-		SystemManager.notifications.dismiss_notification(item.notification_id)
+	# (grouped multi-disc items keep the shared group notification instead)
+	if item.group_id == "":
+		if item.notification_id != -1:
+			SystemManager.notifications.dismiss_notification(item.notification_id)
 
-	item.notification_id = SystemManager.notifications.show_notification(
-		"Copying " + item.name + "...",
-		SystemManager.notifications.Type.INFO,
-		null,
-		0.0,
-		func() -> float:
-			return _final_copy_progress.get(item_id, 0.0),
-		func(progress: float) -> String:
-			var mb_copied = int(item.expected_file_size * progress / (1024.0 * 1024.0))
-			var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
-			return "Copying %s: %d/%d MB (%d%%)" % [item.name, mb_copied, mb_total, int(progress * 100)],
-		false,  # pulsing
-		true  # pinned
-	)
+		item.notification_id = SystemManager.notifications.show_notification(
+			"Copying " + item.name + "...",
+			SystemManager.notifications.Type.INFO,
+			null,
+			0.0,
+			func() -> float:
+				return _final_copy_progress.get(item_id, 0.0),
+			func(progress: float) -> String:
+				var mb_copied = int(item.expected_file_size * progress / (1024.0 * 1024.0))
+				var mb_total = int(item.expected_file_size / (1024.0 * 1024.0))
+				return "Copying %s: %d/%d MB (%d%%)" % [item.name, mb_copied, mb_total, int(progress * 100)],
+			false,  # pulsing
+			true  # pinned
+		)
 
 	_final_copy_progress[item_id] = 0.0
 
@@ -3259,7 +3520,8 @@ func _fail_download(item_id: String, error_msg: String):
 	_process_queue()
 
 func _notify_download_failed(item: QueueItem) -> void:
-	if item.suppress_notification:
+	# Grouped (multi-disc) failures surface in the group summary, not per item
+	if item.suppress_notification or item.group_id != "":
 		return
 	if item.notification_id != -1:
 		SystemManager.notifications.dismiss_notification(item.notification_id)

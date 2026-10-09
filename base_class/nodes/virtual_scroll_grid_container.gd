@@ -719,8 +719,6 @@ func _ready():
 	# frame_pre_draw (visual stamping) is owned by _visual_sync (connects in
 	# its own _ready/_exit_tree).
 	# frame_post_draw (DrawAudit) connects in _update_debug_mode — debug-only.
-	# The flicker watcher (stamp vs REAL on-screen position) connects in the
-	# debug overlay's _ready (ON BY DEFAULT; KYODAI_FLICKER_WATCH=0 disables).
 
 	# Use SystemManager.display as the single source of resize truth when available.
 	# It debounces viewport changes so we don't recalculate layout on every pixel.

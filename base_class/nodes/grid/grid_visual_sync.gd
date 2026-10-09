@@ -168,7 +168,7 @@ func compute_offset(card: Control) -> Vector2:
 
 	Composed entirely from Godot's own layout results plus the precisely
 	tracked float scroll:
-	    scroll_container.origin − scroll_float + content_chain + card.position
+		scroll_container.origin − scroll_float + content_chain + card.position
 	where `content_chain` is the flow's offset within the margin container
 	(captured post-sort) and `card.position` is the FlowContainer's own child
 	position. Every card on a line goes through the identical formula, so no

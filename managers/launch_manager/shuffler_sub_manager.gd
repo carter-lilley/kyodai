@@ -326,6 +326,9 @@ func start_session(config: Dictionary) -> void:
 	var platforms = config.get("platforms", [])
 	var bag_size = config.get("bag_size", 4)
 	var filters: Dictionary = config.get("filters", {})
+	# Platform balance as a 0-1 fraction (slider percent / 100): 0 = pure
+	# proportional sampling, 1 = equal shares per platform.
+	var platform_balance: float = clampf(float(config.get("platform_balance", 50)) / 100.0, 0.0, 1.0)
 
 	if platforms.is_empty():
 		push_error("[ShufflerSubManager] No platforms selected for shuffler")
@@ -340,7 +343,7 @@ func start_session(config: Dictionary) -> void:
 	# a second start in that window.
 	_starting = true
 	var fetch_start := Time.get_ticks_msec()
-	var sampled: Array[GameResource] = await DataManager.get_random_games_for_shuffle_async(platforms, filters, bag_size)
+	var sampled: Array[GameResource] = await DataManager.get_random_games_for_shuffle_balanced_async(platforms, filters, bag_size, platform_balance)
 	print("[ShufflerSubManager] Sampled " + str(sampled.size()) + " bag games in " + str(Time.get_ticks_msec() - fetch_start) + " ms")
 	if _start_cancelled:
 		_start_cancelled = false
@@ -373,7 +376,7 @@ func start_session(config: Dictionary) -> void:
 
 	print("[ShufflerSubManager] Starting session with bag size " + str(_bag.size()) + ": " + _format_bag())
 	_start_bag_preparation()
-	_build_candidates_background(platforms, filters)
+	_build_candidates_background(platforms, filters, platform_balance)
 	_await_first_ready()
 
 func stop_session() -> void:
@@ -768,13 +771,15 @@ func _start_entry_acquisition(index: int) -> void:
 ## Fills the bag's reroll candidate pool in the background after session
 ## start: a single SQL-side random sample capped relative to the bag, so the
 ## whole platform library is never materialized as GameResources (the old
-## per-platform fetch built one per row). Abandons silently if the session
-## ends or the bag is replaced mid-build.
-func _build_candidates_background(platforms: Array[String], filters: Dictionary) -> void:
+## per-platform fetch built one per row). Uses the same platform_balance
+## weighting as the initial bag, so mid-session rerolls keep the session's
+## platform distribution. Abandons silently if the session ends or the bag
+## is replaced mid-build.
+func _build_candidates_background(platforms: Array[String], filters: Dictionary, platform_balance: float) -> void:
 	var bag := _bag
 	bag.candidates_building = true
 	var build_start := Time.get_ticks_msec()
-	var pool: Array[GameResource] = await DataManager.get_random_games_for_shuffle_async(platforms, filters, bag.size() * 10)
+	var pool: Array[GameResource] = await DataManager.get_random_games_for_shuffle_balanced_async(platforms, filters, bag.size() * 10, platform_balance)
 	if _bag != bag or _state == State.IDLE:
 		bag.candidates_building = false
 		return
