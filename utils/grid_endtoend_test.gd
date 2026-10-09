@@ -62,8 +62,13 @@ func _ready() -> void:
 	var targets := [0.0, stride * 3.0, stride * 20.0, stride * 120.0, stride * 60.0]
 	for t in targets:
 		_grid.scroll_to_index(int(t / stride) * _grid._get_items_per_line(), true)
-		# Let snap + tween + sorts + reveal run.
-		for i in 40:
+		# Let snap + tween + sorts + reveal run. Headless frames are far
+		# faster than real time, so poll until the tween actually finishes
+		# (wall-clock based) instead of counting a fixed number of frames.
+		var idle_deadline := Time.get_ticks_msec() + 8000
+		while _grid._scroll_container.is_scrolling() and Time.get_ticks_msec() < idle_deadline:
+			await get_tree().process_frame
+		for i in 10:
 			await get_tree().process_frame
 		_check_sync("scroll->%.0f" % t)
 
@@ -105,3 +110,16 @@ func _check_sync(tag: String) -> void:
 	else:
 		_failures += 1
 		print("FAIL ", tag, " active=", _grid._active_cards.size(), " worst_drift=", worst, " worst_idx=", worst_idx, " unsynced=", unsynced)
+		# Debug dump: which cards drift, and by how much.
+		for card in _grid._active_cards:
+			if not is_instance_valid(card) or not card.is_node_ready():
+				continue
+			var lt2 = card.get("_last_visual_transform")
+			if not lt2 is Transform2D:
+				continue
+			var exp2: Vector2 = _grid._compute_visual_layer_offset(card)
+			var d2: float = (lt2 as Transform2D).origin.distance_to(exp2)
+			if d2 > 2.0:
+				print("  DRIFT vi=", card.get_meta("virtual_index", -1), " d=", d2,
+					" stamp=", (lt2 as Transform2D).origin, " exp=", exp2,
+					" card_pos=", card.position, " scroll=", _grid._scroll_container.get_scroll_float())

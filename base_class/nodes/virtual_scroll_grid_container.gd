@@ -290,15 +290,11 @@ var _grid_items_per_line: int = 0
 # preserves the line number instead of the content (teleport on zoom).
 var _scroll_anchor: Vector2 = Vector2(-1.0, 0.0)
 
-# Target of a guarded scroll write made during a layout recalc (< 0 = none).
-# The ScrollContainer's scrollbar range is stale mid-frame (it updates at the
-# end-of-frame sort), so a write beyond the old range gets clamped; the clamp
-# emits value_changed with the clamped value, which would rebuild the buffer
-# window at the wrong offset. While this is set, the scroll handler ignores
-# values that are clearly the clamp echo rather than the intended position.
-var _guarded_scroll_target: float = -1.0
-var _guarded_scroll_attempts: int = 0
-const MAX_GUARDED_SCROLL_ATTEMPTS: int = 3
+# Scroll writes during layout recalcs go through
+# SmoothScrollContainer.write_immediate_with_extent(): the extent is pre-raised
+# to the grid-computed value so the stale mid-frame scrollbar range never
+# clamps the write, and the single-writer ownership in SSC makes echo guards
+# unnecessary.
 var _grid_trace_stuck_count: int = 0
 var _last_pass_scroll: float = -1.0
 var _last_pass_time_ms: int = 0
@@ -992,12 +988,6 @@ var _is_recalculating_layout: bool = false
 # Set when a resize arrives mid-recalc; consumed with one deferred follow-up
 # pass when the current recalc finishes, so no resize is ever dropped.
 var _resize_pending: bool = false
-
-# During zoom/layout transitions, ScrollContainer may clamp its scroll value and
-# emit a signal that reaches _on_scroll_value_changed() *after* _recalculate_layout()
-# has returned. Without suppression that signal carries allow_recycle=true and
-# recycles cards that were just preserved, causing a visible flash.
-var _suppress_recycle_until_frame: int = -1
 
 # Guard against recursive scroll_value_changed signals that can fire during
 # container sorts triggered by add_child() inside _on_scroll_value_changed().
@@ -2126,7 +2116,6 @@ func _recalculate_layout():
 					_batching_layout = false
 
 	_is_recalculating_layout = true
-	_suppress_recycle_until_frame = Engine.get_process_frames() + 1
 
 	# Save focus state before layout recalculation so we can restore it after
 	# cards are recycled and recreated.
@@ -2357,10 +2346,9 @@ func _recalculate_layout():
 	# recalculation. A preset can reset the scroll position while the active cards
 	# still hold indices from the previous scroll offset; without recycling, the
 	# grid prepends a large range of stale blank cards instead of rebuilding the
-	# correct visible range. The end-of-frame ScrollContainer clamp signal is still
-	# suppressed by _suppress_recycle_until_frame, so this does not cause extra
-	# recycling from that deferred signal. force_recycle=true bypasses the
-	# suppression for this synchronous call only.
+	# correct visible range. The recalc-time scroll write pre-raises the
+	# scrollbar extent to the grid-computed value, so the end-of-frame sort
+	# finds the range already correct and emits no clamp echo to guard against.
 	#
 	# IMPORTANT: the window is built against the COMPUTED anchor position, not
 	# the scrollbar value. The scrollbar range is stale mid-frame and clamps
@@ -2379,12 +2367,11 @@ func _recalculate_layout():
 	if debug_mode:
 		if DEBUG_LOG: print("[Grid] recalc recycle: active ", _active_before, " -> ", _active_after, " (", _first_before, "-", _last_before, " -> ", _first_after, "-", _last_after, ")")
 
-	# Sync the scrollbar to the restored position via the guarded writer (the
-	# window above was built from the computed position, so even if the stale
-	# scrollbar range clamps this write, the view and focus stay correct; the
-	# deferred corrective write repairs the scrollbar itself).
+	# Sync the scrollbar to the restored position. The window above was built
+	# from the computed position; the extent pre-raise makes the write land
+	# exactly even while the live scrollbar range is stale mid-frame.
 	if restored_scroll >= 0.0:
-		_set_scroll_position_guarded(restored_scroll)
+		_write_scroll_during_recalc(restored_scroll)
 
 	if not is_equal_approx(current_zoom, _last_applied_zoom):
 		_last_applied_zoom = current_zoom
@@ -2534,7 +2521,7 @@ func _setup_ui():
 	_scroll_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scroll_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll_container.scroll_vertical = 0
+	_scroll_container.write_immediate(0.0)
 	_scroll_container.clip_contents = true
 	# Universal outer margin: inset the scroll container on all sides. The
 	# effective viewport for layout math is inset in _get_available_size().
@@ -2566,6 +2553,7 @@ func _setup_ui():
 	_scroll_container.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
+	_scroll_container.scroll_completed.connect(_on_scroll_completed)
 	_scroll_container.scroll_target_provider = _on_follow_focus_target_request
 	_scroll_container.page_step_provider = _on_page_step_request
 
@@ -3090,31 +3078,13 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 			if DEBUG_LOG: print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
 		return
 	_grid_trace_stuck_count = 0
-	# Ignore the clamp echo from a guarded recalc-time scroll write: the stale
-	# scrollbar range can clamp the write, and acting on the clamped value
-	# would rebuild the buffer window at the wrong offset. The deferred
-	# corrective write restores the intended position.
-	if _guarded_scroll_target >= 0.0 and not force_recycle:
-		if absf(value - _guarded_scroll_target) > maxf(_get_normal_stride(), 1.0):
-			if trace_verbose:
-				if DEBUG_LOG: print("[GridTrace] echo-skip: value=", value, " target=", _guarded_scroll_target, " t=", Time.get_ticks_msec())
-			return
 	_is_processing_scroll = true
 	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " guarded_target=", _guarded_scroll_target, " suppress_until=", _suppress_recycle_until_frame, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
 
 	if _total_items == 0 or not _scroll_container:
 		_is_processing_scroll = false
 		return
-
-	# Suppress recycling during the frame(s) after a layout recalculation.
-	# ScrollContainer may clamp its scroll value at end-of-frame and emit a
-	# signal that would otherwise recycle cards with allow_recycle=true.
-	# force_recycle bypasses this for the explicit synchronous recycle call
-	# inside _recalculate_layout() itself; without the bypass, zooming in
-	# never trims the active set and cards accumulate across zoom ticks.
-	if not force_recycle and Engine.get_process_frames() <= _suppress_recycle_until_frame:
-		allow_recycle = false
 
 	var scroll_pos = int(value)
 	var items_per_line = _get_items_per_line()
@@ -3361,10 +3331,8 @@ func _reassign_active_cards_to_window() -> bool:
 
 func _reset_transient_scroll_state(reason: String) -> void:
 	"""Single reset point for transient scroll/jump state. Called from every
-	entry point that moves the view programmatically so a stale guard, velocity
-	or pending expansion from a previous operation can never fight the new one."""
-	_guarded_scroll_target = -1.0
-	_guarded_scroll_attempts = 0
+	entry point that moves the view programmatically so a stale velocity or
+	pending expansion from a previous operation can never fight the new one."""
 	_scroll_velocity = 0.0
 	_pending_buffer_expansion = false
 	SmoothScrollContainer._strace("reset-transient reason=" + reason)
@@ -3561,8 +3529,29 @@ func _frame_probe_log() -> void:
 		" csz=", _center_container.size if _center_container else Vector2.INF,
 		" msz=", _margin_container.size if _margin_container else Vector2.INF,
 		" ssz=", _scroll_container.size if _scroll_container else Vector2.INF,
-		" g=", _layout_generation,
-		" grd=", _guarded_scroll_target, " sup=", _suppress_recycle_until_frame)
+		" g=", _layout_generation)
+
+func _on_scroll_completed() -> void:
+	"""Stamp all cards against the final rest position. The terminal write of
+	a tween/chase can land without any further drawn frame (idle tree, nothing
+	dirty), which would leave the pre-draw stamps frozen at the last motion
+	frame's float position. A pure scroll landing queues no sort cascade
+	(card positions are scroll-independent; scroll enters the offset formula
+	directly), so stamping here is immediately correct. Reveal marking stays
+	pre-draw gated."""
+	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
+		return
+	if _active_cards.size() == 0:
+		return
+	_last_stamp_scroll = _scroll_container.get_scroll_float()
+	_last_stamp_margin = _last_margin_top if vertical else _last_margin_left
+	_last_stamp_first = _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1
+	_last_stamp_count = _active_cards.size()
+	_last_stamp_generation = _layout_generation
+	for card in _active_cards:
+		if not is_instance_valid(card) or not card.is_node_ready():
+			continue
+		card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
 
 func _on_frame_pre_draw() -> void:
 	if _frame_probe_enabled:
@@ -4260,6 +4249,19 @@ func _disconnect_card_signals(card: Control):
 			card.disconnect("download_requested", conn["callable"])
 
 func _update_margin():
+	# Wrapper: after margin/extent writes, force the ScrollContainer to
+	# recompute its cached content min size. ScrollContainer's
+	# _update_scrollbars() reads the CACHED largest_child_min_size member,
+	# which only refreshes when the container's own combined minimum size is
+	# recomputed — margin writes alone leave it stale, and the end-of-frame
+	# sort then clamps the scroll value against the pre-write extent.
+	var snapshot := [_last_margin_top, _last_margin_bottom, _last_margin_left, _last_margin_right, _last_flow_height, _last_flow_width]
+	_update_margin_writes()
+	if [_last_margin_top, _last_margin_bottom, _last_margin_left, _last_margin_right, _last_flow_height, _last_flow_width] != snapshot:
+		if _scroll_container:
+			_scroll_container.get_combined_minimum_size()
+
+func _update_margin_writes():
 	if _active_cards.size() == 0:
 		_last_margin_virtual_start = -1
 		_last_margin_virtual_end = -1
@@ -4915,12 +4917,7 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	# the focused item (or raw offset) and restore it after the rebuild.
 	if not preserve_scroll and _scroll_container:
 		_reset_transient_scroll_state("refresh_buffer")
-		_scroll_container.scroll_vertical = 0
-		_scroll_container.scroll_horizontal = 0
-		_scroll_container._target_scroll = 0.0
-		_scroll_container._wheel_target = 0.0
-		_scroll_container._wheel_velocity = 0.0
-		_scroll_container._wheel_chase_active = false
+		_scroll_container.write_immediate(0.0)
 
 	_recalculate_layout()
 	if _active_cards.size() == 0:
@@ -4947,18 +4944,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 		elif _scroll_container:
 			_reset_transient_scroll_state("refresh_buffer_restore")
-			# Clamp to valid range after the new layout is known.
-			var scrollbar = (_scroll_container.get_v_scroll_bar() as ScrollBar) if vertical else (_scroll_container.get_h_scroll_bar() as ScrollBar)
-			var max_scroll: float = scrollbar.max_value - scrollbar.page if scrollbar else 0.0
-			var clamped_offset: int = int(clampf(saved_scroll_offset, 0.0, max_scroll))
-			if vertical:
-				_scroll_container.scroll_vertical = clamped_offset
-			else:
-				_scroll_container.scroll_horizontal = clamped_offset
-			_scroll_container._target_scroll = clamped_offset
-			_scroll_container._wheel_target = clamped_offset
-			_scroll_container._wheel_velocity = 0.0
-			_scroll_container._wheel_chase_active = false
+			# Clamp against the GRID-COMPUTED range (fresh after the recalc
+			# above); the live scrollbar range is stale mid-frame.
+			_scroll_container.write_immediate(_clamp_scroll_to_range(saved_scroll_offset))
 	elif focus_was_in_grid and M3Overlay._get_topmost_overlay() == null:
 		# Non-preserve rebuilds (e.g. GameNative adds, post-sync reload) recycle
 		# the focused card; restore focus to it so controller users aren't
@@ -5052,64 +5040,21 @@ func _get_current_scroll_pos() -> float:
 		return 0.0
 	return float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
 
-## Writes a scroll position during a layout recalc. Use this for ALL scroll
-## writes issued while the layout is mid-recalculation: the scrollbar's
-## max_value is stale until the end-of-frame sort, so a plain write beyond the
-## old range is clamped and the clamp's value_changed rebuilds the buffer
-## window at the wrong offset (previously: zoom-in at deep scroll positions
-## teleported the view and recycled the focused card).
-##
-## Strategy: pre-raise max_value (to what the sort will compute anyway), guard
-## the scroll handler against the clamp echo, write, then queue a deferred
-## corrective write. The corrective RE-ARMS the guard (a plain write there
-## clamped again and destroyed the window) and is attempt-capped.
-func _set_scroll_position_guarded(pos: float) -> void:
+## Writes a scroll position during a layout recalc. Mid-frame the scrollbar's
+## max_value is stale (it updates at the end-of-frame sort), so the extent is
+## pre-raised to the GRID-COMPUTED value — what the sort will compute anyway —
+## and the write goes through SSC's single-writer API. No echo guards: the
+## write lands exactly, so there is no clamp echo to suppress.
+func _write_scroll_during_recalc(pos: float) -> void:
 	if not _scroll_container:
 		return
-	_guarded_scroll_attempts = 0
-	_apply_guarded_scroll(pos)
-
-func _apply_guarded_scroll(pos: float) -> void:
 	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
 	var viewport_axis: float = _get_available_size().y if vertical else _get_available_size().x
-	if scrollbar:
-		# scrollbar.page is 0 before the first sort; fall back to the viewport.
-		var page: float = maxf(scrollbar.page, viewport_axis)
-		if pos > scrollbar.max_value - page:
-			scrollbar.max_value = pos + page
-	_guarded_scroll_target = pos
-	_scroll_container.scroll_to(int(pos), false)
+	# scrollbar.page is 0 before the first sort; fall back to the viewport.
+	var page: float = maxf(scrollbar.page if scrollbar else 0.0, viewport_axis)
+	_scroll_container.write_immediate_with_extent(pos, pos + page)
 	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] guarded-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0, " t=", Time.get_ticks_msec())
-	call_deferred("_correct_guarded_scroll")
-
-func _correct_guarded_scroll() -> void:
-	if _guarded_scroll_target < 0.0:
-		return
-	var target := _guarded_scroll_target
-	if not is_inside_tree() or not _scroll_container:
-		if trace_verbose:
-			if DEBUG_LOG: print("[GridTrace] corrective: guard cleared (not in tree) target=", target, " t=", Time.get_ticks_msec())
-		_guarded_scroll_target = -1.0
-		return
-	var current := _get_current_scroll_pos()
-	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] corrective: current=", current, " target=", target, " attempt=", _guarded_scroll_attempts, " t=", Time.get_ticks_msec())
-	if absf(current - target) <= 1.0:
-		# Write stuck (Range emits nothing when the value doesn't change).
-		if trace_verbose:
-			if DEBUG_LOG: print("[GridTrace] corrective: guard cleared (stuck ok) target=", target, " t=", Time.get_ticks_msec())
-		_guarded_scroll_target = -1.0
-		return
-	_guarded_scroll_attempts += 1
-	if _guarded_scroll_attempts >= MAX_GUARDED_SCROLL_ATTEMPTS:
-		# The range persistently rejects the target (our computed max was wrong
-		# or the sort hasn't run). Accept the engine's position rather than
-		# loop; subsequent scroll signals process normally with the guard clear.
-		push_warning("[Grid] guarded scroll write did not stick after %d attempts (target=%f)" % [MAX_GUARDED_SCROLL_ATTEMPTS, target])
-		_guarded_scroll_target = -1.0
-		return
-	_apply_guarded_scroll(target)
+		if DEBUG_LOG: print("[GridTrace] recalc-write: pos=", pos, " actual_after=", _get_current_scroll_pos(), " sb_max=", scrollbar.max_value if scrollbar else -1.0, " page=", scrollbar.page if scrollbar else -1.0, " t=", Time.get_ticks_msec())
 
 func get_centered_scroll_for_index(idx: int) -> float:
 	"""Scroll position that places the center of slot `idx` at the viewport

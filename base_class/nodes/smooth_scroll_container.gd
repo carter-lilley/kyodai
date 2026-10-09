@@ -140,14 +140,14 @@ func _process(delta: float) -> void:
 	var current := _scroll_float
 	var diff := _wheel_target - current
 	if absf(diff) < 0.05:
-		# Clear ownership BEFORE the final write: the synchronous value_changed
-		# echo then treats it as an external write and syncs the float model to
-		# the int content, making rest state pixel-exact.
+		# Terminal write lands on the exact quantized target so rest state is
+		# pixel-identical to content (echoes of our own writes are ignored, so
+		# the write itself must carry the exact value).
+		_set_current_scroll(float(roundi(_wheel_target)))
 		_wheel_chase_active = false
 		_wheel_velocity = 0.0
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
-		_set_current_scroll(_wheel_target)
 		_strace("wheel-chase-done target=" + str(_wheel_target))
 		scroll_completed.emit()
 		return
@@ -314,21 +314,31 @@ func _get_scrollbar():
 	return get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
+	# Echoes of our OWN writes (Range emits synchronously from
+	# _set_current_scroll) carry no information — the float motion model is
+	# already authoritative — so they are ignored entirely. Only writes that
+	# did not pass through this class land below: engine end-of-frame clamps,
+	# native touch-scroll pans, and contract violations. An external write
+	# always WINS over in-flight motion (it is either the user or the engine
+	# asserting layout truth), so motion stands down and the model adopts it.
 	if _write_depth == 0:
-		# A write that bypassed this class's write paths (or the engine's own
-		# clamp). Violates the single-writer contract; counted for tests.
 		external_write_count += 1
-	# This handler ALSO fires as a synchronous echo of our own _set_current_scroll
-	# writes (Range emits on the int change). While a smooth operation owns the
-	# scroll (tween or wheel chase), the float motion model is authoritative:
-	# syncing it here would re-quantize the glide and resurrect the 1px-step
-	# tail. Only EXTERNAL writes (engine clamps, the grid's direct scroll_vertical
-	# writes during recalcs) resync the model — they arrive while idle.
-	if not _is_smooth_scrolling and not _wheel_chase_active:
+		if _is_smooth_scrolling or _wheel_chase_active:
+			_strace("external write during motion: standing down (value=" + str(value) + ")")
+			_owner_id += 1
+			if _scroll_tween and _scroll_tween.is_valid():
+				_scroll_tween.kill()
+			_wheel_chase_active = false
+			_wheel_velocity = 0.0
+			_is_smooth_scrolling = false
+			_page_scroll_in_flight = false
 		_strace("resync target " + str(_target_scroll) + " -> " + str(value))
-		_target_scroll = value
-		_wheel_target = value
-		_scroll_float = value
+		# Adopt the engine/user truth, quantized: the content position is the
+		# int scroll value, and the float model must match it at rest.
+		var adopted := float(roundi(value))
+		_target_scroll = adopted
+		_wheel_target = adopted
+		_scroll_float = adopted
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:
@@ -546,18 +556,17 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	_scroll_tween.finished.connect(func():
 		if my_owner_id != _owner_id:
 			return
-		# Land exactly on the target: the float model converged, but the rounded
-		# scrollbar write can sit up to 0.5px off. Ownership is cleared BEFORE
-		# the final write so the value_changed echo syncs the float model to the
-		# int content — rest state pixel-exact (and no-ops if already equal).
-		# Clamp to the live range: the library may have shrunk mid-tween, and an
-		# unclamped landing would park the float model beyond the content end.
+		# Land exactly on the target, quantized: echoes of our own writes are
+		# ignored, so this write itself must leave float == int content.
+		# Clamp to the live range first: the library may have shrunk mid-tween,
+		# and an unclamped landing would park the float model beyond the
+		# content end.
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
 		var sb_land = _get_scrollbar()
 		if sb_land:
 			target_value = clampf(target_value, sb_land.min_value, maxf(sb_land.min_value, sb_land.max_value - sb_land.page))
-		_set_current_scroll(target_value)
+		_set_current_scroll(float(roundi(target_value)))
 		SmoothScrollContainer._strace("tween-done target=" + str(target_value) + " actual=" + str(_get_current_scroll()))
 		scroll_completed.emit()
 	)
@@ -657,6 +666,39 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 		# quantized position — rest state must be pixel-identical to content.
 		_set_current_scroll(float(roundi(target)))
 		_suppress_next_snap = true
+
+## Instant write — the ONLY way external owners (the grid) may move the
+## scroll position. Takes ownership (stale tween/chase callbacks go inert),
+## lands the float model and the scrollbar on the exact quantized value, and
+## clamps to the live range. Use scroll_to() for anything animated.
+func write_immediate(value: float) -> void:
+	_strace("write_immediate value=" + str(value) + " caller=" + _strace_caller())
+	_owner_id += 1
+	if _scroll_tween and _scroll_tween.is_valid():
+		_scroll_tween.kill()
+	_wheel_chase_active = false
+	_wheel_velocity = 0.0
+	_is_smooth_scrolling = false
+	_page_scroll_in_flight = false
+	var sb: ScrollBar = _get_scrollbar()
+	if sb:
+		value = clampf(value, sb.min_value, maxf(sb.min_value, sb.max_value - sb.page))
+	_target_scroll = value
+	_wheel_target = value
+	_set_current_scroll(float(roundi(value)))
+	_suppress_next_snap = true
+
+## Instant write that first pre-raises the scrollbar extent so the value is
+## not clamped by a stale range. Use for layout-recalc restores: mid-frame
+## the scrollbar max_value still reflects the OLD content size, and a clamped
+## write would rebuild the grid's window at the wrong offset. The extent
+## argument must be what the end-of-frame sort will compute anyway
+## (grid-computed truth), so the clamp never actually engages afterwards.
+func write_immediate_with_extent(value: float, required_max_value: float) -> void:
+	var sb: ScrollBar = _get_scrollbar()
+	if sb and required_max_value > sb.max_value:
+		sb.max_value = required_max_value
+	write_immediate(value)
 
 func stop_smooth_scroll() -> void:
 	"""Stop any active smooth-scroll tween without changing the target."""
