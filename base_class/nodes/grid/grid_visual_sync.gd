@@ -84,12 +84,6 @@ func configure_card(card: Control) -> void:
 	if card.has_method("set_visual_layer"):
 		card.set_visual_layer(layer)
 
-func sync_transforms() -> void:
-	if not _grid._card_has_sync_visual_transform:
-		return
-	for card in _grid._active_cards:
-		card.sync_visual_transform()
-
 func on_scroll_completed() -> void:
 	"""Stamp all cards against the final rest position. The terminal write of
 	a tween/chase can land without any further drawn frame (idle tree, nothing

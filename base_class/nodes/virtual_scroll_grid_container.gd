@@ -1187,10 +1187,6 @@ func _scroll_stop_size(k: int) -> Vector2:
 ## The stop's zoom fraction (card scroll dim / viewport scroll dim). This is
 ## the value stored in card_zoom_list_ratio, so saved floats migrate onto the
 ## nearest stop.
-func _scroll_stop_fraction(k: int) -> float:
-	_sync_zoom_model_inputs()
-	return _zoom_model.scroll_stop_fraction(k)
-
 ## Maps a scroll-fill fraction to the nearest stop's k.
 func _resolve_lines_for_ratio(ratio: float) -> int:
 	_sync_zoom_model_inputs()
@@ -1223,10 +1219,6 @@ func get_snap_ratios_ascending() -> Array[float]:
 
 ## Returns the snap ratio for the given zoom level using the current grid's
 ## available size. Used to apply the shared zoom level across views.
-func _get_snap_ratio_for_level(level: int) -> float:
-	_sync_zoom_model_inputs()
-	return _zoom_model.ratio_for_level(level)
-
 ## Index of the current zoom within the mode's stop list (0 = largest cards).
 ## Pass from_ratio to resolve a level for an arbitrary ratio (e.g. a saved one)
 ## instead of the grid's current zoom. Does not mutate zoom state.
@@ -1320,10 +1312,6 @@ func _get_nearest_level_for_ratio(p_ratio: float) -> int:
 
 ## The effective items-per-line for GRID layout. Derives from the ratio once a
 ## trustworthy size is available; 0 means "stay on the ratio path".
-func _get_effective_grid_n() -> int:
-	_sync_zoom_model_inputs()
-	return _zoom_model.get_grid_n()
-
 ## Whole lines (rows when vertical, columns when horizontal) that fit in the
 ## viewport on the scroll axis. Groundwork for paged scrolling.
 func get_lines_per_page() -> int:
@@ -1354,10 +1342,6 @@ func _is_staggered_active() -> bool:
 	return staggered and view_mode == ViewMode.GRID and vertical
 
 ## Scroll-axis extent of one page's cards (no trailing separation).
-func _get_page_content_size() -> float:
-	_sync_geometry()
-	return _geometry.page_content_size()
-
 ## Blank space between page groups in the scroll direction: the leftover slack
 ## plus one full stride, so the next page always starts beyond the viewport's
 ## far edge and neighbors are never visible at rest (no culling needed).
@@ -1372,32 +1356,16 @@ func _get_page_period() -> float:
 
 ## Scroll offset subtracted from page-start targets so each page sits centered
 ## in the viewport (blank slack split into balanced gutters on both sides).
-func _get_page_center_offset() -> float:
-	_sync_geometry()
-	return _geometry.page_center_offset()
-
 ## Total line count (rows/columns) across all items.
-func _get_total_lines() -> int:
-	_sync_geometry()
-	return _geometry.total_lines()
-
 func _get_page_count() -> int:
 	_sync_geometry()
 	return _geometry.page_count()
 
 ## Leading blank pad before slot 0: equals the center offset so page 0's
 ## centered target lands exactly at scroll 0 instead of clamping flush-left.
-func _get_page_leading_pad() -> float:
-	_sync_geometry()
-	return _geometry.page_leading_pad()
-
 ## Trailing blank pad after the last line: enough for even a PARTIAL last page
 ## to reach its centered scroll target (its content plus this pad spans the
 ## same centered extent as a full page).
-func _get_page_trailing_pad() -> float:
-	_sync_geometry()
-	return _geometry.page_trailing_pad()
-
 ## Snapped scroll position for page `page` (centered, clamped to range).
 ## With the leading pad in the slot transform, targets are simply k * period.
 func _get_page_scroll_target(page: int) -> float:
@@ -1414,10 +1382,6 @@ func _get_page_for_index(idx: int) -> int:
 # sites (and tests) stable.
 
 ## Items in one full two-row stagger unit (N even-row + N-1 odd-row).
-func _get_stagger_pair_count() -> int:
-	_sync_geometry()
-	return _geometry.stagger_pair_count()
-
 func _get_stagger_line_for_index(idx: int) -> int:
 	_sync_geometry()
 	return _geometry.stagger_line_for_index(idx)
@@ -2272,26 +2236,29 @@ func set_total_count(count: int, preserve_cache: bool = false):
 	# (N-1 pads back up to the same total), which would skip the rebuild and
 	# leave a stale, index-shifted data cache.
 	var count_changed = _source_total_items != count or _total_items != padded
+	var old_total := _total_items
 	_source_total_items = count
 	_total_items = padded
 	_update_layout()
+
+	# Extent-shrink clamp: on a total-count decrease the current scroll offset
+	# can sit beyond the new content end. Clamp BEFORE the recycle pass below,
+	# against the grid-COMPUTED extent (the live scrollbar max is stale for a
+	# frame after a rebuild) and through SSC's instant writer, so no tween/chase
+	# state survives into the rebuild and the engine's end-of-frame clamp never
+	# fires mid-recycle. _refresh_buffer's restore path applies its own clamped
+	# target on top of this; this clamp keeps every pass during the rebuild
+	# computed against the final position.
+	if count_changed and padded < old_total and _scroll_container:
+		var cur := _scroll_container.get_scroll_float()
+		var clamped := _clamp_scroll_to_range(cur)
+		if clamped < cur:
+			_scroll_container.write_immediate(clamped)
 
 	# Clear cache if count changed (index-to-data mapping is now stale)
 	# or if preserve_cache is explicitly false
 	if count_changed or not preserve_cache:
 		_refresh_buffer()
-	# Extent-shrink clamp (Playnite policy): if the library shrank or the
-	# viewport grew, a deep scroll position may now be beyond the content end.
-	# Clamp both the live value and the smooth-scroll targets so the grid can
-	# never rest on a dead position.
-	if _scroll_container:
-		var max_scroll := 0.0
-		var sb: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
-		if sb:
-			max_scroll = maxf(0.0, sb.max_value - sb.page)
-		var cur := _scroll_container.get_scroll_float()
-		if cur > max_scroll:
-			_scroll_container.scroll_to(clampf(cur, 0.0, max_scroll), false)
 
 ## Geometry item count: pads the source count with trailing placeholder slots
 ## so the last page (paginated) or last row/column (plain grid) fills evenly.
@@ -3047,8 +3014,7 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	_last_layout_total_items = -1
 	_last_layout_card_size = Vector2.ZERO
 	_last_layout_focused_card_size = Vector2.ZERO
-	_virtual_start = 0
-	_virtual_end = 0
+	_window.reset_bounds()
 
 	# Only zero the scroll when not preserving it. View-mode switches remember
 	# the focused item (or raw offset) and restore it after the rebuild.
@@ -3300,22 +3266,6 @@ func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 func _update_debug_mode():
 	if _debug_overlay:
 		_debug_overlay.set_enabled(debug_mode)
-
-func _setup_debug_camera():
-	if _debug_overlay:
-		_debug_overlay.setup_camera()
-
-func _update_debug_camera_position():
-	if _debug_overlay:
-		_debug_overlay.update_camera_position()
-
-func _setup_debug_flow_panel():
-	if _debug_overlay:
-		_debug_overlay.setup_flow_panel()
-
-func _update_debug_flow_panel_position():
-	if _debug_overlay:
-		_debug_overlay.update_flow_panel_position()
 
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	"""Refresh effects on active cards. Cards in the visible zone plus a small

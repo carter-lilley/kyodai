@@ -153,14 +153,6 @@ func set_grid_n(n: int) -> bool:
 	return true
 
 
-func has_grid_n() -> bool:
-	return _n_grid > 0
-
-
-func has_lines() -> bool:
-	return _k_lines > 0
-
-
 # --- Structure accessors -----------------------------------------------------
 
 ## Effective items-per-line for GRID. Lazily derives N from the pending ratio
@@ -400,12 +392,3 @@ func get_snap_ratios_ascending() -> Array[float]:
 	ratios.reverse()
 	return ratios
 
-
-func ratio_for_level(level: int) -> float:
-	var stops := get_stops()
-	if stops.is_empty():
-		return _pending_ratio
-	var unit: int = stops[clampi(level, 0, stops.size() - 1)]
-	if _mode == Mode.GRID:
-		return ratio_for_grid_n(unit)
-	return scroll_stop_fraction(unit)
