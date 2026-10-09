@@ -1378,7 +1378,7 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 	if romm_ids.size() > 0:
 		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home FROM games WHERE romm_id IN (%s)" % placeholders,
+			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
 			romm_ids
 		)
 		for row in existing_result:
@@ -1739,10 +1739,13 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var is_favorite = 1 if game.is_favorite else 0
 	var unwrapped = 1 if game.unwrapped else 0
 	var hidden_from_home = 1 if game.hidden_from_home else 0
+	var selected_sibling_id = game.selected_sibling_id
+	var save_id = game.save_id
+	var save_usage = game.save_usage
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -1781,13 +1784,24 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		unwrapped = 1 if existing.get("unwrapped", 0) == 1 else 0
 		# Preserve local-only Home hide (never synced to or from the server)
 		hidden_from_home = 1 if existing.get("hidden_from_home", 0) == 1 else 0
+		# Preserve the user's chosen variant (the server payload never provides it)
+		var existing_selected_sibling = existing.get("selected_sibling_id", 0)
+		if existing_selected_sibling != null and int(existing_selected_sibling) != 0:
+			selected_sibling_id = int(existing_selected_sibling)
+		# Preserve sigil-derived save identity (extracted locally, never synced)
+		var existing_save_id = existing.get("save_id", "")
+		if existing_save_id != "":
+			save_id = existing_save_id
+		var existing_save_usage = existing.get("save_usage", "")
+		if existing_save_usage != "":
+			save_usage = existing_save_usage
 
 	var query = """
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -1808,12 +1822,14 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		game.rating,
 		game.release_date,
 		JSON.stringify(game.siblings),
-		game.selected_sibling_id,
+		selected_sibling_id,
 		1 if game.is_master_entry else 0,
 		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
 		last_played,
 		title_id,
+		save_id,
+		save_usage,
 		game.cover_group_id,
 		1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
