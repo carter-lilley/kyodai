@@ -59,7 +59,16 @@ func _ready() -> void:
 		layer.clip_contents = false
 		layer.z_index = -1
 		layer.top_level = true
-		add_child(layer)
+		# The layer MUST be a child of the grid (a CanvasItem), not of this
+		# module (a plain Node): engine visibility propagation only recurses
+		# into CanvasItem children, and because the layer is top_level its
+		# canvas item is re-rooted to the viewport — scene-tree propagation is
+		# the ONLY thing that ever hides it. Under a Node parent the layer
+		# stayed visible forever when the owning view's tab hid, leaving the
+		# last stamped card art frozen behind the newly shown view.
+		# (Container layout skips top_level children, so the grid does not
+		# fight the layer's rect.)
+		_grid.add_child(layer)
 		layer.position = Vector2.ZERO
 		layer.size = get_viewport().get_visible_rect().size
 
@@ -114,6 +123,12 @@ func _on_frame_pre_draw() -> void:
 	# window membership are all final for the frame, so the stamps are
 	# render-fresh by construction — independent of sort/flush/deferred order.
 	if not _grid or not _grid._card_has_sync_visual_offset or not _grid._scroll_container or not layer:
+		return
+	# Hidden grids (inactive view tabs) don't draw — stamping is wasted work
+	# and, worse, consumes a pending reveal while invisible. The skip-cache is
+	# untouched while hidden, so the first pre-draw after re-show detects the
+	# interruption and stamps/marks before that frame renders (no flash).
+	if not _grid.is_visible_in_tree():
 		return
 	if _grid._active_cards.size() == 0:
 		return
