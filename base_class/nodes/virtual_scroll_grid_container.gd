@@ -105,27 +105,17 @@ func _apply_focus_scale(p_focus_scale: float) -> bool:
 	return true
 
 func _apply_zoom_ratio(p_ratio: float) -> bool:
-	var max_ratio = _calculate_max_ratio()
-	var clamped = clampf(p_ratio, 0.05, max_ratio)
-	# GRID mode with a trustworthy size: convert to the nearest stop silently
-	# (batch contexts recalculate once at the end).
-	if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
-		return _set_grid_n_silent(_get_nearest_level_for_ratio(clamped))
-	# During startup suppression we do NOT snap the saved zoom to the current
-	# container size, because non-active grids can have a temporary small size
-	# and would snap to the wrong stop. The final snap happens once when the
-	# grid is explicitly settled after the window size is stable.
-	var new_ratio = clamped if startup_layout_suppressed else _calculate_snapped_ratio(clamped)
+	_sync_zoom_model_inputs()
+	# During startup suppression the model does NOT snap the saved zoom to the
+	# current container size, because non-active grids can have a temporary
+	# small size and would snap to the wrong stop. The final snap happens once
+	# when the grid is explicitly settled after the window size is stable.
 	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " max_ratio=", max_ratio, " clamped=", clamped, " new_ratio=", new_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
-	if is_equal_approx(target_card_width_ratio, new_ratio):
-		return false
-	_batching_layout = true
-	target_card_width_ratio = new_ratio
-	_batching_layout = false
-	# LIST/CAROUSEL derive their stop from the fraction; force re-resolution.
-	_scroll_axis_lines = 0
-	return true
+		if DEBUG_LOG: print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
+	# GRID: snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
+	if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
+		_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
+	return _zoom_model.set_ratio(p_ratio)
 
 func _apply_grid_padding(p_padding: int) -> bool:
 	var new_separation: int = int(M3Units.dp(float(p_padding)))
@@ -269,19 +259,27 @@ var focus_scale: float = 1.08:
 			_recalculate_layout()
 			_refresh_buffer(true)
 
-# Target card width as ratio of viewport (e.g., 0.15 = 15% of viewport width)
-## Minimum cross-axis card size as a fraction of the base card dimension.
-## Determines the most zoomed-out stop (N_max) for the current viewport.
-const MIN_CARD_SIZE_FRACTION := 0.45
-## Hard cap on the number of discrete zoom stops so the slider stays usable.
-const MAX_ZOOM_STOPS := 12
-## Zoom stops are whole items-per-line counts from 2 up to this many with
-## single-step spacing; beyond it stops are spaced by 2 up to N_max.
-const ZOOM_SINGLE_STEP_MAX := 6
+## SINGLE owner of zoom structure: items-per-line N (GRID) or scroll-axis
+## lines k (LIST/CAROUSEL). Every ratio/zoom/card-size figure is DERIVED from
+## it; inputs (mode, orientation, separation, base dims, available size,
+## startup suppression) are pushed via _sync_zoom_model_inputs() and its stop
+## caches self-invalidate. Nothing else stores zoom state.
+var _zoom_model := GridZoomModel.new()
 
-# Source of truth for GRID-mode zoom: the exact number of items per line.
-# 0 = unset; derived from target_card_width_ratio on the next valid layout.
-var _grid_items_per_line: int = 0
+## Read facades for tests/debug; writes go through the model's setters.
+var _grid_items_per_line: int:
+	get:
+		return _zoom_model._n_grid
+var _scroll_axis_lines: int:
+	get:
+		return _zoom_model._k_lines
+
+## Push the zoom model's inputs. Cheap (key compare short-circuits); called
+## at the top of every zoom facade so stale caches are impossible.
+func _sync_zoom_model_inputs() -> void:
+	_zoom_model.resolution_enabled = not startup_layout_suppressed
+	_zoom_model.configure(int(view_mode), vertical, grid_separation, _get_base_dimensions_for_mode())
+	_zoom_model.set_available_size(_get_available_size() if _has_valid_available_size() else Vector2.ZERO)
 
 # Scroll anchor snapshot (x = virtual index, y = intra-line fraction; x < 0 =
 # unset). Captured by _set_grid_n_silent BEFORE items-per-line changes so
@@ -332,48 +330,33 @@ var _layout_settled_with_valid_size: bool = false
 ## when a valid size first arrives after an invalid settle).
 var _force_layout_once: bool = false
 
-# Zoom-stop caches (rebuilt when the cache key changes)
-var _snap_levels_cache: Array[int] = []
-var _snap_levels_key: String = ""
-## LIST/CAROUSEL zoom: resolved "cards along the scroll axis" count (0 = derive
-## from target_card_width_ratio, which for these modes is the scroll-axis fill
-## fraction). Analogous to _grid_items_per_line for GRID.
-var _scroll_axis_lines: int = 0
-var _scroll_stops_cache: Array[int] = []
-var _scroll_stops_key: String = ""
-
-# This is the user-requested ratio, actual ratio may be snapped to fit whole cards
-var target_card_width_ratio: float = 0.15:
+# The user-facing zoom ratio (e.g. 0.15 = card area ≈ 15%² of viewport for
+# GRID; scroll-axis fill fraction for LIST/CAROUSEL). DERIVED from the zoom
+# model's structure — there is no independently stored ratio. External writes
+# resolve structure (GRID snaps N immediately; LIST/CAROUSEL re-resolve k on
+# next layout) and run a layout pass.
+var target_card_width_ratio: float:
+	get:
+		_sync_zoom_model_inputs()
+		return _zoom_model.get_ratio()
 	set(value):
 		if _batching_layout:
-			target_card_width_ratio = value
+			# Internal sync from the layout pass: the ratio derives from
+			# structure, so this only seeds the pending ratio.
+			_zoom_model.sync_ratio(value)
 			return
 		# Ensure cached display/ratio settings are fresh before snapping; direct
 		# assignments from views can otherwise use stale base dimensions.
 		_refresh_cached_settings()
-		# Calculate dynamic max zoom (one card fills available space)
-		var max_ratio = _calculate_max_ratio()
-		var clamped = clampf(value, 0.05, max_ratio)
-		# GRID mode with a trustworthy size: snap to the nearest items-per-line
-		# stop and let N drive the layout exactly (recalculates internally).
-		if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
-			if not _set_grid_items_per_line(_get_nearest_level_for_ratio(clamped)):
-				# N unchanged, but callers (e.g. refresh_dimensions) expect the
-				# setter to run a layout pass; _recalculate_layout() early-exits
-				# cheaply when nothing changed.
-				_recalculate_layout()
-			return
-		# Calculate snapped ratio to ensure whole cards fit per row/column
-		var snapped_ratio = _calculate_snapped_ratio(clamped)
+		_sync_zoom_model_inputs()
 		if debug_mode:
-			if DEBUG_LOG: print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
-		# Always update ratio and recalculate - _recalculate_layout handles optimization
-		target_card_width_ratio = snapped_ratio
-		# External write (not a batched internal sync): the LIST/CAROUSEL stop
-		# cache derives from this fraction, so drop it and let the recalc
-		# resolve the new stop. Without this, direct writes (e.g. the toolbar's
-		# no-stops fallback) are silently ignored by the cached stop.
-		_scroll_axis_lines = 0
+			if DEBUG_LOG: print("[Grid] setter target_card_width_ratio: input=", value, " max=", _zoom_model.get_max_ratio(), " suppressed=", startup_layout_suppressed)
+		# GRID: snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
+		if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
+			_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
+		_zoom_model.set_ratio(value)
+		# _recalculate_layout() early-exits cheaply when nothing changed; callers
+		# (e.g. refresh_dimensions) expect the setter to run a layout pass.
 		_recalculate_layout()
 
 # Computed zoom based on viewport size
@@ -1308,221 +1291,92 @@ func _calculate_zoom() -> float:
 	return 1.0
 
 func _calculate_max_ratio() -> float:
-	if not _has_valid_available_size():
-		return 0.5
-
-	var base_dims = _get_base_dimensions_for_mode()
-
-	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
-		# Ratio IS the scroll-axis fill fraction; the largest list/carousel stop
-		# (one card along the scroll axis) fills it exactly.
-		return 1.0
-
-	var available = _get_available_size()
-	var viewport_area = available.x * available.y
-
-	# Cap at the largest FIT-AWARE stop (levels[0] = smallest legal N): never
-	# allow a zoom whose cards extend past the viewport on the scroll axis.
-	var levels := get_snap_levels()
-	var cap_n := levels[0] if not levels.is_empty() else 2
-	var ratio = _compute_ratio_for_items_per_line(cap_n, base_dims, available, viewport_area)
-
-	return max(ratio, 0.05)
-
-func _snap_levels_cache_key(base_dims: Vector2, available: Vector2) -> String:
-	return "%d|%d|%d|%d|%d|%d" % [int(base_dims.x), int(base_dims.y), int(available.x), int(available.y), grid_separation, 1 if vertical else 0]
+	_sync_zoom_model_inputs()
+	return _zoom_model.get_max_ratio()
 
 ## Ascending items-per-line stops for the current viewport (index = zoom level).
 ## Every stop exactly fills the viewport cross-axis with whole cards.
-## Do not mutate the returned array (it is the cache).
+## Do not mutate the returned array (it is the model's cache).
 func get_snap_levels() -> Array[int]:
-	if view_mode != ViewMode.GRID or not _has_valid_available_size():
+	_sync_zoom_model_inputs()
+	if view_mode != ViewMode.GRID:
 		return []
-	var base_dims = _get_base_dimensions_for_mode()
-	var available = _get_available_size()
-	var key := _snap_levels_cache_key(base_dims, available)
-	if key == _snap_levels_key and not _snap_levels_cache.is_empty():
-		return _snap_levels_cache
-	_snap_levels_cache = _compute_snap_levels(base_dims, available)
-	_snap_levels_key = key
-	return _snap_levels_cache
-
-# ---------------------------------------------------------------------------
-# LIST/CAROUSEL zoom stops (unified with the grid's bounds-aware stop model)
-# ---------------------------------------------------------------------------
+	return _zoom_model.get_stops()
 
 ## Ascending "cards along the scroll axis" stops for LIST/CAROUSEL. Stop k
 ## gives a card that exactly fills the cross axis and shares the scroll axis
 ## evenly with k−1 siblings: every stop is bounds-correct by construction.
 func get_scroll_stop_lines() -> Array[int]:
-	if view_mode == ViewMode.GRID or not _has_valid_available_size():
+	_sync_zoom_model_inputs()
+	if view_mode == ViewMode.GRID:
 		return []
-	var base_dims = _get_base_dimensions_for_mode()
-	var available := _get_available_size()
-	var key := "%d|%s" % [view_mode, _snap_levels_cache_key(base_dims, available)]
-	if key == _scroll_stops_key and not _scroll_stops_cache.is_empty():
-		return _scroll_stops_cache
-	var scroll_axis: float = available.y if vertical else available.x
-	var base_scroll: float = base_dims.y if vertical else base_dims.x
-	var min_card := base_scroll * MIN_CARD_SIZE_FRACTION
-	var k_max := maxi(1, int((scroll_axis + grid_separation) / (min_card + grid_separation)))
-	_scroll_stops_cache = _build_stop_levels(1, k_max)
-	_scroll_stops_key = key
-	return _scroll_stops_cache
+	return _zoom_model.get_stops()
 
 ## Card size for scroll-axis stop k: cross axis fills exactly, scroll axis is
 ## (scroll_axis − (k−1)·sep) / k.
 func _scroll_stop_size(k: int) -> Vector2:
-	var available := _get_available_size()
-	var scroll_axis: float = available.y if vertical else available.x
-	var cross_axis: float = available.x if vertical else available.y
-	var cell := maxf(1.0, (scroll_axis - (k - 1) * grid_separation) / float(k))
-	return Vector2(cross_axis, cell) if vertical else Vector2(cell, cross_axis)
+	_sync_zoom_model_inputs()
+	return _zoom_model.scroll_stop_size(k)
 
 ## The stop's zoom fraction (card scroll dim / viewport scroll dim). This is
 ## the value stored in card_zoom_list_ratio, so saved floats migrate onto the
 ## nearest stop.
 func _scroll_stop_fraction(k: int) -> float:
-	var available := _get_available_size()
-	var scroll_axis: float = available.y if vertical else available.x
-	if scroll_axis <= 0.0:
-		return 0.25
-	return (_scroll_stop_size(k).y if vertical else _scroll_stop_size(k).x) / scroll_axis
+	_sync_zoom_model_inputs()
+	return _zoom_model.scroll_stop_fraction(k)
 
 ## Maps a scroll-fill fraction to the nearest stop's k.
 func _resolve_lines_for_ratio(ratio: float) -> int:
-	var stops := get_scroll_stop_lines()
-	if stops.is_empty():
+	_sync_zoom_model_inputs()
+	if view_mode == ViewMode.GRID:
 		return 2
-	var available := _get_available_size()
-	var scroll_axis: float = available.y if vertical else available.x
-	var ideal: float = scroll_axis * clampf(ratio, 0.05, 1.0)
-	var k := clampi(int(round((scroll_axis + grid_separation) / maxf(1.0, ideal + grid_separation))), 1, stops[stops.size() - 1])
-	var best: int = stops[0]
-	for s in stops:
-		if absi(s - k) < absi(best - k):
-			best = s
-	return best
+	return _zoom_model.resolve_lines_for_ratio(ratio)
 
 ## The effective scroll-axis stop for LIST/CAROUSEL layout. Derives from the
 ## stored fraction once a trustworthy size is available; 0 = "not resolved".
 func _get_scroll_lines_visible() -> int:
-	if _scroll_axis_lines > 0:
-		return _scroll_axis_lines
-	if not startup_layout_suppressed and _has_valid_available_size():
-		_scroll_axis_lines = _resolve_lines_for_ratio(target_card_width_ratio)
-	return maxi(1, _scroll_axis_lines)
-
-## Builds an ascending stop list in [n_min, n_max]: single steps through
-## ZOOM_SINGLE_STEP_MAX, then coarse steps, N_max always included, trimmed to
-## MAX_ZOOM_STOPS. Shared by grid (items per line, n_min >= 2) and
-## list/carousel (cards along the scroll axis, n_min >= 1).
-func _build_stop_levels(n_min: int, n_max: int) -> Array[int]:
-	var levels: Array[int] = []
-	var n := n_min
-	while n <= mini(n_max, ZOOM_SINGLE_STEP_MAX):
-		levels.append(n)
-		n += 1
-	n = maxi(n_min, ZOOM_SINGLE_STEP_MAX + 2)
-	while n < n_max:
-		levels.append(n)
-		n += 2
-	if levels.is_empty() or levels[-1] != n_max:
-		levels.append(n_max)
-	# Keep the slider usable: trim stops adjacent to N_max first so both the
-	# small-N range and the extreme zoom-out stop survive.
-	while levels.size() > MAX_ZOOM_STOPS:
-		levels.remove_at(levels.size() - 2)
-	return levels
-
-func _compute_snap_levels(base_dims: Vector2, available: Vector2) -> Array[int]:
-	# Largest N whose exact-fill card still meets the minimum size floor.
-	var cross_axis := available.x if vertical else available.y
-	var base_cross := base_dims.x if vertical else base_dims.y
-	var min_card := base_cross * MIN_CARD_SIZE_FRACTION
-	var n_max := maxi(2, int((cross_axis + grid_separation) / (min_card + grid_separation)))
-
-	# Scroll-axis fit floor: the exact-fill card derived from N must show its
-	# WHOLE row/column within the viewport — the largest zoom never extends a
-	# card past the grid bounds (e.g. portrait art on a landscape screen, where
-	# N=2 cards are taller than the viewport). card_scroll(N) falls as N rises,
-	# so solve N >= (cross+sep)/(scroll/aspect+sep) for the smallest legal N.
-	var n_min := 2
-	if base_dims.x > 0.0 and base_dims.y > 0.0:
-		var aspect := (base_dims.y / base_dims.x) if vertical else (base_dims.x / base_dims.y)
-		var scroll_axis := available.y if vertical else available.x
-		if aspect > 0.0 and scroll_axis > 0.0:
-			var denom := scroll_axis / aspect + grid_separation
-			if denom > 0.0:
-				n_min = maxi(2, int(ceil((cross_axis + grid_separation) / denom)))
-	n_min = mini(n_min, n_max)
-	return _build_stop_levels(n_min, n_max)
+	_sync_zoom_model_inputs()
+	return _zoom_model.get_lines_visible()
 
 ## Returns snap ratios ordered most-zoomed-out first (index 0 = smallest
 ## ratio), one per stop, for ALL view modes — the unified view the zoom slider
 ## consumes. GRID: legacy view over the items-per-line stops. LIST/CAROUSEL:
 ## the scroll-axis fill fraction of each stop.
 func get_snap_ratios() -> Array[float]:
-	var ratios: Array[float] = []
-	if not _has_valid_available_size():
-		return ratios
-	match view_mode:
-		ViewMode.GRID:
-			var base_dims = _get_base_dimensions_for_mode()
-			var available = _get_available_size()
-			var viewport_area = available.x * available.y
-			var levels = get_snap_levels()
-			for i in range(levels.size() - 1, -1, -1):
-				ratios.append(_compute_ratio_for_items_per_line(levels[i], base_dims, available, viewport_area))
-		ViewMode.LIST, ViewMode.CAROUSEL:
-			var stops := get_scroll_stop_lines()
-			for i in range(stops.size() - 1, -1, -1):
-				ratios.append(_scroll_stop_fraction(stops[i]))
-	if ratios.size() < 2:
+	_sync_zoom_model_inputs()
+	var ratios := _zoom_model.get_snap_ratios_desc()
+	if _has_valid_available_size() and ratios.size() < 2:
 		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, available=%s" % [ratios.size(), view_mode, size, _get_available_size()])
 	return ratios
 
 ## Returns snap ratios sorted ascending (index 0 = most items per line).
 ## The slider index maps directly to a zoom level.
 func get_snap_ratios_ascending() -> Array[float]:
-	var snap_ratios := get_snap_ratios()
-	snap_ratios.reverse()
-	return snap_ratios
+	_sync_zoom_model_inputs()
+	return _zoom_model.get_snap_ratios_ascending()
 
 ## Returns the snap ratio for the given zoom level using the current grid's
 ## available size. Used to apply the shared zoom level across views.
 func _get_snap_ratio_for_level(level: int) -> float:
-	var levels = get_snap_levels()
-	if levels.is_empty():
-		return target_card_width_ratio
-	var available = _get_available_size()
-	return _compute_ratio_for_items_per_line(levels[clampi(level, 0, levels.size() - 1)], _get_base_dimensions_for_mode(), available, available.x * available.y)
+	_sync_zoom_model_inputs()
+	return _zoom_model.ratio_for_level(level)
 
 ## Index of the current zoom within the mode's stop list (0 = largest cards).
 ## Pass from_ratio to resolve a level for an arbitrary ratio (e.g. a saved one)
 ## instead of the grid's current zoom. Does not mutate zoom state.
 func get_zoom_level(from_ratio: float = -1.0) -> int:
-	if view_mode != ViewMode.GRID:
-		var stops := get_scroll_stop_lines()
-		if stops.is_empty():
-			return -1
-		var k := _scroll_axis_lines
-		if from_ratio >= 0.0:
-			k = _resolve_lines_for_ratio(from_ratio)
-		elif k <= 0:
-			k = _resolve_lines_for_ratio(target_card_width_ratio)
-		return stops.find(k)
-	var levels = get_snap_levels()
-	if levels.is_empty():
+	_sync_zoom_model_inputs()
+	if from_ratio < 0.0:
+		return _zoom_model.get_level()
+	var stops := _zoom_model.get_stops()
+	if stops.is_empty():
 		return -1
-	var n = _grid_items_per_line
-	if from_ratio >= 0.0:
-		n = _get_nearest_level_for_ratio(from_ratio)
-	elif n <= 0:
-		n = _get_nearest_level_for_ratio(target_card_width_ratio)
+	if view_mode != ViewMode.GRID:
+		return stops.find(_zoom_model.resolve_lines_for_ratio(from_ratio))
+	var n := _zoom_model.nearest_grid_stop(from_ratio)
 	var best := 0
-	for i in range(levels.size()):
-		if absi(levels[i] - n) < absi(levels[best] - n):
+	for i in range(stops.size()):
+		if absi(stops[i] - n) < absi(stops[best] - n):
 			best = i
 	return best
 
@@ -1531,7 +1385,8 @@ func get_zoom_level(from_ratio: float = -1.0) -> int:
 func set_zoom_level(level: int) -> bool:
 	if view_mode != ViewMode.GRID:
 		return _apply_scroll_stop_level(level, true)
-	var levels = get_snap_levels()
+	_sync_zoom_model_inputs()
+	var levels := _zoom_model.get_stops()
 	if levels.is_empty():
 		return false
 	return _set_grid_items_per_line(levels[clampi(level, 0, levels.size() - 1)])
@@ -1539,16 +1394,9 @@ func set_zoom_level(level: int) -> bool:
 ## Shared level→stop application for LIST/CAROUSEL. `recalc` false is the
 ## batch/stamp variant (recalculate once at the end by the caller).
 func _apply_scroll_stop_level(level: int, recalc: bool) -> bool:
-	var stops := get_scroll_stop_lines()
-	if stops.is_empty():
+	_sync_zoom_model_inputs()
+	if not _zoom_model.set_level(level):
 		return false
-	var k: int = stops[clampi(level, 0, stops.size() - 1)]
-	if k == _get_scroll_lines_visible() and _scroll_axis_lines > 0:
-		return false
-	_scroll_axis_lines = k
-	_batching_layout = true
-	target_card_width_ratio = _scroll_stop_fraction(k)
-	_batching_layout = false
 	if recalc:
 		_recalculate_layout()
 	return true
@@ -1559,7 +1407,8 @@ func _apply_scroll_stop_level(level: int, recalc: bool) -> bool:
 func stamp_zoom_level(level: int) -> bool:
 	if view_mode != ViewMode.GRID:
 		return _apply_scroll_stop_level(level, false)
-	var levels = get_snap_levels()
+	_sync_zoom_model_inputs()
+	var levels := _zoom_model.get_stops()
 	if levels.is_empty():
 		return false
 	return _set_grid_n_silent(levels[clampi(level, 0, levels.size() - 1)])
@@ -1567,19 +1416,16 @@ func stamp_zoom_level(level: int) -> bool:
 ## Stamps a LIST/CAROUSEL zoom ratio without recalculating layout (hidden views
 ## settle on show).
 func stamp_zoom_ratio(p_ratio: float) -> void:
-	var max_ratio = _calculate_max_ratio()
-	var clamped = clampf(p_ratio, 0.05, max_ratio)
-	_batching_layout = true
-	target_card_width_ratio = clamped
-	_batching_layout = false
-	_scroll_axis_lines = 0
+	_sync_zoom_model_inputs()
+	_zoom_model.stamp_ratio(p_ratio)
 
 ## Applies the given zoom level without triggering a layout recalculation
 ## (batch contexts recalculate once at the end). Returns true if N changed.
 func _apply_zoom_level(p_level: int) -> bool:
 	if view_mode != ViewMode.GRID:
 		return _apply_scroll_stop_level(p_level, false)
-	var levels = get_snap_levels()
+	_sync_zoom_model_inputs()
+	var levels := _zoom_model.get_stops()
 	if levels.is_empty():
 		return false
 	return _set_grid_n_silent(levels[clampi(p_level, 0, levels.size() - 1)])
@@ -1591,52 +1437,26 @@ func _set_grid_items_per_line(n: int) -> bool:
 	return true
 
 func _set_grid_n_silent(n: int) -> bool:
-	if _grid_items_per_line == n:
+	_sync_zoom_model_inputs()
+	if _zoom_model._n_grid == n:
 		return false
 	# Snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
 	_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
-	_grid_items_per_line = n
-	# Keep the derived ratio in sync for persistence/UI without re-entering
-	# the snapping path.
-	if _has_valid_available_size():
-		var available = _get_available_size()
-		_batching_layout = true
-		target_card_width_ratio = _compute_ratio_for_items_per_line(n, _get_base_dimensions_for_mode(), available, available.x * available.y)
-		_batching_layout = false
+	_zoom_model.set_grid_n(n)
 	return true
 
 ## Maps a viewport-area ratio to the nearest items-per-line stop.
 func _get_nearest_level_for_ratio(p_ratio: float) -> int:
-	var levels: Array[int] = get_snap_levels()
-	if levels.is_empty():
+	_sync_zoom_model_inputs()
+	if view_mode != ViewMode.GRID:
 		return 2
-	var base_dims = _get_base_dimensions_for_mode()
-	var available = _get_available_size()
-	var viewport_area = available.x * available.y
-	var base_area = base_dims.x * base_dims.y
-	var n: int = levels[levels.size() - 1]
-	if viewport_area > 0.0 and base_area > 0.0:
-		var card_area = viewport_area * p_ratio * p_ratio
-		var desired_zoom = sqrt(card_area / base_area)
-		var desired_cross = (base_dims.x if vertical else base_dims.y) * desired_zoom
-		var cross_axis = available.x if vertical else available.y
-		n = clampi(int(round((cross_axis + grid_separation) / maxf(1.0, desired_cross + grid_separation))), 2, levels[levels.size() - 1])
-	# Snap to the nearest available stop.
-	var best: int = levels[0]
-	for l in levels:
-		if absi(l - n) < absi(best - n):
-			best = l
-	return best
+	return _zoom_model.nearest_grid_stop(p_ratio)
 
-## The effective items-per-line for GRID layout. Derives from the legacy ratio
-## once a trustworthy size is available; 0 means "stay on the ratio path".
+## The effective items-per-line for GRID layout. Derives from the ratio once a
+## trustworthy size is available; 0 means "stay on the ratio path".
 func _get_effective_grid_n() -> int:
-	if _grid_items_per_line > 0:
-		return _grid_items_per_line
-	# During startup suppression sizes can be transient — don't lock in an N yet.
-	if not startup_layout_suppressed and _has_valid_available_size():
-		_grid_items_per_line = _get_nearest_level_for_ratio(target_card_width_ratio)
-	return _grid_items_per_line
+	_sync_zoom_model_inputs()
+	return _zoom_model.get_grid_n()
 
 ## Whole lines (rows when vertical, columns when horizontal) that fit in the
 ## viewport on the scroll axis. Groundwork for paged scrolling.
@@ -2037,42 +1857,14 @@ func _reconcile_page_spacers() -> void:
 		flow_pos += 1
 
 ## Compute the exact snap ratio for a given number of items per line.
-func _compute_ratio_for_items_per_line(items_per_line: int, base_dims: Vector2, available: Vector2, viewport_area: float) -> float:
-	# Compute card dimensions that exactly fill the available space for the
-	# given items_per_line. No focus-overflow subtraction here so cards fill
-	# the viewport edge-to-edge. Focused edge cards may clip slightly.
-	var final_card_width: float
-	var final_card_height: float
-
-	if vertical:
-		var target_item_width = (available.x - (items_per_line - 1) * grid_separation) / items_per_line
-		final_card_width = target_item_width
-		final_card_height = final_card_width * (base_dims.y / base_dims.x)
-	else:
-		var target_item_height = (available.y - (items_per_line - 1) * grid_separation) / items_per_line
-		final_card_height = target_item_height
-		final_card_width = final_card_height * (base_dims.x / base_dims.y)
-
-	final_card_width = max(final_card_width, base_dims.x * 0.1)
-	final_card_height = max(final_card_height, base_dims.y * 0.1)
-
-	var target_card_area = final_card_width * final_card_height
-	var ratio = sqrt(target_card_area / viewport_area)
-
-	return max(ratio, 0.05)
-
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
+	_sync_zoom_model_inputs()
 	if not _has_valid_available_size():
 		return desired_ratio
-
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
-		return clampf(desired_ratio, 0.05, _calculate_max_ratio())
-
+		return clampf(desired_ratio, 0.05, _zoom_model.get_max_ratio())
 	# GRID: snap to the nearest items-per-line stop.
-	var base_dims = _get_base_dimensions_for_mode()
-	var available = _get_available_size()
-	var viewport_area = available.x * available.y
-	return _compute_ratio_for_items_per_line(_get_nearest_level_for_ratio(desired_ratio), base_dims, available, viewport_area)
+	return _zoom_model.ratio_for_grid_n(_zoom_model.nearest_grid_stop(desired_ratio))
 
 func _finish_recalculate() -> void:
 	"""Clear the recalc guard; if a resize arrived mid-pass, run one deferred
@@ -2098,22 +1890,14 @@ func _recalculate_layout():
 
 	# Ensure cached settings are fresh before any layout math
 	_refresh_cached_settings()
-
-	# Defensive: if display mode or media aspect ratio changed, re-snap the target
-	# ratio so layout uses a valid stop for the new base dimensions.
-	# (GRID mode with a derived N skips this: N is a count and survives base-dimension
-	# changes; it is clamped to the new stop range in the layout pass below.)
-	if UIManager and UIManager.card_settings_state:
-		var layout_state = UIManager.card_settings_state
-		if layout_state.display_mode != _last_layout_display_mode or layout_state.media_aspect_ratio != _last_layout_media_aspect_ratio:
-			if view_mode != ViewMode.GRID or _grid_items_per_line <= 0:
-				var max_ratio = _calculate_max_ratio()
-				var clamped = clampf(target_card_width_ratio, 0.05, max_ratio)
-				var snapped_ratio = _calculate_snapped_ratio(clamped)
-				if not is_equal_approx(target_card_width_ratio, snapped_ratio):
-					_batching_layout = true
-					target_card_width_ratio = snapped_ratio
-					_batching_layout = false
+	# Push fresh inputs into the zoom model. If display mode or media aspect
+	# ratio changed the base dimensions, the model's stop caches rebuild and
+	# LIST/CAROUSEL k re-resolves from its fraction automatically; GRID N is a
+	# count and survives (clamped to the new stop range below).
+	_sync_zoom_model_inputs()
+	# Clamp resolved zoom structure into the current stop range (the window may
+	# have shrunk, or base dimensions changed with display mode).
+	_zoom_model.clamp_structure_to_stops()
 
 	_is_recalculating_layout = true
 
@@ -2146,33 +1930,12 @@ func _recalculate_layout():
 
 	match view_mode:
 		ViewMode.GRID:
-			var n = _get_effective_grid_n()
+			var n := _zoom_model.get_grid_n()
 			if n > 0:
-				# Clamp N to the stop range for the current viewport (window may
-				# have shrunk, or base dimensions changed with display mode).
-				var levels = get_snap_levels()
-				if not levels.is_empty() and n > levels[-1]:
-					n = levels[-1]
-					_grid_items_per_line = n
 				# Exact fill: N whole cards per line, sized directly from the
-				# cross-axis space. No ratio/zoom round-trips.
-				var grid_available = _get_available_size()
-				var cross_axis = grid_available.x if vertical else grid_available.y
-				var base_cross = base_dims.x if vertical else base_dims.y
-				var other_base = base_dims.y if vertical else base_dims.x
-				var card_cross = maxf((cross_axis - (n - 1) * grid_separation) / n, base_cross * 0.1)
-				if vertical:
-					card_size = Vector2(card_cross, card_cross * other_base / base_cross)
-				else:
-					card_size = Vector2(card_cross * other_base / base_cross, card_cross)
-				# Keep the derived ratio in sync for persistence/UI.
-				var vp_area = grid_available.x * grid_available.y
-				if vp_area > 0.0:
-					var derived_ratio = sqrt((card_size.x * card_size.y) / vp_area)
-					if not is_equal_approx(derived_ratio, target_card_width_ratio):
-						_batching_layout = true
-						target_card_width_ratio = derived_ratio
-						_batching_layout = false
+				# cross-axis space. No ratio/zoom round-trips; the persisted
+				# ratio derives from N.
+				card_size = _zoom_model.grid_card_size_for_n(n)
 			else:
 				card_size = base_dims * current_zoom
 			focused_card_size = card_size * focus_scale
@@ -2181,28 +1944,17 @@ func _recalculate_layout():
 			# fills the viewport exactly; unfocused cards shrink by 1/focus_scale
 			# centered in their cells. Nothing exceeds the cell, so no overflow.
 			# Zoom resolves to discrete scroll-axis stops (k cards share the
-			# viewport height); the stored fraction stays in sync for
-			# persistence/UI, exactly like the grid's derived ratio.
-			var k_list := _get_scroll_lines_visible()
-			card_size = _scroll_stop_size(k_list)
+			# viewport height); the persisted fraction derives from k.
+			var k_list := _zoom_model.get_lines_visible()
+			card_size = _zoom_model.scroll_stop_size(k_list)
 			focused_card_size = card_size
-			var list_frac := card_size.y / _get_available_size().y
-			if not is_equal_approx(list_frac, target_card_width_ratio):
-				_batching_layout = true
-				target_card_width_ratio = list_frac
-				_batching_layout = false
 		ViewMode.CAROUSEL:
 			# CAROUSEL (inverted focus): the cell is the FOCUSED size, so focused
 			# height fills the viewport exactly; unfocused cards shrink by
 			# 1/focus_scale centered in their cells. No overflow is reserved.
-			var k_car := _get_scroll_lines_visible()
-			card_size = _scroll_stop_size(k_car)
+			var k_car := _zoom_model.get_lines_visible()
+			card_size = _zoom_model.scroll_stop_size(k_car)
 			focused_card_size = card_size
-			var car_frac := card_size.x / _get_available_size().x
-			if not is_equal_approx(car_frac, target_card_width_ratio):
-				_batching_layout = true
-				target_card_width_ratio = car_frac
-				_batching_layout = false
 
 	var available = _get_available_size()
 
@@ -2646,12 +2398,9 @@ func setup(card_scene_resource: PackedScene, total_items: int, initial_target_ra
 	# valid stop happens once when the window size is stable and the grid is
 	# explicitly settled.
 	if initial_target_ratio >= 0.0:
-		var max_ratio = _calculate_max_ratio()
-		var clamped = clampf(initial_target_ratio, 0.05, max_ratio)
-		if DEBUG_LOG: print("[Grid] setup initial_target_ratio=", initial_target_ratio, " clamped=", clamped)
-		_batching_layout = true
-		target_card_width_ratio = clamped
-		_batching_layout = false
+		if DEBUG_LOG: print("[Grid] setup initial_target_ratio=", initial_target_ratio)
+		_sync_zoom_model_inputs()
+		_zoom_model.stamp_ratio(initial_target_ratio)
 
 	# When startup is orchestrated by Main, defer pool creation until the final
 	# available size is known so the pool is sized for the real viewport instead
