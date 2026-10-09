@@ -35,6 +35,14 @@ var _wheel_chase_active: bool = false
 var _wheel_target: float = 0.0
 var _wheel_velocity: float = 0.0
 
+## px/s velocity of the float motion model (EMA over frame deltas), exposed
+## for consumers like the grid's cover-suppression and buffer-load debounce.
+## SSC owns the float model, so it owns its derivative too. Discontinuous
+## writes (write_immediate*) reset the baseline so teleports don't read as
+## motion; decays to exactly 0 at rest.
+var _scroll_velocity_ema: float = 0.0
+var _velocity_last_scroll: float = -1.0
+
 ## Single-writer scroll ownership. Every scroll operation (wheel tick burst,
 ## tween, instant set, scrollbar drag) bumps this monotonic id and captures it;
 ## stale per-frame callbacks (killed tweens, lagging chases) compare against it
@@ -123,6 +131,16 @@ var scroll_paused: bool = false:
 			_page_scroll_in_flight = false
 
 func _process(delta: float) -> void:
+	# Velocity EMA over the float model — runs even when idle so the reading
+	# decays to exactly 0 at rest (consumers poll it every frame).
+	if delta > 0.0:
+		var inst := 0.0
+		if _velocity_last_scroll >= 0.0:
+			inst = (_scroll_float - _velocity_last_scroll) / delta
+		_velocity_last_scroll = _scroll_float
+		_scroll_velocity_ema = lerpf(_scroll_velocity_ema, inst, 0.3)
+		if absf(inst) < 0.5 and not _wheel_chase_active and not _is_smooth_scrolling:
+			_scroll_velocity_ema = 0.0
 	if not _wheel_chase_active:
 		return
 	# Wheel chase: exponential glide toward the isolated wheel target, on the
@@ -161,6 +179,12 @@ func _process(delta: float) -> void:
 ## exactly). Prefer over scroll_vertical/horizontal for visual math.
 func get_scroll_float() -> float:
 	return _scroll_float
+
+## px/s velocity of the float motion model (EMA over frame deltas; exactly 0
+## at rest). The grid consumes this for cover-download suppression and the
+## buffer-load debounce.
+func get_scroll_velocity() -> float:
+	return _scroll_velocity_ema
 
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
@@ -690,6 +714,10 @@ func write_immediate(value: float) -> void:
 	_wheel_velocity = 0.0
 	_is_smooth_scrolling = false
 	_page_scroll_in_flight = false
+	# Discontinuous write: reset the velocity baseline so the jump doesn't
+	# read as motion (the EMA measures continuous movement only).
+	_scroll_velocity_ema = 0.0
+	_velocity_last_scroll = -1.0
 	var sb: ScrollBar = _get_scrollbar()
 	if sb:
 		value = clampf(value, sb.min_value, maxf(sb.min_value, sb.max_value - sb.page))

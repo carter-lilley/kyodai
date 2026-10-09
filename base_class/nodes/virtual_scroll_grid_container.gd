@@ -314,9 +314,13 @@ var _scroll_anchor: GridScrollAnchor = null
 # clamps the write, and the single-writer ownership in SSC makes echo guards
 # unnecessary.
 var _grid_trace_stuck_count: int = 0
-var _last_pass_scroll: float = -1.0
-var _last_pass_time_ms: int = 0
-var _scroll_velocity: float = 0.0
+
+## Scroll velocity (px/s) is owned by the SmoothScrollContainer (it owns the
+## float motion model, so it owns the derivative too). This is the single
+## read point; the EMA decays to exactly 0 at rest and discontinuous
+## write_immediate jumps reset its baseline.
+func _get_scroll_velocity() -> float:
+	return _scroll_container.get_scroll_velocity() if _scroll_container else 0.0
 
 # Cover-download suppression during fast scroll / A-Z scrubbing (Fix 4):
 # while suppressed, cards render the placeholder for covers that aren't on
@@ -563,6 +567,15 @@ var _last_margin_virtual_end: int = -1
 
 var _data_cache: Dictionary = {}
 var _pending_loads: Dictionary = {}
+
+## Buffer-zone data loads (beyond the visible zone + one line) deferred while
+## scrolling fast: flushed when velocity drops below the threshold OR the
+## viewport has been idle 150ms, whichever first. Keeps fast traversal from
+## flooding the DB worker with windows nobody is looking at.
+const BUFFER_LOAD_VELOCITY_STRIDES: float = 2.0
+const BUFFER_LOAD_IDLE_FLUSH_MS: int = 150
+var _deferred_data_indices: Dictionary = {}  # idx -> true
+var _last_scroll_active_ms: int = 0          # last frame with nonzero velocity
 # Guards _pending_loads: DB worker threads check is_load_pending() to skip
 # stale queries superseded by jumps/refreshes while they were queued.
 var _pending_loads_mutex: Mutex = Mutex.new()
@@ -1056,6 +1069,9 @@ func _process(_delta: float):
 	# scrolling ends, so _process is where the stale velocity decays and
 	# suppressed cover loads resume (and visible placeholders retry).
 	_update_cover_dl_suppression()
+
+	# Buffer-zone data loads deferred during fast scroll flush here on settle.
+	_flush_deferred_data_loads()
 
 	# Top up the card pool a few per frame after zoom-out/resize grew the layout.
 	_process_pool_growth()
@@ -2804,13 +2820,6 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
 
-	var now_ms := Time.get_ticks_msec()
-	if _last_pass_time_ms > 0:
-		var dt: float = float(now_ms - _last_pass_time_ms) / 1000.0
-		if dt > 0.0005:
-			_scroll_velocity = lerpf(_scroll_velocity, (value - _last_pass_scroll) / dt, 0.3)
-	_last_pass_scroll = value
-	_last_pass_time_ms = now_ms
 	_update_cover_dl_suppression()
 
 	var available := _get_available_size()
@@ -3047,8 +3056,9 @@ func _reset_transient_scroll_state(reason: String) -> void:
 	"""Single reset point for transient scroll/jump state. Called from every
 	entry point that moves the view programmatically so a stale velocity or
 	pending expansion from a previous operation can never fight the new one."""
-	_scroll_velocity = 0.0
+	# (Velocity needs no reset here: write_immediate resets the SSC baseline.)
 	_pending_buffer_expansion = false
+	_deferred_data_indices.clear()
 	SmoothScrollContainer._strace("reset-transient reason=" + reason)
 	if trace_verbose:
 		if DEBUG_LOG: print("[GridTrace] reset-transient: reason=", reason, " t=", Time.get_ticks_msec())
@@ -3069,12 +3079,11 @@ func set_scrub_cover_suppressed(active: bool) -> void:
 ## visible cards stuck on the placeholder are nudged to retry - nothing else
 ## re-triggers the download they skipped.
 func _update_cover_dl_suppression() -> void:
-	# Velocity only updates inside scroll passes; zero it once passes stop so
-	# a settled viewport doesn't keep suppression latched on a stale reading.
-	if _last_pass_time_ms > 0 and Time.get_ticks_msec() - _last_pass_time_ms > 150:
-		_scroll_velocity = 0.0
+	# Velocity comes from the scroll container: it owns the float motion model
+	# and its derivative, and the reading decays to exactly 0 at rest.
+	var velocity := _get_scroll_velocity()
 	var stride := _get_normal_stride()
-	var fast := stride > 0.0 and absf(_scroll_velocity) > stride * FAST_SCROLL_SUPPRESS_STRIDES
+	var fast := stride > 0.0 and absf(velocity) > stride * FAST_SCROLL_SUPPRESS_STRIDES
 	var want := _scrub_cover_suppressed or fast
 	# Scroll-idle gate: while scrolling fast, buffer-card decodes wait so the
 	# thread pool's full throughput serves visible covers (they un-gate here on
@@ -4180,15 +4189,29 @@ func _request_missing_data():
 	if trace_verbose:
 		if DEBUG_LOG: print("[GridTrace] missing-data: count=", missing_indices.size(), " first=", missing_indices[0], " t=", Time.get_ticks_msec())
 
-	var batches: Array[Array] = []
-	var current_batch: Array[int] = [missing_indices[0]]
+	# Buffer-zone indices (beyond the visible zone + one line) defer during
+	# fast scroll; the visible zone always requests immediately.
+	var line_margin := _get_items_per_line()
+	var defer_below := _visible_start_idx - line_margin
+	var defer_above := _visible_end_idx + line_margin
+	var immediate: Array[int] = []
+	for idx in missing_indices:
+		if idx >= defer_below and idx < defer_above:
+			immediate.append(idx)
+		else:
+			_deferred_data_indices[idx] = true
 
-	for i in range(1, missing_indices.size()):
-		if missing_indices[i] == missing_indices[i - 1] + 1:
-			current_batch.append(missing_indices[i])
+	if immediate.size() == 0:
+		return
+	var batches: Array[Array] = []
+	var current_batch: Array[int] = [immediate[0]]
+
+	for i in range(1, immediate.size()):
+		if immediate[i] == immediate[i - 1] + 1:
+			current_batch.append(immediate[i])
 		else:
 			batches.append(current_batch)
-			current_batch = [missing_indices[i]]
+			current_batch = [immediate[i]]
 	batches.append(current_batch)
 
 	for batch in batches:
@@ -4196,6 +4219,54 @@ func _request_missing_data():
 			var offset = batch[0]
 			var limit = batch.size()
 			_request_data(offset, limit)
+
+## Flush buffer-zone data loads deferred during fast scroll. Runs from
+## _process: drains when the scroll velocity drops below the threshold OR the
+## viewport has been idle BUFFER_LOAD_IDLE_FLUSH_MS, whichever first.
+func _flush_deferred_data_loads() -> void:
+	if _deferred_data_indices.is_empty():
+		return
+	var velocity := absf(_get_scroll_velocity())
+	var now_ms := Time.get_ticks_msec()
+	if velocity > 1.0:
+		_last_scroll_active_ms = now_ms
+	var stride := _get_normal_stride()
+	var slow := velocity <= maxf(stride, 1.0) * BUFFER_LOAD_VELOCITY_STRIDES
+	var idle := _last_scroll_active_ms == 0 or now_ms - _last_scroll_active_ms >= BUFFER_LOAD_IDLE_FLUSH_MS
+	if not slow and not idle:
+		return
+	var indices: Array = _deferred_data_indices.keys()
+	_deferred_data_indices.clear()
+	indices.sort()
+	# Drop indices that became cached/pending meanwhile or scrolled away; the
+	# current window's own _request_missing_data re-finds anything still needed.
+	var live: Array[int] = []
+	for idx in indices:
+		if idx < 0 or idx >= _source_total_items:
+			continue
+		if _data_cache.has(idx) or _is_index_pending(idx):
+			continue
+		if not is_index_near_buffer(idx):
+			continue
+		live.append(idx)
+	var i := 0
+	while i < live.size():
+		var offset: int = live[i]
+		var limit := 1
+		while i + limit < live.size() and live[i + limit] == offset + limit:
+			limit += 1
+		_request_data(offset, limit)
+		i += limit
+
+## True when idx is within one buffer-window width of the current buffer
+## window. Stale prefetch/decode completions use it to drop work for content
+## that has scrolled away. Before the first scroll pass (no window yet)
+## everything counts as near so nothing is dropped blindly.
+func is_index_near_buffer(idx: int) -> bool:
+	if _last_pass_buffer_start < 0 or _last_pass_buffer_end <= _last_pass_buffer_start:
+		return true
+	var width := _last_pass_buffer_end - _last_pass_buffer_start
+	return idx >= _last_pass_buffer_start - width and idx < _last_pass_buffer_end + width
 
 func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	"""Prefetch data beyond the buffer edge in the current scroll direction so
@@ -4206,13 +4277,14 @@ func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	# directional prefetch would only crowd the queues and delay visible cards.
 	if _programmatic_focus_index >= 0:
 		return
-	if stride <= 0.0 or _total_items <= 0 or absf(_scroll_velocity) < stride * 2.0:
+	var velocity := _get_scroll_velocity()
+	if stride <= 0.0 or _total_items <= 0 or absf(velocity) < stride * 2.0:
 		return
-	var lead_px: float = clampf(absf(_scroll_velocity) * 0.15, stride * 2.0, stride * 8.0)
+	var lead_px: float = clampf(absf(velocity) * 0.15, stride * 2.0, stride * 8.0)
 	var lead_items: int = int(ceil(lead_px / stride)) * items_per_line
 	var start: int
 	var end: int
-	if _scroll_velocity > 0.0:
+	if velocity > 0.0:
 		start = _buffer_target_end
 		end = mini(_total_items, start + lead_items)
 	else:
@@ -4227,7 +4299,7 @@ func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	if missing.size() == 0:
 		return
 	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", _scroll_velocity, " t=", Time.get_ticks_msec())
+		if DEBUG_LOG: print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", velocity, " t=", Time.get_ticks_msec())
 	_request_data(missing[0], missing.size())
 
 func _check_preload_needed():
@@ -4548,8 +4620,8 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		# Warm the texture cache as data lands (covers both window and prefetch
 		# loads) so cover art is decoded before its row scrolls into view. Same
 		# grid-computed bucket the cards are assigned, so warmed entries match
-		# card lookups exactly.
-		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr()))
+		# card lookups exactly. Grid + index enable the stale-decode drop.
+		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr()), self, cache_key)
 
 	if duplicates_found > 0:
 		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])

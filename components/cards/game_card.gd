@@ -12,6 +12,10 @@ signal game_changed(game: GameResource)
 		if game == value:
 			return
 		game = value
+		# Per-game placeholder tint, applied the moment the game is assigned
+		# (grid's visual-setup path) so the swap to cover art never flashes
+		# the neutral gray placeholder.
+		_loading_texture = _tinted_placeholder_texture(game.id if game else "")
 		game_changed.emit(game)
 		_update_texture_pin_state()
 		_update_display()
@@ -28,6 +32,30 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 @export var preview_mode: bool = false
 
 static var _placeholder_texture: Texture2D = _create_placeholder_texture()
+
+## Per-game placeholder color: derived from the game id hash (stable per
+## game), quantized to a small hue palette so the tinted 2×2 textures are
+## shared. Assigned when the game is set — before any cover arrives — so the
+## media panel never flashes neutral gray between placeholder and art, and
+## failed art (negative-cache TTL) shows the game's color immediately.
+const PLACEHOLDER_HUE_STEPS: int = 24
+static var _placeholder_tint_cache: Dictionary = {}  # hue_step -> Texture2D
+
+static func placeholder_color_for_id(id: String) -> Color:
+	var step := absi(hash(id)) % PLACEHOLDER_HUE_STEPS
+	return Color.from_hsv(float(step) / PLACEHOLDER_HUE_STEPS, 0.30, 0.16)
+
+static func _tinted_placeholder_texture(id: String) -> Texture2D:
+	if id == "":
+		return _placeholder_texture
+	var step := absi(hash(id)) % PLACEHOLDER_HUE_STEPS
+	var tex: Texture2D = _placeholder_tint_cache.get(step, null)
+	if tex == null:
+		var img := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+		img.fill(placeholder_color_for_id(id))
+		tex = ImageTexture.create_from_image(img)
+		_placeholder_tint_cache[step] = tex
+	return tex
 
 static func _create_placeholder_texture() -> Texture2D:
 	var img := Image.create(2, 2, false, Image.FORMAT_RGBA8)

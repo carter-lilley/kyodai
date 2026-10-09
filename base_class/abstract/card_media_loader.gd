@@ -40,11 +40,13 @@ const DECODE_SIZE_MAX: int = 2048
 ## a cover URL that failed is not retried for a day, so scrolling back and
 ## forth over games with dead art doesn't re-attempt the download every pass.
 const FAILURE_RETRY_TTL_SEC: int = 86400
-# Bound the static failure-TTL map so permanently-failing URLs don't grow it forever.
+# Bound the static failure registry so permanently-failing URLs don't grow it forever.
 const MAX_FAILED_DOWNLOADS: int = 512
 const DEBUG_LOG: bool = false
 
-static var _failed_downloads: Dictionary = {}
+## Negative cache for failed cover downloads (TTL + cap + reconnect
+## invalidation). Shared by all cards; queryable by placeholder rendering.
+static var _failed_registry := FailedDownloadRegistry.new(FAILURE_RETRY_TTL_SEC, MAX_FAILED_DOWNLOADS)
 ## While true (grid fast-scrolling or A-Z scrubbing), covers that aren't on
 ## disk render the placeholder instead of queueing downloads; the grid lifts
 ## the flag on settle and asks visible placeholder cards to retry.
@@ -57,7 +59,12 @@ static var downloads_suppressed: bool = false
 var _assigned_decode_bucket: int = 0
 
 static func clear_failed_downloads() -> void:
-	_failed_downloads.clear()
+	_failed_registry.clear()
+
+## True while a cover URL's failure TTL is active. Placeholder rendering uses
+## this to pick the per-game placeholder color immediately (no retry storm).
+static func is_download_failed(cover_url: String) -> bool:
+	return cover_url != "" and _failed_registry.is_failed(cover_url)
 
 ## Round a pixel dimension up to the decode-size bucket. Single source of
 ## truth so the grid's prefetch and the card's own load derive matching keys.
@@ -89,7 +96,10 @@ func set_assigned_decode_bucket(bucket: int) -> void:
 ## view. Only reads files already on disk; never triggers downloads.
 ## `decode_size` should be the grid's current card-pixel bucket so the warmed
 ## entry matches what cards will look up (0 = fallback size).
-static func preload_cover(game: GameResource, decode_size: int = 0) -> void:
+## `prefetch_grid` + `virtual_index` enable the stale-decode drop: when the
+## completion lands after the buffer window moved on, the texture upload is
+## skipped (the worker decode is already paid; the main-thread upload is not).
+static func preload_cover(game: GameResource, decode_size: int = 0, prefetch_grid: Node = null, virtual_index: int = -1) -> void:
 	if not game or not SystemManager.memory:
 		return
 	var size := decode_size if decode_size > 0 else MAX_COVER_TEXTURE_SIZE
@@ -109,6 +119,9 @@ static func preload_cover(game: GameResource, decode_size: int = 0) -> void:
 	var load_callable = func():
 		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path), size))
 	var callback_callable = func(image):
+		if prefetch_grid and virtual_index >= 0:
+			if not is_instance_valid(prefetch_grid) or not prefetch_grid.is_index_near_buffer(virtual_index):
+				return  # stale prefetch: window moved on, drop before upload
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
 			if texture:
@@ -178,8 +191,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 				_set_loading_texture(true)
 				return
 			else:
-				var fail_time: float = _failed_downloads.get(cover_url, 0.0)
-				if Time.get_unix_time_from_system() - fail_time < FAILURE_RETRY_TTL_SEC:
+				if _failed_registry.is_failed(cover_url):
 					if DEBUG_LOG: print("[CardMediaLoader] Skipping cover (failed recently, TTL active): %s" % cover_url)
 					_set_loading_texture()
 					return
@@ -293,7 +305,7 @@ func _start_cover_download(cover_url: String, cache_path: String, high_priority:
 		if not _card.game or _card.game.id != target_game_id:
 			return
 		if loaded_texture:
-			_failed_downloads.erase(cover_url)
+			_failed_registry.forget(cover_url)
 			# loaded_texture is full-res (CoverSubManager does not downscale),
 			# so it isn't cached under the 512px card key. Show it now, then
 			# warm the proper card variant from the file just written to disk
@@ -309,10 +321,7 @@ func _start_cover_download(cover_url: String, cache_path: String, high_priority:
 			# Bounded short-delay retry so a settled viewport self-heals.
 			_schedule_drop_retry(cover_url, cache_path, high_priority, target_game_id, download_id)
 		else:
-			# Insertion-ordered: front key is the oldest failure.
-			while _failed_downloads.size() >= MAX_FAILED_DOWNLOADS:
-				_failed_downloads.erase(_failed_downloads.keys()[0])
-			_failed_downloads[cover_url] = Time.get_unix_time_from_system()
+			_failed_registry.mark_failed(cover_url)
 			_set_loading_texture()
 	, high_priority)
 

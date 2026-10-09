@@ -244,6 +244,11 @@ func _initialize_threads():
 
 func _ready():
 	set_process(true)
+	# Reconnect invalidates the negative cache so covers that failed while
+	# offline retry immediately instead of waiting out the TTL. Deferred:
+	# SystemManager's @onready sub-manager refs aren't set until after this
+	# child's _ready.
+	call_deferred("_connect_network_invalidation")
 	Performance.add_custom_monitor("memory/image_queue_high", _get_image_queue_high_size)
 	Performance.add_custom_monitor("memory/image_queue_low", _get_image_queue_low_size)
 	Performance.add_custom_monitor("memory/image_tasks_inflight", _get_image_tasks_inflight)
@@ -251,6 +256,12 @@ func _ready():
 	Performance.add_custom_monitor("memory/lp_callback_backlog", _get_lp_callback_backlog)
 	Performance.add_custom_monitor("memory/texture_cache_count", _get_texture_cache_count)
 	Performance.add_custom_monitor("memory/texture_cache_mb", _get_texture_cache_mb)
+
+func _connect_network_invalidation() -> void:
+	if SystemManager.network and SystemManager.network.has_signal("network_status_changed"):
+		SystemManager.network.network_status_changed.connect(func(online: bool):
+			if online:
+				CardMediaLoader.clear_failed_downloads())
 
 func _get_image_queue_high_size() -> int:
 	_image_mutex.lock()
