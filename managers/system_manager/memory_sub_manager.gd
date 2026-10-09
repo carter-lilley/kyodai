@@ -44,6 +44,8 @@ var _pinned_texture_keys: Dictionary = {}  # cache_key -> int refcount
 const MAX_TEXTURE_CACHE_SIZE: int = 400
 const MAX_TEXTURE_CACHE_MEMORY_MB: int = 300
 const MAX_TEXTURE_CACHE_MEMORY_MB_ANDROID: int = 100
+## Eviction logging (per-entry decode bucket + byte totals) for cache audits.
+const DEBUG_CACHE_LOG: bool = false
 var _texture_cache_memory: int = 0  # Estimated bytes currently cached
 
 static func get_max_texture_cache_size() -> int:
@@ -71,6 +73,8 @@ const MAX_LP_CALLBACKS_PER_FRAME: int = 15
 ## decodes resume once scrolling settles. Prevents a scroll storm from minting
 ## hundreds of soon-evicted textures that crowd out visible rows.
 var _low_priority_gated: bool = false
+## Owners currently holding the low-priority decode gate (owner_id -> true).
+var _low_priority_gate_holders: Dictionary = {}
 
 # Thread-safe main-thread hops ({"callback": Callable, "args": Array}) from
 # workers that must reach the main thread reliably; call_deferred from threads
@@ -791,14 +795,35 @@ static func clear_pending_low_priority_image_tasks(fire_callbacks: bool = true) 
 			_instance.call_deferred("_execute_callback", cb, null)
 	return drained_count
 
-## Gate/un-gate low-priority (buffer-card) decode work. While gated, image
-## workers only pull high-priority tasks. On un-gate, re-post one semaphore
-## wake per queued low-priority task: their original posts were consumed by
-## workers that (correctly) refused to pop them while the gate was closed.
-static func set_low_priority_gated(gated: bool) -> void:
+## Low-priority decode gate, owner-refcounted. While ANY holder has the gate,
+## image workers only pull high-priority tasks. Previously a bare bool two
+## live grids could fight over (whichever grid's scroll pass ran last won);
+## now each holder acquires/releases by owner id and _exit_tree releases its
+## own id. On un-gate, re-post one semaphore wake per queued low-priority
+## task: their original posts were consumed by workers that (correctly)
+## refused to pop them while the gate was closed.
+static func acquire_low_priority_gate(owner_id: int) -> void:
 	if _instance == null:
 		return
 	_instance._image_mutex.lock()
+	_instance._low_priority_gate_holders[owner_id] = true
+	_instance._image_mutex.unlock()
+	_refresh_low_priority_gate()
+
+static func release_low_priority_gate(owner_id: int) -> void:
+	if _instance == null:
+		return
+	_instance._image_mutex.lock()
+	var had: bool = _instance._low_priority_gate_holders.erase(owner_id)
+	_instance._image_mutex.unlock()
+	if had:
+		_refresh_low_priority_gate()
+
+static func _refresh_low_priority_gate() -> void:
+	if _instance == null:
+		return
+	_instance._image_mutex.lock()
+	var gated := not _instance._low_priority_gate_holders.is_empty()
 	var was_gated := _instance._low_priority_gated
 	_instance._low_priority_gated = gated
 	var pending := _instance._image_low_priority_queue.size() if (was_gated and not gated) else 0
@@ -883,12 +908,16 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 	var memory_limit = get_max_texture_cache_memory_bytes()
 	var tex_memory = _estimate_texture_memory(texture)
 
-	# Evict oldest (front of the insertion-ordered Dictionary) by count/memory limits.
-	# Pinned textures are skipped so currently-visible covers never disappear.
+	# Evict oldest (front of the insertion-ordered Dictionary). The BYTE
+	# estimate is the primary eviction metric; the entry count cap is a
+	# secondary backstop. Pinned textures are skipped so currently-visible
+	# covers never disappear.
 	var examined: int = 0
+	var evicted_count: int = 0
+	var evicted_bytes: int = 0
 	while (_instance._texture_cache.size() >= cache_limit or
 		   (_instance._texture_cache_memory + tex_memory) > memory_limit) and not _instance._texture_cache.is_empty():
-		var oldest_key = _instance._texture_cache.keys()[0]
+		var oldest_key: String = _instance._texture_cache.keys()[0]
 		if _instance._pinned_texture_keys.get(oldest_key, 0) > 0:
 			# Oldest entry is pinned: move it to the back and look at the next one.
 			var tex = _instance._texture_cache[oldest_key]
@@ -901,10 +930,22 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 				break
 			continue
 		var oldest_tex = _instance._texture_cache.get(oldest_key, null)
+		var freed := 0
 		if oldest_tex:
-			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory - _estimate_texture_memory(oldest_tex))
+			freed = _estimate_texture_memory(oldest_tex)
+			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory - freed)
+		if DEBUG_CACHE_LOG:
+			# Keys are "<path>#<decode bucket>"; log the bucket so cache audits
+			# can spot duplicate (path, bucket) variants and hit-rate trouble.
+			var bucket := oldest_key.get_slice("#", oldest_key.get_slice_count("#") - 1)
+			var reason := "bytes" if (_instance._texture_cache_memory + tex_memory) > memory_limit else "count"
+			print("[Memory] evict %s#%s reason=%s freed=%.1fKB cache=%.1fMB/%d entries" % [oldest_key.get_slice("#", 0).get_file(), bucket, reason, freed / 1024.0, _instance._texture_cache_memory / 1048576.0, _instance._texture_cache.size()])
+		evicted_count += 1
+		evicted_bytes += freed
 		_instance._texture_cache.erase(oldest_key)
 		examined = 0
+	if DEBUG_CACHE_LOG and evicted_count > 1:
+		print("[Memory] evicted %d textures (%.1fKB) for %s" % [evicted_count, evicted_bytes / 1024.0, cache_key.get_slice("#", 0).get_file()])
 
 	_instance._texture_cache[cache_key] = texture
 	_instance._texture_cache_memory += tex_memory

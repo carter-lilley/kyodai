@@ -248,6 +248,13 @@ func set_image_priority(high_priority: bool) -> void:
 	if _media_loader:
 		_media_loader.set_priority(high_priority, game)
 
+## Assign the grid-computed decode bucket (grid card_size × dpr, bucketed).
+## Called by the grid's layout pass so live card.size is never a decode basis
+## and zoom/resize can't mint duplicate (path, bucket) cache entries.
+func set_assigned_decode_bucket(bucket: int) -> void:
+	if _media_loader:
+		_media_loader.set_assigned_decode_bucket(bucket)
+
 func _update_texture_pin_state() -> void:
 	var desired_key := ""
 	if _image_priority_high and game and _media_loader:

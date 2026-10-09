@@ -50,6 +50,12 @@ static var _failed_downloads: Dictionary = {}
 ## the flag on settle and asks visible placeholder cards to retry.
 static var downloads_suppressed: bool = false
 
+## Grid-assigned decode bucket (0 = fall back to the card's live size). The
+## grid computes it from ITS card_size at layout time and assigns it before
+## any load, so live card.size is never a decode basis and layout transitions
+## (zoom, resize) can't mint duplicate (path, bucket) cache entries.
+var _assigned_decode_bucket: int = 0
+
 static func clear_failed_downloads() -> void:
 	_failed_downloads.clear()
 
@@ -60,6 +66,23 @@ static func decode_bucket_for_size(px: float) -> int:
 		return MAX_COVER_TEXTURE_SIZE
 	var bucket := int(ceil(px / DECODE_SIZE_BUCKET)) * DECODE_SIZE_BUCKET
 	return clampi(bucket, DECODE_SIZE_MIN, DECODE_SIZE_MAX)
+
+## Decode bucket for a GRID-COMPUTED card size at a display pixel density.
+## The one decode-basis formula: bucket128(clamp(max_axis × dpr, 256, 2048)).
+static func decode_bucket_for_card_size(card_size: Vector2, dpr: float) -> int:
+	return decode_bucket_for_size(maxf(card_size.x, card_size.y) * maxf(dpr, 0.01))
+
+## Physical pixel density of the current screen (1.0 headless / unknown).
+static func current_dpr() -> float:
+	if DisplayServer.get_name() == "headless":
+		return 1.0
+	var scale := DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen())
+	return scale if scale > 0.0 else 1.0
+
+## Assign the grid-computed decode bucket. Called by the grid's layout pass
+## (_configure_card_size_flags); takes effect on the next load.
+func set_assigned_decode_bucket(bucket: int) -> void:
+	_assigned_decode_bucket = bucket
 
 ## Warm the texture memory cache for a game with no card attached. Used by the
 ## grid's directional prefetch so cover art is decoded before rows scroll into
@@ -95,11 +118,14 @@ static func preload_cover(game: GameResource, decode_size: int = 0) -> void:
 func _init(card: GameCard) -> void:
 	_card = card
 
-## Decode size for THIS card: its rendered pixel size, bucketed. Falls back to
-## the fixed size before layout has run (size == 0).
+## Decode size for THIS card: the grid-assigned bucket when set (preferred —
+## grid-computed card size is stable across layout transitions), else its
+## rendered pixel size bucketed, else the fixed pre-layout fallback.
 func _decode_size() -> int:
+	if _assigned_decode_bucket > 0:
+		return _assigned_decode_bucket
 	if is_instance_valid(_card) and _card.size.x > 0.0 and _card.size.y > 0.0:
-		return decode_bucket_for_size(maxf(_card.size.x, _card.size.y))
+		return decode_bucket_for_size(maxf(_card.size.x, _card.size.y) * current_dpr())
 	return MAX_COVER_TEXTURE_SIZE
 
 ## Returns the memory-cache key this loader would use for `game`, or "" if no

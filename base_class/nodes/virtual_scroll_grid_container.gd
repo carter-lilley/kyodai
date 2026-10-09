@@ -326,6 +326,7 @@ var _scroll_velocity: float = 0.0
 const FAST_SCROLL_SUPPRESS_STRIDES: float = 4.0  # px/s threshold = 4 row pitches
 var _scrub_cover_suppressed: bool = false   # external: A-Z carousel drag
 var _cover_dl_suppressed: bool = false      # effective state last applied
+var _lp_gate_held: bool = false             # this grid holds the (refcounted) low-priority decode gate
 var _last_pass_buffer_start: int = -1
 var _last_pass_buffer_end: int = -1
 var _last_stamp_scroll: float = -1.0
@@ -869,9 +870,11 @@ func _exit_tree():
 	if is_queued_for_deletion():
 		_active_cards.clear()
 		_active_cards_by_index.clear()
-	# The low-priority decode gate is process-global: never leave it closed
-	# when this grid leaves the tree or other screens' covers starve.
-	MemorySubManager.set_low_priority_gated(false)
+	# The low-priority decode gate is process-global (owner-refcounted): never
+	# leave it held when this grid leaves the tree or other screens starve.
+	if _lp_gate_held:
+		_lp_gate_held = false
+		MemorySubManager.release_low_priority_gate(get_instance_id())
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
@@ -3076,7 +3079,13 @@ func _update_cover_dl_suppression() -> void:
 	# Scroll-idle gate: while scrolling fast, buffer-card decodes wait so the
 	# thread pool's full throughput serves visible covers (they un-gate here on
 	# settle and resume behind the visible cards already in the high queue).
-	MemorySubManager.set_low_priority_gated(fast)
+	# Owner-refcounted: two live grids can't fight over the process-global gate.
+	if fast != _lp_gate_held:
+		_lp_gate_held = fast
+		if fast:
+			MemorySubManager.acquire_low_priority_gate(get_instance_id())
+		else:
+			MemorySubManager.release_low_priority_gate(get_instance_id())
 	if want == _cover_dl_suppressed:
 		return
 	_cover_dl_suppressed = want
@@ -3142,6 +3151,12 @@ func _add_to_pool(card: Control) -> void:
 func _configure_card_size_flags(card: Control) -> void:
 	if not card is M3Card:
 		return
+
+	# Assign the grid-computed decode bucket BEFORE any cover load: live
+	# card.size is never a decode basis, so layout transitions can't mint
+	# duplicate (path, bucket) cache entries.
+	if card is GameCard:
+		card.set_assigned_decode_bucket(CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr()))
 
 	if _card_has_begin_bulk_layout:
 		card.begin_bulk_layout()
@@ -4531,9 +4546,10 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		_data_cache[cache_key] = game
 		_update_cache_access_order(cache_key)
 		# Warm the texture cache as data lands (covers both window and prefetch
-		# loads) so cover art is decoded before its row scrolls into view. Pass
-		# the grid's decode bucket so the warmed entry matches card lookups.
-		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_size(maxf(card_size.x, card_size.y)))
+		# loads) so cover art is decoded before its row scrolls into view. Same
+		# grid-computed bucket the cards are assigned, so warmed entries match
+		# card lookups exactly.
+		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr()))
 
 	if duplicates_found > 0:
 		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
