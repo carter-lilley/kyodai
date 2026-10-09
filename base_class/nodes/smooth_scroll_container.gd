@@ -15,23 +15,44 @@ signal scroll_completed()
 ## Duration multiplier for follow-focus scrolls only (ui/kb focus tracking).
 ## > 1 stretches the distance-scaled duration so focus hops glide instead of snap.
 @export var focus_scroll_duration_multiplier: float = 1.6
-## Fixed tween duration for mouse-wheel scrolling. Wheel ticks accumulate into
-## the target and restart the tween, so a longer fixed duration keeps repeated
-## ticks chasing the target smoothly instead of stuttering.
+## Fixed tween duration for paged mouse-wheel scrolling. Free wheel ticks use
+## the velocity-based chase below.
 @export var wheel_scroll_duration: float = 1.0
-## Time constant (seconds) for the wheel chase: the scroll position glides
-## toward the accumulated target exponentially (velocity proportional to the
-## remaining distance), so any tick cadence stays smooth — no tween restarts.
+## Time constant (seconds) for the free wheel chase: wheel input sets an
+## isolated target/velocity that glides to rest without interfering with tweens
+## or programmatic scrolls.
 @export var wheel_chase_tau: float = 0.2
+## Far-jump policy (borrowed from Argosy/Playnite): when an animated scroll's
+## distance exceeds this many viewport pages, the container first SNAPS to
+## within `far_jump_page_count` pages of the target and only tweens the short
+## remainder. Long letter-carousel / random-game jumps therefore never tween
+## across the whole library (the tween-vs-input fight), while short hops and
+## wheel scrolling stay fully animated.
+@export var far_jump_page_count: float = 2.0
 var _wheel_chase_active: bool = false
-var _chase_pos: float = 0.0
-var _last_wheel_tick_msec: int = -10000
+## Wheel input uses its own target/velocity so it can never fight a tween or
+## programmatic scroll. Tween/programmatic paths reset this state.
+var _wheel_target: float = 0.0
+var _wheel_velocity: float = 0.0
+
+## Single-writer scroll ownership. Every scroll operation (wheel tick burst,
+## tween, instant set, scrollbar drag) bumps this monotonic id and captures it;
+## stale per-frame callbacks (killed tweens, lagging chases) compare against it
+## and no-op. There is exactly one live writer of the scrollbar at any moment.
+var _owner_id: int = 0
+## Precise (non-int-truncated) scroll position. The ScrollBar stores ints, which
+## quantize smooth motion into 1px steps; the grid and visual layer read this
+## float instead so tween/chase motion stays sub-pixel smooth.
+var _scroll_float: float = 0.0
+## Set after a programmatic scroll so snap_to_page/native-scroll-end handlers
+## do not yank the freshly landed position to a page boundary.
+var _suppress_next_snap: bool = false
 
 ## Diagnostic scroll trace, enabled with KYODAI_SCROLL_TRACE=1 in the
 ## environment. Logs every scroll-state transition with timestamps so a
 ## jump-then-wheel repro shows exactly who moves the scroll and when.
 ## Off by default; a single bool check when off.
-static var trace_enabled: bool = true  # TEMP diagnostics; revert to env-gated.
+static var trace_enabled: bool = OS.get_environment("KYODAI_SCROLL_TRACE") == "1"
 
 static func _strace(msg: String) -> void:
 	if trace_enabled:
@@ -47,6 +68,9 @@ static func _strace_caller() -> String:
 		if vertical != value:
 			vertical = value
 			_target_scroll = 0.0
+			_wheel_target = 0.0
+			_wheel_velocity = 0.0
+			_wheel_chase_active = false
 			if is_inside_tree():
 				_reconnect_scrollbars()
 
@@ -92,6 +116,7 @@ var scroll_paused: bool = false:
 		scroll_paused = value
 		if scroll_paused:
 			_wheel_chase_active = false
+			_wheel_velocity = 0.0
 			if _scroll_tween and _scroll_tween.is_valid():
 				_scroll_tween.kill()
 			_is_smooth_scrolling = false
@@ -100,19 +125,42 @@ var scroll_paused: bool = false:
 func _process(delta: float) -> void:
 	if not _wheel_chase_active:
 		return
-	# _chase_pos carries the sub-pixel position the int scrollbar can't hold, so
-	# the exponential tail glides to rest instead of stalling in 1px steps.
-	var diff := _target_scroll - _chase_pos
+	# Wheel chase: exponential glide toward the isolated wheel target, on the
+	# FLOAT motion model — the fractional remainder keeps flowing through the
+	# tail so the glide settles instead of stalling in 1px steps. Tweens and
+	# programmatic scrolls own the scrollbar separately; the value_changed echo
+	# handler ignores echoes while a smooth operation is in flight.
+	# Re-clamp the target to the LIVE range every frame: a library shrink
+	# (platform switch, filter) can strand a chase beyond the new content end.
+	# Without this the writes clamp to max, diff never reaches the done
+	# threshold, and the chase — plus is_scrolling() — runs forever.
+	var sb_reclamp = _get_scrollbar()
+	if sb_reclamp:
+		_wheel_target = clampf(_wheel_target, sb_reclamp.min_value, maxf(sb_reclamp.min_value, sb_reclamp.max_value - sb_reclamp.page))
+	var current := _scroll_float
+	var diff := _wheel_target - current
 	if absf(diff) < 0.05:
-		_set_current_scroll(_target_scroll)
-		_strace("chase-done target=" + str(_target_scroll))
+		# Clear ownership BEFORE the final write: the synchronous value_changed
+		# echo then treats it as an external write and syncs the float model to
+		# the int content, making rest state pixel-exact.
 		_wheel_chase_active = false
+		_wheel_velocity = 0.0
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
+		_set_current_scroll(_wheel_target)
+		_strace("wheel-chase-done target=" + str(_wheel_target))
 		scroll_completed.emit()
 		return
-	_chase_pos += diff * (1.0 - exp(-delta / wheel_chase_tau))
-	_set_current_scroll(_chase_pos)
+	var step := diff * (1.0 - exp(-delta / wheel_chase_tau))
+	_wheel_velocity = step / delta
+	_set_current_scroll(current + step)
+
+## The float MOTION MODEL position. During tweens/wheel chase this carries the
+## sub-pixel remainder so the visual layer glides; the scrollbar/content holds
+## the rounded int. At rest both are pixel-identical (terminal writes land
+## exactly). Prefer over scroll_vertical/horizontal for visual math.
+func get_scroll_float() -> float:
+	return _scroll_float
 
 func _ready():
 	# Disable built-in follow_focus - we'll handle it manually via gui_focus_changed
@@ -238,10 +286,17 @@ func _get_current_scroll() -> float:
 	return scroll_vertical if vertical else scroll_horizontal
 
 func _set_current_scroll(value: float):
+	# Motion model vs layout truth: the ScrollBar stores ints (content moves in
+	# 1px steps), but the tracked float keeps the raw fractional position so
+	# the visual layer — stamped from get_scroll_float() — glides through the
+	# tail instead of stalling in quantized steps. round() (not int()) keeps
+	# the quantization symmetric, and every terminal write lands on the target
+	# exactly, so at rest float and content are pixel-identical.
+	_scroll_float = value
 	if vertical:
-		scroll_vertical = int(value)
+		scroll_vertical = roundi(value)
 	else:
-		scroll_horizontal = int(value)
+		scroll_horizontal = roundi(value)
 
 func _get_scrollbar():
 	if vertical:
@@ -249,13 +304,17 @@ func _get_scrollbar():
 	return get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
-	# Re-sync the wheel/tween target when the scroll position changes with no
-	# tween in flight (engine end-of-frame clamps, guarded writes during layout
-	# recalcs). Without this the next wheel tick accumulates from a stale
-	# target and jumps to a far position.
-	if not _is_smooth_scrolling:
+	# This handler ALSO fires as a synchronous echo of our own _set_current_scroll
+	# writes (Range emits on the int change). While a smooth operation owns the
+	# scroll (tween or wheel chase), the float motion model is authoritative:
+	# syncing it here would re-quantize the glide and resurrect the 1px-step
+	# tail. Only EXTERNAL writes (engine clamps, the grid's direct scroll_vertical
+	# writes during recalcs) resync the model — they arrive while idle.
+	if not _is_smooth_scrolling and not _wheel_chase_active:
 		_strace("resync target " + str(_target_scroll) + " -> " + str(value))
 		_target_scroll = value
+		_wheel_target = value
+		_scroll_float = value
 	scroll_value_changed.emit(value)
 
 func _get_centered_scroll_for_control(p_control: Control) -> float:
@@ -314,6 +373,7 @@ func _on_gui_input(event: InputEvent):
 				if page_snap_max_target >= 0.0:
 					max_target = minf(max_target, page_snap_max_target)
 				var target: float = page_step_provider.call(1 if event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1)
+				_owner_id += 1
 				_target_scroll = clampf(target, scrollbar.min_value, max_target)
 				_page_scroll_in_flight = true
 				_start_smooth_scroll(1.0, wheel_scroll_duration)
@@ -321,16 +381,15 @@ func _on_gui_input(event: InputEvent):
 				return
 
 			if page_snap_period > 0.0:
-				# Paged mode: one tick = one page. Derive the current page with
-				# round() (nearest) rather than floor/ceil on the float ratio —
-				# at exact page targets the ratio lands a hair above or below k,
-				# which made ticks stick in place or skip a page depending on
-				# float rounding.
+				# Paged mode: one tick = one page. Derive the current page from the
+				# actual scrollbar value, not the accumulated wheel target, so page
+				# snaps never jump from a stale target.
 				var max_target = scrollbar.max_value - scrollbar.page
 				if page_snap_max_target >= 0.0:
 					max_target = minf(max_target, page_snap_max_target)
-				var page := int(round((_target_scroll - page_snap_offset) / page_snap_period))
+				var page := int(round((_get_current_scroll() - page_snap_offset) / page_snap_period))
 				page += -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1
+				_owner_id += 1
 				_target_scroll = clampf(page * page_snap_period + page_snap_offset, scrollbar.min_value, max_target)
 				_page_scroll_in_flight = true
 				_start_smooth_scroll(1.0, wheel_scroll_duration)
@@ -343,27 +402,29 @@ func _on_gui_input(event: InputEvent):
 			if event.factor > 1.0:
 				step *= event.factor
 
-			# Rebase the chase on the actual position every tick: a stale
-			# _chase_pos (engine clamp, direct set, finished tween) must never
-			# become the accumulation base. Accumulation lives in _target_scroll.
-			_chase_pos = _get_current_scroll()
-			var current := _chase_pos
+			var current := _scroll_float
 			var dir := -1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
-			# Reversing direction discards any accumulated backlog so the view
-			# responds immediately instead of unwinding the old target first.
-			if signf(_target_scroll - current) == -dir:
-				_target_scroll = current
-			_target_scroll += dir * step
-			_target_scroll = clampf(_target_scroll, scrollbar.min_value, scrollbar.max_value - scrollbar.page)
-			# Chase the target with exponential smoothing in _process() instead of
-			# restarting a tween per tick: velocity stays proportional to the
-			# remaining distance, so bursts track the wheel without jitter and
-			# isolated ticks keep the same glide shape.
+			# Wheel input writes to a dedicated target/velocity state so it can
+			# never carry stale backlog into a tween or programmatic scroll.
+			# Reversing direction cancels the in-flight wheel target.
+			if signf(_wheel_target - current) == -dir:
+				_wheel_target = current
+				_wheel_velocity = 0.0
+			# Wheel destinations are free-scroll targets with no alignment
+			# constraints: quantize to whole pixels so the glide lands exactly
+			# and rest state is pixel-perfect (fractional targets would leave a
+			# sub-pixel float/content gap at rest).
+			_wheel_target = clampf(float(roundi(_wheel_target + dir * step)), scrollbar.min_value, scrollbar.max_value - scrollbar.page)
+			# Wheel takes ownership: kill any tween so the two never write to the
+			# scrollbar at the same time.
+			_owner_id += 1
 			if _scroll_tween and _scroll_tween.is_valid():
 				_scroll_tween.kill()
+				_is_smooth_scrolling = false
+				_page_scroll_in_flight = false
 			_wheel_chase_active = true
 			_is_smooth_scrolling = true
-			_strace("wheel dir=" + str(dir) + " target=" + str(_target_scroll) + " chase_pos=" + str(_chase_pos) + " actual=" + str(_get_current_scroll()))
+			_strace("wheel dir=" + str(dir) + " wheel_target=" + str(_wheel_target) + " current=" + str(current))
 			accept_event()
 
 func _on_scrollbar_input(event: InputEvent):
@@ -379,13 +440,17 @@ func _on_scrollbar_input(event: InputEvent):
 			if event.pressed:
 				_is_dragging_scrollbar = true
 				_scrollbar_drag_start_mouse_pos = event.global_position.y if vertical else event.global_position.x
+				_owner_id += 1
 				_wheel_chase_active = false
+				_wheel_velocity = 0.0
 				if _scroll_tween and _scroll_tween.is_valid():
 					_scroll_tween.kill()
 				_is_smooth_scrolling = false
 				_page_scroll_in_flight = false
+				_suppress_next_snap = false
 
 				_target_scroll = _get_current_scroll()
+				_wheel_target = _target_scroll
 				_scrollbar_drag_start_value = _target_scroll
 			else:
 				_is_dragging_scrollbar = false
@@ -407,7 +472,7 @@ func _on_scrollbar_input(event: InputEvent):
 			_start_smooth_scroll()
 			scrollbar.accept_event()
 
-func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, trans_type: Tween.TransitionType = Tween.TRANS_EXPO, ease_type: Tween.EaseType = Tween.EASE_OUT):
+func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: float = -1.0, trans_type: Tween.TransitionType = Tween.TRANS_CUBIC, ease_type: Tween.EaseType = Tween.EASE_OUT):
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
 		return
@@ -419,8 +484,13 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	# so stand down the wheel chase. Otherwise both write every frame and a
 	# stale chase glides back toward its old target when the tween finishes.
 	_wheel_chase_active = false
+	_wheel_velocity = 0.0
+	_wheel_target = _target_scroll
 
-	var start_value = _get_current_scroll()
+	# Capture the ownership token: if another scroll operation takes over
+	# mid-tween, this tween's per-frame callback goes stale and stops writing.
+	var my_owner_id := _owner_id
+	var start_value = _scroll_float
 	var target_value = _target_scroll
 
 	var duration: float
@@ -449,32 +519,54 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 	_scroll_tween.set_ease(ease_type)
 	
 	_scroll_tween.tween_method(
-		func(val: float): 
+		func(val: float):
+			if my_owner_id != _owner_id:
+				# A newer scroll operation owns the scrollbar; stop writing.
+				return
 			_set_current_scroll(val),
 		start_value,
 		target_value,
 		duration
 	)
-	
+
 	_scroll_tween.finished.connect(func():
+		if my_owner_id != _owner_id:
+			return
+		# Land exactly on the target: the float model converged, but the rounded
+		# scrollbar write can sit up to 0.5px off. Ownership is cleared BEFORE
+		# the final write so the value_changed echo syncs the float model to the
+		# int content — rest state pixel-exact (and no-ops if already equal).
+		# Clamp to the live range: the library may have shrunk mid-tween, and an
+		# unclamped landing would park the float model beyond the content end.
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
+		var sb_land = _get_scrollbar()
+		if sb_land:
+			target_value = clampf(target_value, sb_land.min_value, maxf(sb_land.min_value, sb_land.max_value - sb_land.page))
+		_set_current_scroll(target_value)
 		SmoothScrollContainer._strace("tween-done target=" + str(target_value) + " actual=" + str(_get_current_scroll()))
 		scroll_completed.emit()
 	)
 
 func get_target_scroll() -> float:
+	if _wheel_chase_active:
+		return _wheel_target
 	if smooth_scrolling:
 		return _target_scroll
 	return _get_current_scroll()
 
 func is_scrolling() -> bool:
-	return _is_smooth_scrolling
+	return _is_smooth_scrolling or _wheel_chase_active
 
 ## Snaps the current scroll position to the nearest page target (no-op when
 ## page snapping is disabled or already aligned). Called on drag/touch release.
 func snap_to_page() -> void:
 	if page_snap_period <= 0.0 or scroll_paused:
+		return
+	if _suppress_next_snap:
+		# A programmatic jump just landed on a deliberate (non-page) position;
+		# snapping now would yank it to a boundary and fight the user.
+		_suppress_next_snap = false
 		return
 	var scrollbar = _get_scrollbar()
 	if not scrollbar:
@@ -488,6 +580,7 @@ func snap_to_page() -> void:
 	if is_equal_approx(snapped, current):
 		return
 	_target_scroll = snapped
+	_wheel_target = snapped
 	_start_smooth_scroll()
 
 func _on_native_scroll_ended() -> void:
@@ -497,27 +590,65 @@ func _on_native_scroll_ended() -> void:
 
 func scroll_to(target: float, animate: bool = true, duration_multiplier: float = 1.0):
 	_strace("scroll_to target=" + str(target) + " animate=" + str(animate) + " caller=" + _strace_caller())
-	# Kill any running tween first to prevent conflicts
+	# Take ownership: any previous writer (tween, chase) goes stale right now.
+	_owner_id += 1
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
-		_wheel_chase_active = false
-		_is_smooth_scrolling = false
-		_page_scroll_in_flight = false
+	_wheel_chase_active = false
+	_wheel_velocity = 0.0
+	_is_smooth_scrolling = false
+	_page_scroll_in_flight = false
 
+	_target_scroll = target
+	_wheel_target = target
 	if animate and smooth_scrolling:
-		_target_scroll = target
+		var scrollbar = _get_scrollbar()
+		var current: float = _scroll_float
+		var distance: float = absf(target - current)
+		var page_size: float = scrollbar.page if scrollbar else 0.0
+		var snap_distance: float = far_jump_page_count * page_size
+		if snap_distance > 0.0 and distance > snap_distance:
+			# Far jump (Argosy/Playnite policy): snap to within `snap_distance`
+			# of the target instantly so the window rebuilds at the destination,
+			# then tween only the short remainder. No more multi-second tween
+			# fighting user input across the whole library.
+			var intermediate: float = target - signf(target - current) * snap_distance
+			if page_snap_period > 0.0:
+				# Paginated: a raw geometric intermediate lands in the inter-page
+				# gap (a broken empty frame). Snap it to the nearest page target
+				# on the path instead, so the rebuild lands on a real page.
+				var travel := signf(target - current)
+				intermediate = round((intermediate - page_snap_offset) / page_snap_period) * page_snap_period + page_snap_offset
+				if page_snap_max_target >= 0.0:
+					intermediate = minf(intermediate, page_snap_max_target)
+				intermediate = clampf(intermediate, minf(current, target), maxf(current, target))
+				if signf(target - intermediate) != travel and intermediate != target:
+					# Rounding sent it behind the start; fall back to one period out.
+					intermediate = target - travel * page_snap_period
+					if page_snap_max_target >= 0.0:
+						intermediate = minf(intermediate, page_snap_max_target)
+			_set_current_scroll(intermediate)
+			_suppress_next_snap = true
 		_start_smooth_scroll(duration_multiplier)
+		_suppress_next_snap = true
 	else:
-		_target_scroll = target
+		# Clamp to the valid range instead of extending max_value: the old
+		# extension corrupted the scrollbar range when a stale/deep target
+		# landed here after a library shrink, and every later window/margin
+		# computation ran against a garbage range.
 		var sb: ScrollBar = _get_scrollbar()
-		if sb and target > sb.max_value - sb.page:
-			sb.max_value = target + sb.page
-		_set_current_scroll(target)
+		if sb:
+			target = clampf(target, sb.min_value, maxf(sb.min_value, sb.max_value - sb.page))
+		# Instant jump: no glide follows, so land the float model on the exact
+		# quantized position — rest state must be pixel-identical to content.
+		_set_current_scroll(float(roundi(target)))
+		_suppress_next_snap = true
 
 func stop_smooth_scroll() -> void:
 	"""Stop any active smooth-scroll tween without changing the target."""
 	_strace("stop chase_was=" + str(_wheel_chase_active) + " tween_valid=" + str(_scroll_tween != null and _scroll_tween.is_valid()))
 	_wheel_chase_active = false
+	_wheel_velocity = 0.0
 	if _scroll_tween and _scroll_tween.is_valid():
 		_scroll_tween.kill()
 	_is_smooth_scrolling = false

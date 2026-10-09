@@ -739,10 +739,13 @@ static func _parse_gameinfo_title_id(file, entry: Dictionary) -> String:
 
 # ==================== PS4 (shadPS4) ====================
 
-## Extracts PS4 Title ID from a ZIP file by reading the root directory names
-## PS4 game ZIPs contain a CUSAxxxxx directory at the root level
+## Extracts PS4 Title ID from a ZIP or ZAR file by reading the root directory names
+## PS4 game archives contain a CUSAxxxxx directory at the root level
 ## Returns Title ID string (e.g., "CUSA01130") or empty string on failure
 static func extract_ps4_title_id(zip_path: String) -> String:
+	if zip_path.get_extension().to_lower() == "zar":
+		return _extract_ps4_title_id_zar(zip_path)
+
 	var resolved_path = _resolve_zip_path(zip_path)
 	if resolved_path == "":
 		push_error("[TitleIDParser] File not found: " + zip_path)
@@ -787,6 +790,46 @@ static func extract_ps4_title_id(zip_path: String) -> String:
 	
 	if DEBUG_LOG: print("[TitleIDParser] PS4 TitleID extracted from ZIP: " + title_id)
 	return title_id
+
+
+## Extracts PS4 Title ID from a .zar archive (ZArchive-compressed game contents)
+## Looks for a CUSAxxxxx directory at the archive root; if absent (loose game
+## contents), falls back to parsing the Title ID out of sce_sys/param.sfo
+static func _extract_ps4_title_id_zar(zar_path: String) -> String:
+	if DEBUG_LOG: print("[TitleIDParser] Parsing PS4 ZAR: " + zar_path)
+
+	var reader = _ZarReader.open(zar_path)
+	if reader == null:
+		push_error("[TitleIDParser] Failed to open PS4 ZAR: " + zar_path)
+		return ""
+
+	# Primary: find the root-level CUSAxxxxx directory (same layout as the ZIPs)
+	for entry in reader.list_dir_entries():
+		var potential_id: String = entry["name"]
+		if entry["is_dir"] and potential_id.begins_with("CUSA") and potential_id.length() == 9:
+			reader.close()
+			if DEBUG_LOG: print("[TitleIDParser] PS4 TitleID extracted from ZAR root dir: " + potential_id)
+			return potential_id
+
+	# Fallback: loose game contents — read Title ID from param.sfo
+	if DEBUG_LOG: print("[TitleIDParser] No CUSA root dir in PS4 ZAR, trying param.sfo...")
+	var sfo_entry = reader.find_file("param.sfo")
+	if not sfo_entry.is_empty():
+		var sfo_io = reader.create_node_io(sfo_entry)
+		sfo_io.seek(0)
+		var sfo_bytes = sfo_io.get_buffer(sfo_entry["size"])
+		reader.close()
+		if not sfo_bytes.is_empty():
+			var title_id = get_title_id_from_sfo_bytes(sfo_bytes)
+			if title_id != "":
+				if DEBUG_LOG: print("[TitleIDParser] PS4 TitleID extracted from ZAR param.sfo: " + title_id)
+				return title_id
+		push_error("[TitleIDParser] Failed to extract TitleID from param.sfo in PS4 ZAR: " + zar_path)
+		return ""
+
+	reader.close()
+	push_error("[TitleIDParser] No CUSA dir or param.sfo found in PS4 ZAR: " + zar_path)
+	return ""
 
 
 ## 7-Zip fallback for extracting PS4 TitleID from large/ZIP64 archives

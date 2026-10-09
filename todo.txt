@@ -3,13 +3,7 @@
 xemu raw hdd save sync
 ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
-xdont invert glow
-xright stick to scroll in menus
-xclose badge on settings
-xsettings dont scroll w controller
-xgap between notification bar
 no cemu save sync?
-apply preset missing buttons
 
 - universal extraction normalizer (walk down for expected files...saves & games)
 ## configs

@@ -208,7 +208,9 @@ func _ready():
 
 	# Startup zoom sync is complete; clear the guard after the current frame so
 	# any deferred slider emissions that fire during this frame are ignored.
-	UIManager.toolbar.call_deferred("set_startup_zoom_sync_active", false)
+	# finish_startup_zoom_sync also connects the slider's continuous
+	# value_changed -> _on_zoom_changed (without it the zoom bar dead-ends).
+	UIManager.toolbar.call_deferred("finish_startup_zoom_sync")
 	if DEBUG_LOG: print("[Main] _ready() completed, elapsed_us=", Time.get_ticks_usec() - main_ready_start_us)
 
 	# Non-critical boot work (OOBE wizard, avatar fetch, tool extraction,

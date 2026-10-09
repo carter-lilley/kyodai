@@ -13,6 +13,7 @@ signal game_changed(game: GameResource)
 			return
 		game = value
 		game_changed.emit(game)
+		_update_texture_pin_state()
 		_update_display()
 
 func set_game_with_priority(value: GameResource, high_priority: bool):
@@ -20,6 +21,8 @@ func set_game_with_priority(value: GameResource, high_priority: bool):
 		return
 	game = value
 	game_changed.emit(game)
+	_image_priority_high = high_priority
+	_update_texture_pin_state()
 	_update_display_with_priority(high_priority)
 
 @export var preview_mode: bool = false
@@ -34,6 +37,8 @@ static func _create_placeholder_texture() -> Texture2D:
 var _loading_texture: Texture2D = _placeholder_texture
 var _current_texture: Texture2D = null
 var _current_texture_game_id: String = ""
+var _image_priority_high: bool = false
+var _pinned_texture_key: String = ""
 # Set by CardMediaLoader: true while a cover fetch/decode is genuinely in
 # flight (media panel shimmers), false for static blanks (no art, failures).
 var _media_loading: bool = false
@@ -211,6 +216,11 @@ func _exit_tree():
 	if _media_loader:
 		_media_loader.cancel()
 
+	# Release the visible-window cache pin so this texture can be evicted.
+	if _pinned_texture_key != "" and SystemManager.memory:
+		SystemManager.memory.unpin_texture(_pinned_texture_key)
+		_pinned_texture_key = ""
+
 	# Kill any focus effect tweens
 	_kill_focus_tweens()
 	_kill_present_tween()
@@ -233,8 +243,22 @@ func get_current_texture() -> Texture2D:
 	return _current_texture
 
 func set_image_priority(high_priority: bool) -> void:
+	_image_priority_high = high_priority
+	_update_texture_pin_state()
 	if _media_loader:
 		_media_loader.set_priority(high_priority, game)
+
+func _update_texture_pin_state() -> void:
+	var desired_key := ""
+	if _image_priority_high and game and _media_loader:
+		desired_key = _media_loader.get_cover_cache_key(game)
+	if desired_key == _pinned_texture_key:
+		return
+	if _pinned_texture_key != "" and SystemManager.memory:
+		SystemManager.memory.unpin_texture(_pinned_texture_key)
+	_pinned_texture_key = desired_key
+	if _pinned_texture_key != "" and SystemManager.memory:
+		SystemManager.memory.pin_texture(_pinned_texture_key)
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()

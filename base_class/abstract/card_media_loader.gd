@@ -26,8 +26,20 @@ const MAX_DOWNLOAD_RETRIES: int = 2
 # hammering a full queue forever.
 const MAX_DROP_RETRIES: int = 5
 const DROP_RETRY_DELAY_SEC: float = 1.0
+## Fallback decode size when the card's rendered pixel size isn't known yet
+## (pre-layout). Covers decode at the card's ACTUAL pixel size (bucketed) so a
+## 4K grid of 6 cards gets ~1K textures, not blurry 512px ones (Playnite's
+## decode-to-card-size policy).
 const MAX_COVER_TEXTURE_SIZE: int = 512
-const FAILURE_RETRY_TTL_SEC: int = 300
+## Decode sizes are rounded up to this bucket so smooth zoom/resize doesn't
+## mint a new cache key per pixel step.
+const DECODE_SIZE_BUCKET: int = 128
+const DECODE_SIZE_MIN: int = 256
+const DECODE_SIZE_MAX: int = 2048
+## Known-missing negative cache TTL (Argosy's MissingArtRegistry policy):
+## a cover URL that failed is not retried for a day, so scrolling back and
+## forth over games with dead art doesn't re-attempt the download every pass.
+const FAILURE_RETRY_TTL_SEC: int = 86400
 # Bound the static failure-TTL map so permanently-failing URLs don't grow it forever.
 const MAX_FAILED_DOWNLOADS: int = 512
 const DEBUG_LOG: bool = false
@@ -41,12 +53,23 @@ static var downloads_suppressed: bool = false
 static func clear_failed_downloads() -> void:
 	_failed_downloads.clear()
 
+## Round a pixel dimension up to the decode-size bucket. Single source of
+## truth so the grid's prefetch and the card's own load derive matching keys.
+static func decode_bucket_for_size(px: float) -> int:
+	if px <= 0.0:
+		return MAX_COVER_TEXTURE_SIZE
+	var bucket := int(ceil(px / DECODE_SIZE_BUCKET)) * DECODE_SIZE_BUCKET
+	return clampi(bucket, DECODE_SIZE_MIN, DECODE_SIZE_MAX)
+
 ## Warm the texture memory cache for a game with no card attached. Used by the
 ## grid's directional prefetch so cover art is decoded before rows scroll into
 ## view. Only reads files already on disk; never triggers downloads.
-static func preload_cover(game: GameResource) -> void:
+## `decode_size` should be the grid's current card-pixel bucket so the warmed
+## entry matches what cards will look up (0 = fallback size).
+static func preload_cover(game: GameResource, decode_size: int = 0) -> void:
 	if not game or not SystemManager.memory:
 		return
+	var size := decode_size if decode_size > 0 else MAX_COVER_TEXTURE_SIZE
 	var cache_path := ""
 	if game.cover_path and FSM.file_exists(game.cover_path):
 		cache_path = game.cover_path
@@ -57,11 +80,11 @@ static func preload_cover(game: GameResource) -> void:
 	if cache_path == "":
 		return
 	DataManager.cover.note_cover_access(cache_path)
-	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
+	var cache_key := MemorySubManager.cover_cache_key(cache_path, size)
 	if SystemManager.memory.get_cached_texture(cache_key):
 		return
 	var load_callable = func():
-		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path), size))
 	var callback_callable = func(image):
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
@@ -71,6 +94,31 @@ static func preload_cover(game: GameResource) -> void:
 
 func _init(card: GameCard) -> void:
 	_card = card
+
+## Decode size for THIS card: its rendered pixel size, bucketed. Falls back to
+## the fixed size before layout has run (size == 0).
+func _decode_size() -> int:
+	if is_instance_valid(_card) and _card.size.x > 0.0 and _card.size.y > 0.0:
+		return decode_bucket_for_size(maxf(_card.size.x, _card.size.y))
+	return MAX_COVER_TEXTURE_SIZE
+
+## Returns the memory-cache key this loader would use for `game`, or "" if no
+## cover source exists. Used by the owning card to pin visible textures.
+## Instance method (not static) so the key includes this card's decode-size
+## bucket — a pin only protects the texture the loader actually writes.
+## Intentionally does not hit the filesystem: pinning is best-effort and must
+## be cheap enough to run every frame for all visible cards.
+func get_cover_cache_key(game: GameResource) -> String:
+	if not game:
+		return ""
+	var cache_path := ""
+	if game.cover_path and game.cover_path != "":
+		cache_path = game.cover_path
+	elif game.cover_url != "" and game.cover_url.begins_with("http"):
+		cache_path = DataManager.get_cached_image_path(game.cover_url)
+	if cache_path == "":
+		return ""
+	return MemorySubManager.cover_cache_key(cache_path, _decode_size())
 
 func load_cover(game: GameResource, high_priority: bool = false) -> void:
 	if not game:
@@ -119,7 +167,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 
 	# Memory cache hit: apply immediately without queueing a worker task.
 	DataManager.cover.note_cover_access(cache_path)
-	var cached_tex = SystemManager.memory.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
+	var cached_tex = SystemManager.memory.get_cached_texture(MemorySubManager.cover_cache_key(cache_path, _decode_size()))
 	if cached_tex:
 		_emit_texture(cached_tex)
 		return
@@ -169,8 +217,9 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 	if _current_image_task_id > 0:
 		SystemManager.memory.cancel_image_task(_current_image_task_id)
 
+	var decode_size := _decode_size()
 	var load_callable = func():
-		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path), decode_size))
 
 	var callback_callable = func(image):
 		_current_image_task_id = -1
@@ -182,7 +231,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
 			if texture:
-				SystemManager.memory.cache_texture(MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE), texture)
+				SystemManager.memory.cache_texture(MemorySubManager.cover_cache_key(cache_path, decode_size), texture)
 				_emit_texture(texture)
 		else:
 			_image_retry_count += 1
@@ -193,7 +242,7 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 			else:
 				push_error("[CardMediaLoader] Cache file undecodable after %d retries: %s" % [MAX_IMAGE_RETRIES, cache_path])
 
-	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE))
+	_current_image_task_id = SystemManager.memory.queue_image_task(load_callable, callback_callable, high_priority, MemorySubManager.cover_cache_key(cache_path, decode_size))
 
 func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
 	_download_retry_count += 1
@@ -273,11 +322,12 @@ func _schedule_drop_retry(cover_url: String, cache_path: String, high_priority: 
 ## card's current texture. Used after a fresh download so subsequent recycles
 ## hit the cache instead of flashing the placeholder.
 func _warm_card_cache_from_disk(cache_path: String) -> void:
-	var cache_key := MemorySubManager.cover_cache_key(cache_path, MAX_COVER_TEXTURE_SIZE)
+	var decode_size := _decode_size()
+	var cache_key := MemorySubManager.cover_cache_key(cache_path, decode_size)
 	if not SystemManager.memory or SystemManager.memory.get_cached_texture(cache_key):
 		return
 	var load_callable = func():
-		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path)))
+		return MemorySubManager.prepare_image_for_texture(_load_image_from_buffer(FSM.read_file_bytes(cache_path), decode_size))
 	var callback_callable = func(image):
 		if image and not image.is_empty():
 			var texture = SystemManager.memory.create_texture_from_image(image)
@@ -285,7 +335,7 @@ func _warm_card_cache_from_disk(cache_path: String) -> void:
 				SystemManager.memory.cache_texture(cache_key, texture)
 	SystemManager.memory.queue_image_task(load_callable, callback_callable, false, cache_key)
 
-static func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
+static func _load_image_from_buffer(buffer: PackedByteArray, max_size: int = MAX_COVER_TEXTURE_SIZE) -> Image:
 	if buffer.size() < 16:
 		return null
 
@@ -310,8 +360,8 @@ static func _load_image_from_buffer(buffer: PackedByteArray) -> Image:
 		return null
 
 	var max_dim = max(image.get_width(), image.get_height())
-	if max_dim > MAX_COVER_TEXTURE_SIZE:
-		var resize_scale = float(MAX_COVER_TEXTURE_SIZE) / max_dim
+	if max_dim > max_size:
+		var resize_scale = float(max_size) / max_dim
 		var new_width = max(1, int(image.get_width() * resize_scale))
 		var new_height = max(1, int(image.get_height() * resize_scale))
 		image.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)

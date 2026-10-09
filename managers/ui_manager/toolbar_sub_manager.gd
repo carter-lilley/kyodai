@@ -107,12 +107,16 @@ func connect_signals() -> void:
 func finish_startup_zoom_sync() -> void:
 	"""Mark startup zoom sync complete and connect the continuous value_changed
 	signal so user drags update grids."""
-	_startup_zoom_sync_active = false
-	if _zoom_slider and not _zoom_slider.value_changed.is_connected(_on_zoom_changed):
-		_zoom_slider.value_changed.connect(_on_zoom_changed)
+	set_startup_zoom_sync_active(false)
 
 func set_startup_zoom_sync_active(value: bool) -> void:
 	_startup_zoom_sync_active = value
+	# CRITICAL: clearing the startup gate must ALSO connect the continuous
+	# value_changed handler — otherwise the zoom slider silently dead-ends
+	# (the guard is off but no signal reaches _on_zoom_changed). Idempotent so
+	# both the setter and finish_startup_zoom_sync can call it.
+	if not value and _zoom_slider and not _zoom_slider.value_changed.is_connected(_on_zoom_changed):
+		_zoom_slider.value_changed.connect(_on_zoom_changed)
 
 func is_startup_zoom_sync_active() -> bool:
 	return _startup_zoom_sync_active
@@ -124,6 +128,10 @@ func is_startup_zoom_sync_active() -> bool:
 func _update_zoom_slider_stops(games_grid: VirtualScrollGridContainer) -> void:
 	"""Update slider stops to match the grid's calculated snap levels."""
 	if not _zoom_slider:
+		return
+	# Never reconfigure the slider mid-drag: reassigning range/stops can clamp
+	# the live value and fire value_changed, fighting the user's drag.
+	if _zoom_slider.has_method("is_dragging") and _zoom_slider.is_dragging():
 		return
 	var snap_ratios = games_grid.get_snap_ratios_ascending()
 
@@ -213,10 +221,21 @@ func sync_zoom_slider_to_view(view_name: String) -> void:
 		return
 	games_grid.set_meta("_ui_view_retry_count", 0)
 
+	if _zoom_slider.has_method("is_dragging") and _zoom_slider.is_dragging():
+		return
 	_update_zoom_slider_stops(games_grid)
 	_zoom_slider.set_block_signals(true)
 	if _current_snap_ratios.size() > 0:
-		var level = UIManager.card_settings_state.card_zoom_level if UIManager and UIManager.card_settings_state else -1
+		var level := -1
+		if UIManager and UIManager.card_settings_state:
+			if games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
+				level = UIManager.card_settings_state.card_zoom_level
+				if level < 0:
+					level = _find_nearest_snap_index(games_grid.target_card_width_ratio)
+			else:
+				# LIST/CAROUSEL store a scroll-fill fraction; resolve it to the
+				# nearest stop index so the slider lands on the actual zoom.
+				level = _find_nearest_snap_index(UIManager.card_settings_state.card_zoom_list_ratio)
 		if level < 0:
 			level = _find_nearest_snap_index(games_grid.target_card_width_ratio)
 		level = clampi(level, 0, _current_snap_ratios.size() - 1)
@@ -232,43 +251,51 @@ func _on_zoom_changed(value: float):
 	if _startup_zoom_sync_active:
 		return
 
-	if _current_snap_ratios.size() > 0:
-		# Grid mode: value is an integer level. Keep CardSettingsState in sync
-		# so lazily created views inherit the current level.
-		var level := clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
-		if UIManager and UIManager.card_settings_state:
-			UIManager.card_settings_state.card_zoom_level = level
-			UIManager.card_settings_state.card_zoom_ratio = _current_snap_ratios[level]
-
-		# Apply the same level to ALL grid views. Each grid resolves the level
-		# to its own items-per-line stop so the zoom level stays consistent.
-		# Hidden views only get the level stamped; running their full layout
-		# (card adds, effect rebuilds, data requests) while invisible multiplies
-		# the zoom cost by every instantiated view. They settle on next show
-		# via View.on_view_show -> recalculate_layout_with_size.
-		UIManager.apply_to_all_grids(func(grid: VirtualScrollGridContainer):
-			var grid_view = UIManager.get_view_for_grid(grid)
-			if grid_view and grid_view.is_visible_in_tree():
-				grid.set_zoom_level(level)
-			else:
-				grid.stamp_zoom_level(level)
-		)
+	# DETERMINISTIC: zoom stops are pure functions of the grid's geometry
+	# (base card dims, available area, separation, orientation, view mode) —
+	# there is no guessed ratio path. If the cached stop list is empty (sync
+	# has not run yet), compute it from the current view's grid right now.
+	if _current_snap_ratios.is_empty():
+		_sync_stops_from_current_view()
+	if _current_snap_ratios.is_empty():
+		# Genuinely zero-size grid (never laid out): nothing valid to apply.
 		return
 
-	# List/Carousel mode: value is the actual ratio (stored separately from the
-	# grid zoom so the modes never pollute each other's memory).
-	var actual_zoom = clampf(value, 0.05, 0.5)
+	# All modes: value is an integer stop index. Each grid resolves it to its
+	# own bounds-aware stop (items-per-line for GRID, scroll-axis lines for
+	# LIST/CAROUSEL) so the zoom stays consistent across views.
+	var level := clampi(int(round(value)), 0, _current_snap_ratios.size() - 1)
+	var is_grid := _current_view_is_grid_mode()
 	if UIManager and UIManager.card_settings_state:
-		UIManager.card_settings_state.card_zoom_list_ratio = actual_zoom
+		if is_grid:
+			UIManager.card_settings_state.card_zoom_level = level
+			UIManager.card_settings_state.card_zoom_ratio = _current_snap_ratios[level]
+		else:
+			UIManager.card_settings_state.card_zoom_list_ratio = _current_snap_ratios[level]
 
+	# Hidden views only get the level stamped; running their full layout
+	# (card adds, effect rebuilds, data requests) while invisible multiplies
+	# the zoom cost by every instantiated view. They settle on next show
+	# via View.on_view_show -> recalculate_layout_with_size.
 	UIManager.apply_to_all_grids(func(grid: VirtualScrollGridContainer):
 		var grid_view = UIManager.get_view_for_grid(grid)
-		if grid_view and grid_view.is_visible_in_tree():
-			if not is_equal_approx(actual_zoom, grid.target_card_width_ratio):
-				grid.target_card_width_ratio = actual_zoom
-		else:
-			grid.stamp_zoom_ratio(actual_zoom)
+		var visible: bool = grid_view != null and grid_view.is_visible_in_tree()
+		var result: bool = grid.set_zoom_level(level) if visible else grid.stamp_zoom_level(level)
 	)
+
+func _sync_stops_from_current_view() -> void:
+	"""Compute the slider stops fresh from the current view's grid. Stops are
+	deterministic given the grid geometry, so this is always valid once the
+	grid has any size — it never guesses."""
+	var view = UIManager.get_current_view()
+	var grid = UIManager.get_view_grid(view) if view else null
+	if grid:
+		_update_zoom_slider_stops(grid)
+
+func _current_view_is_grid_mode() -> bool:
+	var view = UIManager.get_current_view()
+	var grid = UIManager.get_view_grid(view) if view else null
+	return grid != null and grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
 
 func _on_zoom_changed_finished(value_changed: bool):
 	"""Called when drag ends - saves the current slider value to settings."""
@@ -277,26 +304,14 @@ func _on_zoom_changed_finished(value_changed: bool):
 	if not _zoom_slider:
 		return
 
-	if _current_snap_ratios.size() > 0:
-		# Grid mode: save the integer level.
-		var level = clampi(int(round(_zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
-		if DataManager:
-			if _sv_zoom_level:
-				DataManager.set_setting(level, _sv_zoom_level)
-				if _zoom_save_timer:
-					_zoom_save_timer.start()
-			if _sv_zoom_ratio:
-				DataManager.set_setting(_current_snap_ratios[level], _sv_zoom_ratio)
-				if _zoom_save_timer:
-					_zoom_save_timer.start()
-	else:
-		# List/Carousel mode: save the per-mode ratio.
-		var saved_value = _zoom_slider.value
-		if DataManager:
-			if _sv_zoom_list:
-				DataManager.set_setting(saved_value, _sv_zoom_list)
-				if _zoom_save_timer:
-					_zoom_save_timer.start()
+	if _current_snap_ratios.is_empty():
+		_sync_stops_from_current_view()
+	if _current_snap_ratios.is_empty():
+		return
+	# All modes: the slider carries integer stop indices; persist via the
+	# shared mode-aware helper (grid -> level+ratio, list/carousel -> fraction).
+	var level := clampi(int(round(_zoom_slider.value)), 0, _current_snap_ratios.size() - 1)
+	_persist_zoom_stop(level)
 
 func _on_zoom_save_timer_timeout() -> void:
 	if DataManager:
@@ -391,7 +406,10 @@ func sync_zoom_slider_to_current_view() -> void:
 		_zoom_slider.set_value_no_signal(games_grid.target_card_width_ratio)
 
 func save_zoom_ratio(ratio: float) -> void:
-	"""Persist the given zoom ratio to the library_card_zoom setting."""
+	"""Persist the list/carousel zoom fraction to library_card_zoom_list.
+
+	(Only called from the list/carousel settle path — grid settle persists via
+	the level/ratio settings in persist_settled_zoom.)"""
 	if not DataManager:
 		return
 	# Don't save a zoom derived from a headless / zero-size window; it would
@@ -399,12 +417,13 @@ func save_zoom_ratio(ratio: float) -> void:
 	var win_size = DisplayServer.window_get_size()
 	if win_size == Vector2i.ZERO or OS.get_cmdline_args().has("--benchmark-startup"):
 		return
-	if not _sv_zoom_ratio:
+	if not _sv_zoom_list:
 		return
-	var clamped_ratio = clampf(ratio, 0.05, 0.5)
-	if is_equal_approx(_sv_zoom_ratio.value, clamped_ratio):
+	# Max fraction is 1.0 (the k=1 stop fills the scroll axis exactly).
+	var clamped_ratio = clampf(ratio, 0.05, 1.0)
+	if is_equal_approx(_sv_zoom_list.value, clamped_ratio):
 		return
-	DataManager.set_setting(clamped_ratio, _sv_zoom_ratio)
+	DataManager.set_setting(clamped_ratio, _sv_zoom_list)
 	if _zoom_save_timer:
 		_zoom_save_timer.start()
 
@@ -830,61 +849,47 @@ func _restore_focus_to_card(index: int, preserve_index: bool = false) -> void:
 	# would override in-flight wheel scrolling and spam value_changed.
 	games_grid.restore_focus_to_index(target_index)
 
-## Step the zoom by one stop/step in the given direction (gamepad triggers).
+## Step the zoom by one stop in the given direction (gamepad triggers).
+## Unified stop model: the slider value IS the stop index for every view mode,
+## so stepping moves one stop and clamps to the mode's stop count.
 func adjust_zoom(delta: float) -> void:
 	if _startup_zoom_sync_active:
 		return
 	if not _zoom_slider:
 		return
-
-	var current_view = UIManager.get_current_view()
-	var is_grid = false
-	if current_view:
-		var games_grid = UIManager.get_view_grid(current_view)
-		if games_grid:
-			is_grid = games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID
-
-	if _current_snap_ratios.size() > 0 and is_grid:
-		# Grid mode: move by whole stop indices
-		var current_index = int(round(_zoom_slider.value))
-		var new_index = clampi(current_index + sign(delta), 0, _current_snap_ratios.size() - 1)
-		if new_index != current_index:
-			var focused_index = get_focused_card_index()
-			_zoom_slider.set_value_no_signal(new_index)
-			_on_zoom_changed(new_index)
-			if focused_index >= 0:
-				call_deferred("_restore_focus_to_card", focused_index)
-			# Save the integer level for grid mode.
-			if DataManager:
-				if _sv_zoom_level:
-					DataManager.set_setting(new_index, _sv_zoom_level)
-					if _zoom_save_timer:
-						_zoom_save_timer.start()
-				if _sv_zoom_ratio:
-					DataManager.set_setting(_current_snap_ratios[new_index], _sv_zoom_ratio)
-					if _zoom_save_timer:
-						_zoom_save_timer.start()
+	if _current_snap_ratios.is_empty():
+		_sync_stops_from_current_view()
+	if _current_snap_ratios.is_empty():
 		return
 
-	# List/Carousel mode: step by slider step to avoid snapping back
-	var current_zoom = _zoom_slider.value
-	var max_zoom = 0.5
-	var effective_delta = sign(delta) * _zoom_slider.step
-	var new_zoom = clampf(current_zoom + effective_delta, 0.05, max_zoom)
+	var current_index := int(round(_zoom_slider.value))
+	var new_index := clampi(current_index + sign(delta), 0, _current_snap_ratios.size() - 1)
+	if new_index == current_index:
+		return
+	var focused_index = get_focused_card_index()
+	_zoom_slider.set_value_no_signal(new_index)
+	_on_zoom_changed(new_index)
+	if focused_index >= 0:
+		call_deferred("_restore_focus_to_card", focused_index)
+	_persist_zoom_stop(new_index)
 
-	if not is_equal_approx(current_zoom, new_zoom):
-		var focused_index = get_focused_card_index()
-		_zoom_slider.set_value_no_signal(new_zoom)
-		var actual_zoom = _zoom_slider.value
-		_on_zoom_changed(actual_zoom)
-		if focused_index >= 0:
-			call_deferred("_restore_focus_to_card", focused_index)
-		# Update in-memory setting and schedule a debounced save to avoid LIST/CAROUSEL flash
-		if DataManager:
-			if _sv_zoom_ratio:
-				DataManager.set_setting(actual_zoom, _sv_zoom_ratio)
-				if _zoom_save_timer:
-					_zoom_save_timer.start()
+## Write the current stop to the mode-correct settings (in-memory; the
+## debounced timer persists to disk). Writing the wrong field here reverts the
+## zoom on the next settings re-sync: sync_from_settings_manager re-reads BOTH
+## zoom fields, and whichever one was left stale wins the re-apply.
+func _persist_zoom_stop(level: int) -> void:
+	if not DataManager:
+		return
+	if _current_view_is_grid_mode():
+		if _sv_zoom_level:
+			DataManager.set_setting(level, _sv_zoom_level)
+		if _sv_zoom_ratio:
+			DataManager.set_setting(_current_snap_ratios[level], _sv_zoom_ratio)
+	else:
+		if _sv_zoom_list:
+			DataManager.set_setting(_current_snap_ratios[level], _sv_zoom_list)
+	if _zoom_save_timer:
+		_zoom_save_timer.start()
 
 ## Stop any pending debounced zoom save (used when suspending/quitting).
 func cancel_pending_zoom_save() -> void:
@@ -896,19 +901,21 @@ func cancel_pending_zoom_save() -> void:
 func persist_settled_zoom(grid: VirtualScrollGridContainer) -> void:
 	if not grid or not UIManager or not UIManager.card_settings_state:
 		return
-	var level = UIManager.card_settings_state.card_zoom_level
-	if level < 0 and _current_snap_ratios.size() > 0:
-		level = _find_nearest_snap_index(grid.target_card_width_ratio)
-		UIManager.card_settings_state.card_zoom_level = level
-	if level >= 0 and DataManager:
-		if _sv_zoom_level:
-			DataManager.set_setting(level, _sv_zoom_level)
+	# Mode-aware: persist to the grid OR list/carousel settings. Writing the
+	# wrong field leaves the other stale, and the next settings re-sync
+	# (sync_from_settings_manager) re-applies the stale value = snap-back.
+	if grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
+		var level = UIManager.card_settings_state.card_zoom_level
+		if level < 0 and _current_snap_ratios.size() > 0:
+			level = _find_nearest_snap_index(grid.target_card_width_ratio)
+			UIManager.card_settings_state.card_zoom_level = level
+		if level >= 0 and DataManager:
+			if _sv_zoom_level:
+				DataManager.set_setting(level, _sv_zoom_level)
+			if _sv_zoom_ratio:
+				DataManager.set_setting(grid.target_card_width_ratio, _sv_zoom_ratio)
+			UIManager.card_settings_state.card_zoom_ratio = grid.target_card_width_ratio
 			if _zoom_save_timer:
 				_zoom_save_timer.start()
-		if _sv_zoom_ratio:
-			DataManager.set_setting(grid.target_card_width_ratio, _sv_zoom_ratio)
-			if _zoom_save_timer:
-				_zoom_save_timer.start()
-		UIManager.card_settings_state.card_zoom_ratio = grid.target_card_width_ratio
 	else:
 		save_zoom_ratio(grid.target_card_width_ratio)

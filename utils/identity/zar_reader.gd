@@ -169,6 +169,21 @@ func find_file(filename: String) -> Dictionary:
 func create_node_io(node: Dictionary) -> NodeIO:
 	return NodeIO.new(self, node.get("offset", 0), node.get("size", 0))
 
+## Returns the child entries of a directory node as an Array of
+## {name: String, is_dir: bool}. Defaults to the archive root (index 0).
+func list_dir_entries(dir_index: int = 0) -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	if _is_file_entry(dir_index):
+		return entries
+	var start = _get_dir_start(dir_index)
+	var count = _get_dir_count(dir_index)
+	for i in range(start, start + count):
+		entries.append({
+			"name": _get_name(_get_name_offset(i)),
+			"is_dir": not _is_file_entry(i),
+		})
+	return entries
+
 ## Reads length bytes at a global uncompressed stream offset
 func _read_at(global_offset: int, length: int) -> PackedByteArray:
 	var result := PackedByteArray()

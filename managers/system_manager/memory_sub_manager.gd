@@ -39,6 +39,8 @@ var _dedup_task_ids: Dictionary = {}  # dedup_key -> task_id of the in-flight ta
 
 var _texture_cache: Dictionary = {}  # Insertion-ordered: front = LRU, back = MRU
 var _texture_cache_mutex: Mutex
+## Keys pinned by currently-visible cards; eviction skips these while refcount > 0.
+var _pinned_texture_keys: Dictionary = {}  # cache_key -> int refcount
 const MAX_TEXTURE_CACHE_SIZE: int = 400
 const MAX_TEXTURE_CACHE_MEMORY_MB: int = 300
 const MAX_TEXTURE_CACHE_MEMORY_MB_ANDROID: int = 100
@@ -63,6 +65,12 @@ var _lp_callbacks: Array = []
 var _lp_callback_head: int = 0  # Unconsumed items start here; avoids O(n) re-slicing per frame
 var _lp_callback_mutex: Mutex
 const MAX_LP_CALLBACKS_PER_FRAME: int = 15
+## Scroll-idle gate (Argosy/Playnite stale-decode policy): while the grid is
+## scrolling fast, workers only pull HIGH-priority (visible) decodes so the
+## thread pool's full throughput serves on-screen covers; buffer/low-priority
+## decodes resume once scrolling settles. Prevents a scroll storm from minting
+## hundreds of soon-evicted textures that crowd out visible rows.
+var _low_priority_gated: bool = false
 
 # Thread-safe main-thread hops ({"callback": Callable, "args": Array}) from
 # workers that must reach the main thread reliably; call_deferred from threads
@@ -414,7 +422,7 @@ static func _image_worker():
 		if high_size > 0 and (low_size == 0 or high_count < 2):
 			task = _instance._image_high_priority_queue.pop_front()
 			high_count += 1
-		elif low_size > 0:
+		elif low_size > 0 and not _instance._low_priority_gated:
 			task = _instance._image_low_priority_queue.pop_front()
 			high_count = 0
 
@@ -783,6 +791,21 @@ static func clear_pending_low_priority_image_tasks(fire_callbacks: bool = true) 
 			_instance.call_deferred("_execute_callback", cb, null)
 	return drained_count
 
+## Gate/un-gate low-priority (buffer-card) decode work. While gated, image
+## workers only pull high-priority tasks. On un-gate, re-post one semaphore
+## wake per queued low-priority task: their original posts were consumed by
+## workers that (correctly) refused to pop them while the gate was closed.
+static func set_low_priority_gated(gated: bool) -> void:
+	if _instance == null:
+		return
+	_instance._image_mutex.lock()
+	var was_gated := _instance._low_priority_gated
+	_instance._low_priority_gated = gated
+	var pending := _instance._image_low_priority_queue.size() if (was_gated and not gated) else 0
+	_instance._image_mutex.unlock()
+	for i in pending:
+		_instance._image_semaphore.post()
+
 static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	if _instance == null or task_id <= 0:
 		return false
@@ -860,14 +883,28 @@ static func cache_texture(cache_key: String, texture: Texture2D) -> void:
 	var memory_limit = get_max_texture_cache_memory_bytes()
 	var tex_memory = _estimate_texture_memory(texture)
 
-	# Evict oldest (front of the insertion-ordered Dictionary) by count/memory limits
+	# Evict oldest (front of the insertion-ordered Dictionary) by count/memory limits.
+	# Pinned textures are skipped so currently-visible covers never disappear.
+	var examined: int = 0
 	while (_instance._texture_cache.size() >= cache_limit or
 		   (_instance._texture_cache_memory + tex_memory) > memory_limit) and not _instance._texture_cache.is_empty():
 		var oldest_key = _instance._texture_cache.keys()[0]
+		if _instance._pinned_texture_keys.get(oldest_key, 0) > 0:
+			# Oldest entry is pinned: move it to the back and look at the next one.
+			var tex = _instance._texture_cache[oldest_key]
+			_instance._texture_cache.erase(oldest_key)
+			_instance._texture_cache[oldest_key] = tex
+			examined += 1
+			# If every entry is pinned we cannot make room; break to avoid an
+			# infinite loop and let the new texture be added anyway.
+			if examined >= _instance._texture_cache.size():
+				break
+			continue
 		var oldest_tex = _instance._texture_cache.get(oldest_key, null)
 		if oldest_tex:
 			_instance._texture_cache_memory = maxi(0, _instance._texture_cache_memory - _estimate_texture_memory(oldest_tex))
 		_instance._texture_cache.erase(oldest_key)
+		examined = 0
 
 	_instance._texture_cache[cache_key] = texture
 	_instance._texture_cache_memory += tex_memory
@@ -878,7 +915,31 @@ static func clear_texture_cache() -> void:
 		return
 	_instance._texture_cache_mutex.lock()
 	_instance._texture_cache.clear()
+	_instance._pinned_texture_keys.clear()
 	_instance._texture_cache_memory = 0
+	_instance._texture_cache_mutex.unlock()
+
+
+## Pin a texture so the LRU evictor will not drop it. Multiple callers can pin
+## the same key (refcounted); it is only unpinned when the last caller releases.
+static func pin_texture(cache_key: String) -> void:
+	if _instance == null or cache_key == "":
+		return
+	_instance._texture_cache_mutex.lock()
+	_instance._pinned_texture_keys[cache_key] = _instance._pinned_texture_keys.get(cache_key, 0) + 1
+	_instance._texture_cache_mutex.unlock()
+
+
+static func unpin_texture(cache_key: String) -> void:
+	if _instance == null or cache_key == "":
+		return
+	_instance._texture_cache_mutex.lock()
+	var refcount: int = _instance._pinned_texture_keys.get(cache_key, 0)
+	refcount -= 1
+	if refcount <= 0:
+		_instance._pinned_texture_keys.erase(cache_key)
+	else:
+		_instance._pinned_texture_keys[cache_key] = refcount
 	_instance._texture_cache_mutex.unlock()
 
 

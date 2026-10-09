@@ -123,6 +123,8 @@ func _apply_zoom_ratio(p_ratio: float) -> bool:
 	_batching_layout = true
 	target_card_width_ratio = new_ratio
 	_batching_layout = false
+	# LIST/CAROUSEL derive their stop from the fraction; force re-resolution.
+	_scroll_axis_lines = 0
 	return true
 
 func _apply_grid_padding(p_padding: int) -> bool:
@@ -321,6 +323,14 @@ var _last_stamp_generation: int = -1
 ## sort. Part of the pre-draw stamp gate so stamps always follow layout
 ## changes even when scroll/margin/window didn't move.
 var _layout_generation: int = 0
+## Set when cards were added/recycled and must not be revealed until the
+## FlowContainer sort commits their positions. The sort handler reveals them
+## (stamp + mark) exactly once, post-sort, so a stale pooled position can
+## never reach the screen.
+var _visual_reveal_pending: bool = false
+## Frame at which the current reveal was requested; a sort that never fires
+## (hidden view, container quirk) must not leave cards hidden forever.
+var _visual_reveal_requested_frame: int = -1
 var _layout_settled_with_valid_size: bool = false
 ## Forces the next _recalculate_layout past its input-cache early-exit (set
 ## when a valid size first arrives after an invalid settle).
@@ -329,6 +339,12 @@ var _force_layout_once: bool = false
 # Zoom-stop caches (rebuilt when the cache key changes)
 var _snap_levels_cache: Array[int] = []
 var _snap_levels_key: String = ""
+## LIST/CAROUSEL zoom: resolved "cards along the scroll axis" count (0 = derive
+## from target_card_width_ratio, which for these modes is the scroll-axis fill
+## fraction). Analogous to _grid_items_per_line for GRID.
+var _scroll_axis_lines: int = 0
+var _scroll_stops_cache: Array[int] = []
+var _scroll_stops_key: String = ""
 
 # This is the user-requested ratio, actual ratio may be snapped to fit whole cards
 var target_card_width_ratio: float = 0.15:
@@ -357,6 +373,11 @@ var target_card_width_ratio: float = 0.15:
 			if DEBUG_LOG: print("[Grid] setter target_card_width_ratio: input=", value, " max_ratio=", max_ratio, " clamped=", clamped, " snapped=", snapped_ratio, " suppressed=", startup_layout_suppressed)
 		# Always update ratio and recalculate - _recalculate_layout handles optimization
 		target_card_width_ratio = snapped_ratio
+		# External write (not a batched internal sync): the LIST/CAROUSEL stop
+		# cache derives from this fraction, so drop it and let the recalc
+		# resolve the new stop. Without this, direct writes (e.g. the toolbar's
+		# no-stops fallback) are silently ignored by the cached stop.
+		_scroll_axis_lines = 0
 		_recalculate_layout()
 
 # Computed zoom based on viewport size
@@ -396,7 +417,14 @@ var item_width: float = 212.0:
 
 var _scroll_container: SmoothScrollContainer
 var _margin_container: MarginContainer
-var _center_container: CenterContainer
+# Plain Control, NOT a CenterContainer: CenterContainer positions children by
+# their combined minimum size (ignoring size flags), so any transient card
+# min-size mutation during recycling leaked into flow.position for exactly
+# one rendered frame (the whole strip jumped ~half the extent delta at
+# recycle thresholds). With a plain Control the flow is anchored full-rect —
+# flow.position stays (0,0) no matter what min sizes do — and all centering
+# is reproduced deterministically via margins in _update_margin().
+var _center_container: Control
 var _flow_container: FlowContainer
 var _visual_layer: Control
 var _debug_camera: Camera2D
@@ -583,21 +611,14 @@ func _update_view_mode() -> void:
 func _update_flow_container_flags() -> void:
 	if not _flow_container:
 		return
-	match view_mode:
-		ViewMode.GRID:
-			# GRID: FlowContainer fills the scroll direction to prevent side gaps
-			if vertical:
-				_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			else:
-				_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-				_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		ViewMode.LIST:
-			_flow_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			_flow_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		ViewMode.CAROUSEL:
-			_flow_container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-			_flow_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# The flow is anchored full-rect inside the center container (a plain
+	# Control), so flow.position is pinned at (0,0) on every frame and
+	# flow.size tracks the margin content rect — completely independent of
+	# card min-size churn during recycling. Anchor layout is synchronous and
+	# never depends on minimum sizes. (This replaces the old CenterContainer +
+	# SHRINK_CENTER arrangement whose sort-derived flow.position committed
+	# transient min-size states for one rendered frame — the recycle-flicker.)
+	_flow_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 
 func _update_center_container_flags() -> void:
 	if not _center_container:
@@ -710,6 +731,11 @@ func _ready():
 	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
 		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
 	# frame_post_draw (DrawAudit) connects in _update_debug_mode — debug-only.
+	# The flicker watcher (stamp vs REAL on-screen position) is ON BY DEFAULT so
+	# editor runs catch detached-visual frames without any setup; set
+	# KYODAI_FLICKER_WATCH=0 to disable.
+	if OS.get_environment("KYODAI_FLICKER_WATCH") != "0":
+		RenderingServer.frame_post_draw.connect(_on_frame_post_draw_reality_check)
 
 	# Use SystemManager.display as the single source of resize truth when available.
 	# It debounces viewport changes so we don't recalculate layout on every pixel.
@@ -819,6 +845,8 @@ func _exit_tree():
 		RenderingServer.frame_pre_draw.disconnect(_on_frame_pre_draw)
 	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
 		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)
+	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_reality_check):
+		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_reality_check)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
 		if state.changed.is_connected(_on_card_settings_state_changed):
@@ -843,6 +871,9 @@ func _exit_tree():
 	if is_queued_for_deletion():
 		_active_cards.clear()
 		_active_cards_by_index.clear()
+	# The low-priority decode gate is process-global: never leave it closed
+	# when this grid leaves the tree or other screens' covers starve.
+	MemorySubManager.set_low_priority_gated(false)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
@@ -990,6 +1021,14 @@ func _process(_delta: float):
 	if _is_processing_scroll:
 		_is_processing_scroll = false
 		push_warning("[Grid] _is_processing_scroll was left set between frames; force-cleared")
+
+	# Reveal fallback: if a sort never consumed the pending reveal (hidden view,
+	# container quirk), reveal after 3 frames rather than leaving cards hidden.
+	if _visual_reveal_pending and _visual_reveal_requested_frame >= 0 \
+		and Engine.get_process_frames() > _visual_reveal_requested_frame + 3:
+		_visual_reveal_pending = false
+		_visual_reveal_requested_frame = -1
+		_sync_and_mark_card_visual_transforms("reveal-fallback", true)
 
 	if _resize_debounce_frames > 0:
 		_resize_debounce_frames -= 1
@@ -1185,10 +1224,9 @@ func _process_buffer_expansion() -> void:
 		_update_card_priorities(_visible_start_idx, _visible_end_idx)
 		_update_visual_draw_order()
 		_flush_pending_visual_setup_for_visible_zone()
-		# Newly added off-screen cards need their visual-layer positions synced
-		# after the FlowContainer sort runs, otherwise the visual layer stays at
-		# the origin until a scroll/recycle forces a sync.
-		call_deferred("_sync_and_mark_card_visual_transforms", "buffer-expansion")
+		# Newly added off-screen cards are revealed once the sort commits their
+		# positions (see _on_flow_sorted).
+		_request_visual_reveal()
 
 	if current_first <= _buffer_target_start and current_last >= _buffer_target_end - 1:
 		_pending_buffer_expansion = false
@@ -1286,13 +1324,18 @@ func _calculate_max_ratio() -> float:
 	var base_dims = _get_base_dimensions_for_mode()
 
 	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL:
-		return 0.5
+		# Ratio IS the scroll-axis fill fraction; the largest list/carousel stop
+		# (one card along the scroll axis) fills it exactly.
+		return 1.0
 
 	var available = _get_available_size()
 	var viewport_area = available.x * available.y
 
-	# Cap at 2 cards per line — never allow a single card to fill the viewport.
-	var ratio = _compute_ratio_for_items_per_line(2, base_dims, available, viewport_area)
+	# Cap at the largest FIT-AWARE stop (levels[0] = smallest legal N): never
+	# allow a zoom whose cards extend past the viewport on the scroll axis.
+	var levels := get_snap_levels()
+	var cap_n := levels[0] if not levels.is_empty() else 2
+	var ratio = _compute_ratio_for_items_per_line(cap_n, base_dims, available, viewport_area)
 
 	return max(ratio, 0.05)
 
@@ -1314,21 +1357,83 @@ func get_snap_levels() -> Array[int]:
 	_snap_levels_key = key
 	return _snap_levels_cache
 
-func _compute_snap_levels(base_dims: Vector2, available: Vector2) -> Array[int]:
-	# Largest N whose exact-fill card still meets the minimum size floor.
-	var cross_axis := available.x if vertical else available.y
-	var base_cross := base_dims.x if vertical else base_dims.y
-	var min_card := base_cross * MIN_CARD_SIZE_FRACTION
-	var n_max := maxi(2, int((cross_axis + grid_separation) / (min_card + grid_separation)))
+# ---------------------------------------------------------------------------
+# LIST/CAROUSEL zoom stops (unified with the grid's bounds-aware stop model)
+# ---------------------------------------------------------------------------
 
-	# Single-step stops for the common range, then coarser steps up to N_max
-	# so huge viewports don't drown the slider in ticks. N_max is always a stop.
+## Ascending "cards along the scroll axis" stops for LIST/CAROUSEL. Stop k
+## gives a card that exactly fills the cross axis and shares the scroll axis
+## evenly with k−1 siblings: every stop is bounds-correct by construction.
+func get_scroll_stop_lines() -> Array[int]:
+	if view_mode == ViewMode.GRID or not _has_valid_available_size():
+		return []
+	var base_dims = _get_base_dimensions_for_mode()
+	var available := _get_available_size()
+	var key := "%d|%s" % [view_mode, _snap_levels_cache_key(base_dims, available)]
+	if key == _scroll_stops_key and not _scroll_stops_cache.is_empty():
+		return _scroll_stops_cache
+	var scroll_axis: float = available.y if vertical else available.x
+	var base_scroll: float = base_dims.y if vertical else base_dims.x
+	var min_card := base_scroll * MIN_CARD_SIZE_FRACTION
+	var k_max := maxi(1, int((scroll_axis + grid_separation) / (min_card + grid_separation)))
+	_scroll_stops_cache = _build_stop_levels(1, k_max)
+	_scroll_stops_key = key
+	return _scroll_stops_cache
+
+## Card size for scroll-axis stop k: cross axis fills exactly, scroll axis is
+## (scroll_axis − (k−1)·sep) / k.
+func _scroll_stop_size(k: int) -> Vector2:
+	var available := _get_available_size()
+	var scroll_axis: float = available.y if vertical else available.x
+	var cross_axis: float = available.x if vertical else available.y
+	var cell := maxf(1.0, (scroll_axis - (k - 1) * grid_separation) / float(k))
+	return Vector2(cross_axis, cell) if vertical else Vector2(cell, cross_axis)
+
+## The stop's zoom fraction (card scroll dim / viewport scroll dim). This is
+## the value stored in card_zoom_list_ratio, so saved floats migrate onto the
+## nearest stop.
+func _scroll_stop_fraction(k: int) -> float:
+	var available := _get_available_size()
+	var scroll_axis: float = available.y if vertical else available.x
+	if scroll_axis <= 0.0:
+		return 0.25
+	return (_scroll_stop_size(k).y if vertical else _scroll_stop_size(k).x) / scroll_axis
+
+## Maps a scroll-fill fraction to the nearest stop's k.
+func _resolve_lines_for_ratio(ratio: float) -> int:
+	var stops := get_scroll_stop_lines()
+	if stops.is_empty():
+		return 2
+	var available := _get_available_size()
+	var scroll_axis: float = available.y if vertical else available.x
+	var ideal: float = scroll_axis * clampf(ratio, 0.05, 1.0)
+	var k := clampi(int(round((scroll_axis + grid_separation) / maxf(1.0, ideal + grid_separation))), 1, stops[stops.size() - 1])
+	var best: int = stops[0]
+	for s in stops:
+		if absi(s - k) < absi(best - k):
+			best = s
+	return best
+
+## The effective scroll-axis stop for LIST/CAROUSEL layout. Derives from the
+## stored fraction once a trustworthy size is available; 0 = "not resolved".
+func _get_scroll_lines_visible() -> int:
+	if _scroll_axis_lines > 0:
+		return _scroll_axis_lines
+	if not startup_layout_suppressed and _has_valid_available_size():
+		_scroll_axis_lines = _resolve_lines_for_ratio(target_card_width_ratio)
+	return maxi(1, _scroll_axis_lines)
+
+## Builds an ascending stop list in [n_min, n_max]: single steps through
+## ZOOM_SINGLE_STEP_MAX, then coarse steps, N_max always included, trimmed to
+## MAX_ZOOM_STOPS. Shared by grid (items per line, n_min >= 2) and
+## list/carousel (cards along the scroll axis, n_min >= 1).
+func _build_stop_levels(n_min: int, n_max: int) -> Array[int]:
 	var levels: Array[int] = []
-	var n := 2
+	var n := n_min
 	while n <= mini(n_max, ZOOM_SINGLE_STEP_MAX):
 		levels.append(n)
 		n += 1
-	n = ZOOM_SINGLE_STEP_MAX + 2
+	n = maxi(n_min, ZOOM_SINGLE_STEP_MAX + 2)
 	while n < n_max:
 		levels.append(n)
 		n += 2
@@ -1340,21 +1445,51 @@ func _compute_snap_levels(base_dims: Vector2, available: Vector2) -> Array[int]:
 		levels.remove_at(levels.size() - 2)
 	return levels
 
-## Returns descending snap ratios (index 0 = largest cards) for the current
-## viewport configuration — a legacy view over the items-per-line stops.
-## Prefer get_snap_levels() for new code.
+func _compute_snap_levels(base_dims: Vector2, available: Vector2) -> Array[int]:
+	# Largest N whose exact-fill card still meets the minimum size floor.
+	var cross_axis := available.x if vertical else available.y
+	var base_cross := base_dims.x if vertical else base_dims.y
+	var min_card := base_cross * MIN_CARD_SIZE_FRACTION
+	var n_max := maxi(2, int((cross_axis + grid_separation) / (min_card + grid_separation)))
+
+	# Scroll-axis fit floor: the exact-fill card derived from N must show its
+	# WHOLE row/column within the viewport — the largest zoom never extends a
+	# card past the grid bounds (e.g. portrait art on a landscape screen, where
+	# N=2 cards are taller than the viewport). card_scroll(N) falls as N rises,
+	# so solve N >= (cross+sep)/(scroll/aspect+sep) for the smallest legal N.
+	var n_min := 2
+	if base_dims.x > 0.0 and base_dims.y > 0.0:
+		var aspect := (base_dims.y / base_dims.x) if vertical else (base_dims.x / base_dims.y)
+		var scroll_axis := available.y if vertical else available.x
+		if aspect > 0.0 and scroll_axis > 0.0:
+			var denom := scroll_axis / aspect + grid_separation
+			if denom > 0.0:
+				n_min = maxi(2, int(ceil((cross_axis + grid_separation) / denom)))
+	n_min = mini(n_min, n_max)
+	return _build_stop_levels(n_min, n_max)
+
+## Returns snap ratios ordered most-zoomed-out first (index 0 = smallest
+## ratio), one per stop, for ALL view modes — the unified view the zoom slider
+## consumes. GRID: legacy view over the items-per-line stops. LIST/CAROUSEL:
+## the scroll-axis fill fraction of each stop.
 func get_snap_ratios() -> Array[float]:
 	var ratios: Array[float] = []
-	if view_mode != ViewMode.GRID or not _has_valid_available_size():
+	if not _has_valid_available_size():
 		return ratios
-	var base_dims = _get_base_dimensions_for_mode()
-	var available = _get_available_size()
-	var viewport_area = available.x * available.y
-	var levels = get_snap_levels()
-	for i in range(levels.size() - 1, -1, -1):
-		ratios.append(_compute_ratio_for_items_per_line(levels[i], base_dims, available, viewport_area))
+	match view_mode:
+		ViewMode.GRID:
+			var base_dims = _get_base_dimensions_for_mode()
+			var available = _get_available_size()
+			var viewport_area = available.x * available.y
+			var levels = get_snap_levels()
+			for i in range(levels.size() - 1, -1, -1):
+				ratios.append(_compute_ratio_for_items_per_line(levels[i], base_dims, available, viewport_area))
+		ViewMode.LIST, ViewMode.CAROUSEL:
+			var stops := get_scroll_stop_lines()
+			for i in range(stops.size() - 1, -1, -1):
+				ratios.append(_scroll_stop_fraction(stops[i]))
 	if ratios.size() < 2:
-		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, base_dims=%s, available=%s" % [ratios.size(), view_mode, size, base_dims, available])
+		push_warning("[VirtualScrollGridContainer] Only %d snap ratio(s) for view_mode=%s, size=%s, available=%s" % [ratios.size(), view_mode, size, _get_available_size()])
 	return ratios
 
 ## Returns snap ratios sorted ascending (index 0 = most items per line).
@@ -1373,10 +1508,20 @@ func _get_snap_ratio_for_level(level: int) -> float:
 	var available = _get_available_size()
 	return _compute_ratio_for_items_per_line(levels[clampi(level, 0, levels.size() - 1)], _get_base_dimensions_for_mode(), available, available.x * available.y)
 
-## Index of the current items-per-line within the stop list (0 = most zoomed out).
+## Index of the current zoom within the mode's stop list (0 = largest cards).
 ## Pass from_ratio to resolve a level for an arbitrary ratio (e.g. a saved one)
 ## instead of the grid's current zoom. Does not mutate zoom state.
 func get_zoom_level(from_ratio: float = -1.0) -> int:
+	if view_mode != ViewMode.GRID:
+		var stops := get_scroll_stop_lines()
+		if stops.is_empty():
+			return -1
+		var k := _scroll_axis_lines
+		if from_ratio >= 0.0:
+			k = _resolve_lines_for_ratio(from_ratio)
+		elif k <= 0:
+			k = _resolve_lines_for_ratio(target_card_width_ratio)
+		return stops.find(k)
 	var levels = get_snap_levels()
 	if levels.is_empty():
 		return -1
@@ -1391,18 +1536,39 @@ func get_zoom_level(from_ratio: float = -1.0) -> int:
 			best = i
 	return best
 
-## Applies a zoom level (index into get_snap_levels()) and recalculates layout.
-## Returns true if the items-per-line changed.
+## Applies a zoom level (index into the mode's stop list) and recalculates
+## layout. Returns true if the effective zoom changed.
 func set_zoom_level(level: int) -> bool:
+	if view_mode != ViewMode.GRID:
+		return _apply_scroll_stop_level(level, true)
 	var levels = get_snap_levels()
 	if levels.is_empty():
 		return false
 	return _set_grid_items_per_line(levels[clampi(level, 0, levels.size() - 1)])
 
+## Shared level→stop application for LIST/CAROUSEL. `recalc` false is the
+## batch/stamp variant (recalculate once at the end by the caller).
+func _apply_scroll_stop_level(level: int, recalc: bool) -> bool:
+	var stops := get_scroll_stop_lines()
+	if stops.is_empty():
+		return false
+	var k: int = stops[clampi(level, 0, stops.size() - 1)]
+	if k == _get_scroll_lines_visible() and _scroll_axis_lines > 0:
+		return false
+	_scroll_axis_lines = k
+	_batching_layout = true
+	target_card_width_ratio = _scroll_stop_fraction(k)
+	_batching_layout = false
+	if recalc:
+		_recalculate_layout()
+	return true
+
 ## Stamps a zoom level without recalculating layout. Intended for hidden views:
 ## the layout settles when the view is next shown (View.on_view_show runs
 ## recalculate_layout_with_size). Returns true if N changed.
 func stamp_zoom_level(level: int) -> bool:
+	if view_mode != ViewMode.GRID:
+		return _apply_scroll_stop_level(level, false)
 	var levels = get_snap_levels()
 	if levels.is_empty():
 		return false
@@ -1416,10 +1582,13 @@ func stamp_zoom_ratio(p_ratio: float) -> void:
 	_batching_layout = true
 	target_card_width_ratio = clamped
 	_batching_layout = false
+	_scroll_axis_lines = 0
 
 ## Applies the given zoom level without triggering a layout recalculation
 ## (batch contexts recalculate once at the end). Returns true if N changed.
 func _apply_zoom_level(p_level: int) -> bool:
+	if view_mode != ViewMode.GRID:
+		return _apply_scroll_stop_level(p_level, false)
 	var levels = get_snap_levels()
 	if levels.is_empty():
 		return false
@@ -2022,16 +2191,29 @@ func _recalculate_layout():
 			# LIST (inverted focus): the cell is the FOCUSED size, so focused width
 			# fills the viewport exactly; unfocused cards shrink by 1/focus_scale
 			# centered in their cells. Nothing exceeds the cell, so no overflow.
-			var card_width = _get_available_size().x
-			card_size = Vector2(card_width, base_dims.y * current_zoom)
+			# Zoom resolves to discrete scroll-axis stops (k cards share the
+			# viewport height); the stored fraction stays in sync for
+			# persistence/UI, exactly like the grid's derived ratio.
+			var k_list := _get_scroll_lines_visible()
+			card_size = _scroll_stop_size(k_list)
 			focused_card_size = card_size
+			var list_frac := card_size.y / _get_available_size().y
+			if not is_equal_approx(list_frac, target_card_width_ratio):
+				_batching_layout = true
+				target_card_width_ratio = list_frac
+				_batching_layout = false
 		ViewMode.CAROUSEL:
 			# CAROUSEL (inverted focus): the cell is the FOCUSED size, so focused
 			# height fills the viewport exactly; unfocused cards shrink by
 			# 1/focus_scale centered in their cells. No overflow is reserved.
-			var card_height = _get_available_size().y
-			card_size = Vector2(base_dims.x * current_zoom, card_height)
+			var k_car := _get_scroll_lines_visible()
+			card_size = _scroll_stop_size(k_car)
 			focused_card_size = card_size
+			var car_frac := card_size.x / _get_available_size().x
+			if not is_equal_approx(car_frac, target_card_width_ratio):
+				_batching_layout = true
+				target_card_width_ratio = car_frac
+				_batching_layout = false
 
 	var available = _get_available_size()
 
@@ -2235,9 +2417,9 @@ func _recalculate_layout():
 	# target so the view never rests mid-gap after zoom/resize/orientation changes.
 	_reconcile_page_spacers()
 	_update_page_snap_state()
-	# Sync and reveal visual items after the deferred FlowContainer sort has run.
-	# Relying only on NOTIFICATION_TRANSFORM_CHANGED misses some rebuild paths.
-	call_deferred("_sync_and_mark_card_visual_transforms", "recalc")
+	# Geometry/spacers changed: reveal after the sort commits new positions
+	# (the reveal runs in _on_flow_sorted, post-sort, at committed offsets).
+	_request_visual_reveal()
 
 	# Restore focus to the card that was focused before layout recalculation.
 	# The anchor restore above already placed it in view, so this must NOT
@@ -2330,11 +2512,12 @@ func _get_visible_count() -> int:
 	if vertical:
 		var viewport_height = available.y
 		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		return (visible_rows * items_per_line) + 1
+		# Extra row for partial visibility at the viewport edge.
+		return ((visible_rows + 1) * items_per_line) + 1
 	else:
 		var viewport_width = available.x
 		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		return (visible_cols * items_per_line) + 1
+		return ((visible_cols + 1) * items_per_line) + 1
 
 ## Returns the number of items that fit in the current viewport
 func get_visible_count() -> int:
@@ -2391,7 +2574,10 @@ func _setup_ui():
 	_margin_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll_container.add_child(_margin_container)
 
-	_center_container = CenterContainer.new()
+	_center_container = Control.new()
+	# Plain Controls default to MOUSE_FILTER_STOP, which would swallow wheel
+	# scrolls and hover over the whole grid area (Container defaulted to PASS).
+	_center_container.mouse_filter = Control.MOUSE_FILTER_PASS
 	if vertical:
 		_center_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_center_container.size_flags_vertical = Control.SIZE_FILL
@@ -2407,6 +2593,15 @@ func _setup_ui():
 	_flow_container.add_theme_constant_override("v_separation", grid_separation)
 	_flow_container.sort_children.connect(_on_flow_sorted)
 	_center_container.add_child(_flow_container)
+	# The center rect changes when the viewport/margins change even if the flow
+	# itself did not re-sort. It only refreshes the captured chain offset;
+	# revealing waits for the FLOW sort, which runs after children are placed.
+	# (This used to hook CenterContainer.sort_children; a plain Control has no
+	# sort, and anchor layout is synchronous, so `resized` covers the size half
+	# and the margin-change half is already caught by the live chain reads in
+	# _compute_visual_layer_offset.)
+	if not _center_container.resized.is_connected(_on_center_sorted):
+		_center_container.resized.connect(_on_center_sorted)
 
 	if debug_mode:
 		_setup_debug_camera()
@@ -2427,11 +2622,12 @@ func refresh_dimensions() -> void:
 	# Update grid separation from settings
 	_update_grid_separation_from_settings()
 
-	# NOTE: do not zero _flow_container.custom_minimum_size here to "force" a
-	# recalc — the CenterContainer sizes the flow to its minimum, and if the
-	# recalc is skipped or the deferred sort runs first, a zeroed min size
-	# collapses the grid to one column. The cache invalidation below is the
-	# correct trigger; _update_layout/_update_margin own the min size.
+	# NOTE: do not zero the flow/center custom_minimum_size here to "force" a
+	# recalc — the center's custom min carries the content extent for the
+	# scrollbar range, and if the recalc is skipped or the deferred sort runs
+	# first, a zeroed min size collapses the layout. The cache invalidation
+	# below is the correct trigger; _update_layout/_update_margin own the min
+	# sizes.
 
 	# Re-snap zoom to ensure it fits the new dimensions/margins
 	var current_ratio = target_card_width_ratio
@@ -2730,6 +2926,18 @@ func set_total_count(count: int, preserve_cache: bool = false):
 	# or if preserve_cache is explicitly false
 	if count_changed or not preserve_cache:
 		_refresh_buffer()
+	# Extent-shrink clamp (Playnite policy): if the library shrank or the
+	# viewport grew, a deep scroll position may now be beyond the content end.
+	# Clamp both the live value and the smooth-scroll targets so the grid can
+	# never rest on a dead position.
+	if _scroll_container:
+		var max_scroll := 0.0
+		var sb: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+		if sb:
+			max_scroll = maxf(0.0, sb.max_value - sb.page)
+		var cur := _scroll_container.get_scroll_float()
+		if cur > max_scroll:
+			_scroll_container.scroll_to(clampf(cur, 0.0, max_scroll), false)
 
 ## Geometry item count: pads the source count with trailing placeholder slots
 ## so the last page (paginated) or last row/column (plain grid) fills evenly.
@@ -2756,6 +2964,14 @@ func _pad_total_items(count: int) -> int:
 func _update_layout():
 	var items_per_line = _get_items_per_line()
 
+	# The center container is a plain Control, so its combined minimum size is
+	# exactly its custom_minimum_size — children no longer propagate. It must
+	# carry the content extent for the margin container / scrollbar range:
+	# this pass owns the CROSS component (row width / column height / card
+	# extent), _update_margin() owns the scroll-axis component (flow span).
+	# All writes are deterministic functions of layout inputs, never of the
+	# transient children extent, so min-size churn during recycling can no
+	# longer reach any container's size or position.
 	match view_mode:
 		ViewMode.GRID:
 			if vertical:
@@ -2764,18 +2980,26 @@ func _update_layout():
 					row_width += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.x = max(row_width, 0.0)
 				_flow_container.update_minimum_size()
+				if _center_container:
+					_center_container.custom_minimum_size.x = max(row_width, 0.0)
 			else:
 				var col_height = items_per_line * card_size.y
 				if items_per_line > 1:
 					col_height += (items_per_line - 1) * grid_separation
 				_flow_container.custom_minimum_size.y = max(col_height, 0.0)
 				_flow_container.update_minimum_size()
+				if _center_container:
+					_center_container.custom_minimum_size.y = max(col_height, 0.0)
 		ViewMode.LIST:
 			_flow_container.custom_minimum_size.x = 0
 			_flow_container.update_minimum_size()
+			if _center_container:
+				_center_container.custom_minimum_size.x = card_size.x
 		ViewMode.CAROUSEL:
 			_flow_container.custom_minimum_size.y = 0
 			_flow_container.update_minimum_size()
+			if _center_container:
+				_center_container.custom_minimum_size.y = card_size.y
 
 func _initial_load():
 	var start_us := Time.get_ticks_usec()
@@ -2807,16 +3031,26 @@ func _initial_load():
 	_update_margin()
 	_update_visual_draw_order()
 	_request_missing_data()
+	_update_card_priorities(_visible_start_idx, _visible_end_idx)
 	_flush_pending_visual_setup_for_visible_zone()
+	# Reveal once the first sort commits positions.
+	_request_visual_reveal()
 	if DEBUG_LOG: print("[Grid] _initial_load: card_count=", _buffer_target_end - _buffer_target_start, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
 	"""Compute visible range and buffer target range for the current scroll position.
 	Writes directly to member variables to avoid Dictionary allocation."""
-	var line = _get_line_for_scroll_pos(scroll_pos) if _is_pagination_active() else (int(scroll_pos / stride) if stride > 0 else 0)
-	var visible_lines = ceili(viewport_size / stride) if stride > 0 else 1
+	var line = _get_line_for_scroll_pos(scroll_pos) if _is_pagination_active() else (int(floor(scroll_pos / stride)) if stride > 0 else 0)
+	# Use the actual viewport end position so a partially-visible row at the
+	# far edge is always counted, preventing on-screen cards from missing data
+	# or image priority.
+	var end_line: int
+	if _is_pagination_active():
+		end_line = _get_line_for_scroll_pos(scroll_pos + viewport_size) + 1
+	else:
+		end_line = int(ceil((scroll_pos + viewport_size) / stride)) if stride > 0 else 1
 	_visible_start_idx = _get_first_index_for_line(line, items_per_line)
-	_visible_end_idx = min(_get_first_index_for_line(line + visible_lines, items_per_line), _total_items)
+	_visible_end_idx = min(_get_first_index_for_line(end_line, items_per_line), _total_items)
 
 	var visible_count = _visible_end_idx - _visible_start_idx
 	# When paginated, a page jump moves the visible window by a whole page;
@@ -2905,8 +3139,10 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 		_prefetch_scroll_lead(stride, items_per_line)
 		_flush_pending_effect_rebuilds_for_visible_zone()
 		_flush_pending_visual_setup_for_visible_zone()
-		_sync_and_mark_card_visual_transforms("pass-end", false)
-		call_deferred("_sync_and_mark_card_visual_transforms", "deferred")
+		# No stamp here: pass-end runs mid-cascade (margin/center sorts queued
+		# by this very pass may still be pending), and any stamp is superseded
+		# by _on_frame_pre_draw before render anyway. Mid-cascade stamps were a
+		# mixed-generation flash source.
 		visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
 		_try_apply_pending_focus()
 		if trace_verbose:
@@ -2939,12 +3175,12 @@ func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_re
 	# visible zone; finish them immediately so the user doesn't see blanks.
 	_flush_pending_effect_rebuilds_for_visible_zone()
 	_flush_pending_visual_setup_for_visible_zone()
-	_sync_and_mark_card_visual_transforms("pass-end", false)
-	# Re-stamp visual transforms after the end-of-frame sort on EVERY pass, not
-	# just structural ones: steady-state healing otherwise relies solely on
-	# NOTIFICATION_TRANSFORM_CHANGED being armed and firing for every card.
-	call_deferred("_sync_and_mark_card_visual_transforms", "deferred")
+	# No pass-end stamp: pre-draw re-stamps post-cascade every changed frame.
+	# Cards added/recycled this pass stay hidden until the FlowContainer sort
+	# commits their positions; _on_flow_sorted reveals them exactly once,
+	# post-sort, at the deterministic offset above.
 	if structure_changed:
+		_request_visual_reveal()
 		call_deferred("_audit_visual_holes")
 	call_deferred("_audit_render_state", "post-pass")
 	_update_visual_draw_order()
@@ -2972,17 +3208,16 @@ func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
 	true when the active set changed. Isolated so a failure here can't skip
 	margins, data requests, or visual sync downstream of the scroll pass."""
 	var structure_changed := false
-	# Teleport guard: if the new buffer window doesn't overlap the active
-	# window at all, this is a jump (random-game button, focus restore), not a
-	# small correction. The recycle suppression in the caller exists for tiny
-	# end-of-frame clamp wiggles after a recalc — the windows still overlap in
-	# that case. Applying it to a teleport would bridge the entire gap with
-	# adds (thousands of cards), so force recycling and rebuild from scratch.
+	# Teleport: the new buffer window doesn't overlap the active window at all
+	# (far jump / focus restore). Instead of recycle-all + re-add — which hides
+	# every card and pops them back after the sort (a full-grid flicker) —
+	# re-assign the existing cards to their new indices in place. Survivors
+	# never leave the flow and never get hidden; the sort repositions them.
 	if _active_cards.size() > 0:
 		var active_first: int = _active_cards[0].get_meta("virtual_index", -1)
 		var active_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
 		if active_last < _buffer_target_start or active_first >= _buffer_target_end:
-			allow_recycle = true
+			return _reassign_active_cards_to_window()
 
 	if allow_recycle:
 		var recycle_top_count = 0
@@ -3040,8 +3275,15 @@ func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
 		else:
 			var current_last = back_card.get_meta("virtual_index", 0)
 			while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
+				var size_before := _active_cards.size()
 				_add_card_at_end(current_last + 1)
 				structure_changed = true
+				# Freeze guard: if the add failed to grow the active set (pool
+				# exhaustion or an acquire failure), a platform-switch shrink
+				# would spin here forever. Break loudly instead of hanging.
+				if _active_cards.size() <= size_before:
+					push_error("[Grid] _stage_recycle_and_fill: add failed to grow active set (size=%d, target_end=%d) — breaking to avoid freeze" % [size_before, _buffer_target_end])
+					break
 				back_card = _active_cards[_active_cards.size() - 1]
 				if not is_instance_valid(back_card):
 					break
@@ -3054,6 +3296,67 @@ func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
 				_batch_add_at_start(_buffer_target_start, add_start_count)
 				structure_changed = true
 
+	return structure_changed
+
+## Teleport rebuild: re-index the active cards in place to cover the new
+## buffer window. Unlike the recycle-all path, survivors keep their flow slot
+## and stay visible (marked); only the tail trim pools cards, and the head
+## grows from the pool. The sort then repositions everyone in one pass, so a
+## far jump never produces a hide-all/reveal-all pop.
+func _reassign_active_cards_to_window() -> bool:
+	var structure_changed := false
+	var target_count: int = _buffer_target_end - _buffer_target_start
+	# Same queue pruning rationale as the full-rebuild path: requests for the
+	# old window are useless now and would crowd the new window's loads.
+	_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
+	MemorySubManager.clear_pending_low_priority_image_tasks()
+	if SystemManager.download:
+		SystemManager.download.clear_pending_low_priority_image_downloads()
+	_pending_buffer_expansion = false
+
+	# Trim excess from the end: keeps flow child order identical to index
+	# order (both old and new runs are contiguous and ascending).
+	while _active_cards.size() > target_count:
+		_recycle_card_at_index(_active_cards.size() - 1)
+		structure_changed = true
+
+	# Re-index survivors. Data for the new index is applied by the pending
+	# visual-setup flush later in this same scroll pass, so a stale cover
+	# never reaches the screen.
+	for i in range(_active_cards.size()):
+		var card = _active_cards[i]
+		if not is_instance_valid(card):
+			continue
+		var new_idx: int = _buffer_target_start + i
+		var old_idx: int = card.get_meta("virtual_index", -1)
+		if old_idx == new_idx:
+			continue
+		if old_idx >= 0:
+			_active_cards_by_index.erase(old_idx)
+			_pending_visual_setup.erase(old_idx)
+			if _pending_effect_rebuild_set.has(card):
+				_pending_effect_rebuilds.erase(card)
+				_pending_effect_rebuild_set.erase(card)
+		card.set_meta("virtual_index", new_idx)
+		_active_cards_by_index[new_idx] = card
+		card.set_meta("needs_visual_setup", true)
+		_pending_visual_setup[new_idx] = card
+		structure_changed = true
+
+	# Grow the tail from the pool if the new window is larger.
+	while _active_cards.size() < target_count:
+		var grow_before := _active_cards.size()
+		_add_card_at_end(_buffer_target_start + _active_cards.size())
+		structure_changed = true
+		# Freeze guard: a failed add must never spin this loop forever.
+		if _active_cards.size() <= grow_before:
+			push_error("[Grid] _reassign_active_cards_to_window: add failed to grow active set (size=%d, target=%d) — breaking to avoid freeze" % [grow_before, target_count])
+			break
+
+	# Page/stagger spacers were laid out for the OLD index run; rebuild them
+	# for the new one before the sort places everything.
+	if _is_pagination_active() or _is_staggered_active():
+		_reconcile_page_spacers()
 	return structure_changed
 
 func _reset_transient_scroll_state(reason: String) -> void:
@@ -3091,6 +3394,10 @@ func _update_cover_dl_suppression() -> void:
 	var stride := _get_normal_stride()
 	var fast := stride > 0.0 and absf(_scroll_velocity) > stride * FAST_SCROLL_SUPPRESS_STRIDES
 	var want := _scrub_cover_suppressed or fast
+	# Scroll-idle gate: while scrolling fast, buffer-card decodes wait so the
+	# thread pool's full throughput serves visible covers (they un-gate here on
+	# settle and resume behind the visible cards already in the high queue).
+	MemorySubManager.set_low_priority_gated(fast)
 	if want == _cover_dl_suppressed:
 		return
 	_cover_dl_suppressed = want
@@ -3208,7 +3515,58 @@ func _sync_card_visual_transforms() -> void:
 	for card in _active_cards:
 		card.sync_visual_transform()
 
+## TEMP DIAGNOSTIC (remove after flicker hunt): env-gated per-frame dump of the
+## window bookkeeping that feeds both the content layout and the visual stamps.
+## Enabled with KYODAI_FRAME_PROBE=1. One row per drawn frame so a one-frame
+## spike in any shared input (window first index, margins, stride, flow width)
+## shows up as a single anomalous row.
+var _frame_probe_enabled: bool = OS.get_environment("KYODAI_FRAME_PROBE") == "1"
+
+func _frame_probe_log() -> void:
+	if not _scroll_container:
+		return
+	var first_idx := -1
+	var last_idx := -1
+	if _active_cards.size() > 0:
+		if is_instance_valid(_active_cards[0]):
+			first_idx = _active_cards[0].get_meta("virtual_index", -1)
+		if is_instance_valid(_active_cards[_active_cards.size() - 1]):
+			last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
+	var ref_pos := Vector2.INF
+	var ref_glob := Vector2.INF
+	var ref_min := Vector2.INF
+	var ref_card: Control = _active_cards_by_index.get(first_idx + 2, null) if first_idx >= 0 else null
+	if ref_card and is_instance_valid(ref_card):
+		ref_pos = ref_card.position
+		ref_glob = ref_card.global_position
+		ref_min = ref_card.custom_minimum_size
+	print("[FrameProbe] f=", Engine.get_process_frames(),
+		" sf=", snappedf(_scroll_container.get_scroll_float(), 0.01),
+		" si=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal,
+		" buf=", _buffer_target_start, "-", _buffer_target_end,
+		" act=", first_idx, "-", last_idx, " n=", _active_cards.size(),
+		" vis=", _visible_start_idx, "-", _visible_end_idx,
+		" ml=", _last_margin_left, " mr=", _last_margin_right,
+		" mt=", _last_margin_top, " mb=", _last_margin_bottom,
+		" fw=", snappedf(_last_flow_width, 0.01), " fh=", snappedf(_last_flow_height, 0.01),
+		" stride=", snappedf(_get_normal_stride(), 0.01),
+		" bl=", _current_buffer_lines,
+		" tot=", _total_items, " src=", _source_total_items,
+		" ctr=", _center_container.position if _center_container else Vector2.INF,
+		" flw=", _flow_container.position if _flow_container else Vector2.INF,
+		" ref=", ref_pos, " refg=", ref_glob, " refmin=", ref_min,
+		" fsz=", _flow_container.size if _flow_container else Vector2.INF,
+		" fmin=", _flow_container.get_combined_minimum_size() if _flow_container else Vector2.INF,
+		" fcnt=", _flow_container.get_child_count() if _flow_container else -1,
+		" csz=", _center_container.size if _center_container else Vector2.INF,
+		" msz=", _margin_container.size if _margin_container else Vector2.INF,
+		" ssz=", _scroll_container.size if _scroll_container else Vector2.INF,
+		" g=", _layout_generation,
+		" grd=", _guarded_scroll_target, " sup=", _suppress_recycle_until_frame)
+
 func _on_frame_pre_draw() -> void:
+	if _frame_probe_enabled:
+		_frame_probe_log()
 	# Stamp visual offsets at the last moment before render, from pure
 	# container arithmetic. At pre-draw time the scroll value, margin cache and
 	# window membership are all final for the frame, so the stamps are
@@ -3219,11 +3577,22 @@ func _on_frame_pre_draw() -> void:
 		return
 	# Skip the stamp loop entirely when nothing that feeds the offset math
 	# changed since the last stamp (idle frames far outnumber scroll frames).
-	var scroll_now: float = float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
+	# Track the FLOAT motion model, not the int scrollbar: during tween/chase
+	# tails the int can sit still for frames while the float keeps gliding —
+	# skipping on the int would freeze the visual layer mid-glide.
+	var scroll_now: float = _scroll_container.get_scroll_float()
 	var margin_now: int = _last_margin_top if vertical else _last_margin_left
 	var first_now: int = _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1
-	if scroll_now == _last_stamp_scroll and margin_now == _last_stamp_margin and first_now == _last_stamp_first and _active_cards.size() == _last_stamp_count and _layout_generation == _last_stamp_generation:
+	if not _visual_reveal_pending and scroll_now == _last_stamp_scroll and margin_now == _last_stamp_margin and first_now == _last_stamp_first and _active_cards.size() == _last_stamp_count and _layout_generation == _last_stamp_generation:
 		return
+	# A pending reveal means a sort cascade is (or was) in flight. Pre-draw runs
+	# after the ENTIRE cascade (margin -> center -> flow), so positions and the
+	# chain are final here — this is the only stamp that may also MARK cards
+	# visible: marking from mid-cascade states (e.g. _on_flow_sorted) flashed a
+	# whole-strip offset by the margin delta for a frame.
+	var do_reveal: bool = _visual_reveal_pending
+	_visual_reveal_pending = false
+	_visual_reveal_requested_frame = -1
 	_last_stamp_scroll = scroll_now
 	_last_stamp_margin = margin_now
 	_last_stamp_first = first_now
@@ -3234,6 +3603,8 @@ func _on_frame_pre_draw() -> void:
 			continue
 		var expected_offset := _compute_visual_layer_offset(card)
 		card.sync_visual_transform_with_offset(expected_offset)
+		if do_reveal and _card_has_mark_visuals_position_synced:
+			card._mark_visuals_position_synced()
 
 func _on_frame_post_draw_audit() -> void:
 	# Render-time truth check: after the frame was drawn, the stamped origins
@@ -3278,54 +3649,163 @@ func _on_frame_post_draw_audit() -> void:
 
 var _drawaudit_last_deltas: Dictionary = {}
 
-func _compute_visual_layer_offset(card: Control) -> Vector2:
-	"""Layer-space offset for a card.
+## Env-gated flicker detector (KYODAI_FLICKER_WATCH=1). Unlike the debug-mode
+## DrawAudit (stamp vs the offset FORMULA — self-consistent by construction),
+## this compares each visible card's stamped visual origin against its REAL
+## on-screen position (global_position minus the layer origin). That is the
+## ground truth the user sees: any frame where the visual layer is detached
+## from the actual content is a flicker, regardless of which inputs fed it.
+## Threshold 2px absorbs the designed <=0.5px float-glide vs int-content and
+## the focus-scale pivot correction.
+var _flicker_key: int = -1
+var _flicker_announced := false
 
-	The primary source of truth is the Control's actual on-screen position
-	(card.global_position), because it reflects every layout contribution
-	(margins, centering, page gaps, stagger, and any headers/sections above the
-	cards) and stays correct across window resizes and fullscreen transitions.
-
-	During active scrolling the FlowContainer child positions are stale until
-	the end-of-frame sort, so we fall back to slot-delta math when the card's
-	local position looks valid and the two methods agree within roughly one
-	row/column. Otherwise the global position wins, preventing persistent
-	drift when margins or slot math are stale."""
-	var vidx: int = card.get_meta("virtual_index", -1)
+func _on_frame_post_draw_reality_check() -> void:
+	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
+		return
+	if not _flicker_announced:
+		_flicker_announced = true
+		print("[FlickerWatch] active on grid=", name, " view=", get_parent().get_parent().get_parent().name if get_parent() and get_parent().get_parent() and get_parent().get_parent().get_parent() else "?")
+	if _active_cards.size() == 0:
+		return
 	var layer_origin := _visual_layer.global_position
+	var worst := 0.0
+	var worst_idx := -1
+	var worst_kind := ""
+	var worst_a := Vector2.ZERO
+	var worst_b := Vector2.ZERO
+	for card in _active_cards:
+		if not is_instance_valid(card) or not card.is_node_ready():
+			continue
+		if card.get("_visuals_position_synced") != true:
+			continue
+		var lt_v = card.get("_last_visual_transform")
+		if not lt_v is Transform2D:
+			continue
+		var stamp: Vector2 = lt_v.origin
+		var real: Vector2 = card.global_position - layer_origin
+		var exp: Vector2 = _compute_visual_layer_offset(card)
+		var cs_v = card.get("content_scale")
+		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
+		if not cs.is_equal_approx(Vector2.ONE):
+			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
+			real += pivot - cs * pivot
+			exp += pivot - cs * pivot
+		# (a) visual layer detached from the real content.
+		var d_vis := stamp.distance_to(real)
+		if d_vis > worst:
+			worst = d_vis
+			worst_idx = card.get_meta("virtual_index", -1)
+			worst_kind = "VISUAL-vs-CONTENT"
+			worst_a = stamp
+			worst_b = real
+		# (b) content detached from the deterministic expectation (margin/chain
+		# lag): the whole card jumps even though the visual layer tracks it.
+		var d_exp := real.distance_to(exp)
+		if d_exp > worst:
+			worst = d_exp
+			worst_idx = card.get_meta("virtual_index", -1)
+			worst_kind = "CONTENT-vs-EXPECTED"
+			worst_a = real
+			worst_b = exp
+		# (c) STALE COVER: the visible card's texture belongs to a different
+		# game than the card currently shows — the classic recycle flash where
+		# the previous game's art lingers for a frame (or the skeleton shows).
+		if card.has_meta("virtual_index"):
+			var game_v = card.get("game")
+			var tex_id: String = card.get("_current_texture_game_id") if card.get("_current_texture_game_id") != null else ""
+			if game_v != null and tex_id != "" and game_v.id != tex_id:
+				var skey := 500000000 + int(card.get_meta("virtual_index", -1))
+				if skey != _flicker_key:
+					_flicker_key = skey
+					print("[FlickerWatch] STALE-COVER: idx=", card.get_meta("virtual_index", -1),
+						" mode=", view_mode,
+						" game=", game_v.id, " (", game_v.title, ")",
+						" texture_for=", tex_id,
+						" needs_setup=", card.has_meta("needs_visual_setup"),
+						" loading=", card.get("_media_loading"),
+						" scroll_float=", _scroll_container.get_scroll_float(),
+						" gen=", _layout_generation,
+						" frame=", Engine.get_process_frames(),
+						" t=", Time.get_ticks_msec())
+			elif game_v != null and card.has_meta("needs_visual_setup"):
+				# Revealed (visible) before its data was applied: skeleton/blank.
+				var rkey := 600000000 + int(card.get_meta("virtual_index", -1))
+				if rkey != _flicker_key:
+					_flicker_key = rkey
+					print("[FlickerWatch] REVEALED-NO-DATA: idx=", card.get_meta("virtual_index", -1),
+						" mode=", view_mode,
+						" game=", game_v.id,
+						" scroll_float=", _scroll_container.get_scroll_float(),
+						" gen=", _layout_generation,
+						" frame=", Engine.get_process_frames(),
+						" t=", Time.get_ticks_msec())
+			# (d) PLACEHOLDER-VISIBLE: data applied but the cover hasn't landed —
+			# the shimmer/blank flash during fast recycling ("images loading in").
+			elif game_v != null:
+				var cur_tex = card.get("_current_texture")
+				var loading_tex = card.get("_loading_texture")
+				var is_loading_state: bool = card.get("_media_loading") if card.get("_media_loading") != null else false
+				if cur_tex != null and loading_tex != null and cur_tex == loading_tex:
+					var pkey := 700000000 + int(card.get_meta("virtual_index", -1))
+					if pkey != _flicker_key:
+						_flicker_key = pkey
+						print("[FlickerWatch] PLACEHOLDER-VISIBLE: idx=", card.get_meta("virtual_index", -1),
+							" mode=", view_mode,
+							" game=", game_v.id,
+							" shimmer=", is_loading_state,
+							" scroll_float=", _scroll_container.get_scroll_float(),
+							" gen=", _layout_generation,
+							" frame=", Engine.get_process_frames(),
+							" t=", Time.get_ticks_msec())
+	if worst > 2.0:
+		var key := int(round(worst * 2.0)) * 100000 + worst_idx
+		if key != _flicker_key:
+			_flicker_key = key
+			var center_pos: Vector2 = _center_container.position if _center_container else Vector2.ZERO
+			var flow_pos: Vector2 = _flow_container.position if _flow_container else Vector2.ZERO
+			print("[FlickerWatch] ", worst_kind, ": worst=", worst,
+				" idx=", worst_idx,
+				" mode=", view_mode,
+				" a=", worst_a,
+				" b=", worst_b,
+				" scroll_float=", _scroll_container.get_scroll_float(),
+				" scroll_int=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal,
+				" margin(L/T)=", _last_margin_left, "/", _last_margin_top,
+				" center.pos=", center_pos,
+				" flow.pos=", flow_pos,
+				" card.pos=", _active_cards_by_index.get(worst_idx).position if _active_cards_by_index.get(worst_idx) else Vector2.ZERO,
+				" gen=", _layout_generation,
+				" frame=", Engine.get_process_frames(),
+				" t=", Time.get_ticks_msec())
 
-	# Primary source of truth: the actual on-screen top-left of the Control.
-	# sync_visual_transform_with_offset treats this as the unscaled base offset
-	# and applies content_scale around the card pivot, so the final visual origin
-	# is base_offset + pivot - content_scale * pivot (matching existing audit).
-	var raw_global_offset := card.global_position - layer_origin
-	var target_origin := raw_global_offset
+func _compute_visual_layer_offset(card: Control) -> Vector2:
+	"""Layer-space offset for a card — ONE deterministic source of truth.
 
-	# Fallback: slot-delta math is pre-sort-truth during fast scroll/recycle.
-	var use_slot := false
-	if _scroll_container and _active_cards.size() > 0 and is_instance_valid(_active_cards[0]) and vidx >= 0:
-		var first_idx: int = _active_cards[0].get_meta("virtual_index", -1)
-		if first_idx >= 0:
-			var sc_origin := _scroll_container.get_global_rect().position
-			var scroll_vec := Vector2(float(_scroll_container.scroll_horizontal), float(_scroll_container.scroll_vertical))
-			var margin_vec := Vector2(float(_last_margin_left), float(_last_margin_top))
-			var slot_delta := _get_slot_position_for_index(vidx) - _get_slot_position_for_index(first_idx)
-			var slot_offset := sc_origin - scroll_vec + margin_vec - layer_origin
-			if vertical:
-				slot_offset.y += slot_delta
-			else:
-				slot_offset.x += slot_delta
-			# Only trust slot math when the card has been placed by the flow
-			# container and the two methods are close (avoids one-frame recycle
-			# flash without snapping to stale math during resize).
-			var card_pos_valid := card.position.x >= 0.0 and card.position.y >= 0.0
-			var stride := _get_normal_stride()
-			var threshold := maxf(stride * 0.5, 4.0)
-			if card_pos_valid and raw_global_offset.distance_to(slot_offset) < threshold:
-				target_origin = slot_offset
-				use_slot = true
-
-	return target_origin
+	Composed entirely from Godot's own layout results plus the precisely
+	tracked float scroll:
+	    scroll_container.origin − scroll_float + content_chain + card.position
+	where `content_chain` is the flow's offset within the margin container
+	(captured post-sort) and `card.position` is the FlowContainer's own child
+	position. Every card on a line goes through the identical formula, so no
+	column can diverge, and reading it never depends on mid-frame transform
+	flushes (only the scroll float moves during scrolling, and we track it).
+	"""
+	var layer_origin := _visual_layer.global_position
+	var vidx: int = card.get_meta("virtual_index", -1)
+	if vidx < 0 or not _scroll_container or not _flow_container:
+		return card.global_position - layer_origin
+	var scroll_f := _scroll_container.get_scroll_float()
+	var scroll_vec := Vector2(scroll_f, 0.0) if not vertical else Vector2(0.0, scroll_f)
+	# Read the container chain LIVE rather than from the sort-captured snapshot:
+	# center/flow positions only change on layout (never during scroll), and in
+	# the hidden pre-sort window a stale read is harmless because the card is
+	# not visible yet. Live reads make the offset immune to sort ordering.
+	var chain := _content_chain_offset
+	if _center_container and _flow_container:
+		chain = _center_container.position + _flow_container.position
+	return _scroll_container.get_global_rect().position - scroll_vec \
+		+ chain + card.position - layer_origin
 
 func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) -> void:
 	var use_offsets: bool = _card_has_sync_visual_offset and _scroll_container and _visual_layer
@@ -3346,8 +3826,38 @@ func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) 
 		if mark and _card_has_mark_visuals_position_synced:
 			card._mark_visuals_position_synced()
 
+## Position of the flow's content origin within the margin container, captured
+## post-sort from Godot's own container results (center position + flow
+## position). Scroll-independent, so capturing it on sort is race-free: during
+## scroll only the scroll offset moves, which we track separately as a float.
+var _content_chain_offset := Vector2.ZERO
+
+func _on_center_sorted() -> void:
+	_layout_generation += 1
+	if _center_container and _flow_container:
+		_content_chain_offset = _center_container.position + _flow_container.position
+
+## Request reveal-on-sort: cards stay hidden until the FlowContainer sort
+## commits their positions, then are stamped + marked exactly once.
+func _request_visual_reveal() -> void:
+	_visual_reveal_pending = true
+	_visual_reveal_requested_frame = Engine.get_process_frames()
+	if _flow_container:
+		_flow_container.queue_sort()
+
 func _on_flow_sorted() -> void:
 	_layout_generation += 1
+	if _center_container and _flow_container:
+		_content_chain_offset = _center_container.position + _flow_container.position
+	# The sort committed new FLOW child positions, but the container cascade may
+	# still be mid-flight: queued sorts flush in message-queue order, so the
+	# MARGIN/CENTER re-sorts (which move center.position via the new margins)
+	# can run AFTER this flow sort. Stamping now would mix the new child
+	# positions with the old chain — a whole-strip offset by the margin delta
+	# (one card pitch) flashing for a frame. The reveal therefore defers to
+	# _on_frame_pre_draw, which runs after the ENTIRE cascade, before render.
+	if _visual_reveal_pending:
+		_visual_reveal_requested_frame = Engine.get_process_frames()
 
 func _audit_structure(tag: String) -> void:
 	if not debug_mode:
@@ -3603,11 +4113,12 @@ func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
 	elif _card_has_sync_visual_transform:
 		card.sync_visual_transform()
-	# When called from inside a scroll pass the FlowContainer hasn't sorted yet,
-	# so marking here would reveal the card at a stale position; the deferred
-	# post-sort mark handles those. Outside a pass the layout is settled and
-	# marking immediately is both safe and required (async data arrivals).
-	if not _is_processing_scroll and _card_has_mark_visuals_position_synced:
+	# When called from inside a scroll pass — or while a reveal is pending (a
+	# sort cascade is in flight; positions/chains are mid-update) — marking here
+	# would reveal the card at a stale or mixed-generation position. The pre-draw
+	# reveal handles those after the cascade. Outside both, layout is settled
+	# and marking immediately is both safe and required (async data arrivals).
+	if not _is_processing_scroll and not _visual_reveal_pending and _card_has_mark_visuals_position_synced:
 		card._mark_visuals_position_synced()
 	if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
 	return true
@@ -3703,16 +4214,17 @@ func _get_visible_range() -> void:
 	if vertical:
 		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
 		var viewport_height = available.y
-		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		var first_line = int(scroll_pos / eff) if eff > 0 else 0
+		var first_line = int(floor(scroll_pos / eff)) if eff > 0 else 0
+		var last_line = int(ceil((scroll_pos + viewport_height) / eff)) if eff > 0 else 1
 		_visible_start_idx = _get_first_index_for_line(first_line, items_per_line)
-		_visible_end_idx = min(_get_first_index_for_line(first_line + visible_rows, items_per_line), _total_items)
+		_visible_end_idx = min(_get_first_index_for_line(last_line, items_per_line), _total_items)
 	else:
 		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
 		var viewport_width = available.x
-		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		_visible_start_idx = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		_visible_end_idx = min(_visible_start_idx + visible_cols * items_per_line, _total_items)
+		var first_line = int(floor(scroll_pos / eff)) if eff > 0 else 0
+		var last_line = int(ceil((scroll_pos + viewport_width) / eff)) if eff > 0 else 1
+		_visible_start_idx = _get_first_index_for_line(first_line, items_per_line)
+		_visible_end_idx = min(_get_first_index_for_line(last_line, items_per_line), _total_items)
 
 func _is_index_visible(idx: int) -> bool:
 	return idx >= _visible_start_idx and idx < _visible_end_idx
@@ -3769,10 +4281,14 @@ func _update_margin():
 			if vertical:
 				if _last_flow_height != 0:
 					_flow_container.custom_minimum_size.y = 0
+					if _center_container:
+						_center_container.custom_minimum_size.y = 0
 					_last_flow_height = 0
 			else:
 				if _last_flow_width != 0:
 					_flow_container.custom_minimum_size.x = 0
+					if _center_container:
+						_center_container.custom_minimum_size.x = 0
 					_last_flow_width = 0
 		return
 
@@ -3798,6 +4314,17 @@ func _update_margin():
 		var margin_bottom = total_end - after_last_pos + focus_overflow.y
 		var flow_height = after_last_pos - first_pos
 
+		# The flow is anchored full-rect in the (plain Control) center container
+		# (see _update_flow_container_flags), so a library shorter than the
+		# viewport can no longer be centered by the container. Split the slack
+		# into the scroll-axis margins to reproduce that centering exactly,
+		# while keeping flow.position pinned at 0 on every frame.
+		var viewport_axis: float = _get_available_size().y
+		var slack: float = viewport_axis - (margin_top + flow_height + margin_bottom)
+		if slack > 0.0:
+			margin_top += slack / 2.0
+			margin_bottom += slack / 2.0
+
 		if int(margin_top) != _last_margin_top or int(margin_bottom) != _last_margin_bottom:
 			_margin_container.add_theme_constant_override("margin_top", int(margin_top))
 			_margin_container.add_theme_constant_override("margin_bottom", int(margin_bottom))
@@ -3808,19 +4335,28 @@ func _update_margin():
 
 		if not is_equal_approx(flow_height, _last_flow_height):
 			_flow_container.custom_minimum_size.y = flow_height
+			if _center_container:
+				_center_container.custom_minimum_size.y = flow_height
 			_last_flow_height = flow_height
 
-		# No horizontal margins — cards fill the viewport edge-to-edge.
-		# Focused cards in edge columns may clip slightly; this is preferred
-		# over leaving visible gaps on either side of the grid.
-		if _last_margin_left != 0 or _last_margin_right != 0:
-			_margin_container.add_theme_constant_override("margin_left", 0)
-			_margin_container.add_theme_constant_override("margin_right", 0)
-			_last_margin_left = 0
-			_last_margin_right = 0
-		# NOTE: custom_minimum_size.x is owned by _update_layout() (row width for
-		# centering). This pass must NOT zero it — the CenterContainer sizes the
-		# flow to its minimum, so zeroing here wraps the grid to one column.
+		# Cross-axis centering: content narrower than the viewport is centered
+		# via the cross-axis margins. This reproduces exactly what the old
+		# CenterContainer did (offset = slack/2), but the inputs are the
+		# deterministic cross extent owned by _update_layout() — never the
+		# transient children min size — and margins are grid-owned writes, so
+		# the result cannot flicker mid-cascade.
+		var flow_cross: float = _center_container.custom_minimum_size.x if _center_container else 0.0
+		var cross_slack: float = maxf(0.0, _get_available_size().x - flow_cross)
+		var margin_left_c := int(cross_slack / 2.0)
+		var margin_right_c := int(cross_slack / 2.0)
+		if margin_left_c != _last_margin_left or margin_right_c != _last_margin_right:
+			_margin_container.add_theme_constant_override("margin_left", margin_left_c)
+			_margin_container.add_theme_constant_override("margin_right", margin_right_c)
+			_last_margin_left = margin_left_c
+			_last_margin_right = margin_right_c
+		# NOTE: the flow's custom_minimum_size.x is owned by _update_layout()
+		# (row width). This pass must NOT zero it — a zeroed cross min wraps
+		# the grid to one column.
 		_last_flow_width = 0
 	else:
 		var first_pos = _get_slot_position_for_index(first_idx, items_per_line, stride)
@@ -3831,6 +4367,15 @@ func _update_margin():
 		var margin_right = total_end - after_last_pos + focus_overflow.x
 		var flow_width = after_last_pos - first_pos
 
+		# Horizontal counterpart of the slack compensation above: the flow is
+		# anchored full-rect in the center container, so center a library
+		# narrower than the viewport via the margins instead of the container.
+		var viewport_axis: float = _get_available_size().x
+		var slack: float = viewport_axis - (margin_left + flow_width + margin_right)
+		if slack > 0.0:
+			margin_left += slack / 2.0
+			margin_right += slack / 2.0
+
 		if int(margin_left) != _last_margin_left or int(margin_right) != _last_margin_right:
 			_margin_container.add_theme_constant_override("margin_left", int(margin_left))
 			_margin_container.add_theme_constant_override("margin_right", int(margin_right))
@@ -3839,18 +4384,24 @@ func _update_margin():
 
 		if not is_equal_approx(flow_width, _last_flow_width):
 			_flow_container.custom_minimum_size.x = flow_width
+			if _center_container:
+				_center_container.custom_minimum_size.x = flow_width
 			_last_flow_width = flow_width
 
-		# No vertical margins — cards fill the viewport edge-to-edge.
-		# Focused cards in edge rows may clip slightly; this is preferred
-		# over leaving visible gaps above and below the grid.
-		if _last_margin_top != 0 or _last_margin_bottom != 0:
-			_margin_container.add_theme_constant_override("margin_top", 0)
-			_margin_container.add_theme_constant_override("margin_bottom", 0)
-			_last_margin_top = 0
-			_last_margin_bottom = 0
-		# NOTE: custom_minimum_size.y is owned by _update_layout() for GRID
-		# horizontal (column height for centering); see the vertical branch.
+		# Cross-axis centering (horizontal counterpart of the vertical branch):
+		# content shorter than the viewport is centered via the cross-axis
+		# margins, using the deterministic cross extent from _update_layout().
+		var flow_cross: float = _center_container.custom_minimum_size.y if _center_container else 0.0
+		var cross_slack: float = maxf(0.0, _get_available_size().y - flow_cross)
+		var margin_top_c := int(cross_slack / 2.0)
+		var margin_bottom_c := int(cross_slack / 2.0)
+		if margin_top_c != _last_margin_top or margin_bottom_c != _last_margin_bottom:
+			_margin_container.add_theme_constant_override("margin_top", margin_top_c)
+			_margin_container.add_theme_constant_override("margin_bottom", margin_bottom_c)
+			_last_margin_top = margin_top_c
+			_last_margin_bottom = margin_bottom_c
+		# NOTE: the flow's custom_minimum_size.y is owned by _update_layout()
+		# for GRID horizontal (column height); see the vertical branch.
 		_last_flow_height = 0
 
 func _is_index_pending(idx: int) -> bool:
@@ -3923,6 +4474,10 @@ func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	incoming rows already have data when they enter the viewport (~150ms lead).
 	Without this, every window shift leaves the entering rows blank for the
 	~100ms DB round-trip, visible as flickering/disappearing rows."""
+	# During a programmatic jump the destination window is already being built;
+	# directional prefetch would only crowd the queues and delay visible cards.
+	if _programmatic_focus_index >= 0:
+		return
 	if stride <= 0.0 or _total_items <= 0 or absf(_scroll_velocity) < stride * 2.0:
 		return
 	var lead_px: float = clampf(absf(_scroll_velocity) * 0.15, stride * 2.0, stride * 8.0)
@@ -3967,15 +4522,20 @@ func _check_preload_needed():
 				_request_data(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
 
 func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
+	# Mark visible cards and one extra row on each side as high priority so
+	# covers decode before the row fully enters the viewport.
+	var items_per_line = _get_items_per_line()
+	var high_start: int = maxi(0, visible_start_idx - items_per_line)
+	var high_end: int = mini(_total_items, visible_end_idx + items_per_line)
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx < 0:
 			continue
 
-		var card_visible = idx >= visible_start_idx and idx < visible_end_idx
+		var card_high_priority = idx >= high_start and idx < high_end
 
 		if _card_has_set_image_priority:
-			card.set_image_priority(card_visible)
+			card.set_image_priority(card_high_priority)
 
 func _connect_focus_lock_viewport() -> void:
 	# Hub connection: FocusSubManager re-emits the UI viewport's focus changes,
@@ -4258,8 +4818,9 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 		_data_cache[cache_key] = game
 		_update_cache_access_order(cache_key)
 		# Warm the texture cache as data lands (covers both window and prefetch
-		# loads) so cover art is decoded before its row scrolls into view.
-		CardMediaLoader.preload_cover(game)
+		# loads) so cover art is decoded before its row scrolls into view. Pass
+		# the grid's decode bucket so the warmed entry matches card lookups.
+		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_size(maxf(card_size.x, card_size.y)))
 
 	if duplicates_found > 0:
 		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
@@ -4324,11 +4885,12 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	_margin_container.add_theme_constant_override("margin_bottom", 0)
 	_margin_container.add_theme_constant_override("margin_left", 0)
 	_margin_container.add_theme_constant_override("margin_right", 0)
-	# Do NOT zero _flow_container.custom_minimum_size here: the CenterContainer
-	# sizes the flow to its minimum, and if the restoring recalc below is
-	# skipped (guards) or the flow sorts first, a zeroed min size collapses the
-	# grid to one column. _update_layout/_update_margin own the min size; the
-	# cache invalidations below already force the recalc that rewrites it.
+	# Do NOT zero _flow_container/_center_container.custom_minimum_size here:
+	# the center's custom min carries the content extent for the scrollbar
+	# range, and if the restoring recalc below is skipped (guards) or the flow
+	# sorts first, a zeroed min size collapses the layout. _update_layout/
+	# _update_margin own the min sizes; the cache invalidations below already
+	# force the recalc that rewrites them.
 	# Reset the write-caches to the sentinel so the next _update_margin() cannot
 	# skip a write while the real overrides sit at zero (cache/actual desync).
 	_last_margin_top = -1
@@ -4356,6 +4918,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		_scroll_container.scroll_vertical = 0
 		_scroll_container.scroll_horizontal = 0
 		_scroll_container._target_scroll = 0.0
+		_scroll_container._wheel_target = 0.0
+		_scroll_container._wheel_velocity = 0.0
+		_scroll_container._wheel_chase_active = false
 
 	_recalculate_layout()
 	if _active_cards.size() == 0:
@@ -4370,6 +4935,14 @@ func _refresh_buffer(preserve_scroll: bool = false):
 	# Never grab card focus while an overlay (e.g. the settings dialog) is
 	# showing: the steal would fight the overlay's focus pull-back.
 	if preserve_scroll:
+		# The platform/filter path can shrink the library far below the saved
+		# index (random jump deep, then RB/LB to a small platform): restoring an
+		# out-of-range index drives slot math past the content end and the
+		# container's instant path EXTENDS the scrollbar range to reach it,
+		# corrupting every subsequent window computation. Clamp to the new
+		# source range.
+		if saved_focus_index >= 0 and saved_focus_index >= _source_total_items:
+			saved_focus_index = _source_total_items - 1
 		if saved_focus_index >= 0 and M3Overlay._get_topmost_overlay() == null:
 			call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 		elif _scroll_container:
@@ -4383,6 +4956,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 			else:
 				_scroll_container.scroll_horizontal = clamped_offset
 			_scroll_container._target_scroll = clamped_offset
+			_scroll_container._wheel_target = clamped_offset
+			_scroll_container._wheel_velocity = 0.0
+			_scroll_container._wheel_chase_active = false
 	elif focus_was_in_grid and M3Overlay._get_topmost_overlay() == null:
 		# Non-preserve rebuilds (e.g. GameNative adds, post-sync reload) recycle
 		# the focused card; restore focus to it so controller users aren't
@@ -4455,10 +5031,21 @@ func _clamp_scroll_to_range(offset: float) -> float:
 		# still propagating, which let zoom snaps clamp to (or get undone to)
 		# positions between pages.
 		return clampf(offset, 0.0, (_get_page_count() - 1) * _get_page_period())
-	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
-	if not scrollbar:
-		return offset
-	return clampf(offset, scrollbar.min_value, maxf(scrollbar.min_value, scrollbar.max_value - scrollbar.page))
+	# Clamp against COMPUTED content end, never the live scrollbar: the
+	# scrollbar's max is stale for a frame after a library shrink / rebuild
+	# (it updates on the next sort), and a stale-large max lets out-of-range
+	# targets through — the instant scroll path then extends the range to fit,
+	# corrupting every subsequent window computation.
+	if not _has_valid_available_size() or _total_items <= 0:
+		var fallback_sb: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+		if not fallback_sb:
+			return offset
+		return clampf(offset, fallback_sb.min_value, maxf(fallback_sb.min_value, fallback_sb.max_value - fallback_sb.page))
+	var available := _get_available_size()
+	var viewport_axis: float = available.y if vertical else available.x
+	var overflow_axis: float = _get_focus_overflow().y if vertical else _get_focus_overflow().x
+	var max_scroll: float = maxf(0.0, _get_content_end_position() + 2.0 * overflow_axis - viewport_axis)
+	return clampf(offset, 0.0, max_scroll)
 
 func _get_current_scroll_pos() -> float:
 	if not _scroll_container:
@@ -4617,6 +5204,11 @@ func _on_follow_focus_target_request(control: Control) -> float:
 	return _get_current_scroll_pos()
 
 func scroll_to_index(index: int, animate: bool = false, duration_multiplier: float = 1.0):
+	# Out-of-range indices (stale restore targets after a library shrink) must
+	# not reach the slot math: they push the scroll target past the content end
+	# and the instant path extends the scrollbar range to fit, corrupting it.
+	if index < 0 or index >= _source_total_items:
+		return
 	if _scroll_container:
 		_reset_transient_scroll_state("scroll_to_index")
 		_scroll_container.scroll_to(int(get_centered_scroll_for_index(index)), animate, duration_multiplier)
@@ -4624,6 +5216,8 @@ func scroll_to_index(index: int, animate: bool = false, duration_multiplier: flo
 func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multiplier: float = 1.0) -> void:
 	"""Scroll to an item and focus it, honoring the focus-centering mode."""
 	if not _scroll_container:
+		return
+	if index < 0 or index >= _source_total_items:
 		return
 	_focus_request_id += 1
 	var request_id := _focus_request_id
