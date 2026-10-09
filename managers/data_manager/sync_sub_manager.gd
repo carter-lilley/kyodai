@@ -48,6 +48,12 @@ var _pending_server_deletions: Dictionary = {}
 # Progress tracking state
 var _sync_current: int = 0
 var _sync_total: int = 0
+# Progress split: covers are work units too, but they're counted into
+# _sync_total only when DISPATCHED (never when merely queued), and tracked
+# separately so the notification can show games and covers distinctly.
+# games_done = _sync_current - _sync_covers_done; games_total = _sync_total - _sync_covers_total.
+var _sync_covers_total: int = 0
+var _sync_covers_done: int = 0
 var _sync_platform: String = ""
 var _sync_platform_index: int = 0  # Current platform number (1-based)
 var _sync_platform_count: int = 0  # Total platforms
@@ -265,6 +271,8 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	# Reset sync state
 	_sync_current = 0
 	_sync_total = 0
+	_sync_covers_total = 0
+	_sync_covers_done = 0
 	_sync_platform = ""
 	_sync_state = SyncState.PRECHECK_DISABLED
 	_sync_platforms_list = []
@@ -279,6 +287,10 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_seen_ids = []
 	_sync_platform_fully_enumerated = false
 	_sync_total_removed = 0
+	# A background cover flush from a previous sync must not interfere with
+	# this sync's queue (which is reset below).
+	if _cover_flush_timer != null:
+		_cover_flush_timer.stop()
 	# A fresh enumeration supersedes any deletion batches held from a
 	# previous sync - the server state they were validated against is stale.
 	_pending_server_deletions.clear()
@@ -373,6 +385,8 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	_sync_current_platform_idx = 0
 	_sync_current = 0
 	_sync_total = 0  # Will accumulate as we discover totals
+	_sync_covers_total = 0
+	_sync_covers_done = 0
 	_sync_total_synced = 0
 
 	# Start sync notification on main thread
@@ -397,7 +411,10 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	# Size the cover download budget from the cache cap before any covers are
 	# collected: downloading past the cap only feeds evict-on-insert churn.
 	_sync_covers_budget = _compute_cover_download_budget(_sync_cover_cap_bytes)
-	print("[SyncThread] Cover download budget: %d new covers" % _sync_covers_budget)
+	if _sync_cover_cap_bytes >= CoverSubManager.UNLIMITED_CACHE_BYTES:
+		print("[SyncThread] Cover download budget: unlimited (cache cap is Unlimited)")
+	else:
+		print("[SyncThread] Cover download budget: %d new covers" % _sync_covers_budget)
 
 	# Queue backfill covers (library games whose image files were never
 	# cached) up front so they download through the same interleaved dispatch
@@ -628,6 +645,11 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int, tot
 	_stop_sync_batch_mode()
 	_stop_sync_fg_service()
 
+	# Covers still queued when the drain hit its timeout keep downloading in
+	# the background instead of being dropped; they no longer count toward
+	# sync progress.
+	_start_pending_cover_flush()
+
 	# Apply cover folding and emit completion
 	data_manager.cover.apply_cover_folding_to_database(func(folded_count: int):
 		var completion_msg = "Synced " + str(total_synced) + " games"
@@ -730,7 +752,8 @@ func _queue_backfill_covers() -> void:
 			continue
 		_sync_covers_seen_set[url] = true
 		_sync_covers_budget -= 1
-		_sync_total += 1  # Each unique backfill cover is also a work unit
+		# Not counted into _sync_total here: covers join the progress total
+		# when DISPATCHED, so never-dispatched queue leftovers can't inflate it.
 		_sync_covers_pending.append(url)
 		_sync_covers_pending_set[url] = true
 		queued += 1
@@ -746,6 +769,7 @@ const COVER_PROGRESS_EVERY: int = 5
 func _on_cover_processed() -> void:
 	"""Called on the main thread when a cover has been processed by the worker."""
 	_sync_current += 1
+	_sync_covers_done += 1
 	if _sync_current % COVER_PROGRESS_EVERY == 0 or _sync_current == _sync_total:
 		var progress_pct = float(_sync_current) / float(_sync_total) * 100.0 if _sync_total > 0 else 0.0
 		_emit_sync_progress(progress_pct * 0.01, _sync_current, _sync_total)
@@ -756,6 +780,42 @@ func _on_cover_processed() -> void:
 # suspend must never wedge sync completion. Stragglers finish in the
 # background after sync_completed fires.
 const COVER_DRAIN_TIMEOUT_MS: int = 60000
+
+## Repeating main-thread timer that keeps dispatching leftover queued covers
+## after sync completion (drain timeout is a safety bound, not a drop).
+var _cover_flush_timer: Timer = null
+
+
+func _start_pending_cover_flush() -> void:
+	"""Main thread: if covers are still queued after the drain, keep
+	dispatching them in the background until the queue empties."""
+	_sync_covers_mutex.lock()
+	var pending := _sync_covers_pending.size()
+	_sync_covers_mutex.unlock()
+	if pending == 0:
+		return
+	print("[Sync] %d cover(s) still queued after sync - downloading in the background" % pending)
+	if _cover_flush_timer == null:
+		_cover_flush_timer = Timer.new()
+		_cover_flush_timer.wait_time = 2.0
+		_cover_flush_timer.timeout.connect(_on_cover_flush_tick)
+		add_child(_cover_flush_timer)
+	_cover_flush_timer.start()
+
+
+func _on_cover_flush_tick() -> void:
+	if MemorySubManager.is_shutting_down():
+		_cover_flush_timer.stop()
+		return
+	_sync_covers_mutex.lock()
+	var pending := _sync_covers_pending.size()
+	_sync_covers_mutex.unlock()
+	if pending == 0:
+		_cover_flush_timer.stop()
+		return
+	# count_progress=false: the sync's progress notification has completed;
+	# these covers must not touch its counters.
+	_dispatch_covers_to_main_thread(false)
 
 func _wait_for_all_cover_downloads() -> void:
 	"""Block the sync thread until every queued cover download has settled.
@@ -798,14 +858,18 @@ func _wait_for_all_cover_downloads() -> void:
 	print("[SyncThread] Cover downloads: %d cached, %d downloaded, %d skipped (cache full), %d FAILED" % [_sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_skipped_count, _sync_covers_failed_count])
 
 
-func _dispatch_covers_to_main_thread():
+func _dispatch_covers_to_main_thread(count_progress: bool = true):
 	"""Dispatch collected cover URLs to main thread for async download.
 
 	Self-throttles to COVER_DISPATCH_MAX_IN_FLIGHT outstanding downloads so a
 	large backfill can't flood the download queue past its pending cap and get
 	covers silently dropped. Leftover URLs stay pending for the next dispatch
 	once in-flight downloads settle.
-	"""
+
+	Dispatched covers join the progress total here (not at queue time) so
+	never-dispatched leftovers can't inflate it. count_progress is false only
+	for the post-sync background flush, which runs after the progress
+	notification has completed."""
 	_sync_pending_downloads_mutex.lock()
 	var headroom: int = COVER_DISPATCH_MAX_IN_FLIGHT - _sync_pending_downloads
 	_sync_pending_downloads_mutex.unlock()
@@ -825,10 +889,15 @@ func _dispatch_covers_to_main_thread():
 		_sync_covers_pending_set.erase(url)
 	_sync_covers_pending = _sync_covers_pending.slice(take)
 	_sync_covers_dispatched_count += 1
+	if count_progress:
+		_sync_total += take
+		_sync_covers_total += take
 	_sync_last_cover_dispatch_ms = Time.get_ticks_msec()
 	_sync_covers_mutex.unlock()
 
-	_defer_on_main("_download_covers_on_main_thread", [urls, _on_cover_processed])
+	# The post-sync flush must not touch progress counters.
+	var on_processed: Callable = _on_cover_processed if count_progress else Callable()
+	_defer_on_main("_download_covers_on_main_thread", [urls, on_processed])
 	if DEBUG_LOG: print("[SyncThread] Cover dispatch: %d urls (cached=%d downloaded=%d failed=%d pending_dl=%d)" % [urls.size(), _sync_covers_cached_count, _sync_covers_downloaded_count, _sync_covers_failed_count, _sync_pending_downloads])
 
 
@@ -1410,7 +1479,7 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 				continue
 			_sync_covers_seen_set[game.cover_url] = true
 			_sync_covers_budget -= 1
-			_sync_total += 1  # Each unique cover is a download work unit
+			# Counted into _sync_total at dispatch time, not here.
 			new_urls.append(game.cover_url)
 	for url in new_urls:
 		if not _sync_covers_pending_set.has(url):
@@ -1717,9 +1786,17 @@ func _show_sync_notification():
 			return frac,
 		func(progress: float) -> String:
 			var pct = int(progress * 100)
+			# Games and covers are separate work-unit pools summed into
+			# _sync_total; show them distinctly so the headline number is
+			# always the game count.
+			var games_done := _sync_current - _sync_covers_done
+			var games_total := _sync_total - _sync_covers_total
+			var covers_suffix := ""
+			if _sync_covers_total > 0:
+				covers_suffix = " + %d/%d covers" % [_sync_covers_done, _sync_covers_total]
 			if _sync_platform != "":
-				return "Platform %d/%d: %s - %d/%d (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, _sync_current, _sync_total, pct]
-			return "Syncing %d/%d (%d%%)" % [_sync_current, _sync_total, pct],
+				return "Platform %d/%d: %s - %d/%d games%s (%d%%)" % [_sync_platform_index, _sync_platform_count, _sync_platform, games_done, games_total, covers_suffix, pct]
+			return "Syncing %d/%d games%s (%d%%)" % [games_done, games_total, covers_suffix, pct],
 		false,  # pulsing
 		true  # pinned
 	)
