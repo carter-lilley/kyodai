@@ -94,7 +94,7 @@ func _check_sync(tag: String) -> void:
 		var lt = card.get("_last_visual_transform")
 		if not lt is Transform2D:
 			continue
-		var exp: Vector2 = _grid._compute_visual_layer_offset(card)
+		var exp: Vector2 = _grid._visual_sync.compute_offset(card)
 		var cs_v = card.get("content_scale")
 		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
 		if not cs.is_equal_approx(Vector2.ONE):
@@ -117,7 +117,7 @@ func _check_sync(tag: String) -> void:
 			var lt2 = card.get("_last_visual_transform")
 			if not lt2 is Transform2D:
 				continue
-			var exp2: Vector2 = _grid._compute_visual_layer_offset(card)
+			var exp2: Vector2 = _grid._visual_sync.compute_offset(card)
 			var d2: float = (lt2 as Transform2D).origin.distance_to(exp2)
 			if d2 > 2.0:
 				print("  DRIFT vi=", card.get_meta("virtual_index", -1), " d=", d2,

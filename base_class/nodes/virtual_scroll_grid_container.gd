@@ -8,18 +8,14 @@ const DEBUG_LOG: bool = false
 # the saved window size and saved zoom are stable.
 static var startup_layout_suppressed: bool = true
 
-## Card capability probes, keyed by card scene path, shared across all grids
-## so only the first grid pays the probe instantiation.
-static var _capability_probe_cache: Dictionary = {}
+## Card capability probes live in GridCardPool.probe_capabilities (static,
+## cached per scene path, shared across all grids).
 
 # Libraries below this size load all cards at once to avoid partial-row recycling
 # edge cases. Above this threshold only visible cards plus a buffer are created.
 const SMALL_LIBRARY_THRESHOLD: int = 50
 
-# Upper bound for a single data request. Legitimate batches cover one buffer
-# window or a preload span (tens of items); anything larger indicates a
-# pathological state and would stall the DB worker.
-const MAX_DATA_REQUEST_ITEMS: int = 500
+# Single-request batch cap lives in GridDataCache.MAX_REQUEST_ITEMS.
 
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
@@ -67,7 +63,7 @@ var grid_vertical: bool = true:
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
 func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
-	var _old_focused: int = _last_focused_virtual_index
+	var _old_focused: int = _focus.last_index
 	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 
@@ -114,7 +110,7 @@ func _apply_zoom_ratio(p_ratio: float) -> bool:
 		if DEBUG_LOG: print("[Grid] _apply_zoom_ratio: p_ratio=", p_ratio, " current_target=", target_card_width_ratio, " suppressed=", startup_layout_suppressed)
 	# GRID: snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
 	if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
-		_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
+		_scroll_anchor = _capture_scroll_anchor(_focus.focused_virtual_index())
 	return _zoom_model.set_ratio(p_ratio)
 
 func _apply_grid_padding(p_padding: int) -> bool:
@@ -143,7 +139,7 @@ func _batch_apply_layout_state() -> void:
 
 	# Apply structure first so zoom/padding math uses the correct geometry.
 	# Then apply padding before zoom because separation affects available space.
-	var _old_focused: int = _last_focused_virtual_index
+	var _old_focused: int = _focus.last_index
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
@@ -232,15 +228,10 @@ var pagination_enabled: bool = false
 ## half-cell spacer in the flow.
 var staggered: bool = false
 
-# Track the last focused card's virtual index so we can restore it after layout recalculations.
-var _last_focused_virtual_index: int = -1
-
-# Monotonically-increasing ID used to cancel stale deferred-focus requests.
-var _focus_request_id: int = 0
-
-# Pending focus target set by scroll_to_index_and_focus; applied as soon as the
-# card is created by _on_scroll_value_changed.
-var _pending_focus_index: int = -1
+## Focus tracking, restore/release, and the focus-lock viewport connection
+## (GridFocusController). The property facades below keep direct readers
+## unchanged; the module owns the truth.
+var _focus := GridFocusController.new(self)
 
 func is_focus_locked_and_active() -> bool:
 	"""Returns true if UIManager has locked focus to this grid."""
@@ -313,7 +304,6 @@ var _scroll_anchor: GridScrollAnchor = null
 # to the grid-computed value so the stale mid-frame scrollbar range never
 # clamps the write, and the single-writer ownership in SSC makes echo guards
 # unnecessary.
-var _grid_trace_stuck_count: int = 0
 
 ## Scroll velocity (px/s) is owned by the SmoothScrollContainer (it owns the
 ## float motion model, so it owns the derivative too). This is the single
@@ -331,25 +321,10 @@ const FAST_SCROLL_SUPPRESS_STRIDES: float = 4.0  # px/s threshold = 4 row pitche
 var _scrub_cover_suppressed: bool = false   # external: A-Z carousel drag
 var _cover_dl_suppressed: bool = false      # effective state last applied
 var _lp_gate_held: bool = false             # this grid holds the (refcounted) low-priority decode gate
-var _last_pass_buffer_start: int = -1
-var _last_pass_buffer_end: int = -1
-var _last_stamp_scroll: float = -1.0
-var _last_stamp_margin: int = -1
-var _last_stamp_first: int = -1
-var _last_stamp_count: int = -1
-var _last_stamp_generation: int = -1
 ## Incremented on every completed full layout pass and every FlowContainer
-## sort. Part of the pre-draw stamp gate so stamps always follow layout
-## changes even when scroll/margin/window didn't move.
+## sort. Part of the visual sync's pre-draw stamp gate so stamps always
+## follow layout changes even when scroll/margin/window didn't move.
 var _layout_generation: int = 0
-## Set when cards were added/recycled and must not be revealed until the
-## FlowContainer sort commits their positions. The sort handler reveals them
-## (stamp + mark) exactly once, post-sort, so a stale pooled position can
-## never reach the screen.
-var _visual_reveal_pending: bool = false
-## Frame at which the current reveal was requested; a sort that never fires
-## (hidden view, container quirk) must not leave cards hidden forever.
-var _visual_reveal_requested_frame: int = -1
 var _layout_settled_with_valid_size: bool = false
 ## Forces the next _recalculate_layout past its input-cache early-exit (set
 ## when a valid size first arrives after an invalid settle).
@@ -378,7 +353,7 @@ var target_card_width_ratio: float:
 			if DEBUG_LOG: print("[Grid] setter target_card_width_ratio: input=", value, " max=", _zoom_model.get_max_ratio(), " suppressed=", startup_layout_suppressed)
 		# GRID: snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
 		if view_mode == ViewMode.GRID and not startup_layout_suppressed and _has_valid_available_size():
-			_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
+			_scroll_anchor = _capture_scroll_anchor(_focus.focused_virtual_index())
 		_zoom_model.set_ratio(value)
 		# _recalculate_layout() early-exits cheaply when nothing changed; callers
 		# (e.g. refresh_dimensions) expect the setter to run a layout pass.
@@ -430,42 +405,56 @@ var _margin_container: MarginContainer
 # is reproduced deterministically via margins in _update_margin().
 var _center_container: Control
 var _flow_container: FlowContainer
-var _visual_layer: Control
-var _debug_camera: Camera2D
-var _debug_flow_panel: Panel
+## Visual stamping pipeline: owns the top-level visual layer, pre-draw
+## stamping, the reveal-on-sort gate, and the rest stamp (GridVisualSync).
+var _visual_sync := GridVisualSync.new(self)
+## Spacer lifecycle in the flow (page spacers between pages, stagger spacers
+## indenting odd rows). Boundary math stays in GridGeometry via the facades.
+var _spacers := GridSpacerManager.new(self)
 
-# Cached debug style boxes to avoid allocating every frame
-var _debug_style_visible_data: StyleBoxFlat
-var _debug_style_visible_loading: StyleBoxFlat
-var _debug_style_buffer_data: StyleBoxFlat
-var _debug_style_buffer_loading: StyleBoxFlat
+## Debug/audit tooling (debug panels, debug camera, frame-post-draw audits,
+## soak test). Reads grid state for introspection; owns its own RS signal
+## connections. Created in _setup_ui.
+var _debug_overlay: GridDebugOverlay = null
 
 var _total_items: int = 0
 # Real item count from the data source. _total_items is the geometry count:
 # padded with placeholder slots (trailing) so pages/rows always fill evenly.
 var _source_total_items: int = 0
-var _virtual_start: int = 0
-var _virtual_end: int = 0
 var _card_scene: PackedScene
 var _ready_called: bool = false
 
-var _card_pool: Array[Control] = []
-var _active_cards: Array[Control] = []
-var _active_cards_by_index: Dictionary[int, Control] = {}
-var _max_pool_size: int = 120
+## Card instance pool: creation, acquire/recycle, frame-spread growth, and the
+## card-scene capability probe (GridCardPool).
+var _pool := GridCardPool.new(self)
+
+## The active window: membership, recycle/add, the scroll pass, async buffer
+## expansion, and the pending visual-setup drain (GridWindowManager). The
+## window manager is the ONE writer of window membership; the properties
+## below are read-only views for the other modules, the overlay, and tests.
+var _window := GridWindowManager.new(self)
+
+var _active_cards: Array[Control]:
+	get:
+		return _window.cards
+var _active_cards_by_index: Dictionary[int, Control]:
+	get:
+		return _window.by_index
+var _pending_visual_setup: Dictionary:
+	get:
+		return _window.pending_setup
+var _virtual_start: int:
+	get:
+		return _window.virtual_start
+var _virtual_end: int:
+	get:
+		return _window.virtual_end
 
 # Async buffer expansion: load only a small synchronous buffer at startup, then
 # fill the rest of the visual buffer over subsequent frames to avoid a startup
 # hitch while keeping the full scroll buffer.
-const ASYNC_BUFFER_CARDS_PER_FRAME: int = 10
 const STARTUP_BUFFER_LINES: int = 1
 var _current_buffer_lines: int = visual_buffer_lines
-var _pending_buffer_expansion: bool = false
-
-# Async visual setup for off-screen cards: skip expensive refresh_settings/set_game
-# during the synchronous layout, then finish setup a few cards per frame.
-const ASYNC_SETUP_CARDS_PER_FRAME: int = 8
-var _pending_visual_setup: Dictionary = {}
 
 # Cached card capability flags — set once in _instantiate_card_pool() to avoid
 # repeated has_method() and string lookups in hot loops.
@@ -547,13 +536,9 @@ var _visible_end_idx: int = 0
 var _buffer_target_start: int = 0
 var _buffer_target_end: int = 0
 
-# Incremental effect rebuild queue — populated when effect configs change.
-# Cards in the visible zone rebuild immediately; the rest are drained over frames.
-const EFFECT_REBUILD_BUFFER_LINES: int = 2
-const EFFECT_REBUILD_CARDS_PER_FRAME: int = 2
-var _pending_effect_rebuilds: Array[Control] = []
-var _pending_effect_rebuild_force_full: bool = false
-var _pending_effect_rebuild_set: Dictionary = {}
+## Incremental effect rebuild queue (visible zone immediately, the rest
+## drained over frames) plus the "refresh after layout settles" deferral.
+var _effect_queue := GridEffectRefreshQueue.new(self)
 
 # Flow-container separation caching - only override when value changes
 var _last_h_separation: int = -1
@@ -565,8 +550,15 @@ var _last_margin_virtual_end: int = -1
 
 
 
-var _data_cache: Dictionary = {}
-var _pending_loads: Dictionary = {}
+## Item-data cache: index → game, LRU + in-flight request ledger + duplicate
+## tracking (GridDataCache). Views still connect to THIS grid's
+## items_requested signal; the module's signal is relayed below.
+var _data: GridDataCache = _create_data_cache()
+
+func _create_data_cache() -> GridDataCache:
+	var d := GridDataCache.new(self)
+	d.items_requested.connect(func(offset: int, limit: int): items_requested.emit(offset, limit))
+	return d
 
 ## Buffer-zone data loads (beyond the visible zone + one line) deferred while
 ## scrolling fast: flushed when velocity drops below the threshold OR the
@@ -576,22 +568,6 @@ const BUFFER_LOAD_VELOCITY_STRIDES: float = 2.0
 const BUFFER_LOAD_IDLE_FLUSH_MS: int = 150
 var _deferred_data_indices: Dictionary = {}  # idx -> true
 var _last_scroll_active_ms: int = 0          # last frame with nonzero velocity
-# Guards _pending_loads: DB worker threads check is_load_pending() to skip
-# stale queries superseded by jumps/refreshes while they were queued.
-var _pending_loads_mutex: Mutex = Mutex.new()
-
-# Deduplication tracking - prevents duplicate game entries
-var _cached_game_ids: Dictionary = {}  # romm_id -> cache_key
-
-const MAX_CACHE_SIZE: int = 5000
-# Insertion-ordered LRU: front = least recently used, back = most recent.
-var _cache_lru_tick: Dictionary[int, bool] = {}
-
-# When settings change, layout must settle before effect rebuilds run against
-# final card bounds. This flag defers refresh_all_card_effects until after the
-# scheduled layout recalc completes.
-var _pending_effects_refresh_after_layout: bool = false
-var _pending_effects_refresh_force_full: bool = false
 
 func _configure_view_mode() -> void:
 	"""Update scroll/flow container flags for the current view_mode/grid_vertical without rebuilding cards."""
@@ -740,14 +716,11 @@ func _capture_scroll_anchor(focus_index: int, allow_end_pin: bool = false) -> Gr
 func _ready():
 	_setup_ui()
 
-	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
-		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
+	# frame_pre_draw (visual stamping) is owned by _visual_sync (connects in
+	# its own _ready/_exit_tree).
 	# frame_post_draw (DrawAudit) connects in _update_debug_mode — debug-only.
-	# The flicker watcher (stamp vs REAL on-screen position) is ON BY DEFAULT so
-	# editor runs catch detached-visual frames without any setup; set
-	# KYODAI_FLICKER_WATCH=0 to disable.
-	if OS.get_environment("KYODAI_FLICKER_WATCH") != "0":
-		RenderingServer.frame_post_draw.connect(_on_frame_post_draw_reality_check)
+	# The flicker watcher (stamp vs REAL on-screen position) connects in the
+	# debug overlay's _ready (ON BY DEFAULT; KYODAI_FLICKER_WATCH=0 disables).
 
 	# Use SystemManager.display as the single source of resize truth when available.
 	# It debounces viewport changes so we don't recalculate layout on every pixel.
@@ -762,7 +735,7 @@ func _ready():
 	call_deferred("_update_grid_separation_from_settings")
 	call_deferred("_update_focus_scale_from_settings")
 	call_deferred("_refresh_cached_settings")
-	call_deferred("_connect_focus_lock_viewport")
+	_focus.connect_viewport.call_deferred()
 	_ready_called = true
 
 func _setup_internal_resize_debounce():
@@ -775,9 +748,7 @@ func _setup_internal_resize_debounce():
 func _on_resized():
 	# Keep the top-level visual layer pinned to the viewport so it can draw
 	# outside the grid's bounds without being clipped by margins or scroll.
-	if _visual_layer and _visual_layer.top_level:
-		_visual_layer.position = Vector2.ZERO
-		_visual_layer.size = get_viewport_rect().size
+	_visual_sync.resize_to_viewport()
 
 	# Ignore resize events that don't actually change size (sub-pixel or duplicate)
 	var new_size = Vector2(size.x, size.y)
@@ -798,9 +769,7 @@ func _on_display_size_changed(_new_size: Vector2):
 	"""Handler for SystemManager.display's debounced viewport_size_changed signal."""
 	# Keep the top-level visual layer pinned to the viewport even while startup
 	# layout is suppressed, so the layer never holds a stale viewport rect.
-	if _visual_layer and _visual_layer.top_level:
-		_visual_layer.position = Vector2.ZERO
-		_visual_layer.size = get_viewport_rect().size
+	_visual_sync.resize_to_viewport()
 
 	if startup_layout_suppressed:
 		return
@@ -828,11 +797,8 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
-	# _exit_tree disconnects frame_pre_draw and _ready only connects it once,
-	# so re-establish it on every tree entry (DS reparents, nav rebuilds) -
-	# otherwise the visual-transform stamping loop dies for this grid instance.
-	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
-		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
+	# frame_pre_draw (visual stamping) reconnects in _visual_sync's own _ready
+	# on every tree entry (DS reparents, nav rebuilds).
 	# Connect to centralized card settings state (idempotent via is_connected guards)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
@@ -841,7 +807,7 @@ func _enter_tree():
 	# If the grid was reparented, the pool was freed in _exit_tree().
 	# Recreate it so cards can be reused again. On initial entry _card_scene is
 	# still null, so this is a no-op.
-	if _card_scene and _card_pool.is_empty():
+	if _card_scene and _pool.cards.is_empty():
 		_instantiate_card_pool()
 
 	# Reset cached size so the next display resize check will recalculate layout
@@ -850,30 +816,24 @@ func _enter_tree():
 	if SystemManager.display:
 		_on_display_size_changed(SystemManager.display.get_viewport_size())
 	# Ensure focus-lock viewport signal is active after reparenting.
-	_reconnect_focus_lock_viewport()
+	_focus.reconnect_viewport()
 
 func _exit_tree():
-	if RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
-		RenderingServer.frame_pre_draw.disconnect(_on_frame_pre_draw)
-	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
-		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)
-	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_reality_check):
-		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_reality_check)
+	# frame_pre_draw (visual stamping) is disconnected by _visual_sync's own
+	# _exit_tree; frame_post_draw audit/reality-check connections are owned
+	# (and released) by _debug_overlay. Both exit the tree before this parent.
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state
 		if state.changed.is_connected(_on_card_settings_state_changed):
 			state.changed.disconnect(_on_card_settings_state_changed)
-	_disconnect_focus_lock_viewport()
+	_focus.disconnect_viewport()
 	# Release scene-wide focus lock if this grid held it.
 	if UIManager:
 		UIManager.exit_focus_lock(self)
 	# Always free the pooled cards when leaving the tree. Pooled nodes are not in
 	# the tree, so they would not be cleaned up automatically. Use free() because
 	# queue_free() may not flush during process exit.
-	for card in _card_pool:
-		if is_instance_valid(card):
-			card.free()
-	_card_pool.clear()
+	_pool.free_all(true)
 
 	# Only clear active-card tracking when the grid is being destroyed. When the
 	# grid is reparented (e.g. nav type change), the active cards stay in the
@@ -896,27 +856,18 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
 		# A focus grab skipped while the window was backgrounded left its
 		# target pending; restore it now that the user is back.
-		if _pending_focus_index >= 0 and M3Overlay._get_topmost_overlay() == null:
-			call_deferred("_try_apply_pending_focus")
-
-func _free_card_pool() -> void:
-	"""Release pooled card references.
-	Pooled nodes are not in the tree, so they must be freed explicitly.
-	Use free() because these nodes are not displayed and queue_free() may not
-	process before the rendering server shuts down at engine exit."""
-	var _freed_count: int = 0
-	for card in _card_pool:
-		if is_instance_valid(card):
-			card.free()
-			_freed_count += 1
-	_card_pool.clear()
+		if _focus.pending_index >= 0 and M3Overlay._get_topmost_overlay() == null:
+			_focus.try_apply_pending_focus.call_deferred()
 
 func clear_pool() -> void:
 	"""Public hook to free pooled cards before the grid leaves the tree.
 
 	Useful during app shutdown to release heavy card resources early.
+	Pooled nodes are not in the tree, so they must be freed explicitly;
+	free() is used because queue_free() may not flush before the rendering
+	server shuts down at engine exit.
 	"""
-	_free_card_pool()
+	_pool.free_all(true)
 
 func _on_card_settings_state_changed(mask: int) -> void:
 	if not UIManager or not UIManager.card_settings_state:
@@ -954,8 +905,7 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	# layout recalc so cards are rebuilt against final bounds and newly added cards
 	# are included in the refresh snapshot.
 	if mask & CardSettingsState.ChangeMask.EFFECTS:
-		_pending_effects_refresh_after_layout = true
-		_pending_effects_refresh_force_full = true
+		_effect_queue.request_after_layout(true)
 		_schedule_layout_recalc()
 
 func _schedule_layout_recalc() -> void:
@@ -971,9 +921,7 @@ func _do_scheduled_layout_recalc() -> void:
 	
 	# Now that layout has settled, apply any deferred effect refresh. This ensures
 	# effect rebuilds use final card bounds and include cards added during recalc.
-	if _pending_effects_refresh_after_layout:
-		_pending_effects_refresh_after_layout = false
-		refresh_all_card_effects(_pending_effects_refresh_force_full)
+	_effect_queue.apply_after_layout()
 
 func _refresh_cached_settings() -> void:
 	if not UIManager or not UIManager.card_settings_state:
@@ -1007,10 +955,6 @@ var _is_recalculating_layout: bool = false
 # pass when the current recalc finishes, so no resize is ever dropped.
 var _resize_pending: bool = false
 
-# Guard against recursive scroll_value_changed signals that can fire during
-# container sorts triggered by add_child() inside _on_scroll_value_changed().
-var _is_processing_scroll: bool = false
-
 # Throttle window resize: ignore tiny size jitters and avoid duplicate back-to-back
 # recalculations caused by scrollbar visibility toggling.
 var _resize_debounce_frames: int = 0
@@ -1026,17 +970,13 @@ func _gui_input(event: InputEvent) -> void:
 		_scroll_container._on_gui_input(event)
 
 func _process(_delta: float):
-	if _is_processing_scroll:
-		_is_processing_scroll = false
+	if _window.processing_scroll:
+		_window.processing_scroll = false
 		push_warning("[Grid] _is_processing_scroll was left set between frames; force-cleared")
 
 	# Reveal fallback: if a sort never consumed the pending reveal (hidden view,
 	# container quirk), reveal after 3 frames rather than leaving cards hidden.
-	if _visual_reveal_pending and _visual_reveal_requested_frame >= 0 \
-		and Engine.get_process_frames() > _visual_reveal_requested_frame + 3:
-		_visual_reveal_pending = false
-		_visual_reveal_requested_frame = -1
-		_sync_and_mark_card_visual_transforms("reveal-fallback", true)
+	_visual_sync.check_reveal_fallback()
 
 	if _resize_debounce_frames > 0:
 		_resize_debounce_frames -= 1
@@ -1051,7 +991,7 @@ func _process(_delta: float):
 		var idx := _programmatic_focus_index
 		_programmatic_focus_index = -1
 		_scroll_container.follow_focus_suppressed = false
-		_pending_focus_index = -1
+		_focus.pending_index = -1
 		var focused_owner: Control = null
 		var viewport := get_viewport()
 		if viewport:
@@ -1059,11 +999,11 @@ func _process(_delta: float):
 		if not focused_owner or not is_ancestor_of(focused_owner):
 			var card := get_card_at_index(idx)
 			if card and is_instance_valid(card) and card.is_inside_tree():
-				_apply_focus_to_card(card)
+				_focus.apply_focus_to_card(card)
 
 	# Add off-screen buffer cards a few at a time so startup isn't blocked by
 	# creating the entire visual buffer in one frame.
-	_process_buffer_expansion()
+	_window.process_buffer_expansion()
 
 	# Settle detection for cover-download suppression: scroll passes stop once
 	# scrolling ends, so _process is where the stale velocity decays and
@@ -1077,10 +1017,10 @@ func _process(_delta: float):
 	_process_pool_growth()
 
 	# Finish deferred visual setup for off-screen buffer cards.
-	_process_pending_visual_setup()
+	_window.process_pending_visual_setup()
 
 	# Drain any queued off-screen effect rebuilds a few cards per frame.
-	_drain_pending_effect_rebuilds()
+	_effect_queue.drain_pending()
 
 func _on_resize_debounced():
 	if debug_mode:
@@ -1125,7 +1065,7 @@ func _on_resize_debounced():
 
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
-		_initial_load()
+		_window.initial_load()
 		_recalculate_layout()
 
 func _log_parent_chain_sizes() -> void:
@@ -1164,7 +1104,7 @@ func settle_startup() -> void:
 
 	# If we have items but no active cards (e.g., view was hidden during setup), load them now.
 	if _active_cards.size() == 0 and _total_items > 0 and _has_valid_available_size():
-		_initial_load()
+		_window.initial_load()
 		_recalculate_layout()
 
 func settle_startup_with_buffer(startup_buffer_lines: int) -> void:
@@ -1182,122 +1122,10 @@ func settle_startup_with_buffer(startup_buffer_lines: int) -> void:
 
 func _expand_buffer_async() -> void:
 	"""Schedule the remaining off-screen buffer cards to be added over frames."""
-	_pending_buffer_expansion = true
+	_window.pending_buffer_expansion = true
 
-func _process_buffer_expansion() -> void:
-	if not _pending_buffer_expansion:
-		return
-	if _active_cards.size() == 0 or _total_items == 0:
-		_pending_buffer_expansion = false
-		return
-	if not _scroll_container:
-		_pending_buffer_expansion = false
-		return
 
-	var scroll_pos = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
-	var items_per_line = _get_items_per_line()
-	var stride = _get_normal_stride()
-	var available = _get_available_size()
-	var viewport_size = available.y if vertical else available.x
-	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
 
-	var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-	var current_first = _active_cards[0].get_meta("virtual_index", 0)
-
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _process_buffer_expansion: target_start=", _buffer_target_start, " target_end=", _buffer_target_end, " current_first=", current_first, " current_last=", current_last)
-
-	var added: int = 0
-	while current_last < _buffer_target_end - 1 and current_last < _total_items - 1 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "grid_buffer"):
-		_add_card_at_end(current_last + 1)
-		current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-		added += 1
-
-	current_first = _active_cards[0].get_meta("virtual_index", 0)
-	while current_first > _buffer_target_start and current_first > 0 and added < ASYNC_BUFFER_CARDS_PER_FRAME and WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "grid_buffer"):
-		_add_card_at_start(current_first - 1)
-		current_first = _active_cards[0].get_meta("virtual_index", 0)
-		added += 1
-
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _process_buffer_expansion: added=", added, " current_first=", current_first, " current_last=", current_last)
-
-	# Keep the internal virtual range consistent with the active card list so
-	# later scroll/recycle math and preload checks don't use stale bounds.
-	if _active_cards.size() > 0:
-		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
-		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-
-	if added > 0:
-		_request_missing_data()
-		_update_margin()
-		_check_preload_needed()
-		_update_card_priorities(_visible_start_idx, _visible_end_idx)
-		_update_visual_draw_order()
-		_flush_pending_visual_setup_for_visible_zone()
-		# Newly added off-screen cards are revealed once the sort commits their
-		# positions (see _on_flow_sorted).
-		_request_visual_reveal()
-
-	if current_first <= _buffer_target_start and current_last >= _buffer_target_end - 1:
-		_pending_buffer_expansion = false
-		if debug_mode:
-			if DEBUG_LOG: print("[Grid] async buffer expansion complete")
-
-func _process_pending_visual_setup() -> void:
-	if _pending_visual_setup.is_empty():
-		return
-
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _process_pending_visual_setup: pending_size=", _pending_visual_setup.size())
-	var processed: int = 0
-	var keys := _pending_visual_setup.keys()
-	# Not budget-gated: this drain services ACTIVE cards (a pending card has
-	# no game assigned and renders invisible). Starving it hides rows.
-	while processed < ASYNC_SETUP_CARDS_PER_FRAME and not keys.is_empty():
-		var idx = keys[0]
-		keys.remove_at(0)
-		var card = _pending_visual_setup[idx]
-		if not is_instance_valid(card) or not _active_cards.has(card):
-			_pending_visual_setup.erase(idx)
-			continue
-		# Count ATTEMPTS toward the per-frame budget, not just successes:
-		# cards whose data hasn't arrived yet stay pending, and without an
-		# attempt cap the loop iterates the entire pending dict every frame
-		# (livelock when many cards are waiting on the DB).
-		processed += 1
-		var setup_ok = _apply_card_visual_setup(card, idx)
-		if debug_mode: print("[Grid] _process_pending_visual_setup: idx=", idx, " setup_ok=", setup_ok)
-		if setup_ok:
-			_pending_visual_setup.erase(idx)
-		else:
-			# Re-queue at the end (dicts iterate in insertion order) so a run
-			# of data-starved cards at the front can't block the rest.
-			_pending_visual_setup.erase(idx)
-			_pending_visual_setup[idx] = card
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _process_pending_visual_setup: processed=", processed, " remaining=", _pending_visual_setup.size())
-
-func _flush_pending_visual_setup_for_visible_zone() -> void:
-	if _pending_visual_setup.is_empty():
-		return
-
-	_get_visible_range()
-	var items_per_line: int = _get_items_per_line()
-	var sync_start: int = maxi(0, _visible_start_idx - items_per_line)
-	var sync_end: int = mini(_visible_end_idx + items_per_line, _total_items)
-
-	var completed: Array = []
-	for idx in _pending_visual_setup:
-		if idx >= sync_start and idx < sync_end:
-			var card = _pending_visual_setup[idx]
-			if is_instance_valid(card) and _active_cards.has(card):
-				if _apply_card_visual_setup(card, idx):
-					completed.append(idx)
-			else:
-				completed.append(idx)
-	for idx in completed:
-		_pending_visual_setup.erase(idx)
 
 func _update_grid_separation_from_settings() -> void:
 	var padding: int = UIManager.card_settings_state.grid_padding if UIManager and UIManager.card_settings_state else 10
@@ -1479,7 +1307,7 @@ func _set_grid_n_silent(n: int) -> bool:
 	if _zoom_model._n_grid == n:
 		return false
 	# Snapshot the scroll anchor BEFORE N changes (see _scroll_anchor).
-	_scroll_anchor = _capture_scroll_anchor(_get_focused_virtual_index())
+	_scroll_anchor = _capture_scroll_anchor(_focus.focused_virtual_index())
 	_zoom_model.set_grid_n(n)
 	return true
 
@@ -1697,141 +1525,8 @@ func _on_page_step_request(direction: int) -> float:
 # of _active_cards; the invariant is:
 #   "a spacer sits between two consecutive card children iff their lines are
 #    on different pages; no leading or trailing spacers."
-
-func _make_page_spacer() -> Control:
-	var spacer := Control.new()
-	spacer.set_meta("page_spacer", true)
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	spacer.focus_mode = Control.FOCUS_NONE
-	spacer.custom_minimum_size = _get_page_spacer_size()
-	return spacer
-
-## Spacer dimensions: full line on the cross axis (forces the wrap). The
-## scroll-axis extent is gap - separation because the FlowContainer adds its
-## own line separation after the spacer line.
-func _get_page_spacer_size() -> Vector2:
-	var extent = maxf(1.0, _get_page_gap() - grid_separation)
-	var items_per_line = maxi(1, _get_items_per_line())
-	if vertical:
-		var row_width = items_per_line * card_size.x + max(0, items_per_line - 1) * grid_separation
-		return Vector2(row_width, extent)
-	var col_height = items_per_line * card_size.y + max(0, items_per_line - 1) * grid_separation
-	return Vector2(extent, col_height)
-
-func _add_page_spacer(flow_index: int = -1) -> void:
-	if not _flow_container:
-		return
-	var spacer = _make_page_spacer()
-	_flow_container.add_child(spacer)
-	if flow_index >= 0:
-		_flow_container.move_child(spacer, flow_index)
-
-func _free_page_spacer(spacer: Control) -> void:
-	_flow_container.remove_child(spacer)
-	spacer.queue_free()
-
-## Removes any leading/trailing spacers (recycling is contiguous from the
-## ends, so orphaned spacers can only ever appear at the edges).
-func _prune_edge_spacers() -> void:
-	if not _flow_container:
-		return
-	while _flow_container.get_child_count() > 0:
-		var first = _flow_container.get_child(0)
-		if first.has_meta("page_spacer"):
-			_free_page_spacer(first)
-			continue
-		if first.has_meta("stagger_spacer"):
-			# A leading stagger spacer stays LIVE while any card of its odd row
-			# still follows it: partial rows keep their half-cell indent while
-			# the window recycles through them. Only a spacer whose row is fully
-			# gone (next child is a spacer, an even-row card, or nothing) dies.
-			var next = _flow_container.get_child(1) if _flow_container.get_child_count() > 1 else null
-			if next and not next.has_meta("page_spacer") and not next.has_meta("stagger_spacer"):
-				var next_idx: int = next.get_meta("virtual_index", -1)
-				if next_idx >= 0 and _is_staggered_active() and _get_stagger_line_for_index(next_idx) % 2 == 1:
-					break
-			_free_page_spacer(first)
-			continue
-		break
-	while _flow_container.get_child_count() > 0:
-		var last = _flow_container.get_child(_flow_container.get_child_count() - 1)
-		if last.has_meta("page_spacer") or last.has_meta("stagger_spacer"):
-			_free_page_spacer(last)
-		else:
-			break
-
-func _clear_page_spacers() -> void:
-	if not _flow_container:
-		return
-	for child in _flow_container.get_children():
-		if child.has_meta("page_spacer") or child.has_meta("stagger_spacer"):
-			_flow_container.remove_child(child)
-			child.queue_free()
-
-# --- Stagger spacers --------------------------------------------------------
-# Half-cell spacers at the start of odd rows force the FlowContainer to wrap
-# offset rows at N-1 cards and indent them half a stride. Invariant: "a
-# stagger spacer immediately precedes the first card of every odd row present
-# in the flow; none elsewhere."
-
-func _make_stagger_spacer() -> Control:
-	var spacer := Control.new()
-	spacer.set_meta("stagger_spacer", true)
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	spacer.focus_mode = Control.FOCUS_NONE
-	spacer.custom_minimum_size = _get_stagger_spacer_size()
-	return spacer
-
-## Half a cell minus the separation the flow inserts after the spacer, so the
-## odd row's first card lands exactly half a stride to the right.
-func _get_stagger_spacer_size() -> Vector2:
-	var w = maxf(1.0, (card_size.x - grid_separation) / 2.0)
-	return Vector2(w, card_size.y)
-
-func _add_stagger_spacer(flow_index: int = -1) -> void:
-	if not _flow_container:
-		return
-	var spacer = _make_stagger_spacer()
-	_flow_container.add_child(spacer)
-	if flow_index >= 0:
-		_flow_container.move_child(spacer, flow_index)
-
-## True when idx is the first item of an odd (offset) row.
-func _is_stagger_row_opener(idx: int) -> bool:
-	if not _is_staggered_active() or idx < 0:
-		return false
-	var line := _get_stagger_line_for_index(idx)
-	return line % 2 == 1 and idx == _get_stagger_first_index_for_line(line)
-
-## Rebuilds spacer placement from scratch after a layout recalc. Zoom, resize,
-## and orientation changes move every page boundary at once, so incremental
-## spacer maintenance cannot keep up; this clears all spacers and re-inserts
-## them wherever consecutive cards cross a boundary under the CURRENT page
-## composition. Cheap (a handful of plain Controls) and idempotent.
-func _reconcile_page_spacers() -> void:
-	if not _flow_container:
-		return
-	_clear_page_spacers()
-	var paginate := _is_pagination_active() and _active_cards.size() >= 2
-	var stagger := _is_staggered_active() and not _active_cards.is_empty()
-	if not paginate and not stagger:
-		return
-	# Flow children are now exactly _active_cards in order; walk the run and
-	# insert spacers at page boundaries and odd-row openers (stagger). When a
-	# card opens both (tiny pages), the page spacer comes FIRST: it owns a
-	# whole line, and the stagger spacer must stay attached to its row's cards.
-	var flow_pos := 0
-	for i in range(_active_cards.size()):
-		var idx: int = _active_cards[i].get_meta("virtual_index", -1)
-		if i > 0 and paginate:
-			var prev_idx: int = _active_cards[i - 1].get_meta("virtual_index", -1)
-			if prev_idx >= 0 and idx >= 0 and _get_page_for_index(idx) != _get_page_for_index(prev_idx):
-				_add_page_spacer(flow_pos)
-				flow_pos += 1
-		if idx >= 0 and stagger and _is_stagger_row_opener(idx):
-			_add_stagger_spacer(flow_pos)
-			flow_pos += 1
-		flow_pos += 1
+# Spacer lifecycle (page + stagger) lives in GridSpacerManager (_spacers);
+# boundary math lives in GridGeometry.
 
 ## Compute the exact snap ratio for a given number of items per line.
 func _calculate_snapped_ratio(desired_ratio: float) -> float:
@@ -1880,7 +1575,7 @@ func _recalculate_layout():
 
 	# Save focus state before layout recalculation so we can restore it after
 	# cards are recycled and recreated.
-	var saved_focus_index: int = _get_focused_virtual_index()
+	var saved_focus_index: int = _focus.focused_virtual_index()
 
 	# Resolve the scroll anchor for this recalc. Prefer the snapshot taken by
 	# _set_grid_n_silent BEFORE items-per-line changed (zoom path); otherwise
@@ -2130,16 +1825,16 @@ func _recalculate_layout():
 				card._update_media_panel_size(false)
 
 	_finish_recalculate()
-	_update_visual_draw_order()
+	_visual_sync.update_draw_order()
 	_ensure_pool_capacity()
 	# Rebuild spacer placement for the new page composition, then push the snap
 	# period/offset to the scroll container and re-align the scroll to a page
 	# target so the view never rests mid-gap after zoom/resize/orientation changes.
-	_reconcile_page_spacers()
+	_spacers.reconcile()
 	_update_page_snap_state()
 	# Geometry/spacers changed: reveal after the sort commits new positions
 	# (the reveal runs in _on_flow_sorted, post-sort, at committed offsets).
-	_request_visual_reveal()
+	_visual_sync.request_reveal()
 
 	# Restore focus to the card that was focused before layout recalculation.
 	# The anchor restore above already placed it in view, so this must NOT
@@ -2147,7 +1842,7 @@ func _recalculate_layout():
 	# the stale scrollbar range mid-frame, which could strand the target
 	# offscreen and lose focus entirely on zoom-in).
 	if saved_focus_index >= 0 and saved_focus_index < _source_total_items:
-		call_deferred("_restore_focus_only", saved_focus_index)
+		_focus.restore_focus_only.call_deferred(saved_focus_index)
 
 func _get_items_per_line() -> int:
 	if not _scroll_container:
@@ -2268,17 +1963,8 @@ func _setup_ui():
 	_scroll_container.vertical_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
 	_scroll_container.horizontal_scroll_mode = ScrollContainer.ScrollMode.SCROLL_MODE_SHOW_NEVER
 
-	_visual_layer = Control.new()
-	_visual_layer.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_visual_layer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_visual_layer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_visual_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_visual_layer.clip_contents = false
-	_visual_layer.z_index = -1
-	_visual_layer.top_level = true
-	add_child(_visual_layer)
-	_visual_layer.position = Vector2.ZERO
-	_visual_layer.size = get_viewport_rect().size
+	# The visual sync module creates its top-level layer in its own _ready.
+	add_child(_visual_sync)
 
 	add_child(_scroll_container)
 
@@ -2286,7 +1972,7 @@ func _setup_ui():
 	_scroll_container.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 	_scroll_container.scroll_value_changed.connect(_on_scroll_value_changed)
-	_scroll_container.scroll_completed.connect(_on_scroll_completed)
+	_scroll_container.scroll_completed.connect(_visual_sync.on_scroll_completed)
 	_scroll_container.scroll_target_provider = _on_follow_focus_target_request
 	_scroll_container.page_step_provider = _on_page_step_request
 
@@ -2324,12 +2010,17 @@ func _setup_ui():
 	if not _center_container.resized.is_connected(_on_center_sorted):
 		_center_container.resized.connect(_on_center_sorted)
 
+	# Debug/audit tooling lives in a child overlay so its RS signal connections
+	# and debug nodes release with it.
+	_debug_overlay = GridDebugOverlay.new()
+	_debug_overlay.setup(self)
+	add_child(_debug_overlay)
 	if debug_mode:
-		_setup_debug_camera()
+		_update_debug_mode()
 
 func get_visual_layer_rid() -> RID:
-	if _visual_layer and _visual_layer.is_inside_tree():
-		return _visual_layer.get_canvas_item()
+	if _visual_sync.layer and _visual_sync.layer.is_inside_tree():
+		return _visual_sync.layer.get_canvas_item()
 	return RID()
 
 func _get_base_dimensions() -> Vector2:
@@ -2405,7 +2096,7 @@ func setup(card_scene_resource: PackedScene, total_items: int, initial_target_ra
 	if _has_valid_available_size():
 		_recalculate_layout()
 	if _active_cards.size() == 0:
-		_initial_load()
+		_window.initial_load()
 
 func _instantiate_card_pool():
 	var start_us := Time.get_ticks_usec()
@@ -2417,13 +2108,8 @@ func _instantiate_card_pool():
 	# dozens of unused cards during startup, especially on smaller libraries.
 	var available = _get_available_size()
 	if _has_valid_available_size():
-		_max_pool_size = _compute_pool_size(available)
-		if DEBUG_LOG: print("[Grid] _instantiate_card_pool dynamic max_pool_size=", _max_pool_size, " available=", available, " total_items=", _total_items)
-
-	for card in _card_pool:
-		if is_instance_valid(card):
-			card.queue_free()
-	_card_pool.clear()
+		_pool.max_pool_size = _compute_pool_size(available)
+		if DEBUG_LOG: print("[Grid] _instantiate_card_pool dynamic max_pool_size=", _pool.max_pool_size, " available=", available, " total_items=", _total_items)
 
 	# Instantiate only the first visible screen synchronously so startup paints
 	# sooner; the rest of the pool is topped up a few per frame by
@@ -2431,52 +2117,20 @@ func _instantiate_card_pool():
 	# Hidden views have no valid size: skip both the seed and the pending
 	# growth — they build their pool under the transition cover on first show
 	# via _ensure_pool_capacity.
-	var sync_count = POOL_STARTUP_SEED if _has_valid_available_size() else 0
+	var sync_count = GridCardPool.STARTUP_SEED if _has_valid_available_size() else 0
 	if _last_computed_visible_count > 0:
-		sync_count = mini(_max_pool_size, _last_computed_visible_count)
-	sync_count = mini(sync_count, _max_pool_size)
-	for i in range(sync_count):
-		var card = _card_scene.instantiate()
-		card.visible = false
-		card.set_meta("pooled", true)
-		card.set_meta("virtual_index", -1)
-		_card_pool.append(card)
-	_pending_pool_growth = maxi(0, _max_pool_size - sync_count) if _has_valid_available_size() else 0
+		sync_count = mini(_pool.max_pool_size, _last_computed_visible_count)
+	_pool.instantiate_seed(sync_count, _has_valid_available_size())
 
-	# Cache card capability flags from the first instantiated card so we can
-	# skip has_method() / string lookups in hot loops. Probed once per card
-	# scene across ALL grids — previously every grid paid a full card
-	# instantiate + queue_free just for these flags.
-	var flags: Dictionary
-	var scene_key := _card_scene.resource_path
-	if _capability_probe_cache.has(scene_key):
-		flags = _capability_probe_cache[scene_key]
-	else:
-		var probe = _card_scene.instantiate()
-		probe.queue_free()
-		flags = {
-			"focus_scale_enabled": "focus_scale_enabled" in probe,
-			"set_focus_scale": probe.has_method("set_focus_scale"),
-			"set_game_with_priority": probe.has_method("set_game_with_priority"),
-			"refresh_settings": probe.has_method("refresh_settings"),
-			"reset": probe.has_method("reset"),
-			"game_prop": "game" in probe,
-			"update_media_panel_size": probe.has_method("_update_media_panel_size"),
-			"update_display": probe.has_method("update_display"),
-			"set_image_priority": probe.has_method("set_image_priority"),
-			"set_content_alignment": probe.has_method("set_content_alignment"),
-			"set_media_aspect_ratio": probe.has_method("set_media_aspect_ratio"),
-			"refresh_effects": probe.has_method("refresh_effects"),
-			"update_card_state_from_settings": probe.has_method("_update_card_state_from_settings"),
-			"sync_visual_transform": probe.has_method("sync_visual_transform"),
-			"sync_visual_offset": probe.has_method("sync_visual_transform_with_offset"),
-			"mark_visuals_position_synced": probe.has_method("_mark_visuals_position_synced"),
-			"unmark_visuals_position_synced": probe.has_method("_unmark_visuals_position_synced"),
-			"show_loading_skeleton": probe.has_method("show_loading_skeleton"),
-			"begin_bulk_layout": probe.has_method("begin_bulk_layout"),
-			"end_bulk_layout": probe.has_method("end_bulk_layout"),
-		}
-		_capability_probe_cache[scene_key] = flags
+	# Cache card capability flags from the probe so we can skip has_method() /
+	# string lookups in hot loops (probed once per card scene across all grids).
+	_apply_capability_flags(GridCardPool.probe_capabilities(_card_scene))
+	if debug_mode:
+		if DEBUG_LOG: print("[Grid] _instantiate_card_pool: pool_size=", _pool.max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
+
+## Assigns the probed capability flags onto the read-cache vars consumed by
+## the hot paths (visual setup, refresh, recycle).
+func _apply_capability_flags(flags: Dictionary) -> void:
 	_card_has_focus_scale_enabled = flags["focus_scale_enabled"]
 	_card_has_set_focus_scale = flags["set_focus_scale"]
 	_card_has_set_game_with_priority = flags["set_game_with_priority"]
@@ -2497,19 +2151,12 @@ func _instantiate_card_pool():
 	_card_has_show_loading_skeleton = flags["show_loading_skeleton"]
 	_card_has_begin_bulk_layout = flags["begin_bulk_layout"]
 	_card_has_end_bulk_layout = flags["end_bulk_layout"]
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _instantiate_card_pool: pool_size=", _max_pool_size, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
-var _pending_pool_growth: int = 0
 var _last_computed_visible_count: int = 0
-const POOL_GROWTH_PER_FRAME: int = 4
-## Cards built synchronously when no layout has computed a visible count yet
-## (hidden views, pre-settle). The pool tops up via _process_pool_growth.
-const POOL_STARTUP_SEED: int = 8
 
 ## Recomputes the required pool size for the current layout. Grows _max_pool_size
 ## immediately (so buffer math sees the new cap) and queues frame-spread card
-## instantiation; shrinking is handled passively by _add_to_pool overflow.
+## instantiation; shrinking is handled passively by pool-return overflow.
 func _ensure_pool_capacity() -> void:
 	if not _card_scene or _total_items <= 0 or not _scroll_container:
 		return
@@ -2518,24 +2165,13 @@ func _ensure_pool_capacity() -> void:
 	var required = _compute_pool_size(_get_available_size())
 	if required <= 0:
 		return
-	if required > _max_pool_size:
-		var live_cards = _card_pool.size() + _active_cards.size()
-		_pending_pool_growth = max(_pending_pool_growth, required - live_cards)
-	_max_pool_size = required
+	if required > _pool.max_pool_size:
+		var live_cards = _pool.cards.size() + _active_cards.size()
+		_pool.pending_growth = maxi(_pool.pending_growth, required - live_cards)
+	_pool.max_pool_size = required
 
 func _process_pool_growth() -> void:
-	if _pending_pool_growth <= 0 or not _card_scene:
-		return
-	var count = mini(POOL_GROWTH_PER_FRAME, _pending_pool_growth)
-	for i in range(count):
-		if not WarmupBudget.try_spend(WarmupBudget.COST_CARD_INSTANTIATE_US, "card_pool"):
-			return
-		var card = _card_scene.instantiate()
-		card.visible = false
-		card.set_meta("pooled", true)
-		card.set_meta("virtual_index", -1)
-		_card_pool.append(card)
-		_pending_pool_growth -= 1
+	_pool.process_growth()
 
 func _compute_pool_size(available: Vector2) -> int:
 	if _total_items <= 0 or not _scroll_container:
@@ -2719,41 +2355,6 @@ func _update_layout():
 			if _center_container:
 				_center_container.custom_minimum_size.y = card_size.y
 
-func _initial_load():
-	var start_us := Time.get_ticks_usec()
-	if startup_layout_suppressed:
-		return
-	if _active_cards.size() > 0:
-		return
-	if _total_items <= 0:
-		return
-	var available := _get_available_size()
-	if available.x <= 0 or available.y <= 0:
-		return
-
-	var items_per_line = _get_items_per_line()
-	var stride = _get_normal_stride()
-	var viewport_size = available.y if vertical else available.x
-	var scroll_pos := 0
-	if _scroll_container:
-		scroll_pos = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
-
-	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
-
-	for i in range(_buffer_target_start, _buffer_target_end):
-		_add_card_at_end(i)
-
-	_virtual_start = _buffer_target_start
-	_virtual_end = _buffer_target_end - 1
-
-	_update_margin()
-	_update_visual_draw_order()
-	_request_missing_data()
-	_update_card_priorities(_visible_start_idx, _visible_end_idx)
-	_flush_pending_visual_setup_for_visible_zone()
-	# Reveal once the first sort commits positions.
-	_request_visual_reveal()
-	if DEBUG_LOG: print("[Grid] _initial_load: card_count=", _buffer_target_end - _buffer_target_start, " elapsed_us=", Time.get_ticks_usec() - start_us)
 
 func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
 	"""Compute visible range and buffer target range for the current scroll position.
@@ -2801,263 +2402,19 @@ func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, st
 	if _buffer_target_end < _total_items and (_total_items - _buffer_target_end) < items_per_line:
 		_buffer_target_end = _total_items
 
+
+
+## The scroll pass (SSC scroll_value_changed handler + force-pass callers).
+## Implementation in GridWindowManager — it owns the window the pass mutates.
 func _on_scroll_value_changed(value: float, allow_recycle: bool = true, force_recycle: bool = false):
-	if _is_processing_scroll:
-		_grid_trace_stuck_count += 1
-		if trace_verbose and (_grid_trace_stuck_count <= 3 or _grid_trace_stuck_count % 100 == 0):
-			if DEBUG_LOG: print("[GridTrace] HANDLER BLOCKED (_is_processing_scroll stuck): value=", value, " count=", _grid_trace_stuck_count, " t=", Time.get_ticks_msec())
-		return
-	_grid_trace_stuck_count = 0
-	_is_processing_scroll = true
-	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] pass: value=", value, " recycle=", allow_recycle, " force=", force_recycle, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
-
-	if _total_items == 0 or not _scroll_container:
-		_is_processing_scroll = false
-		return
-
-	var scroll_pos = int(value)
-	var items_per_line = _get_items_per_line()
-	var stride = _get_normal_stride()
-
-	_update_cover_dl_suppression()
-
-	var available := _get_available_size()
-	var viewport_size = available.y if vertical else available.x
-	_compute_visible_and_buffer_ranges(scroll_pos, items_per_line, stride, viewport_size)
-
-	if not force_recycle and _active_cards.size() > 0 and _buffer_target_start == _last_pass_buffer_start and _buffer_target_end == _last_pass_buffer_end:
-		# Light path: the buffer window didn't move, so no recycle/add, margin,
-		# or data-request work is needed — just keep visuals and focus current.
-		_prefetch_scroll_lead(stride, items_per_line)
-		_flush_pending_effect_rebuilds_for_visible_zone()
-		_flush_pending_visual_setup_for_visible_zone()
-		# No stamp here: pass-end runs mid-cascade (margin/center sorts queued
-		# by this very pass may still be pending), and any stamp is superseded
-		# by _on_frame_pre_draw before render anyway. Mid-cascade stamps were a
-		# mixed-generation flash source.
-		visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
-		_try_apply_pending_focus()
-		if trace_verbose:
-			if DEBUG_LOG: print("[GridTrace] pass-end (light): scroll=", scroll_pos, " active=", _active_cards.size(), " buffer=", _buffer_target_start, "-", _buffer_target_end, " t=", Time.get_ticks_msec())
-		_is_processing_scroll = false
-		return
-
-	var structure_changed := _stage_recycle_and_fill(allow_recycle)
-	_last_pass_buffer_start = _buffer_target_start
-	_last_pass_buffer_end = _buffer_target_end
-
-	if _active_cards.size() > 0:
-		_virtual_start = _active_cards[0].get_meta("virtual_index", 0)
-		_virtual_end = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-
-	_request_missing_data()
-	_prefetch_scroll_lead(stride, items_per_line)
-
-	var should_update_margin = true
-	if _active_cards.size() > 0:
-		var current_first = _active_cards[0].get_meta("virtual_index", 0)
-		var current_last = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-		should_update_margin = (current_first != _last_margin_virtual_start) or (current_last != _last_margin_virtual_end)
-	if should_update_margin:
-		_update_margin()
-	_check_preload_needed()
-	_update_card_priorities(_visible_start_idx, _visible_end_idx)
-	
-	# Scrolling may bring queued effect-rebuild or visual-setup cards into the
-	# visible zone; finish them immediately so the user doesn't see blanks.
-	_flush_pending_effect_rebuilds_for_visible_zone()
-	_flush_pending_visual_setup_for_visible_zone()
-	# No pass-end stamp: pre-draw re-stamps post-cascade every changed frame.
-	# Cards added/recycled this pass stay hidden until the FlowContainer sort
-	# commits their positions; _on_flow_sorted reveals them exactly once,
-	# post-sort, at the deterministic offset above.
-	if structure_changed:
-		_request_visual_reveal()
-		call_deferred("_audit_visual_holes")
-	call_deferred("_audit_render_state", "post-pass")
-	_update_visual_draw_order()
-	_audit_structure("pass-end")
-
-	visible_range_changed.emit(_visible_start_idx, _visible_end_idx, _total_items)
-
-	# If a programmatic focus is waiting for this scroll rebuild, try to land it now.
-	_try_apply_pending_focus()
-
-	if debug_mode:
-		_update_debug_visuals(_visible_start_idx, _visible_end_idx)
-
-	if trace_verbose:
-		var gt_first: int = _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
-		var gt_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
-		var gt_expected_pos := -float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
-		var gt_actual_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
-		if DEBUG_LOG: print("[GridTrace] pass-end: scroll=", scroll_pos, " active=", _active_cards.size(), " window=", gt_first, "-", gt_last, " buffer=", _buffer_target_start, "-", _buffer_target_end, " pending_setup=", _pending_visual_setup.size(), " margin_pos=", gt_actual_pos, " expected_pos=", gt_expected_pos, " margin_delta=", gt_actual_pos - gt_expected_pos, " t=", Time.get_ticks_msec())
-
-	_is_processing_scroll = false
-
-func _stage_recycle_and_fill(allow_recycle: bool) -> bool:
-	"""Recycle cards outside the buffer window and add missing ones. Returns
-	true when the active set changed. Isolated so a failure here can't skip
-	margins, data requests, or visual sync downstream of the scroll pass."""
-	var structure_changed := false
-	# Teleport: the new buffer window doesn't overlap the active window at all
-	# (far jump / focus restore). Instead of recycle-all + re-add — which hides
-	# every card and pops them back after the sort (a full-grid flicker) —
-	# re-assign the existing cards to their new indices in place. Survivors
-	# never leave the flow and never get hidden; the sort repositions them.
-	if _active_cards.size() > 0:
-		var active_first: int = _active_cards[0].get_meta("virtual_index", -1)
-		var active_last: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
-		if active_last < _buffer_target_start or active_first >= _buffer_target_end:
-			return _reassign_active_cards_to_window()
-
-	if allow_recycle:
-		var recycle_top_count = 0
-		for card in _active_cards:
-			if not is_instance_valid(card):
-				continue
-			var idx = card.get_meta("virtual_index", -1)
-			if idx < _buffer_target_start:
-				recycle_top_count += 1
-			else:
-				break
-		if recycle_top_count > 0:
-			_batch_recycle_from_start(recycle_top_count)
-			structure_changed = true
-
-		while _active_cards.size() > 0:
-			var last_card = _active_cards[_active_cards.size() - 1]
-			if not is_instance_valid(last_card):
-				_active_cards.remove_at(_active_cards.size() - 1)
-				continue
-			var last_idx = last_card.get_meta("virtual_index", -1)
-
-			if last_idx >= _buffer_target_end:
-				_recycle_card_at_index(_active_cards.size() - 1)
-				structure_changed = true
-			else:
-				break
-
-	# If buffer was fully recycled (e.g. scrolled to a completely different range),
-	# populate the target range from scratch
-	if _active_cards.size() == 0:
-		# Full jump (e.g. random-game teleport): in-flight requests for the old
-		# window are useless now. Prune them so stale DB results are ignored and
-		# queued DB tasks can skip themselves via is_load_pending().
-		_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
-		# Likewise, every queued low-priority image task is directional prefetch
-		# for the old window; draining them lets the workers decode the new
-		# window's covers at full throughput. High-priority loads (hero art,
-		# details sheets) are untouched.
-		MemorySubManager.clear_pending_low_priority_image_tasks()
-		# Same story for the download queue: queued low-priority requests are
-		# covers for the window we just left. Drop them (DROPPED, no TTL) so
-		# they can't crowd out the new window and trigger queue-full drops.
-		# Bulk work (sync prefetch) and high-priority requests are spared.
-		if SystemManager.download:
-			SystemManager.download.clear_pending_low_priority_image_downloads()
-		_pending_buffer_expansion = false
-		structure_changed = true
-		for i in range(_buffer_target_start, _buffer_target_end):
-			_add_card_at_end(i)
-	elif _active_cards.size() > 0:
-		var back_card = _active_cards[_active_cards.size() - 1]
-		if not is_instance_valid(back_card):
-			_active_cards.remove_at(_active_cards.size() - 1)
-		else:
-			var current_last = back_card.get_meta("virtual_index", 0)
-			while current_last < _buffer_target_end - 1 and current_last < _total_items - 1:
-				var size_before := _active_cards.size()
-				_add_card_at_end(current_last + 1)
-				structure_changed = true
-				# Freeze guard: if the add failed to grow the active set (pool
-				# exhaustion or an acquire failure), a platform-switch shrink
-				# would spin here forever. Break loudly instead of hanging.
-				if _active_cards.size() <= size_before:
-					push_error("[Grid] _stage_recycle_and_fill: add failed to grow active set (size=%d, target_end=%d) — breaking to avoid freeze" % [size_before, _buffer_target_end])
-					break
-				back_card = _active_cards[_active_cards.size() - 1]
-				if not is_instance_valid(back_card):
-					break
-				current_last = back_card.get_meta("virtual_index", 0)
-
-		if _active_cards.size() > 0 and is_instance_valid(_active_cards[0]):
-			var current_first = _active_cards[0].get_meta("virtual_index", 0)
-			if current_first > _buffer_target_start and current_first > 0:
-				var add_start_count = mini(current_first - _buffer_target_start, current_first)
-				_batch_add_at_start(_buffer_target_start, add_start_count)
-				structure_changed = true
-
-	return structure_changed
-
-## Teleport rebuild: re-index the active cards in place to cover the new
-## buffer window. Unlike the recycle-all path, survivors keep their flow slot
-## and stay visible (marked); only the tail trim pools cards, and the head
-## grows from the pool. The sort then repositions everyone in one pass, so a
-## far jump never produces a hide-all/reveal-all pop.
-func _reassign_active_cards_to_window() -> bool:
-	var structure_changed := false
-	var target_count: int = _buffer_target_end - _buffer_target_start
-	# Same queue pruning rationale as the full-rebuild path: requests for the
-	# old window are useless now and would crowd the new window's loads.
-	_prune_pending_loads_outside(_buffer_target_start, _buffer_target_end)
-	MemorySubManager.clear_pending_low_priority_image_tasks()
-	if SystemManager.download:
-		SystemManager.download.clear_pending_low_priority_image_downloads()
-	_pending_buffer_expansion = false
-
-	# Trim excess from the end: keeps flow child order identical to index
-	# order (both old and new runs are contiguous and ascending).
-	while _active_cards.size() > target_count:
-		_recycle_card_at_index(_active_cards.size() - 1)
-		structure_changed = true
-
-	# Re-index survivors. Data for the new index is applied by the pending
-	# visual-setup flush later in this same scroll pass, so a stale cover
-	# never reaches the screen.
-	for i in range(_active_cards.size()):
-		var card = _active_cards[i]
-		if not is_instance_valid(card):
-			continue
-		var new_idx: int = _buffer_target_start + i
-		var old_idx: int = card.get_meta("virtual_index", -1)
-		if old_idx == new_idx:
-			continue
-		if old_idx >= 0:
-			_active_cards_by_index.erase(old_idx)
-			_pending_visual_setup.erase(old_idx)
-			if _pending_effect_rebuild_set.has(card):
-				_pending_effect_rebuilds.erase(card)
-				_pending_effect_rebuild_set.erase(card)
-		card.set_meta("virtual_index", new_idx)
-		_active_cards_by_index[new_idx] = card
-		card.set_meta("needs_visual_setup", true)
-		_pending_visual_setup[new_idx] = card
-		structure_changed = true
-
-	# Grow the tail from the pool if the new window is larger.
-	while _active_cards.size() < target_count:
-		var grow_before := _active_cards.size()
-		_add_card_at_end(_buffer_target_start + _active_cards.size())
-		structure_changed = true
-		# Freeze guard: a failed add must never spin this loop forever.
-		if _active_cards.size() <= grow_before:
-			push_error("[Grid] _reassign_active_cards_to_window: add failed to grow active set (size=%d, target=%d) — breaking to avoid freeze" % [grow_before, target_count])
-			break
-
-	# Page/stagger spacers were laid out for the OLD index run; rebuild them
-	# for the new one before the sort places everything.
-	if _is_pagination_active() or _is_staggered_active():
-		_reconcile_page_spacers()
-	return structure_changed
+	_window.on_scroll_value_changed(value, allow_recycle, force_recycle)
 
 func _reset_transient_scroll_state(reason: String) -> void:
 	"""Single reset point for transient scroll/jump state. Called from every
 	entry point that moves the view programmatically so a stale velocity or
 	pending expansion from a previous operation can never fight the new one."""
 	# (Velocity needs no reset here: write_immediate resets the SSC baseline.)
-	_pending_buffer_expansion = false
+	_window.pending_buffer_expansion = false
 	_deferred_data_indices.clear()
 	SmoothScrollContainer._strace("reset-transient reason=" + reason)
 	if trace_verbose:
@@ -3113,48 +2470,6 @@ func _retry_visible_placeholder_covers() -> void:
 		if card.has_method("retry_cover_if_placeholder"):
 			card.retry_cover_if_placeholder()
 
-func _recycle_card_at_index(index: int):
-	if index < 0 or index >= _active_cards.size():
-		return
-
-	var card = _active_cards[index]
-	_release_focus_if_inside(card)
-	_active_cards.remove_at(index)
-	var vidx = card.get_meta("virtual_index", -1)
-	if vidx >= 0:
-		_active_cards_by_index.erase(vidx)
-		_pending_visual_setup.erase(vidx)
-
-	if is_instance_valid(card):
-		_disconnect_card_signals(card)
-		card.visible = false
-		card.set_meta("pooled", true)
-		card.set_meta("virtual_index", -1)
-
-		# Remove from pending effect rebuild queue so recycled cards don't
-		# rebuild after they're returned to the pool.
-		if _pending_effect_rebuild_set.has(card):
-			_pending_effect_rebuilds.erase(card)
-			_pending_effect_rebuild_set.erase(card)
-
-		card.remove_meta("needs_visual_setup")
-
-		if _card_has_reset:
-			card.reset(true)
-		elif _card_has_game_prop:
-			card.game = null
-
-		if card.get_parent() == _flow_container:
-			_flow_container.remove_child(card)
-
-		_add_to_pool(card)
-		_prune_edge_spacers()
-
-func _add_to_pool(card: Control) -> void:
-	if _card_pool.size() >= _max_pool_size:
-		card.queue_free()
-	else:
-		_card_pool.append(card)
 
 
 func _configure_card_size_flags(card: Control) -> void:
@@ -3208,497 +2523,47 @@ func _configure_card_size_flags(card: Control) -> void:
 	if _card_has_end_bulk_layout:
 		card.end_bulk_layout()
 
-func _configure_card_visual_layer(card: Control) -> void:
-	if card.has_method("set_visual_layer"):
-		card.set_visual_layer(_visual_layer)
-
-func _sync_card_visual_transforms() -> void:
-	if not _card_has_sync_visual_transform:
-		return
-	for card in _active_cards:
-		card.sync_visual_transform()
-
-## TEMP DIAGNOSTIC (remove after flicker hunt): env-gated per-frame dump of the
-## window bookkeeping that feeds both the content layout and the visual stamps.
-## Enabled with KYODAI_FRAME_PROBE=1. One row per drawn frame so a one-frame
-## spike in any shared input (window first index, margins, stride, flow width)
-## shows up as a single anomalous row.
-var _frame_probe_enabled: bool = OS.get_environment("KYODAI_FRAME_PROBE") == "1"
-
 func _frame_probe_log() -> void:
-	if not _scroll_container:
-		return
-	var first_idx := -1
-	var last_idx := -1
-	if _active_cards.size() > 0:
-		if is_instance_valid(_active_cards[0]):
-			first_idx = _active_cards[0].get_meta("virtual_index", -1)
-		if is_instance_valid(_active_cards[_active_cards.size() - 1]):
-			last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
-	var ref_pos := Vector2.INF
-	var ref_glob := Vector2.INF
-	var ref_min := Vector2.INF
-	var ref_card: Control = _active_cards_by_index.get(first_idx + 2, null) if first_idx >= 0 else null
-	if ref_card and is_instance_valid(ref_card):
-		ref_pos = ref_card.position
-		ref_glob = ref_card.global_position
-		ref_min = ref_card.custom_minimum_size
-	print("[FrameProbe] f=", Engine.get_process_frames(),
-		" sf=", snappedf(_scroll_container.get_scroll_float(), 0.01),
-		" si=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal,
-		" buf=", _buffer_target_start, "-", _buffer_target_end,
-		" act=", first_idx, "-", last_idx, " n=", _active_cards.size(),
-		" vis=", _visible_start_idx, "-", _visible_end_idx,
-		" ml=", _last_margin_left, " mr=", _last_margin_right,
-		" mt=", _last_margin_top, " mb=", _last_margin_bottom,
-		" fw=", snappedf(_last_flow_width, 0.01), " fh=", snappedf(_last_flow_height, 0.01),
-		" stride=", snappedf(_get_normal_stride(), 0.01),
-		" bl=", _current_buffer_lines,
-		" tot=", _total_items, " src=", _source_total_items,
-		" ctr=", _center_container.position if _center_container else Vector2.INF,
-		" flw=", _flow_container.position if _flow_container else Vector2.INF,
-		" ref=", ref_pos, " refg=", ref_glob, " refmin=", ref_min,
-		" fsz=", _flow_container.size if _flow_container else Vector2.INF,
-		" fmin=", _flow_container.get_combined_minimum_size() if _flow_container else Vector2.INF,
-		" fcnt=", _flow_container.get_child_count() if _flow_container else -1,
-		" csz=", _center_container.size if _center_container else Vector2.INF,
-		" msz=", _margin_container.size if _margin_container else Vector2.INF,
-		" ssz=", _scroll_container.size if _scroll_container else Vector2.INF,
-		" g=", _layout_generation)
-
-func _on_scroll_completed() -> void:
-	"""Stamp all cards against the final rest position. The terminal write of
-	a tween/chase can land without any further drawn frame (idle tree, nothing
-	dirty), which would leave the pre-draw stamps frozen at the last motion
-	frame's float position. A pure scroll landing queues no sort cascade
-	(card positions are scroll-independent; scroll enters the offset formula
-	directly), so stamping here is immediately correct. Reveal marking stays
-	pre-draw gated."""
-	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
-		return
-	if _active_cards.size() == 0:
-		return
-	_last_stamp_scroll = _scroll_container.get_scroll_float()
-	_last_stamp_margin = _last_margin_top if vertical else _last_margin_left
-	_last_stamp_first = _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1
-	_last_stamp_count = _active_cards.size()
-	_last_stamp_generation = _layout_generation
-	for card in _active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
-
-func _on_frame_pre_draw() -> void:
-	if _frame_probe_enabled:
-		_frame_probe_log()
-	# Stamp visual offsets at the last moment before render, from pure
-	# container arithmetic. At pre-draw time the scroll value, margin cache and
-	# window membership are all final for the frame, so the stamps are
-	# render-fresh by construction — independent of sort/flush/deferred order.
-	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
-		return
-	if _active_cards.size() == 0:
-		return
-	# Skip the stamp loop entirely when nothing that feeds the offset math
-	# changed since the last stamp (idle frames far outnumber scroll frames).
-	# Track the FLOAT motion model, not the int scrollbar: during tween/chase
-	# tails the int can sit still for frames while the float keeps gliding —
-	# skipping on the int would freeze the visual layer mid-glide.
-	var scroll_now: float = _scroll_container.get_scroll_float()
-	var margin_now: int = _last_margin_top if vertical else _last_margin_left
-	var first_now: int = _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1
-	if not _visual_reveal_pending and scroll_now == _last_stamp_scroll and margin_now == _last_stamp_margin and first_now == _last_stamp_first and _active_cards.size() == _last_stamp_count and _layout_generation == _last_stamp_generation:
-		return
-	# A pending reveal means a sort cascade is (or was) in flight. Pre-draw runs
-	# after the ENTIRE cascade (margin -> center -> flow), so positions and the
-	# chain are final here — this is the only stamp that may also MARK cards
-	# visible: marking from mid-cascade states (e.g. _on_flow_sorted) flashed a
-	# whole-strip offset by the margin delta for a frame.
-	var do_reveal: bool = _visual_reveal_pending
-	_visual_reveal_pending = false
-	_visual_reveal_requested_frame = -1
-	_last_stamp_scroll = scroll_now
-	_last_stamp_margin = margin_now
-	_last_stamp_first = first_now
-	_last_stamp_count = _active_cards.size()
-	_last_stamp_generation = _layout_generation
-	for card in _active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		var expected_offset := _compute_visual_layer_offset(card)
-		card.sync_visual_transform_with_offset(expected_offset)
-		if do_reveal and _card_has_mark_visuals_position_synced:
-			card._mark_visuals_position_synced()
-
-func _on_frame_post_draw_audit() -> void:
-	# Render-time truth check: after the frame was drawn, the stamped origins
-	# must equal the arithmetic offsets computed from the final frame state.
-	if not debug_mode:
-		return
-	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
-		return
-	if _active_cards.size() == 0:
-		return
-	var worst := 0.0
-	var worst_idx := -1
-	var worst_stamp := Vector2.ZERO
-	var worst_exp := Vector2.ZERO
-	for card in _active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		var lt_v = card.get("_last_visual_transform")
-		if not lt_v is Transform2D:
-			continue
-		var stamp: Vector2 = lt_v.origin
-		var exp: Vector2 = _compute_visual_layer_offset(card)
-		var cs_v = card.get("content_scale")
-		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
-		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
-			exp += pivot - cs * pivot
-		var d := stamp.distance_to(exp)
-		if d > worst:
-			worst = d
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_stamp = stamp
-			worst_exp = exp
-	if worst > 2.0:
-		# De-spam: report a card only when its delta changes materially; a static
-		# layout-vs-model constant is printed once, oscillation prints per change.
-		var delta_key := int(round(worst * 2.0))
-		var last_delta: int = _drawaudit_last_deltas.get(worst_idx, -1000)
-		if delta_key != last_delta:
-			_drawaudit_last_deltas[worst_idx] = delta_key
-			if DEBUG_LOG: print("[DrawAudit] MISMATCH: worst=", worst, " idx=", worst_idx, " stamp=", worst_stamp, " exp=", worst_exp, " scroll=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal, " margin=", _last_margin_top if vertical else _last_margin_left, " first=", _active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_active_cards[0]) else -1, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
-
-var _drawaudit_last_deltas: Dictionary = {}
-
-## Env-gated flicker detector (KYODAI_FLICKER_WATCH=1). Unlike the debug-mode
-## DrawAudit (stamp vs the offset FORMULA — self-consistent by construction),
-## this compares each visible card's stamped visual origin against its REAL
-## on-screen position (global_position minus the layer origin). That is the
-## ground truth the user sees: any frame where the visual layer is detached
-## from the actual content is a flicker, regardless of which inputs fed it.
-## Threshold 2px absorbs the designed <=0.5px float-glide vs int-content and
-## the focus-scale pivot correction.
-var _flicker_key: int = -1
-var _flicker_announced := false
-
-func _on_frame_post_draw_reality_check() -> void:
-	if not _card_has_sync_visual_offset or not _scroll_container or not _visual_layer:
-		return
-	if not _flicker_announced:
-		_flicker_announced = true
-		print("[FlickerWatch] active on grid=", name, " view=", get_parent().get_parent().get_parent().name if get_parent() and get_parent().get_parent() and get_parent().get_parent().get_parent() else "?")
-	if _active_cards.size() == 0:
-		return
-	var layer_origin := _visual_layer.global_position
-	var worst := 0.0
-	var worst_idx := -1
-	var worst_kind := ""
-	var worst_a := Vector2.ZERO
-	var worst_b := Vector2.ZERO
-	for card in _active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		if card.get("_visuals_position_synced") != true:
-			continue
-		var lt_v = card.get("_last_visual_transform")
-		if not lt_v is Transform2D:
-			continue
-		var stamp: Vector2 = lt_v.origin
-		var real: Vector2 = card.global_position - layer_origin
-		var exp: Vector2 = _compute_visual_layer_offset(card)
-		var cs_v = card.get("content_scale")
-		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
-		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
-			real += pivot - cs * pivot
-			exp += pivot - cs * pivot
-		# (a) visual layer detached from the real content.
-		var d_vis := stamp.distance_to(real)
-		if d_vis > worst:
-			worst = d_vis
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_kind = "VISUAL-vs-CONTENT"
-			worst_a = stamp
-			worst_b = real
-		# (b) content detached from the deterministic expectation (margin/chain
-		# lag): the whole card jumps even though the visual layer tracks it.
-		var d_exp := real.distance_to(exp)
-		if d_exp > worst:
-			worst = d_exp
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_kind = "CONTENT-vs-EXPECTED"
-			worst_a = real
-			worst_b = exp
-		# (c) STALE COVER: the visible card's texture belongs to a different
-		# game than the card currently shows — the classic recycle flash where
-		# the previous game's art lingers for a frame (or the skeleton shows).
-		if card.has_meta("virtual_index"):
-			var game_v = card.get("game")
-			var tex_id: String = card.get("_current_texture_game_id") if card.get("_current_texture_game_id") != null else ""
-			if game_v != null and tex_id != "" and game_v.id != tex_id:
-				var skey := 500000000 + int(card.get_meta("virtual_index", -1))
-				if skey != _flicker_key:
-					_flicker_key = skey
-					print("[FlickerWatch] STALE-COVER: idx=", card.get_meta("virtual_index", -1),
-						" mode=", view_mode,
-						" game=", game_v.id, " (", game_v.title, ")",
-						" texture_for=", tex_id,
-						" needs_setup=", card.has_meta("needs_visual_setup"),
-						" loading=", card.get("_media_loading"),
-						" scroll_float=", _scroll_container.get_scroll_float(),
-						" gen=", _layout_generation,
-						" frame=", Engine.get_process_frames(),
-						" t=", Time.get_ticks_msec())
-			elif game_v != null and card.has_meta("needs_visual_setup"):
-				# Revealed (visible) before its data was applied: skeleton/blank.
-				var rkey := 600000000 + int(card.get_meta("virtual_index", -1))
-				if rkey != _flicker_key:
-					_flicker_key = rkey
-					print("[FlickerWatch] REVEALED-NO-DATA: idx=", card.get_meta("virtual_index", -1),
-						" mode=", view_mode,
-						" game=", game_v.id,
-						" scroll_float=", _scroll_container.get_scroll_float(),
-						" gen=", _layout_generation,
-						" frame=", Engine.get_process_frames(),
-						" t=", Time.get_ticks_msec())
-			# (d) PLACEHOLDER-VISIBLE: data applied but the cover hasn't landed —
-			# the shimmer/blank flash during fast recycling ("images loading in").
-			elif game_v != null:
-				var cur_tex = card.get("_current_texture")
-				var loading_tex = card.get("_loading_texture")
-				var is_loading_state: bool = card.get("_media_loading") if card.get("_media_loading") != null else false
-				if cur_tex != null and loading_tex != null and cur_tex == loading_tex:
-					var pkey := 700000000 + int(card.get_meta("virtual_index", -1))
-					if pkey != _flicker_key:
-						_flicker_key = pkey
-						print("[FlickerWatch] PLACEHOLDER-VISIBLE: idx=", card.get_meta("virtual_index", -1),
-							" mode=", view_mode,
-							" game=", game_v.id,
-							" shimmer=", is_loading_state,
-							" scroll_float=", _scroll_container.get_scroll_float(),
-							" gen=", _layout_generation,
-							" frame=", Engine.get_process_frames(),
-							" t=", Time.get_ticks_msec())
-	if worst > 2.0:
-		var key := int(round(worst * 2.0)) * 100000 + worst_idx
-		if key != _flicker_key:
-			_flicker_key = key
-			var center_pos: Vector2 = _center_container.position if _center_container else Vector2.ZERO
-			var flow_pos: Vector2 = _flow_container.position if _flow_container else Vector2.ZERO
-			print("[FlickerWatch] ", worst_kind, ": worst=", worst,
-				" idx=", worst_idx,
-				" mode=", view_mode,
-				" a=", worst_a,
-				" b=", worst_b,
-				" scroll_float=", _scroll_container.get_scroll_float(),
-				" scroll_int=", _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal,
-				" margin(L/T)=", _last_margin_left, "/", _last_margin_top,
-				" center.pos=", center_pos,
-				" flow.pos=", flow_pos,
-				" card.pos=", _active_cards_by_index.get(worst_idx).position if _active_cards_by_index.get(worst_idx) else Vector2.ZERO,
-				" gen=", _layout_generation,
-				" frame=", Engine.get_process_frames(),
-				" t=", Time.get_ticks_msec())
-
-func _compute_visual_layer_offset(card: Control) -> Vector2:
-	"""Layer-space offset for a card — ONE deterministic source of truth.
-
-	Composed entirely from Godot's own layout results plus the precisely
-	tracked float scroll:
-	    scroll_container.origin − scroll_float + content_chain + card.position
-	where `content_chain` is the flow's offset within the margin container
-	(captured post-sort) and `card.position` is the FlowContainer's own child
-	position. Every card on a line goes through the identical formula, so no
-	column can diverge, and reading it never depends on mid-frame transform
-	flushes (only the scroll float moves during scrolling, and we track it).
-	"""
-	var layer_origin := _visual_layer.global_position
-	var vidx: int = card.get_meta("virtual_index", -1)
-	if vidx < 0 or not _scroll_container or not _flow_container:
-		return card.global_position - layer_origin
-	var scroll_f := _scroll_container.get_scroll_float()
-	var scroll_vec := Vector2(scroll_f, 0.0) if not vertical else Vector2(0.0, scroll_f)
-	# Read the container chain LIVE rather than from the sort-captured snapshot:
-	# center/flow positions only change on layout (never during scroll), and in
-	# the hidden pre-sort window a stale read is harmless because the card is
-	# not visible yet. Live reads make the offset immune to sort ordering.
-	var chain := _content_chain_offset
-	if _center_container and _flow_container:
-		chain = _center_container.position + _flow_container.position
-	return _scroll_container.get_global_rect().position - scroll_vec \
-		+ chain + card.position - layer_origin
-
-func _sync_and_mark_card_visual_transforms(tag: String = "", mark: bool = true) -> void:
-	var use_offsets: bool = _card_has_sync_visual_offset and _scroll_container and _visual_layer
-	for card in _active_cards:
-		if not is_instance_valid(card):
-			continue
-		# Don't mark cards before _ready() has run; _setup_rs_items() resets the
-		# synced flag, so marking earlier would be silently undone.
-		if not card.is_node_ready():
-			continue
-		if use_offsets:
-			card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
-		elif _card_has_sync_visual_transform:
-			card.sync_visual_transform()
-		# When mark=false (pre-sort passes), newly added cards keep their RS
-		# items hidden until the deferred post-sort mark, so a stale pooled
-		# position can never reach the screen even if the heal slips a frame.
-		if mark and _card_has_mark_visuals_position_synced:
-			card._mark_visuals_position_synced()
-
-## Position of the flow's content origin within the margin container, captured
-## post-sort from Godot's own container results (center position + flow
-## position). Scroll-independent, so capturing it on sort is race-free: during
-## scroll only the scroll offset moves, which we track separately as a float.
-var _content_chain_offset := Vector2.ZERO
+	if _debug_overlay:
+		_debug_overlay.frame_probe_log()
 
 func _on_center_sorted() -> void:
 	_layout_generation += 1
-	if _center_container and _flow_container:
-		_content_chain_offset = _center_container.position + _flow_container.position
-
-## Request reveal-on-sort: cards stay hidden until the FlowContainer sort
-## commits their positions, then are stamped + marked exactly once.
-func _request_visual_reveal() -> void:
-	_visual_reveal_pending = true
-	_visual_reveal_requested_frame = Engine.get_process_frames()
-	if _flow_container:
-		_flow_container.queue_sort()
+	_visual_sync.on_content_sorted()
 
 func _on_flow_sorted() -> void:
 	_layout_generation += 1
-	if _center_container and _flow_container:
-		_content_chain_offset = _center_container.position + _flow_container.position
+	_visual_sync.on_content_sorted()
 	# The sort committed new FLOW child positions, but the container cascade may
 	# still be mid-flight: queued sorts flush in message-queue order, so the
 	# MARGIN/CENTER re-sorts (which move center.position via the new margins)
 	# can run AFTER this flow sort. Stamping now would mix the new child
 	# positions with the old chain — a whole-strip offset by the margin delta
 	# (one card pitch) flashing for a frame. The reveal therefore defers to
-	# _on_frame_pre_draw, which runs after the ENTIRE cascade, before render.
-	if _visual_reveal_pending:
-		_visual_reveal_requested_frame = Engine.get_process_frames()
+	# the visual sync's pre-draw stamp, which runs after the ENTIRE cascade,
+	# before render.
+	_visual_sync.on_flow_sorted_post()
 
 func _audit_structure(tag: String) -> void:
-	if not debug_mode:
-		return
-	var prev_idx := -2
-	var dup := -1
-	var nonmono := -1
-	var seen := {}
-	for c in _active_cards:
-		if not is_instance_valid(c):
-			continue
-		var m: int = c.get_meta("virtual_index", -1)
-		if seen.has(m):
-			dup = m
-			break
-		seen[m] = true
-		if m <= prev_idx:
-			nonmono = m
-			break
-		prev_idx = m
-	var flow_cards := 0
-	var spacers := 0
-	for ch in _flow_container.get_children():
-		if ch.has_meta("page_spacer") or ch.has_meta("stagger_spacer"):
-			spacers += 1
-		else:
-			flow_cards += 1
-	if dup >= 0 or nonmono >= 0 or flow_cards != _active_cards.size():
-		var first: int = _active_cards[0].get_meta("virtual_index", -1) if _active_cards.size() > 0 else -1
-		if DEBUG_LOG: print("[GridInv] VIOLATION tag=", tag, " dup=", dup, " nonmono=", nonmono, " active=", _active_cards.size(), " flow_cards=", flow_cards, " spacers=", spacers, " first=", first, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+	if _debug_overlay:
+		_debug_overlay.audit_structure(tag)
 
 func _audit_visual_holes() -> void:
-	if not debug_mode:
-		return
-	var unsynced: Array = []
-	var invisible: Array = []
-	for card in _active_cards:
-		if not is_instance_valid(card):
-			continue
-		var vidx: int = card.get_meta("virtual_index", -1)
-		if not card.visible:
-			invisible.append(vidx)
-		if _card_has_mark_visuals_position_synced and card.get("_visuals_position_synced") == false:
-			unsynced.append(vidx)
-	if unsynced.size() > 0 or invisible.size() > 0:
-		if DEBUG_LOG: print("[VisHole] unsynced=", unsynced, " invisible=", invisible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+	if _debug_overlay:
+		_debug_overlay.audit_visual_holes()
 
 func soak_test(iterations: int = 20) -> void:
 	"""Debug stress test: random teleports + scroll bursts with all violation
 	audits active. Any [GridInv]/[VisHole]/[RsAudit]/[DrawAudit] output during
 	the run indicates a broken invariant. Call from the debugger or a hotkey."""
-	if DEBUG_LOG: print("[SoakTest] starting: iterations=", iterations, " items=", _source_total_items, " mode=", view_mode)
-	for i in iterations:
-		if _source_total_items <= 0 or not _scroll_container:
-			break
-		scroll_to_index_and_focus(randi() % _source_total_items, false)
-		await get_tree().process_frame
-		await get_tree().process_frame
-		for j in 4:
-			var dir := 1.0 if j % 2 == 0 else -1.0
-			_scroll_container.scroll_to(_get_current_scroll_pos() + dir * _get_normal_stride() * 2.5, false)
-			await get_tree().process_frame
-		_audit_structure("soak")
-	if DEBUG_LOG: print("[SoakTest] complete: iterations=", iterations, " mode=", view_mode)
-
-func _update_visual_draw_order() -> void:
-	var focused_idx = _get_focused_virtual_index()
-	for card in _active_cards:
-		if not card.has_method("set_visual_draw_index"):
-			continue
-		var idx = card.get_meta("virtual_index", 0)
-		var base_index = idx * 10
-		if idx == focused_idx:
-			base_index += 1000000
-		card.set_visual_draw_index(base_index)
+	if _debug_overlay:
+		await _debug_overlay.soak_test(iterations)
 
 func _audit_render_state(tag: String) -> void:
 	"""Compare what is actually rendered (RS canvas item transforms, visual
-	layer state, scroll content offset) against the layout truth. Runs deferred
-	(post-sort, post-sync) so any divergence here is a genuine render bug."""
-	if not debug_mode:
-		return
-	if not _visual_layer or not _scroll_container:
-		return
-	var layer_pos := _visual_layer.global_position
-	if _visual_layer.position != Vector2.ZERO or not _visual_layer.top_level or not _visual_layer.visible:
-		if DEBUG_LOG: print("[LayerAudit] tag=", tag, " pos=", _visual_layer.position, " global=", layer_pos, " top_level=", _visual_layer.top_level, " visible=", _visual_layer.visible, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
-	var mc_pos: float = _margin_container.position.y if vertical else _margin_container.position.x
-	var scroll_now: float = float(_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal)
-	var mc_delta: float = absf(mc_pos + scroll_now)
-	var worst := 0.0
-	var worst_idx := -1
-	var worst_rs := Vector2.ZERO
-	var worst_exp := Vector2.ZERO
-	var worst_cs := Vector2.ONE
-	for card in _active_cards:
-		if not is_instance_valid(card) or not card.is_node_ready():
-			continue
-		var lt_v = card.get("_last_visual_transform")
-		if not lt_v is Transform2D:
-			continue
-		var rs_origin: Vector2 = lt_v.origin
-		var exp_origin: Vector2 = _compute_visual_layer_offset(card)
-		var cs_v = card.get("content_scale")
-		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
-		if not cs.is_equal_approx(Vector2.ONE):
-			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
-			exp_origin += pivot - cs * pivot
-		var d: float = rs_origin.distance_to(exp_origin)
-		if d > worst:
-			worst = d
-			worst_idx = card.get_meta("virtual_index", -1)
-			worst_rs = rs_origin
-			worst_exp = exp_origin
-			worst_cs = cs
-	if worst > 2.0 or mc_delta > 2.0:
-		if DEBUG_LOG: print("[RsAudit] tag=", tag, " worst=", worst, " idx=", worst_idx, " rs=", worst_rs, " exp=", worst_exp, " cs=", worst_cs, " margin_lag=", mc_delta, " scroll=", scroll_now, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
+	layer state, scroll content offset) against the layout truth."""
+	if _debug_overlay:
+		_debug_overlay.audit_render_state(tag)
 
 func _show_skeleton_if_unloaded(card: Control, virtual_index: int) -> void:
 	# Cards entering the flow before their data is cached would render blank
@@ -3707,228 +2572,14 @@ func _show_skeleton_if_unloaded(card: Control, virtual_index: int) -> void:
 		return
 	if virtual_index >= _source_total_items:
 		return  # Placeholder slots render a blank panel, not shimmer.
-	if _data_cache.has(virtual_index):
+	if _data.has_index(virtual_index):
 		return  # Data ready; setup applies it this pass.
 	card.show_loading_skeleton()
 
-func _add_card_at_end(virtual_index: int):
-	var card = _acquire_card()
-	if not card:
-		return
 
-	card.set_meta("virtual_index", virtual_index)
-	if _card_has_focus_scale_enabled:
-		card.focus_scale_enabled = true
-		card.focus_scale_inverted = _get_focus_scale_inverted()
-	_configure_card_visual_layer(card)
-	_configure_card_size_flags(card)
-	if _card_has_set_focus_scale:
-		card.set_focus_scale(focus_scale)
-	if _is_pagination_active() and _active_cards.size() > 0:
-		# Page boundary between the last buffered card and this one: the spacer
-		# owns a whole flow line, creating the visual gap between pages.
-		var last_idx: int = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", -1)
-		if last_idx >= 0 and _get_page_for_index(virtual_index) != _get_page_for_index(last_idx):
-			_add_page_spacer()
-	if _is_stagger_row_opener(virtual_index):
-		# Odd-row opener: half-cell spacer indents the row and wraps it at N-1.
-		_add_stagger_spacer()
-	_active_cards.append(card)
-	_active_cards_by_index[virtual_index] = card
-	_flow_container.add_child(card)
 
-	card.set_meta("needs_visual_setup", true)
-	_pending_visual_setup[virtual_index] = card
-	_show_skeleton_if_unloaded(card, virtual_index)
 
-	item_created.emit(card, virtual_index)
 
-func _add_card_at_start(virtual_index: int):
-	var card = _acquire_card()
-	if not card:
-		return
-
-	card.set_meta("virtual_index", virtual_index)
-	if _card_has_focus_scale_enabled:
-		card.focus_scale_enabled = true
-		card.focus_scale_inverted = _get_focus_scale_inverted()
-	_configure_card_visual_layer(card)
-	_active_cards.insert(0, card)
-	_active_cards_by_index[virtual_index] = card
-	_flow_container.add_child(card)
-	_flow_container.move_child(card, 0)
-	if _is_pagination_active() and _active_cards.size() > 1:
-		# Page boundary between the new first card and the previous first card.
-		var next_idx: int = _active_cards[1].get_meta("virtual_index", -1)
-		if next_idx >= 0 and _get_page_for_index(virtual_index) != _get_page_for_index(next_idx):
-			_add_page_spacer(1)
-	if _is_stagger_row_opener(virtual_index):
-		# Odd-row opener prepended: its half-cell spacer goes before it. If the
-		# row's partial run kept its spacer (edge-prune keeps live spacers),
-		# move that one up instead of inserting a duplicate.
-		if _flow_container.get_child_count() > 1 and _flow_container.get_child(1).has_meta("stagger_spacer"):
-			_flow_container.move_child(_flow_container.get_child(1), 0)
-		else:
-			_add_stagger_spacer(0)
-	_configure_card_size_flags(card)
-	if _card_has_set_focus_scale:
-		card.set_focus_scale(focus_scale)
-
-	card.set_meta("needs_visual_setup", true)
-	_pending_visual_setup[virtual_index] = card
-	_show_skeleton_if_unloaded(card, virtual_index)
-
-	item_created.emit(card, virtual_index)
-
-func _apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
-	if not card.has_meta("needs_visual_setup"):
-		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " no meta, skipping")
-		return true
-	if not card.is_node_ready():
-		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " not ready, keeping pending")
-		return false
-	var actual_idx: int = card.get_meta("virtual_index", -1)
-	if actual_idx != virtual_index:
-		# Stale pending entry: the card was recycled and now shows a different
-		# index. Never apply the wrong game's data; re-queue under the card's
-		# current index so it still gets set up.
-		if DEBUG_LOG: print("[CardApply] MISMATCH: card_meta=", actual_idx, " arg=", virtual_index, " frame=", Engine.get_process_frames(), " t=", Time.get_ticks_msec())
-		if actual_idx >= 0 and _active_cards_by_index.get(actual_idx) == card:
-			_pending_visual_setup[actual_idx] = card
-		else:
-			card.remove_meta("needs_visual_setup")
-		return true
-	# Placeholder slots (index beyond the source count): no data to apply;
-	# render as a blank, non-interactive card shape.
-	if virtual_index >= _source_total_items:
-		card.remove_meta("needs_visual_setup")
-		if card.has_method("set_placeholder"):
-			card.set_placeholder(true)
-		return true
-	if not _data_cache.has(virtual_index):
-		# Data not loaded yet; keep the card pending so it gets finished once
-		# the items_requested callback populates the cache.
-		if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data missing, keeping pending")
-		_show_skeleton_if_unloaded(card, virtual_index)
-		return false
-	card.remove_meta("needs_visual_setup")
-
-	if _card_has_refresh_settings:
-		card.refresh_settings()
-
-	var card_visible = _is_index_visible(virtual_index)
-	if _card_has_set_game_with_priority:
-		card.set_game_with_priority(_data_cache[virtual_index], card_visible)
-	else:
-		card.game = _data_cache[virtual_index]
-	_update_cache_access_order(virtual_index)
-	if debug_mode:
-		if DEBUG_LOG: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " data applied, size=", card.size, " min=", card.custom_minimum_size)
-	# The card may have been marked as position-synced before its data was
-	# applied, in which case its visual items were hidden because headline was
-	# empty. Re-evaluate visibility now that the game/title is set.
-	if card.has_method("_update_visual_items_visibility"):
-		card._update_visual_items_visibility()
-	# Ensure the card's visual layer is positioned and marked visible now that
-	# data is applied. In some paths (async startup, scroll recycling) the
-	# global sync runs before the card is ready or before data is available,
-	# leaving the card invisible until it is recycled.
-	if _card_has_sync_visual_offset and _scroll_container and _visual_layer:
-		card.sync_visual_transform_with_offset(_compute_visual_layer_offset(card))
-	elif _card_has_sync_visual_transform:
-		card.sync_visual_transform()
-	# When called from inside a scroll pass — or while a reveal is pending (a
-	# sort cascade is in flight; positions/chains are mid-update) — marking here
-	# would reveal the card at a stale or mixed-generation position. The pre-draw
-	# reveal handles those after the cascade. Outside both, layout is settled
-	# and marking immediately is both safe and required (async data arrivals).
-	if not _is_processing_scroll and not _visual_reveal_pending and _card_has_mark_visuals_position_synced:
-		card._mark_visuals_position_synced()
-	if debug_mode: print("[Grid] _apply_card_visual_setup: idx=", virtual_index, " applied")
-	return true
-
-func _batch_recycle_from_start(count: int) -> void:
-	if count <= 0 or count > _active_cards.size():
-		return
-
-	# Release focus once if any card being recycled (or a descendant) owns it.
-	var viewport := get_viewport()
-	var focused = viewport.gui_get_focus_owner() if is_instance_valid(viewport) else null
-	if focused:
-		for i in range(count):
-			var card = _active_cards[i]
-			if is_instance_valid(card) and card.is_ancestor_of(focused):
-				viewport.gui_release_focus()
-				break
-
-	# Recycle in-place to avoid array allocation from slice().
-	for i in range(count - 1, -1, -1):
-		var card = _active_cards[i]
-		var vidx = card.get_meta("virtual_index", -1)
-		if vidx >= 0:
-			_active_cards_by_index.erase(vidx)
-			_pending_visual_setup.erase(vidx)
-		if is_instance_valid(card):
-			_disconnect_card_signals(card)
-			card.visible = false
-			card.set_meta("pooled", true)
-			card.set_meta("virtual_index", -1)
-			if _pending_effect_rebuild_set.has(card):
-				_pending_effect_rebuilds.erase(card)
-				_pending_effect_rebuild_set.erase(card)
-			if _card_has_reset:
-				card.reset(true)
-			elif _card_has_game_prop:
-				card.game = null
-			card.remove_meta("needs_visual_setup")
-			if card.get_parent() == _flow_container:
-				_flow_container.remove_child(card)
-			_add_to_pool(card)
-	_active_cards = _active_cards.slice(count)
-	_prune_edge_spacers()
-
-func _batch_add_at_start(target_start: int, count: int) -> void:
-	if count <= 0:
-		return
-	var new_cards: Array[Control] = []
-	var flow_pos := 0
-	for i in range(count):
-		var virtual_index = target_start + i
-		var card = _acquire_card()
-		if not card:
-			break
-		card.set_meta("virtual_index", virtual_index)
-		if _card_has_focus_scale_enabled:
-			card.focus_scale_enabled = true
-			card.focus_scale_inverted = _get_focus_scale_inverted()
-		_configure_card_visual_layer(card)
-		if _is_pagination_active() and i > 0:
-			# Page boundary within the prepended range.
-			if _get_page_for_index(virtual_index) != _get_page_for_index(virtual_index - 1):
-				_add_page_spacer(flow_pos)
-				flow_pos += 1
-		if _is_stagger_row_opener(virtual_index):
-			_add_stagger_spacer(flow_pos)
-			flow_pos += 1
-		_flow_container.add_child(card)
-		_flow_container.move_child(card, flow_pos)
-		flow_pos += 1
-		_configure_card_size_flags(card)
-		if _card_has_set_focus_scale:
-			card.set_focus_scale(focus_scale)
-		card.set_meta("needs_visual_setup", true)
-		_pending_visual_setup[virtual_index] = card
-		_show_skeleton_if_unloaded(card, virtual_index)
-		item_created.emit(card, virtual_index)
-		_active_cards_by_index[virtual_index] = card
-		new_cards.append(card)
-	if _is_pagination_active() and new_cards.size() > 0 and _active_cards.size() > 0:
-		# Page boundary between the last prepended card and the previous first card.
-		var last_new_idx: int = new_cards[new_cards.size() - 1].get_meta("virtual_index", -1)
-		var old_first_idx: int = _active_cards[0].get_meta("virtual_index", -1)
-		if last_new_idx >= 0 and old_first_idx >= 0 and _get_page_for_index(last_new_idx) != _get_page_for_index(old_first_idx):
-			_add_page_spacer(flow_pos)
-	_active_cards = new_cards + _active_cards
 
 func _get_visible_range() -> void:
 	var items_per_line = _get_items_per_line()
@@ -3950,38 +2601,6 @@ func _get_visible_range() -> void:
 		_visible_start_idx = _get_first_index_for_line(first_line, items_per_line)
 		_visible_end_idx = min(_get_first_index_for_line(last_line, items_per_line), _total_items)
 
-func _is_index_visible(idx: int) -> bool:
-	return idx >= _visible_start_idx and idx < _visible_end_idx
-
-func _acquire_card() -> Control:
-	while _card_pool.size() > 0:
-		var card = _card_pool.pop_back()
-		if is_instance_valid(card):
-			card.set_meta("pooled", false)
-			# Ensure a recycled card can always receive focus; some paths (preview,
-			# manual disabling) may leave these in a non-focusable state.
-			card.disabled = false
-			card.focus_mode = Control.FOCUS_ALL
-			if _card_has_unmark_visuals_position_synced:
-				card._unmark_visuals_position_synced()
-			card.visible = true
-			return card
-
-	if _card_scene:
-		var card = _card_scene.instantiate()
-		card.set_meta("pooled", false)
-		card.focus_mode = Control.FOCUS_ALL
-		return card
-
-	return null
-
-func _disconnect_card_signals(card: Control):
-	# Only disconnect signals that are connected by external code (e.g., LibraryView)
-	# Internal signals like 'pressed' should NOT be disconnected as they are
-	# connected in the card's _ready() function, which only runs once
-	if card.has_signal("download_requested"):
-		for conn in card.get_signal_connection_list("download_requested"):
-			card.disconnect("download_requested", conn["callable"])
 
 func _update_margin():
 	# Wrapper: after margin/extent writes, force the ScrollContainer to
@@ -4141,37 +2760,10 @@ func _update_margin_writes():
 		# for GRID horizontal (column height); see the vertical branch.
 		_last_flow_height = 0
 
-func _is_index_pending(idx: int) -> bool:
-	_pending_loads_mutex.lock()
-	for offset in _pending_loads.keys():
-		var limit = _pending_loads[offset]
-		if idx >= offset and idx < offset + limit:
-			_pending_loads_mutex.unlock()
-			return true
-	_pending_loads_mutex.unlock()
-	return false
-
 ## Thread-safe check used by DB worker tasks to skip queries whose results
 ## would be discarded anyway (superseded by a jump or buffer refresh).
 func is_load_pending(offset: int) -> bool:
-	_pending_loads_mutex.lock()
-	var pending := _pending_loads.has(offset)
-	_pending_loads_mutex.unlock()
-	return pending
-
-func _prune_pending_loads_outside(range_start: int, range_end: int) -> void:
-	_pending_loads_mutex.lock()
-	var gt_pruned: int = 0
-	for offset in _pending_loads.keys():
-		var limit: int = _pending_loads[offset]
-		# Keep requests that still overlap the new buffer window.
-		if offset + limit <= range_start or offset >= range_end:
-			_pending_loads.erase(offset)
-			gt_pruned += 1
-	var gt_remaining: int = _pending_loads.size()
-	_pending_loads_mutex.unlock()
-	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] prune-loads: pruned=", gt_pruned, " remaining=", gt_remaining, " window=", range_start, "-", range_end, " t=", Time.get_ticks_msec())
+	return _data.is_load_pending(offset)
 
 func _request_missing_data():
 	if _active_cards.size() == 0:
@@ -4181,7 +2773,7 @@ func _request_missing_data():
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		# Placeholder slots (idx >= source count) need no data.
-		if idx >= 0 and idx < _source_total_items and not _data_cache.has(idx) and not _is_index_pending(idx):
+		if idx >= 0 and idx < _source_total_items and not _data.has_index(idx) and not _data.is_index_pending(idx):
 			missing_indices.append(idx)
 
 	if missing_indices.size() == 0:
@@ -4218,7 +2810,7 @@ func _request_missing_data():
 		if batch.size() > 0:
 			var offset = batch[0]
 			var limit = batch.size()
-			_request_data(offset, limit)
+			_data.request(offset, limit)
 
 ## Flush buffer-zone data loads deferred during fast scroll. Runs from
 ## _process: drains when the scroll velocity drops below the threshold OR the
@@ -4244,7 +2836,7 @@ func _flush_deferred_data_loads() -> void:
 	for idx in indices:
 		if idx < 0 or idx >= _source_total_items:
 			continue
-		if _data_cache.has(idx) or _is_index_pending(idx):
+		if _data.has_index(idx) or _data.is_index_pending(idx):
 			continue
 		if not is_index_near_buffer(idx):
 			continue
@@ -4255,7 +2847,7 @@ func _flush_deferred_data_loads() -> void:
 		var limit := 1
 		while i + limit < live.size() and live[i + limit] == offset + limit:
 			limit += 1
-		_request_data(offset, limit)
+		_data.request(offset, limit)
 		i += limit
 
 ## True when idx is within one buffer-window width of the current buffer
@@ -4263,10 +2855,10 @@ func _flush_deferred_data_loads() -> void:
 ## that has scrolled away. Before the first scroll pass (no window yet)
 ## everything counts as near so nothing is dropped blindly.
 func is_index_near_buffer(idx: int) -> bool:
-	if _last_pass_buffer_start < 0 or _last_pass_buffer_end <= _last_pass_buffer_start:
+	if _window.last_pass_buffer_start < 0 or _window.last_pass_buffer_end <= _window.last_pass_buffer_start:
 		return true
-	var width := _last_pass_buffer_end - _last_pass_buffer_start
-	return idx >= _last_pass_buffer_start - width and idx < _last_pass_buffer_end + width
+	var width := _window.last_pass_buffer_end - _window.last_pass_buffer_start
+	return idx >= _window.last_pass_buffer_start - width and idx < _window.last_pass_buffer_end + width
 
 func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 	"""Prefetch data beyond the buffer edge in the current scroll direction so
@@ -4294,13 +2886,13 @@ func _prefetch_scroll_lead(stride: float, items_per_line: int) -> void:
 		return
 	var missing: Array[int] = []
 	for idx in range(start, end):
-		if idx < _source_total_items and not _data_cache.has(idx) and not _is_index_pending(idx):
+		if idx < _source_total_items and not _data.has_index(idx) and not _data.is_index_pending(idx):
 			missing.append(idx)
 	if missing.size() == 0:
 		return
 	if trace_verbose:
 		if DEBUG_LOG: print("[GridTrace] prefetch-lead: count=", missing.size(), " first=", missing[0], " vel=", velocity, " t=", Time.get_ticks_msec())
-	_request_data(missing[0], missing.size())
+	_data.request(missing[0], missing.size())
 
 func _check_preload_needed():
 	var visible_count = _get_visible_count()
@@ -4311,15 +2903,15 @@ func _check_preload_needed():
 		var distance_to_end = _source_total_items - 1 - _virtual_end
 		if distance_to_end > 0 and distance_to_end <= preload_distance:
 			var next_batch_start = _virtual_end + 1
-			if not is_load_pending(next_batch_start) and not _data_cache.has(next_batch_start):
-				_request_data(next_batch_start, min(buffer_size, _source_total_items - next_batch_start))
+			if not is_load_pending(next_batch_start) and not _data.has_index(next_batch_start):
+				_data.request(next_batch_start, min(buffer_size, _source_total_items - next_batch_start))
 
 	if _virtual_start > 0:
 		var distance_to_start = _virtual_start
 		if distance_to_start > 0 and distance_to_start <= preload_distance:
 			var prev_batch_start = max(0, _virtual_start - buffer_size)
-			if not is_load_pending(prev_batch_start) and not _data_cache.has(prev_batch_start):
-				_request_data(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
+			if not is_load_pending(prev_batch_start) and not _data.has_index(prev_batch_start):
+				_data.request(prev_batch_start, min(buffer_size, _virtual_start - prev_batch_start))
 
 func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 	# Mark visible cards and one extra row on each side as high priority so
@@ -4337,294 +2929,47 @@ func _update_card_priorities(visible_start_idx: int, visible_end_idx: int):
 		if _card_has_set_image_priority:
 			card.set_image_priority(card_high_priority)
 
-func _connect_focus_lock_viewport() -> void:
-	# Hub connection: FocusSubManager re-emits the UI viewport's focus changes,
-	# so this survives dual-screen reparents without reconnecting.
-	var hub := FocusSubManager.get_instance()
-	if not hub:
-		return
-	if not hub.ui_focus_changed.is_connected(_on_viewport_focus_changed):
-		hub.ui_focus_changed.connect(_on_viewport_focus_changed)
-
-func _disconnect_focus_lock_viewport() -> void:
-	var hub := FocusSubManager.get_instance()
-	if hub and hub.ui_focus_changed.is_connected(_on_viewport_focus_changed):
-		hub.ui_focus_changed.disconnect(_on_viewport_focus_changed)
-
-func _reconnect_focus_lock_viewport() -> void:
-	_disconnect_focus_lock_viewport()
-	_connect_focus_lock_viewport()
-
 func refresh_focus_lock() -> void:
 	"""Re-sync focus-lock state and ensure the viewport signal is connected.
 	Call after reparenting or when the setting may have changed outside the
 	normal change event flow."""
-	_reconnect_focus_lock_viewport()
-
-func _on_viewport_focus_changed(control: Control) -> void:
-	if not control:
-		return
-
-	# Check if focus moved to a card inside this grid.
-	if is_ancestor_of(control):
-		var node = control
-		while node != self:
-			if node.has_meta("virtual_index"):
-				_last_focused_virtual_index = node.get_meta("virtual_index", -1)
-				break
-			node = node.get_parent()
-		# Tell UIManager to lock focus to this grid.
-		if UIManager:
-			UIManager.enter_focus_lock(self)
-		return
-
-	# Focus is outside this grid.
-	if UIManager:
-		UIManager.exit_focus_lock(self)
+	_focus.reconnect_viewport()
 
 func navigate_direction(dir: String, from_index: int = -1) -> bool:
 	"""Move focus one step in the given direction. Returns true if the event was consumed."""
-	if not visible or not is_inside_tree():
-		return false
-	if not UIManager or not UIManager.controller_has_priority():
-		return false
-
-	var row_delta := 0
-	var col_delta := 0
-	match dir:
-		"ui_up":
-			row_delta = -1
-		"ui_down":
-			row_delta = 1
-		"ui_left":
-			col_delta = -1
-		"ui_right":
-			col_delta = 1
-		_:
-			return false
-
-	# For horizontal grids the "line" runs top-to-bottom, so swap axis meaning
-	# so left/right always move along the line and up/down move between lines.
-	if not vertical:
-		var tmp := row_delta
-		row_delta = col_delta
-		col_delta = tmp
-
-	var current_idx := from_index if from_index >= 0 else _get_focused_virtual_index()
-	if current_idx < 0:
-		return false
-
-	var target_idx := _compute_target_index(current_idx, row_delta, col_delta)
-	if target_idx < 0 or target_idx == current_idx:
-		# Boundary: consume the event so focus cannot leave the grid.
-		return true
-
-	# Route visible and offscreen targets through the same scroll-and-focus path
-	# so behavior is consistent; the centering mode decides whether a visible
-	# target triggers any scroll at all.
-	scroll_to_index_and_focus(target_idx, true)
-	return true
-
-func _get_focused_virtual_index() -> int:
-	var viewport := get_viewport()
-	if not is_instance_valid(viewport):
-		return -1
-	var focused := viewport.gui_get_focus_owner()
-	if not focused or not is_ancestor_of(focused):
-		return -1
-	var node := focused
-	while node != self:
-		if node.has_meta("virtual_index"):
-			return node.get_meta("virtual_index", -1)
-		node = node.get_parent()
-	return -1
+	return _focus.navigate_direction(dir, from_index)
 
 ## Public read of the focused card's virtual index (-1 when focus is outside
 ## the grid). External callers (main.gd) use this instead of walking ancestors
 ## for the virtual_index meta themselves.
 func get_focused_virtual_index() -> int:
-	return _get_focused_virtual_index()
+	return _focus.focused_virtual_index()
 
 ## Public focus-restore entry point: focus the card for `index` without
 ## scrolling, with follow-focus suppression handled internally. No-op when the
 ## card isn't in the buffer or isn't focusable.
 func restore_focus_to_index(index: int) -> void:
-	var card := get_card_at_index(index)
-	if not card or not is_instance_valid(card) or not card.is_inside_tree():
-		return
-	if card is Control and card.focus_mode != Control.FOCUS_NONE:
-		_apply_focus_to_card(card)
-
-func _compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> int:
-	"""Compute the target virtual index from a 2D row/column delta.
-
-	For vertical grids a "row" is a horizontal line and the column is the
-	intra-line index. For horizontal grids a "row" is a vertical line and the
-	column is the intra-line index. This lets left/right navigate within a
-	line and up/down navigate between lines regardless of orientation."""
-	if _source_total_items <= 0 or current_idx < 0 or current_idx >= _source_total_items:
-		return -1
-
-	var items_per_line := _get_items_per_line()
-	if items_per_line <= 0:
-		items_per_line = 1
-
-	# LIST/CAROUSEL: simple linear movement.
-	if view_mode == ViewMode.LIST or view_mode == ViewMode.CAROUSEL or items_per_line == 1:
-		var target := current_idx + row_delta + col_delta
-		return clamp(target, 0, _source_total_items - 1)
-
-	if _is_staggered_active():
-		var line := _get_stagger_line_for_index(current_idx)
-		var col := current_idx - _get_stagger_first_index_for_line(line)
-		var total_lines := _get_stagger_line_for_index(_source_total_items - 1) + 1
-		# Horizontal moves stay on the current row, bounded by its capacity.
-		if row_delta == 0 and col_delta != 0:
-			var target_col_h := col + col_delta
-			if target_col_h < 0 or target_col_h >= _get_stagger_line_capacity(line):
-				return -1
-			var target_idx_h := _get_stagger_first_index_for_line(line) + target_col_h
-			if target_idx_h >= _source_total_items:
-				return -1
-			return target_idx_h
-		var target_line := line + row_delta
-		if target_line < 0 or target_line >= total_lines:
-			return -1
-		# Vertical moves keep the column index, clamped to the target row's
-		# capacity (offset rows hold one fewer card).
-		var target_col := mini(col, _get_stagger_line_capacity(target_line) - 1)
-		var target_idx := _get_stagger_first_index_for_line(target_line) + target_col
-		# Placeholder slots (idx >= source count) are not navigation targets.
-		if target_idx >= _source_total_items:
-			return -1
-		return target_idx
-
-	var line := int(current_idx / float(items_per_line))
-	var col := current_idx % items_per_line
-	var total_lines := ceili(float(_source_total_items) / items_per_line)
-
-	var target_line := line + row_delta
-	var target_col := col + col_delta
-
-	if target_line < 0 or target_line >= total_lines:
-		return -1
-	if target_col < 0 or target_col >= items_per_line:
-		return -1
-
-	var target_idx := target_line * items_per_line + target_col
-	# Placeholder slots (idx >= source count) are not navigation targets.
-	if target_idx >= _source_total_items:
-		return -1
-	return target_idx
-
-func _release_focus_if_inside(card: Control) -> void:
-	"""Release focus if the current focus owner is inside the given card."""
-	var viewport := get_viewport()
-	if not is_instance_valid(viewport):
-		return
-	var focused := viewport.gui_get_focus_owner()
-	if focused and (focused == card or card.is_ancestor_of(focused)):
-		viewport.gui_release_focus()
-		# gui_focus_changed ignores the null owner, so the lock taken when the
-		# card was focused would persist with no focus owner (swallowing input)
-		# if the deferred focus restore fails. Release it; the restore re-locks.
-		if UIManager:
-			UIManager.exit_focus_lock(self)
-
-func _release_focus_inside_grid() -> void:
-	"""Release focus if it currently belongs to any card inside this grid."""
-	var viewport := get_viewport()
-	if not is_instance_valid(viewport):
-		return
-	var focused := viewport.gui_get_focus_owner()
-	if focused and is_ancestor_of(focused):
-		viewport.gui_release_focus()
-
-func _window_has_focus() -> bool:
-	var w := get_window()
-	return w == null or w.has_focus()
-
-func _try_apply_pending_focus() -> void:
-	"""Focus the pending card if it has been created by the latest scroll."""
-	if _pending_focus_index < 0:
-		return
-	var card := get_card_at_index(_pending_focus_index)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		_apply_focus_to_card(card)
-
-func _request_data(offset: int, limit: int):
-	if limit <= 0 or offset < 0 or offset >= _total_items:
-		return
-
-	# Cap batch size: legitimate requests cover one buffer window (a few dozen
-	# items) or a preload span. Multi-thousand-item queries only ever come from
-	# a pathological active-set state and can stall the DB worker for seconds.
-	limit = mini(limit, MAX_DATA_REQUEST_ITEMS)
-	limit = min(limit, _total_items - offset)
-	if trace_verbose:
-		if DEBUG_LOG: print("[GridTrace] request-data: offset=", offset, " limit=", limit, " t=", Time.get_ticks_msec())
-	_pending_loads_mutex.lock()
-	_pending_loads[offset] = limit
-	_pending_loads_mutex.unlock()
-
-	items_requested.emit(offset, limit)
+	_focus.restore_focus_to_index(index)
 
 func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool = false):
 	if trace_verbose:
 		if DEBUG_LOG: print("[GridTrace] items-loaded: offset=", offset, " count=", items.size(), " t=", Time.get_ticks_msec())
 	if debug_mode:
-		if DEBUG_LOG: print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data_cache.size())
-	_pending_loads_mutex.lock()
-	var was_pending := _pending_loads.has(offset)
-	_pending_loads.erase(offset)
-	_pending_loads_mutex.unlock()
+		if DEBUG_LOG: print("[Grid] on_items_loaded: offset=", offset, " count=", items.size(), " pending=", _pending_visual_setup.size(), " cache_size_before=", _data.size())
 
-	# Stale result: the request was superseded by a jump or buffer refresh
-	# while its DB task was in flight. Applying it would refill the cache with
-	# windows nobody is looking at and re-trigger pointless cover loads.
-	if not was_pending:
+	# Ingest into the cache (stale results — superseded by a jump or buffer
+	# refresh while the DB task was in flight — are dropped inside).
+	var landed := _data.ingest(items, offset)
+	if landed.is_empty():
 		return
 
-	if items.is_empty():
-		return
-
-	# Clear deduplication tracking for each batch to avoid false positives
-	# when scrolling causes overlapping ranges from the parent view
-	_cached_game_ids.clear()
-
-	var duplicates_found: int = 0
-
-	for i in range(items.size()):
-		var cache_key = offset + i
-		var game = items[i]
-
-		# Deduplication check: warn if this game ID is already cached at a different index
-		# but still cache it at the new index so cards get their data
-		if game and game.romm_id != 0:
-			if _cached_game_ids.has(game.romm_id):
-				var existing_key = _cached_game_ids[game.romm_id]
-				# Stale mapping check: evicted or replaced game at existing_key
-				if not _data_cache.has(existing_key) or _data_cache[existing_key] != game:
-					_cached_game_ids.erase(game.romm_id)
-				elif existing_key != cache_key:
-					duplicates_found += 1
-					push_warning("[VirtualScrollGridContainer] Duplicate game detected: '%s' (romm_id: %d) at indices %d and %d" % [game.title, game.romm_id, existing_key, cache_key])
-			else:
-				_cached_game_ids[game.romm_id] = cache_key
-
-		if _data_cache.size() >= MAX_CACHE_SIZE and not _data_cache.has(cache_key):
-			_evict_oldest_cache_entries(items.size())
-
-		_data_cache[cache_key] = game
-		_update_cache_access_order(cache_key)
-		# Warm the texture cache as data lands (covers both window and prefetch
-		# loads) so cover art is decoded before its row scrolls into view. Same
-		# grid-computed bucket the cards are assigned, so warmed entries match
-		# card lookups exactly. Grid + index enable the stale-decode drop.
-		CardMediaLoader.preload_cover(game, CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr()), self, cache_key)
-
-	if duplicates_found > 0:
-		push_warning("[VirtualScrollGridContainer] Found %d duplicate game(s) in batch starting at offset %d" % [duplicates_found, offset])
+	# Warm the texture cache as data lands (covers both window and prefetch
+	# loads) so cover art is decoded before its row scrolls into view. Same
+	# grid-computed bucket the cards are assigned, so warmed entries match
+	# card lookups exactly. Grid + index enable the stale-decode drop.
+	var bucket := CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr())
+	for cache_key in landed:
+		CardMediaLoader.preload_cover(_data.get_game(cache_key), bucket, self, cache_key)
 
 	_get_visible_range()
 	var visible_start_idx: int = _visible_start_idx
@@ -4645,23 +2990,23 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 					card.set_game_with_priority(items[data_idx], card_visible)
 				else:
 					card.game = items[data_idx]
-				_update_cache_access_order(idx)
+				_data.touch(idx)
 				_assigned_count += 1
 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
-	_flush_pending_visual_setup_for_visible_zone()
+	_window.flush_pending_visual_setup_for_visible_zone()
 
 func _refresh_buffer(preserve_scroll: bool = false):
 	# Capture live focus state before recycling so we can restore it after rebuild.
-	var saved_focus_index: int = _get_focused_virtual_index()
+	var saved_focus_index: int = _focus.focused_virtual_index()
 	# Only a live in-grid focus may trigger a focus restore after the rebuild;
 	# the _last_focused fallback below is memory only, and must not let a
 	# background rebuild steal focus back from the nav rail or other views.
 	var focus_was_in_grid: bool = saved_focus_index >= 0
 	# Remember the last focused index for fallback restoration even if focus is
 	# not currently owned by this grid.
-	if saved_focus_index < 0 and _last_focused_virtual_index >= 0:
-		saved_focus_index = _last_focused_virtual_index
+	if saved_focus_index < 0 and _focus.last_index >= 0:
+		saved_focus_index = _focus.last_index
 	# Capture the raw scroll offset when requested so we can restore position for
 	# non-focused cards (e.g. mouse users) across view-mode switches.
 	var saved_scroll_offset: float = 0.0
@@ -4669,19 +3014,12 @@ func _refresh_buffer(preserve_scroll: bool = false):
 		saved_scroll_offset = _scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal
 
 	while _active_cards.size() > 0:
-		_recycle_card_at_index(0)
-	_clear_page_spacers()
+		_window.recycle_card_at_index(0)
+	_spacers.clear_all()
 
-	_data_cache.clear()
-	_cached_game_ids.clear()
-	_cache_lru_tick.clear()
-	_pending_loads_mutex.lock()
-	_pending_loads.clear()
-	_pending_loads_mutex.unlock()
+	_data.clear()
 	_active_cards_by_index.clear()
-	_pending_effect_rebuilds.clear()
-	_pending_effect_rebuild_set.clear()
-	_pending_effects_refresh_after_layout = false
+	_effect_queue.clear_all()
 	_margin_container.add_theme_constant_override("margin_top", 0)
 	_margin_container.add_theme_constant_override("margin_bottom", 0)
 	_margin_container.add_theme_constant_override("margin_left", 0)
@@ -4720,9 +3058,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 
 	_recalculate_layout()
 	if _active_cards.size() == 0:
-		_initial_load()
+		_window.initial_load()
 		_recalculate_layout()
-	_update_visual_draw_order()
+	_visual_sync.update_draw_order()
 
 	# Restore focus to the card that owned it before recycle; fall back to the
 	# saved raw scroll offset if no focus target exists. scroll_to_index_and_focus
@@ -4795,19 +3133,14 @@ func get_visible_range() -> Dictionary:
 		}
 
 func get_card_at_index(index: int) -> Control:
-	return _active_cards_by_index.get(index, null)
+	return _window.get_card_at_index(index)
 
 ## Replace cached data for a game (matched by romm_id) without a buffer
 ## rebuild, so an offscreen card picks up the new state when scrolled into
 ## view. Live cards are NOT touched here — the view's _on_game_updated path
 ## updates those in place.
 func update_cached_game(game: GameResource) -> void:
-	if game == null:
-		return
-	for key in _data_cache:
-		var cached = _data_cache[key]
-		if cached and cached is GameResource and cached.romm_id == game.romm_id:
-			_data_cache[key] = game
+	_data.update_game(game)
 
 func _clamp_scroll_to_range(offset: float) -> float:
 	if not _scroll_container:
@@ -4897,13 +3230,13 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 		return
 	if index < 0 or index >= _source_total_items:
 		return
-	_focus_request_id += 1
-	var request_id := _focus_request_id
+	_focus.request_id += 1
+	var request_id := _focus.request_id
 	# Defocus the grid before scrolling so the currently focused card is not
 	# recycled mid-jump, which would hand focus to a temporary card and trigger
 	# a competing smooth-scroll back toward the top.
-	_release_focus_inside_grid()
-	_pending_focus_index = index
+	_focus.release_focus_inside_grid()
+	_focus.pending_index = index
 	_programmatic_focus_index = -1
 	_scroll_container.follow_focus_suppressed = false
 	_reset_transient_scroll_state("jump")
@@ -4919,7 +3252,7 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 			_scroll_container.scroll_to(int(target), false)
 		var card := get_card_at_index(index)
 		if card and is_instance_valid(card) and card.is_inside_tree():
-			_apply_focus_to_card(card)
+			_focus.apply_focus_to_card(card)
 		else:
 			_deferred_focus_index(index, request_id, 0)
 		return
@@ -4934,15 +3267,15 @@ func scroll_to_index_and_focus(index: int, animate: bool = false, duration_multi
 
 func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
 	"""Wait until the card for `index` exists, then grab focus."""
-	if request_id != _focus_request_id:
+	if request_id != _focus.request_id:
 		return
-	if _pending_focus_index != index:
+	if _focus.pending_index != index:
 		# Focused already, superseded by a newer request, or cancelled.
 		return
 
 	var card := get_card_at_index(index)
 	if card and is_instance_valid(card) and card.is_inside_tree():
-		_apply_focus_to_card(card)
+		_focus.apply_focus_to_card(card)
 		return
 
 	# The card may not enter the buffer until the scroll passes its row, which
@@ -4954,291 +3287,41 @@ func _deferred_focus_index(index: int, request_id: int, attempt: int) -> void:
 		await get_tree().process_frame
 		_deferred_focus_index(index, request_id, attempt + 1)
 
-func _restore_focus_only(index: int) -> void:
-	"""Re-grab focus on the card for `index` without changing the scroll
-	position. Used after layout recalcs, where the scroll anchor already
-	positioned the focused card. Falls back to the pending-focus path (applied
-	by the next scroll rebuild) if the card hasn't been created yet."""
-	if not is_inside_tree():
-		return
-	var card := get_card_at_index(index)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		_apply_focus_to_card(card)
-	else:
-		_pending_focus_index = index
-
-func _apply_focus_to_card(card: Control) -> void:
-	"""Focus a card and suppress the container's follow-focus auto-scroll.
-	We intentionally do NOT stop an in-flight smooth scroll here: this helper is
-	used by scroll-to-focus paths that already started a centered scroll, and
-	interrupting it leaves offscreen targets sitting at the viewport edge."""
-	if not _window_has_focus():
-		# Backgrounded (e.g. a shuffler session): grabbing focus would fire
-		# focus_entered SFX/vibration nobody can see. Keep the target pending;
-		# NOTIFICATION_WM_WINDOW_FOCUS_IN restores it when the user returns.
-		var idx := int(card.get_meta("virtual_index", -1))
-		if idx >= 0:
-			_pending_focus_index = idx
-		return
-	card.set_meta("_suppress_smooth_scroll", true)
-	SmoothScrollContainer._strace("focus-card idx=" + str(card.get_meta("virtual_index", -1)))
-	card.grab_focus()
-	_pending_focus_index = -1
-
 func focus_last_or_first_card() -> void:
 	"""Focus the last focused card, or the first card if none was focused."""
-	if not _window_has_focus():
-		return
-	var card = get_card_at_index(_last_focused_virtual_index)
-	if not card or not is_instance_valid(card) or not card.is_inside_tree():
-		card = get_card_at_index(0)
-	if card and is_instance_valid(card) and card.is_inside_tree():
-		card.grab_focus()
+	_focus.focus_last_or_first_card()
+
+# --- Debug/audit facades (implementation: GridDebugOverlay child) -------------
 
 func _update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
-	# Lazy-init cached style boxes
-	if not _debug_style_visible_data:
-		_debug_style_visible_data = StyleBoxFlat.new()
-		_debug_style_visible_data.border_color = Color(0.0, 1.0, 0.0, 0.8)
-		_debug_style_visible_data.bg_color = Color(0.0, 1.0, 0.0, 0.1)
-		_debug_style_visible_data.set_border_width_all(3)
-		_debug_style_visible_loading = StyleBoxFlat.new()
-		_debug_style_visible_loading.border_color = Color(1.0, 0.5, 0.0, 0.8)
-		_debug_style_visible_loading.bg_color = Color(1.0, 0.5, 0.0, 0.1)
-		_debug_style_visible_loading.set_border_width_all(3)
-		_debug_style_buffer_data = StyleBoxFlat.new()
-		_debug_style_buffer_data.border_color = Color(0.0, 0.5, 1.0, 0.5)
-		_debug_style_buffer_data.bg_color = Color(0.0, 0.5, 1.0, 0.05)
-		_debug_style_buffer_data.set_border_width_all(3)
-		_debug_style_buffer_loading = StyleBoxFlat.new()
-		_debug_style_buffer_loading.border_color = Color(0.5, 0.5, 0.5, 0.5)
-		_debug_style_buffer_loading.bg_color = Color(0.5, 0.5, 0.5, 0.05)
-		_debug_style_buffer_loading.set_border_width_all(3)
-
-	for card in _active_cards:
-		var idx = card.get_meta("virtual_index", -1)
-		if idx < 0:
-			continue
-
-		var card_visible = idx >= visible_start_idx and idx <= visible_end_idx
-		var has_data = _data_cache.has(idx)
-
-		# Use cached metadata reference instead of tree traversal for performance
-		var debug_panel = card.get_meta("_debug_panel_ref", null)
-		if not debug_panel or not is_instance_valid(debug_panel):
-			debug_panel = Panel.new()
-			debug_panel.name = "_debug_panel"
-			debug_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-			debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-			var label = M3Label.new()
-			label.name = "_debug_label"
-			label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-			label.position = Vector2(M3Units.dp(5), M3Units.dp(5))
-			label.label_style = M3Label.Style.BODY_SMALL
-			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-			label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-			debug_panel.add_child(label)
-
-			card.add_child(debug_panel)
-			card.move_child(debug_panel, 0)
-			card.set_meta("_debug_panel_ref", debug_panel)
-
-		var style: StyleBoxFlat
-		if card_visible:
-			style = _debug_style_visible_data if has_data else _debug_style_visible_loading
-		else:
-			style = _debug_style_buffer_data if has_data else _debug_style_buffer_loading
-		debug_panel.add_theme_stylebox_override("panel", style)
-
-		var debug_label = debug_panel.get_node("_debug_label")
-		if debug_label:
-			var status = "DATA" if has_data else "LOADING"
-			var location = "VISIBLE" if card_visible else "BUFFER"
-			debug_label.text = "#%d\n%s\n%s" % [idx, status, location]
-
-	_update_debug_flow_panel_position()
+	if _debug_overlay:
+		_debug_overlay.update_debug_visuals(visible_start_idx, visible_end_idx)
 
 func _update_debug_mode():
-	if not is_inside_tree():
-		return
-
-	if debug_mode:
-		_setup_debug_camera()
-		_setup_debug_flow_panel()
-		if not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
-			RenderingServer.frame_post_draw.connect(_on_frame_post_draw_audit)
-		if _active_cards.size() > 0:
-			var first_idx = _active_cards[0].get_meta("virtual_index", 0)
-			var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
-			_update_debug_visuals(first_idx, last_idx)
-	else:
-		if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
-			RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)
-		if _debug_camera:
-			_debug_camera.queue_free()
-			_debug_camera = null
-		if _debug_flow_panel:
-			_debug_flow_panel.queue_free()
-			_debug_flow_panel = null
-		# Clear draw-audit dedup state so it cannot grow unbounded while debug
-		# mode is on and never leaks across debug sessions.
-		_drawaudit_last_deltas.clear()
-		# Clean debug panels from both active cards and pool cards
-		for card in _active_cards:
-			var debug_panel = card.get_meta("_debug_panel_ref", null)
-			if debug_panel and is_instance_valid(debug_panel):
-				debug_panel.queue_free()
-			card.remove_meta("_debug_panel_ref")
-		for card in _card_pool:
-			var debug_panel = card.get_meta("_debug_panel_ref", null)
-			if debug_panel and is_instance_valid(debug_panel):
-				debug_panel.queue_free()
-			card.remove_meta("_debug_panel_ref")
-		_debug_style_visible_data = null
-		_debug_style_visible_loading = null
-		_debug_style_buffer_data = null
-		_debug_style_buffer_loading = null
+	if _debug_overlay:
+		_debug_overlay.set_enabled(debug_mode)
 
 func _setup_debug_camera():
-	if _debug_camera:
-		return
-
-	_debug_camera = Camera2D.new()
-	_debug_camera.zoom = Vector2(0.5, 0.5)
-	_debug_camera.enabled = true
-	add_child(_debug_camera)
-	_update_debug_camera_position()
+	if _debug_overlay:
+		_debug_overlay.setup_camera()
 
 func _update_debug_camera_position():
-	if not _debug_camera or not _scroll_container:
-		return
-	_debug_camera.position = _scroll_container.position + _scroll_container.size / 2.0
+	if _debug_overlay:
+		_debug_overlay.update_camera_position()
 
 func _setup_debug_flow_panel():
-	if _debug_flow_panel:
-		return
-
-	_debug_flow_panel = Panel.new()
-	_debug_flow_panel.name = "_debug_flow_panel"
-	_debug_flow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_debug_flow_panel.z_index = -1
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(1.0, 0.0, 0.0, 0.2)
-	style.border_color = Color(1.0, 0.0, 0.0, 0.8)
-	style.set_border_width_all(2)
-	_debug_flow_panel.add_theme_stylebox_override("panel", style)
-	_margin_container.add_child(_debug_flow_panel)
-	_update_debug_flow_panel_position()
+	if _debug_overlay:
+		_debug_overlay.setup_flow_panel()
 
 func _update_debug_flow_panel_position():
-	if not _debug_flow_panel or not _flow_container:
-		return
-	var flow_pos = _flow_container.global_position
-	var parent_pos = _margin_container.global_position
-	_debug_flow_panel.position = flow_pos - parent_pos
-	_debug_flow_panel.size = _flow_container.size
-
-func _refresh_card_visuals(card: Control, force_full_rebuild: bool = false) -> void:
-	"""Single helper for the card visual refresh used by effect/config refresh
-	and pending drains. Media bounds are updated inside the card's refresh path."""
-	if not is_instance_valid(card):
-		return
-	if _card_has_refresh_effects:
-		card.refresh_effects(force_full_rebuild)
-	elif _card_has_refresh_settings:
-		card.refresh_settings()
+	if _debug_overlay:
+		_debug_overlay.update_flow_panel_position()
 
 func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
 	"""Refresh effects on active cards. Cards in the visible zone plus a small
 	buffer are rebuilt immediately; the rest are queued and drained over frames
 	to avoid stalling on large grids."""
-	# A new full-grid refresh supersedes any still-pending queue.
-	_pending_effect_rebuilds.clear()
-	_pending_effect_rebuild_set.clear()
-	_pending_effect_rebuild_force_full = force_full_rebuild
-
-	_get_visible_range()
-
-	var items_per_line = _get_items_per_line()
-	var eff = _get_normal_stride()
-	var stride_cards: int = items_per_line
-	if eff > 0:
-		var row_size: int = maxi(items_per_line, 1)
-		stride_cards = row_size * EFFECT_REBUILD_BUFFER_LINES
-
-	var sync_start: int = maxi(0, _visible_start_idx - stride_cards)
-	var sync_end: int = mini(_visible_end_idx + stride_cards, _total_items)
-
-	for card in _active_cards:
-		if not is_instance_valid(card):
-			continue
-		var idx = card.get_meta("virtual_index", -1)
-		var in_sync_zone = idx >= sync_start and idx < sync_end
-		if in_sync_zone:
-			_refresh_card_visuals(card, force_full_rebuild)
-		else:
-			if not _pending_effect_rebuild_set.has(card):
-				_pending_effect_rebuilds.append(card)
-				_pending_effect_rebuild_set[card] = true
-
-func _drain_pending_effect_rebuilds() -> void:
-	if _pending_effect_rebuilds.is_empty():
-		return
-
-	var force_full_rebuild: bool = _pending_effect_rebuild_force_full
-	var processed: int = 0
-	# Not budget-gated: pending effect rebuilds belong to active cards;
-	# starving the queue leaves stale/missing effect stacks on screen.
-	while processed < EFFECT_REBUILD_CARDS_PER_FRAME and not _pending_effect_rebuilds.is_empty():
-		var card = _pending_effect_rebuilds[0]
-		_pending_effect_rebuilds.remove_at(0)
-		_pending_effect_rebuild_set.erase(card)
-		if not is_instance_valid(card):
-			continue
-		# Skip cards that are no longer active.
-		if not _active_cards.has(card):
-			continue
-		# Make sure bounds and stack parenting are current before rebuilding;
-		# cards that were queued during a layout change can otherwise rebuild
-		# against stale/zero media bounds and stay blank.
-		_refresh_card_visuals(card, force_full_rebuild)
-		processed += 1
-
-func _flush_pending_effect_rebuilds_for_visible_zone() -> void:
-	if _pending_effect_rebuilds.is_empty():
-		return
-
-	_get_visible_range()
-
-	var items_per_line = _get_items_per_line()
-	var eff = _get_normal_stride()
-	var stride_cards: int = items_per_line
-	if eff > 0:
-		var row_size: int = maxi(items_per_line, 1)
-		stride_cards = row_size * EFFECT_REBUILD_BUFFER_LINES
-
-	var sync_start: int = maxi(0, _visible_start_idx - stride_cards)
-	var sync_end: int = mini(_visible_end_idx + stride_cards, _total_items)
-
-	var i: int = 0
-	while i < _pending_effect_rebuilds.size():
-		var card = _pending_effect_rebuilds[i]
-		if not is_instance_valid(card):
-			_pending_effect_rebuilds.remove_at(i)
-			_pending_effect_rebuild_set.erase(card)
-			continue
-		if not _active_cards.has(card):
-			_pending_effect_rebuilds.remove_at(i)
-			_pending_effect_rebuild_set.erase(card)
-			continue
-		var idx = card.get_meta("virtual_index", -1)
-		if idx >= sync_start and idx < sync_end:
-			_pending_effect_rebuilds.remove_at(i)
-			_pending_effect_rebuild_set.erase(card)
-			_refresh_card_visuals(card, _pending_effect_rebuild_force_full)
-			continue
-		i += 1
+	_effect_queue.refresh_all(force_full_rebuild)
 
 func refresh_all_card_configs() -> void:
 	"""Re-apply size flags, alignment, aspect ratio, and display mode to all active cards.
@@ -5261,27 +3344,3 @@ func refresh_all_card_displays() -> void:
 	for card in _active_cards:
 		if is_instance_valid(card) and _card_has_update_display:
 			card.update_display()
-
-func _update_cache_access_order(cache_key: int):
-	# Dictionary preserves insertion order: erase + re-insert moves the key to
-	# the back (most recently used), keeping eviction O(1).
-	_cache_lru_tick.erase(cache_key)
-	_cache_lru_tick[cache_key] = true
-
-func _evict_oldest_cache_entries(count: int):
-	var to_evict = mini(count, _data_cache.size())
-	if to_evict <= 0:
-		return
-
-	# Front of the insertion-ordered LRU is the least recently used entry.
-	var evicted := 0
-	for oldest_key in _cache_lru_tick.keys():
-		if evicted >= to_evict:
-			break
-		_cache_lru_tick.erase(oldest_key)
-		if _data_cache.has(oldest_key):
-			var game = _data_cache[oldest_key]
-			if game and game.romm_id != 0:
-				_cached_game_ids.erase(game.romm_id)
-			_data_cache.erase(oldest_key)
-		evicted += 1

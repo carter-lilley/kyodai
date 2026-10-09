@@ -85,7 +85,7 @@ func _post_draw_check() -> void:
 		var lt = card.get("_last_visual_transform")
 		if not lt is Transform2D:
 			continue
-		var exp: Vector2 = _grid._compute_visual_layer_offset(card)
+		var exp: Vector2 = _grid._visual_sync.compute_offset(card)
 		var cs_v = card.get("content_scale")
 		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
 		if not cs.is_equal_approx(Vector2.ONE):
