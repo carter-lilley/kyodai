@@ -1,6 +1,9 @@
 ## Regression test for the zoom-bar apply chain (run as a SCENE, not -s, so
 ## autoloads register before grid scripts compile):
-##   godot --headless --path . res://utils/zoom_apply_test.tscn
+##   godot --headless --resolution 1600x900 --path . res://utils/zoom_apply_test.tscn
+## (--resolution matters: headless embedded child Windows clamp to the default
+## 400x300 root viewport, and the grid anchors itself full-rect to its parent,
+## so without it every layout pass sees a degenerate ~324x224 available size.)
 ##
 ## Covers the reported "zoom bar does nothing":
 ##  1. GRID integer path: set_zoom_level changes N and card_size.
@@ -34,12 +37,14 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var win := Window.new()
-	win.size = Vector2i(1600, 900)
-	get_tree().root.add_child(win)
+	# Size the ROOT window directly: headless embedded child Windows clamp to
+	# the root viewport, and the app itself forces a 400x300 minimum at startup
+	# (stomping --resolution and any child Window size). The grid anchors
+	# full-rect to its parent, so the root size IS the grid geometry.
+	get_tree().root.size = Vector2i(1600, 900)
 	var host := Control.new()
 	host.set_anchors_preset(Control.PRESET_FULL_RECT)
-	win.add_child(host)
+	get_tree().root.add_child(host)
 
 	_grid = VirtualScrollGridContainer.new()
 	host.add_child(_grid)
@@ -86,11 +91,13 @@ func _ready() -> void:
 	var k_resolved := _grid._get_scroll_lines_visible()
 	var size_before := _grid.card_size.x
 	_check(k_resolved > 0, "carousel stop resolved (k=%d, w=%.0f)" % [k_resolved, size_before])
-	# External write — exactly what the toolbar fallback does.
-	_grid.target_card_width_ratio = 0.5
+	# External write — exactly what the toolbar fallback does. The ratio must
+	# resolve to a DIFFERENT stop than the current one for the check to be
+	# meaningful (0.25 -> k=4 vs k=2 at the standard 1600x900 geometry).
+	_grid.target_card_width_ratio = 0.25
 	for i in 8:
 		await get_tree().process_frame
-	var expected_w: float = (avail_x - (_grid._resolve_lines_for_ratio(0.5) - 1) * _grid.grid_separation) / _grid._resolve_lines_for_ratio(0.5)
+	var expected_w: float = (avail_x - (_grid._resolve_lines_for_ratio(0.25) - 1) * _grid.grid_separation) / _grid._resolve_lines_for_ratio(0.25)
 	_check(absf(_grid.card_size.x - expected_w) < 1.0 and absf(_grid.card_size.x - size_before) > 1.0,
 		"carousel external ratio write re-resolved stop (w %.0f -> %.0f, expected %.0f)" % [size_before, _grid.card_size.x, expected_w])
 

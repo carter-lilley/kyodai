@@ -143,7 +143,7 @@ func _process(delta: float) -> void:
 		# Terminal write lands on the exact quantized target so rest state is
 		# pixel-identical to content (echoes of our own writes are ignored, so
 		# the write itself must carry the exact value).
-		_set_current_scroll(float(roundi(_wheel_target)))
+		_set_current_scroll_terminal(_wheel_target)
 		_wheel_chase_active = false
 		_wheel_velocity = 0.0
 		_is_smooth_scrolling = false
@@ -308,6 +308,15 @@ func _set_current_scroll(value: float):
 		scroll_horizontal = roundi(value)
 	_write_depth -= 1
 
+## Terminal variant: after the write, reconcile the float model with the
+## POST-CLAMP scrollbar truth. The Range can clamp to a fractional
+## max − page just below the quantized value, leaving the model 1px off the
+## int content otherwise. Use for rest-state writes only — mid-motion writes
+## must keep the fractional glide.
+func _set_current_scroll_terminal(value: float) -> void:
+	_set_current_scroll(value)
+	_scroll_float = float(scroll_vertical if vertical else scroll_horizontal)
+
 func _get_scrollbar():
 	if vertical:
 		return get_v_scroll_bar()
@@ -333,9 +342,10 @@ func _on_internal_scroll_changed(value: float):
 			_is_smooth_scrolling = false
 			_page_scroll_in_flight = false
 		_strace("resync target " + str(_target_scroll) + " -> " + str(value))
-		# Adopt the engine/user truth, quantized: the content position is the
-		# int scroll value, and the float model must match it at rest.
-		var adopted := float(roundi(value))
+		# Adopt the engine/user truth from the POST-CLAMP int content position
+		# (the Range can clamp to a fractional max − page just below the
+		# rounded value), so the float model matches the content at rest.
+		var adopted := float(scroll_vertical if vertical else scroll_horizontal)
 		_target_scroll = adopted
 		_wheel_target = adopted
 		_scroll_float = adopted
@@ -566,7 +576,7 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 		var sb_land = _get_scrollbar()
 		if sb_land:
 			target_value = clampf(target_value, sb_land.min_value, maxf(sb_land.min_value, sb_land.max_value - sb_land.page))
-		_set_current_scroll(float(roundi(target_value)))
+		_set_current_scroll_terminal(target_value)
 		SmoothScrollContainer._strace("tween-done target=" + str(target_value) + " actual=" + str(_get_current_scroll()))
 		scroll_completed.emit()
 	)
@@ -664,7 +674,7 @@ func scroll_to(target: float, animate: bool = true, duration_multiplier: float =
 			target = clampf(target, sb.min_value, maxf(sb.min_value, sb.max_value - sb.page))
 		# Instant jump: no glide follows, so land the float model on the exact
 		# quantized position — rest state must be pixel-identical to content.
-		_set_current_scroll(float(roundi(target)))
+		_set_current_scroll_terminal(target)
 		_suppress_next_snap = true
 
 ## Instant write — the ONLY way external owners (the grid) may move the
@@ -685,7 +695,7 @@ func write_immediate(value: float) -> void:
 		value = clampf(value, sb.min_value, maxf(sb.min_value, sb.max_value - sb.page))
 	_target_scroll = value
 	_wheel_target = value
-	_set_current_scroll(float(roundi(value)))
+	_set_current_scroll_terminal(value)
 	_suppress_next_snap = true
 
 ## Instant write that first pre-raises the scrollbar extent so the value is

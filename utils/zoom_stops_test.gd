@@ -7,8 +7,9 @@
 ##  5. Level round-trip: set_zoom_level -> recalc -> card_size matches stop.
 ##  6. Resize: shrinking the viewport re-floors the stops; clamped levels stay
 ##     valid and fit.
-## Run: godot --headless --path . res://utils/zoom_stops_test.tscn
-## (scene-based so autoloads register before grid scripts compile)
+## Run: godot --headless --resolution 1600x900 --path . res://utils/zoom_stops_test.tscn
+## (scene-based so autoloads register before grid scripts compile; --resolution
+## defeats the headless 400x300 root-viewport clamp — see zoom_apply_test)
 extends Node
 
 var _failures := 0
@@ -31,12 +32,12 @@ func _ready() -> void:
 		UIManager.card_settings_state = CardSettingsState.new()
 		UIManager.card_settings_state.sync_from_settings_manager()
 
-	var win := Window.new()
-	win.size = Vector2i(1600, 900)
-	get_tree().root.add_child(win)
+	# Size the ROOT window (headless child Windows clamp to the root viewport;
+	# see zoom_apply_test).
+	get_tree().root.size = Vector2i(1600, 900)
 	var host := Control.new()
 	host.set_anchors_preset(Control.PRESET_FULL_RECT)
-	win.add_child(host)
+	get_tree().root.add_child(host)
 
 	_grid = VirtualScrollGridContainer.new()
 	host.add_child(_grid)
@@ -48,8 +49,10 @@ func _ready() -> void:
 		await get_tree().process_frame
 
 	# Portrait box art (2:3), media-only display: base dims (200, 300).
+	# NOTE: media_aspect_ratio is an INDEX into the grid's _RATIO_LOOKUP
+	# (0=Fill, 1=2:3, 2=3:4, 3=1:1, 4=16:11), not a float ratio.
 	UIManager.card_settings_state.display_mode = 2
-	UIManager.card_settings_state.media_aspect_ratio = 2.0 / 3.0
+	UIManager.card_settings_state.media_aspect_ratio = 1
 	_grid.set_grid_orientation(_grid.ViewMode.GRID, true, 1.0)
 
 	# --- 1. Grid portrait on landscape: whole card visible at every stop ---
@@ -75,12 +78,12 @@ func _ready() -> void:
 		"largest stop equals computed fit floor (levels[0]=%d expected>=%d)" % [levels[0], n_min_expected])
 
 	# --- 2. Landscape art: N=2 allowed when it fits ---
-	UIManager.card_settings_state.media_aspect_ratio = 16.0 / 9.0
+	UIManager.card_settings_state.media_aspect_ratio = 4  # 16:11
 	_grid._refresh_cached_settings()
 	_grid.refresh_dimensions()
 	var levels_wide := _grid.get_snap_levels()
 	_check(levels_wide.has(2), "N=2 reachable for landscape art (levels[0]=%d)" % levels_wide[0])
-	UIManager.card_settings_state.media_aspect_ratio = 2.0 / 3.0
+	UIManager.card_settings_state.media_aspect_ratio = 1  # back to 2:3
 	_grid._refresh_cached_settings()
 	_grid.refresh_dimensions()
 
@@ -134,7 +137,9 @@ func _ready() -> void:
 
 	# --- 6. Resize re-floors stops ---
 	_grid.set_grid_orientation(_grid.ViewMode.GRID, true, 1.0)
-	_grid.size = Vector2(800, 480)
+	# The grid anchors full-rect to its host, so resize the root window
+	# (assigning grid.size directly would be stomped on the next sort).
+	get_tree().root.size = Vector2i(800, 480)
 	_grid.refresh_dimensions()
 	for i in 6:
 		await get_tree().process_frame

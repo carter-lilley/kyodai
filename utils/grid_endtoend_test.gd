@@ -24,13 +24,13 @@ func _ready() -> void:
 	for i in 5:
 		await get_tree().process_frame
 
-	var win := Window.new()
-	win.size = Vector2i(1600, 900)
-	get_tree().root.add_child(win)
-
+	# Size the ROOT window: headless embedded child Windows clamp to the root
+	# viewport (and the app forces a 400x300 minimum at startup), so a child
+	# Window would leave the grid at a degenerate ~324x224 available size.
+	get_tree().root.size = Vector2i(1600, 900)
 	var host := Control.new()
 	host.set_anchors_preset(Control.PRESET_FULL_RECT)
-	win.add_child(host)
+	get_tree().root.add_child(host)
 
 	_grid = VirtualScrollGridContainer.new()
 	host.add_child(_grid)
