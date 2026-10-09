@@ -795,10 +795,8 @@ func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_si
 		var on_disk_size := FSM.get_file_size(destination_path)
 		if file_size <= 0 or on_disk_size == file_size:
 			if DEBUG_LOG: print("[SystemManager.download] File already on disk, marking downloaded instead of redownloading: " + destination_path)
-			game.mark_sibling_downloaded(disc_id)
-			if disc_id == game.romm_id:
-				game.file_path = destination_path
-			DataManager.update_game(game)
+			# Per-row truth: stamp the variant's own row + rebuild group cache.
+			DataManager.record_variant_download(game, disc_id, destination_path)
 			if not suppress_notification:
 				SystemManager.notifications.show_notification(game.get_display_name() + " is already downloaded", SystemManager.notifications.Type.INFO)
 			# No QueueItem exists on this path, but listeners (HomeView) still need
@@ -3337,11 +3335,10 @@ func _finish_download_completion(item: QueueItem):
 	# Update game resource if applicable
 	if item.game_resource and item.update_game_resource:
 		var downloaded_id = item.romm_id if item.romm_id != 0 else item.game_resource.romm_id
-		item.game_resource.mark_sibling_downloaded(downloaded_id)
-		# Only the main rom owns file_path; sibling discs resolve via get_disc_entries()
-		if downloaded_id == item.game_resource.romm_id:
-			item.game_resource.file_path = item.destination_path
-		DataManager.update_game(item.game_resource, func(persist_ok: bool):
+		# Per-row truth: stamp the downloaded variant's OWN row and rebuild the
+		# group cache (record_variant_download also updates the resource
+		# in-memory for immediate UI feedback).
+		DataManager.record_variant_download(item.game_resource, downloaded_id, item.destination_path, func(persist_ok: bool):
 			if not persist_ok:
 				push_error("[SystemManager.download] Failed to persist download state for " + item.game_resource.title + " - game will appear undownloaded on next launch")
 				if SystemManager.notifications:

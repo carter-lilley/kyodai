@@ -444,6 +444,113 @@ func _get_is_master_entry_clause() -> String:
 	return " AND is_master_entry = 1" if _should_fold_romm_siblings() else ""
 
 
+## Downloaded-membership clause for Home queries. Folded: the master row
+## represents its whole sibling group, so its own file OR any cached
+## downloaded sibling counts. Unfolded: every row stands alone and only its
+## OWN file counts - a sibling's download must not drag the group master's
+## entry into Home (and vice versa).
+func _get_downloaded_clause() -> String:
+	if _should_fold_romm_siblings():
+		return " AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')"
+	return " AND has_local_copy = 1"
+
+
+## Rebuilds a sibling group's download cache from member rows' per-row truth
+## (has_local_copy). DB thread, lock held by caller.
+##
+## downloaded_sibling_ids is a DERIVED CACHE that lives on the group's master
+## row only; it exists for folded Home queries and details-sheet badges.
+## Non-master rows always get '[]' so unfolded views trust each row's own
+## has_local_copy. Returns {"master_id": int, "cache": Array[int]}.
+func refresh_group_download_cache_unlocked(member_ids: Array) -> Dictionary:
+	if member_ids.is_empty() or not _is_db_ready:
+		return {"master_id": 0, "cache": [] as Array[int]}
+	var placeholders = ", ".join(member_ids.map(func(_id): return "?"))
+	var rows = query_array_unlocked(
+		"SELECT romm_id, has_local_copy, is_master_entry, downloaded_sibling_ids FROM games WHERE romm_id IN (%s)" % placeholders,
+		member_ids)
+	if rows.is_empty():
+		return {"master_id": 0, "cache": [] as Array[int]}
+	var master_id := 0
+	var lowest_id := 0
+	var downloaded: Array[int] = []
+	for row in rows:
+		var rid := int(row.get("romm_id", 0))
+		if rid == 0:
+			continue
+		if lowest_id == 0 or rid < lowest_id:
+			lowest_id = rid
+		if master_id == 0 and int(row.get("is_master_entry", 0)) == 1:
+			master_id = rid
+		if int(row.get("has_local_copy", 0)) == 1:
+			downloaded.append(rid)
+	# Defensive: a group with no master row (legacy bad state) still gets its
+	# cache written to a consistent holder.
+	if master_id == 0:
+		master_id = lowest_id
+	var cache: Array[int] = []
+	for d in downloaded:
+		if d != master_id:
+			cache.append(d)
+	var cache_json := JSON.stringify(cache)
+	for row in rows:
+		var rid := int(row.get("romm_id", 0))
+		var target := cache_json if rid == master_id else "[]"
+		if str(row.get("downloaded_sibling_ids", "[]")) != target:
+			query_bool_unlocked("UPDATE games SET downloaded_sibling_ids = ? WHERE romm_id = ?", [target, rid])
+	return {"master_id": master_id, "cache": cache}
+
+
+## Records a completed download: stamps the OWNING row (per-row truth) and
+## rebuilds the group's master-row download cache. Callback receives
+## {"success": bool, "master_id": int, "cache": Array[int]}.
+func record_variant_download(group_ids: Array, downloaded_id: int, file_path: String, callback: Callable = Callable()) -> void:
+	if not _is_db_ready:
+		if callback.is_valid():
+			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
+		return
+	invalidate_downloaded_games_count_cache()
+	MemorySubManager.queue_db_task(
+		func():
+			_db_lock()
+			var ok = query_bool_unlocked("UPDATE games SET has_local_copy = 1, file_path = ? WHERE romm_id = ?", [file_path, downloaded_id])
+			var info := refresh_group_download_cache_unlocked(group_ids)
+			_db_unlock()
+			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
+		func(result):
+			# null when the queue dropped the task (overflow).
+			if result == null:
+				result = {"success": false, "master_id": 0, "cache": []}
+			if callback.is_valid():
+				callback.call(result)
+	)
+
+
+## Clears one variant's row after its file was deleted, then rebuilds the
+## group's download cache from the remaining member rows. Callback receives
+## {"success": bool, "master_id": int, "cache": Array[int]}.
+func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callable = Callable()) -> void:
+	if not _is_db_ready:
+		if callback.is_valid():
+			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
+		return
+	invalidate_downloaded_games_count_cache()
+	MemorySubManager.queue_db_task(
+		func():
+			_db_lock()
+			var ok = query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [deleted_id])
+			var info := refresh_group_download_cache_unlocked(group_ids)
+			_db_unlock()
+			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
+		func(result):
+			# null when the queue dropped the task (overflow).
+			if result == null:
+				result = {"success": false, "master_id": 0, "cache": []}
+			if callback.is_valid():
+				callback.call(result)
+	)
+
+
 # ==================== LIBRARY FILTERS ====================
 
 const FILTER_KINDS := ["genre", "game_mode", "esrb", "pegi", "flag", "status", "company", "release_week"]
@@ -847,101 +954,156 @@ func scan_for_downloaded_games(callback: Callable = Callable()) -> void:
 
 func _scan_and_update_downloaded_games(root_folder: String) -> int:
 	"""DB worker: match downloaded files against the library and update rows.
-	Reads only the columns matching needs; no GameResource materialization."""
-	# Slim read: romm_id, platform_slug, file_name, siblings, downloaded ids.
-	var rows = query_array("SELECT romm_id, platform_slug, file_name, siblings, downloaded_sibling_ids FROM games")
+
+	Per-row truth model: each row's has_local_copy/file_path describes its OWN
+	file. Sibling files resolve to the sibling's own row (sibling.id is that
+	row's romm_id), never to the group master. Rows whose files have vanished
+	are cleared (negative pass), then every sibling group's download cache
+	(downloaded_sibling_ids on the master row) is rebuilt from member rows."""
+	# Slim read of the columns matching needs; deterministic order so conflicts
+	# resolve the same way on every scan.
+	var rows = query_array("SELECT romm_id, platform_slug, file_name, file_path, siblings, is_master_entry, has_local_copy FROM games ORDER BY romm_id")
 	if rows.is_empty():
 		return 0
 
-	# Build lookups: file -> romm_id, plus per-game sibling file -> sibling_id.
-	var file_to_romm: Dictionary = {}
-	var sibling_file_to_id: Dictionary = {}  # romm_id -> {file_name_lower: sibling_id}
-	var main_file_lower: Dictionary = {}     # romm_id -> file_name.to_lower()
-	var existing_dl_ids: Dictionary = {}     # romm_id -> Array (parsed JSON)
-
+	var row_by_id: Dictionary = {}        # romm_id -> row
+	var parsed_siblings: Dictionary = {}  # romm_id -> Array[Dictionary]
 	for row in rows:
 		var romm_id := int(row.get("romm_id", 0))
-		var platform_slug := str(row.get("platform_slug", ""))
-		var file_name := str(row.get("file_name", ""))
 		if romm_id == 0:
 			continue
-
-		var sib_map: Dictionary = {}
+		row_by_id[romm_id] = row
+		var sibs: Array = []
 		var json := JSON.new()
 		if json.parse(str(row.get("siblings", "[]"))) == OK and json.data is Array:
-			for sibling in json.data:
-				if sibling is Dictionary:
-					var sib_file := str(sibling.get("file_name", ""))
-					var sib_id := int(sibling.get("id", 0))
-					if sib_file != "" and sib_id != 0:
-						sib_map[sib_file.to_lower()] = sib_id
-						file_to_romm[platform_slug + "/" + sib_file.to_lower()] = romm_id
-		sibling_file_to_id[romm_id] = sib_map
+			sibs = json.data
+		parsed_siblings[romm_id] = sibs
 
-		if file_name != "":
-			main_file_lower[romm_id] = file_name.to_lower()
-			file_to_romm[platform_slug + "/" + file_name.to_lower()] = romm_id
-
-		var ids: Array = []
-		var id_json := JSON.new()
-		if id_json.parse(str(row.get("downloaded_sibling_ids", "[]"))) == OK and id_json.data is Array:
-			ids = id_json.data
-		existing_dl_ids[romm_id] = ids
+	# Two-pass lookup: a row's OWN file_name claims its key first; sibling-JSON
+	# references only fill unclaimed keys and point at the SIBLING's row.
+	var file_to_romm: Dictionary = {}
+	for row in rows:
+		var romm_id := int(row.get("romm_id", 0))
+		var file_name := str(row.get("file_name", ""))
+		if romm_id == 0 or file_name == "":
+			continue
+		file_to_romm[str(row.get("platform_slug", "")) + "/" + file_name.to_lower()] = romm_id
+	for row in rows:
+		var owner_id := int(row.get("romm_id", 0))
+		var platform_slug := str(row.get("platform_slug", ""))
+		for sibling in parsed_siblings.get(owner_id, []):
+			if not sibling is Dictionary:
+				continue
+			var sib_file := str(sibling.get("file_name", ""))
+			var sib_id := int(sibling.get("id", 0))
+			if sib_file == "" or sib_id == 0 or not row_by_id.has(sib_id):
+				continue
+			var key := platform_slug + "/" + sib_file.to_lower()
+			if not file_to_romm.has(key):
+				file_to_romm[key] = sib_id
 
 	# Filesystem scan on the worker: directory IO stays off the main thread.
-	var found_files: Array[String] = []
-	_scan_games_directory(root_folder, "", found_files)
+	# Files at any depth, plus depth-1 directories so folder-based platforms
+	# (ps3/vita/xbox360 extract each game to a folder named after the rom)
+	# match their row's file_name.
+	var found_entries: Array[String] = []
+	_scan_games_directory(root_folder, "", found_entries)
+	var platform_scan := _scan_platform_directories(root_folder)
+	found_entries.append_array(platform_scan.dirs)
+	var scanned_platforms: Dictionary = {}
+	for slug in platform_scan.platforms:
+		scanned_platforms[slug] = true
 
 	# Files with a sibling download-state file are interrupted/incomplete
 	# downloads (possibly sparse pre-allocated) - never match them as present.
 	var in_progress := {}
-	for f in found_files:
+	for f in found_entries:
 		if f.ends_with(".kyodai_download"):
 			in_progress[f.trim_suffix(".kyodai_download")] = true
 
-	# Match files to games.
-	var matched: Dictionary = {}  # romm_id -> {file_path: String, new_sibling_ids: Array}
-	for file_path in found_files:
+	# Match entries to their owning row. Only depth-1 entries can match;
+	# deeper paths belong to folder-based games whose directory entry matched.
+	var matched: Dictionary = {}  # romm_id -> full local path
+	for file_path in found_entries:
 		if in_progress.has(file_path):
 			continue
-
 		var parts = file_path.split("/", false, 1)
-		if parts.size() < 2:
+		if parts.size() < 2 or parts[1].contains("/"):
 			continue
-
 		var lookup_key = parts[0] + "/" + parts[1].to_lower()
-		if not file_to_romm.has(lookup_key):
-			continue
-		var romm_id: int = file_to_romm[lookup_key]
-		if not matched.has(romm_id):
-			matched[romm_id] = {"file_path": "", "new_sibling_ids": []}
-		var file_lower: String = parts[1].to_lower()
-		if main_file_lower.get(romm_id, "") == file_lower:
-			# Main game file: record its full path.
-			matched[romm_id].file_path = root_folder + "/" + file_path
-		else:
-			# Sibling file: record its sibling id if not already tracked.
-			var sib_id := int(sibling_file_to_id[romm_id].get(file_lower, 0))
-			if sib_id != 0 and not matched[romm_id].new_sibling_ids.has(sib_id) \
-					and not existing_dl_ids[romm_id].has(sib_id):
-				matched[romm_id].new_sibling_ids.append(sib_id)
+		if file_to_romm.has(lookup_key):
+			matched[file_to_romm[lookup_key]] = root_folder + "/" + file_path
 
-	# Transactional update of all matched rows. file_path follows the legacy
-	# behavior of writing "" when only sibling files matched.
+	# Negative pass: rows flagged downloaded whose file is gone get cleared.
+	# Guarded per platform directory so an absent/unmounted platform folder
+	# never mass-clears its rows, and the stored file_path is checked directly
+	# so layouts the name scan can't see don't cause false clears.
+	var cleared: Array = []
+	for row in rows:
+		var romm_id := int(row.get("romm_id", 0))
+		if romm_id == 0 or matched.has(romm_id):
+			continue
+		if int(row.get("has_local_copy", 0)) != 1:
+			continue
+		var platform_slug := str(row.get("platform_slug", ""))
+		if not scanned_platforms.has(platform_slug):
+			continue
+		var still_present := false
+		var stored_path := str(row.get("file_path", ""))
+		if stored_path != "" and (FSM.file_exists(stored_path) or FSM.dir_exists(stored_path)):
+			still_present = true
+		else:
+			var file_name := str(row.get("file_name", ""))
+			if file_name != "":
+				var candidate := root_folder + "/" + platform_slug + "/" + file_name
+				if FSM.file_exists(candidate) or FSM.dir_exists(candidate):
+					still_present = true
+		if not still_present:
+			cleared.append(romm_id)
+
+	# Transactional update of all changed rows, then rebuild group caches.
 	var updated_count := 0
 	_db_lock()
 	var tx_ok = query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION")
 	if tx_ok:
 		for romm_id in matched.keys():
-			var entry: Dictionary = matched[romm_id]
-			var merged_ids: Array = existing_dl_ids[romm_id].duplicate()
-			merged_ids.append_array(entry.new_sibling_ids)
-			if query_bool_unlocked(
-					"UPDATE games SET has_local_copy = 1, file_path = ?, downloaded_sibling_ids = ? WHERE romm_id = ?",
-					[entry.file_path, JSON.stringify(merged_ids), romm_id]):
+			var row: Dictionary = row_by_id[romm_id]
+			var new_path: String = matched[romm_id]
+			if int(row.get("has_local_copy", 0)) == 1 and str(row.get("file_path", "")) == new_path:
+				continue  # already accurate
+			if query_bool_unlocked("UPDATE games SET has_local_copy = 1, file_path = ? WHERE romm_id = ?", [new_path, romm_id]):
 				updated_count += 1
 			else:
 				tx_ok = false
+		if tx_ok:
+			for romm_id in cleared:
+				if query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [romm_id]):
+					updated_count += 1
+				else:
+					tx_ok = false
+		if tx_ok:
+			# Rebuild every sibling group's download cache from member-row truth.
+			var done_groups := {}
+			for owner_id in parsed_siblings.keys():
+				var sibs: Array = parsed_siblings[owner_id]
+				if sibs.is_empty():
+					continue
+				var member_ids: Array = [owner_id]
+				for sibling in sibs:
+					if not sibling is Dictionary:
+						continue
+					var sid := int(sibling.get("id", 0))
+					if sid != 0 and row_by_id.has(sid) and not member_ids.has(sid):
+						member_ids.append(sid)
+				if member_ids.size() < 2:
+					continue
+				var sorted_ids := member_ids.duplicate()
+				sorted_ids.sort()
+				var group_key := str(sorted_ids)
+				if done_groups.has(group_key):
+					continue
+				done_groups[group_key] = true
+				refresh_group_download_cache_unlocked(member_ids)
 	if tx_ok:
 		query_bool_unlocked("COMMIT")
 	else:
@@ -949,6 +1111,24 @@ func _scan_and_update_downloaded_games(root_folder: String) -> int:
 		updated_count = 0
 	_db_unlock()
 	return updated_count
+
+
+## Lists depth-1 game directories (folder-based roms) as "slug/name" entries,
+## plus the platform folders that exist under root (negative-pass guardrail:
+## rows of a platform whose folder is absent are never cleared).
+func _scan_platform_directories(root_path: String) -> Dictionary:
+	var result := {"platforms": [], "dirs": []}
+	if not FSM.dir_exists(root_path):
+		return result
+	for platform_entry in FSM.list_dir(root_path):
+		var platform_path := FSM.join_paths(root_path, platform_entry)
+		if not FSM.is_dir(platform_path):
+			continue
+		result.platforms.append(platform_entry)
+		for game_entry in FSM.list_dir(platform_path):
+			if FSM.is_dir(FSM.join_paths(platform_path, game_entry)):
+				result.dirs.append(platform_entry + "/" + game_entry)
+	return result
 
 
 func _scan_games_directory(root_path: String, sub_path: String, results: Array[String]) -> void:
@@ -1516,7 +1696,7 @@ func get_most_recently_played_game() -> GameResource:
 	stall when all the sweep needs is the single most recent game."""
 	if not _is_db_ready:
 		return null
-	var query_result = query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND last_played != '' AND (has_local_copy = 1 OR (downloaded_sibling_ids != '[]' AND downloaded_sibling_ids != '')) ORDER BY last_played DESC LIMIT 1")
+	var query_result = query_array("SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND last_played != ''" + _get_downloaded_clause() + " ORDER BY last_played DESC LIMIT 1")
 	if query_result.is_empty():
 		return null
 	return _row_to_game(query_result[0])
@@ -1599,6 +1779,127 @@ func get_random_games_for_shuffle_async(platforms: Array[String], filters: Dicti
 	for row in query_result:
 		games.append(_row_to_game(row))
 	return games
+
+
+## Per-platform eligible-game counts under the shuffle WHERE semantics.
+## Used by balanced sampling to split the bag quota fairly; the clauses match
+## get_random_games_for_shuffle_async exactly so the counts agree with what a
+## sampling query would see (filters included).
+func get_game_counts_for_shuffle(platforms: Array[String], filters: Dictionary = {}) -> Dictionary:
+	var counts: Dictionary = {}
+	if not _is_db_ready or platforms.is_empty():
+		return counts
+	var placeholders := ", ".join(platforms.map(func(_p): return "?"))
+	var filter_parts: Array = _get_filter_clause(filters)
+	var query = "SELECT platform_slug, COUNT(*) AS c FROM games WHERE platform_slug IN (" + placeholders + ")" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 GROUP BY platform_slug"
+	var bindings: Array = []
+	bindings.append_array(platforms)
+	bindings.append_array(filter_parts[1])
+	var query_result = await query_array_async(query, bindings)
+	for row in query_result:
+		counts[row["platform_slug"]] = int(row["c"])
+	return counts
+
+
+## Balanced random sampling for the shuffler bag: platform representation is
+## weighted by count^alpha (alpha = 1.0 - balance), interpolating between the
+## two extremes — balance 0.0 is uniform per game (proportional to library
+## size, identical to get_random_games_for_shuffle_async), balance 1.0 is
+## uniform per platform, and the default 0.5 gives square-root weighting, so
+## a 7k-game platform outrepresents a 50-game one ~12:1 instead of 140:1.
+## Quotas are computed against the real counts with weighted
+## largest-remainder + water-filling, then each platform is sampled with its
+## own small ORDER BY RANDOM() LIMIT quota query on the DB worker thread.
+func get_random_games_for_shuffle_balanced_async(platforms: Array[String], filters: Dictionary, limit: int, balance: float = 1.0) -> Array[GameResource]:
+	var games: Array[GameResource] = []
+	if not _is_db_ready or platforms.is_empty() or limit <= 0:
+		return games
+	if balance <= 0.0:
+		# 0% balance is exactly the plain proportional sample.
+		return await get_random_games_for_shuffle_async(platforms, filters, limit)
+	var counts: Dictionary = await get_game_counts_for_shuffle(platforms, filters)
+	var active: Array[String] = []
+	for slug in platforms:
+		if counts.get(slug, 0) > 0:
+			active.append(slug)
+	if active.is_empty():
+		return games
+	var quotas := _balanced_shuffle_quotas(counts, active, limit, 1.0 - balance)
+	var filter_parts: Array = _get_filter_clause(filters)
+	var seen: Dictionary = {}
+	for slug in active:
+		var quota: int = quotas[slug]
+		if quota <= 0:
+			continue
+		var query = "SELECT " + _SHUFFLE_COLUMNS + " FROM games WHERE platform_slug = ?" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + filter_parts[0] + " AND cover_group_master = 1 ORDER BY RANDOM() LIMIT ?"
+		var bindings: Array = [slug]
+		bindings.append_array(filter_parts[1])
+		bindings.append(quota)
+		var query_result = await query_array_async(query, bindings)
+		for row in query_result:
+			var game := _row_to_game(row)
+			if not seen.has(game.romm_id):
+				seen[game.romm_id] = true
+				games.append(game)
+	games.shuffle()
+	return games
+
+
+## Splits `limit` into per-platform quotas proportional to count^alpha
+## (alpha 0 = equal shares, alpha 1 = proportional to library size). Each
+## round distributes the remaining budget by weighted largest-remainder;
+## platforms whose library is smaller than their share contribute everything
+## they have and drop out, and the surplus redistributes to the platforms
+## still below quota. Repeats until the budget is spent or every platform is
+## exhausted.
+func _balanced_shuffle_quotas(counts: Dictionary, active: Array[String], limit: int, alpha: float) -> Dictionary:
+	var quotas: Dictionary = {}
+	var weights: Dictionary = {}
+	for slug in active:
+		quotas[slug] = 0
+		weights[slug] = pow(float(counts[slug]), alpha)
+	var remaining := limit
+	var unfilled: Array[String] = active.duplicate()
+	while remaining > 0 and not unfilled.is_empty():
+		var total_w := 0.0
+		for slug in unfilled:
+			total_w += weights[slug]
+		if total_w <= 0.0:
+			break
+		# Ideal weighted share of the remaining budget, floored; the leftover
+		# units go to the largest fractional remainders (largest-remainder).
+		var fractions: Array = []  # [[fraction, slug], ...]
+		var round_take: Dictionary = {}
+		var distributed := 0
+		for slug in unfilled:
+			var exact: float = remaining * weights[slug] / total_w
+			var capacity: int = counts[slug] - quotas[slug]
+			var take: int = mini(int(floor(exact)), capacity)
+			round_take[slug] = take
+			distributed += take
+			fractions.append([exact - floor(exact), slug])
+		fractions.sort_custom(func(a, b): return a[0] > b[0])
+		var leftover := remaining - distributed
+		for pair in fractions:
+			if leftover <= 0:
+				break
+			var slug: String = pair[1]
+			if counts[slug] - quotas[slug] - round_take[slug] > 0:
+				round_take[slug] += 1
+				leftover -= 1
+		var progress := false
+		var next: Array[String] = []
+		for slug in unfilled:
+			quotas[slug] += round_take[slug]
+			remaining -= round_take[slug]
+			if round_take[slug] > 0:
+				progress = true
+			if counts[slug] - quotas[slug] > 0:
+				next.append(slug)
+		unfilled = next
+		if not progress:
+			break
+	return quotas
 
 
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:
@@ -1772,7 +2073,7 @@ func get_downloaded_games_count() -> int:
 		return 0
 
 	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]')" % placeholders
+	var query = "SELECT COUNT(*) as count FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s)" % placeholders + _get_downloaded_clause()
 
 	var query_result = query_array(query, enabled_slugs)
 	if query_result.size() > 0:
@@ -1796,7 +2097,7 @@ func get_downloaded_games_paginated(offset: int, limit: int) -> Array[GameResour
 		return games
 
 	var placeholders = ", ".join(enabled_slugs.map(func(_s): return "?"))
-	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s) AND (has_local_copy = 1 OR downloaded_sibling_ids != '[]') ORDER BY last_played DESC, title ASC LIMIT ? OFFSET ?" % placeholders
+	var query = "SELECT * FROM games WHERE 1=1" + _get_is_master_entry_clause() + _get_has_cover_art_clause() + " AND cover_group_master = 1 AND hidden_from_home = 0 AND platform_slug IN (%s)" % placeholders + _get_downloaded_clause() + " ORDER BY last_played DESC, title ASC LIMIT ? OFFSET ?"
 
 	var bindings: Array = []
 	bindings.append_array(enabled_slugs)

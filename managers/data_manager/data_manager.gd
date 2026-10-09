@@ -199,6 +199,10 @@ func get_random_games_for_shuffle_async(platforms: Array[String], filters: Dicti
 	return await database.get_random_games_for_shuffle_async(platforms, filters, limit)
 
 
+func get_random_games_for_shuffle_balanced_async(platforms: Array[String], filters: Dictionary, limit: int, balance: float = 1.0) -> Array[GameResource]:
+	return await database.get_random_games_for_shuffle_balanced_async(platforms, filters, limit, balance)
+
+
 func get_games_paginated(offset: int, limit: int, sort_field: String = "title", ascending: bool = true, platform_slug: String = "", filters: Dictionary = {}) -> Array[GameResource]:
 	return database.get_games_paginated(offset, limit, sort_field, ascending, platform_slug, filters)
 
@@ -344,6 +348,37 @@ func set_game_user_props(game: GameResource, props: Dictionary, update_last_play
 	user_props.set_game_props(game, props, update_last_played, notify, callback)
 
 
+## Record a completed download for a specific variant (main rom or sibling).
+## Per-row truth model: the variant's OWN row is stamped, and the group
+## master's downloaded_sibling_ids cache is rebuilt from member rows.
+func record_variant_download(game: GameResource, downloaded_id: int, file_path: String, callback: Callable = Callable()) -> void:
+	if not database.is_database_ready() or not game:
+		if callback.is_valid():
+			callback.call(false)
+		return
+	# In-memory update for immediate UI feedback
+	if downloaded_id == game.romm_id:
+		game.has_local_copy = true
+		game.file_path = file_path
+	else:
+		game.mark_sibling_downloaded(downloaded_id)
+	var group_ids: Array = [game.romm_id]
+	for sibling in game.siblings:
+		var sid := int(sibling.get("id", 0))
+		if sid != 0 and sid != game.romm_id and not group_ids.has(sid):
+			group_ids.append(sid)
+	database.record_variant_download(group_ids, downloaded_id, file_path, func(result: Dictionary):
+		var success: bool = result.get("success", false)
+		if success:
+			# Mirror the authoritative cache (master rows only)
+			if int(result.get("master_id", 0)) == game.romm_id:
+				game.downloaded_sibling_ids = result.get("cache", [])
+			game_updated.emit(game)
+		if callback.is_valid():
+			callback.call(success)
+	)
+
+
 ## Toggle a game's membership in the RomM "favourites" virtual collection.
 func set_game_favorite(game: GameResource, favorite: bool, notify: bool = true, callback: Callable = Callable()) -> void:
 	user_props.set_favorite(game, favorite, notify, callback)
@@ -423,29 +458,38 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 				callback.call(false)
 			return false
 
-	# Update game state (after successful deletion or forced removal)
-	if active_id == game.romm_id:
-		# Main game
-		game.has_local_copy = false
-		game.file_path = ""
-		# Also clear any downloaded siblings since user is removing this game from library
-		game.downloaded_sibling_ids.clear()
-	else:
-		# Sibling - remove from downloaded list
-		game.downloaded_sibling_ids.erase(active_id)
+	# Update game state (after successful deletion or forced removal).
+	# Per-row truth: clear only the deleted variant's own row; the group's
+	# download cache is rebuilt from the remaining member rows. Sibling files
+	# still on disk keep their downloaded state (they weren't deleted).
+	var group_ids: Array = [game.romm_id]
+	for sibling in game.siblings:
+		var sid := int(sibling.get("id", 0))
+		if sid != 0 and sid != game.romm_id and not group_ids.has(sid):
+			group_ids.append(sid)
 
-	print("[DataManager] delete_game_download: Updating DB for game " + game.title + " (romm_id=" + str(game.romm_id) + ") - has_local_copy=" + str(game.has_local_copy) + ", downloaded_sibling_ids=" + str(game.downloaded_sibling_ids))
+	print("[DataManager] delete_game_download: clearing variant " + str(active_id) + " of game " + game.title + " (romm_id=" + str(game.romm_id) + ")")
 
 	# Clean up extracted game files for platforms that extract during launch
 	LaunchManager.cleanup_extracted_game_files(game)
 
-	# Persist to database
-	var wrapped_callback = func(success: bool):
+	# Persist to database and mirror the authoritative result in memory
+	database.record_variant_deleted(group_ids, active_id, func(result: Dictionary):
+		var success: bool = result.get("success", false)
 		print("[DataManager] delete_game_download: DB update result for " + game.title + " = " + str(success))
+		if success:
+			if active_id == game.romm_id:
+				game.has_local_copy = false
+				game.file_path = ""
+			if int(result.get("master_id", 0)) == game.romm_id:
+				game.downloaded_sibling_ids = result.get("cache", [])
+			elif active_id != game.romm_id:
+				game.downloaded_sibling_ids.erase(active_id)
+			game_updated.emit(game)
 		if callback.is_valid():
 			callback.call(success)
-
-	return database.update_game(game, wrapped_callback)
+	)
+	return true
 
 
 # ==================== SYNC TIMESTAMPS / DEVICE ID ====================
