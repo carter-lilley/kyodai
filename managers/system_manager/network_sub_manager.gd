@@ -777,6 +777,9 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 
 		if request_result != HTTPRequest.RESULT_SUCCESS:
 			result["error"] = "Download failed: " + str(request_result)
+			# This path has no resume support - never leave a partial file behind.
+			if FSM.file_exists(normalized_path):
+				FSM.delete_file(normalized_path)
 			callback.call(false, response_code, result.error)
 			http.queue_free()
 			return
@@ -784,6 +787,12 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 		if response_code >= 400:
 			if response_code == 401:
 				authentication_failed.emit()
+			# HTTPRequest streams the body into download_file regardless of
+			# status, so an error body (e.g. RomM's JSON error) would otherwise
+			# stay on disk masquerading as the ROM - and the next filesystem
+			# scan would match it by name as a completed download.
+			if FSM.file_exists(normalized_path):
+				FSM.delete_file(normalized_path)
 			result["error"] = "HTTP error: " + str(response_code)
 			callback.call(false, response_code, result.error)
 			http.queue_free()

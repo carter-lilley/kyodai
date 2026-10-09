@@ -1058,8 +1058,8 @@ func _start_download(item: QueueItem):
 		item.url,
 		item.destination_path,
 		headers,
-		func(success: bool, _status_code: int, error_msg: String):
-			_on_file_download_complete(item, success, error_msg),
+		func(success: bool, status_code: int, error_msg: String):
+			_on_file_download_complete(item, success, error_msg, status_code),
 		item.expected_file_size
 	)
 
@@ -1180,8 +1180,8 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 				item.url,
 				item.destination_path,
 				headers,
-			func(success: bool, _status_code: int, err: String):
-				_on_file_download_complete(item, success, err),
+			func(success: bool, status_code: int, err: String):
+				_on_file_download_complete(item, success, err, status_code),
 				item.expected_file_size
 			)
 
@@ -2177,7 +2177,12 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			push_error("[SystemManager.download] Chunks failed with no retries remaining for: " + item.name)
 			item.status = "failed"
 			item.error_message = "Chunk download failed after " + str(MAX_CHUNK_RETRIES) + " retries"
+			# Flush mode (Android) writes chunks directly into the destination;
+			# without resume state that partial data must not survive.
 			_cleanup_chunked_download(item_id)
+			_delete_download_state(item.destination_path)
+			if FSM.file_exists(item.destination_path):
+				FSM.delete_file(item.destination_path)
 			_cleanup_item(item)
 			download_completed.emit(item_id, false, item.error_message)
 			_active_items.erase(item_id)
@@ -2205,8 +2210,8 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 		item.url,
 		item.destination_path,
 		headers,
-		func(success: bool, _status_code: int, error_msg: String):
-			_on_file_download_complete(item, success, error_msg),
+		func(success: bool, status_code: int, error_msg: String):
+			_on_file_download_complete(item, success, error_msg, status_code),
 		item.expected_file_size
 	)
 
@@ -3117,7 +3122,7 @@ func _update_download_progress(item: QueueItem):
 		# Update foreground service notification on Android
 		_update_foreground_service(item.name, int(item.progress * 100))
 
-func _on_file_download_complete(item: QueueItem, success: bool, error_msg: String):
+func _on_file_download_complete(item: QueueItem, success: bool, error_msg: String, status_code: int = 0):
 	# Guard against double-calls
 	if item.status != "downloading":
 		return
@@ -3128,13 +3133,22 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 	item.http_request = null
 
 	if not success:
+		# Terminal failure on the single-stream path: HTTPRequest streams the
+		# response body into the destination file even for error statuses, so a
+		# partial/error file must never survive (the filesystem scan matches by
+		# name and would count it as a completed download).
+		if FSM.file_exists(item.destination_path):
+			FSM.delete_file(item.destination_path)
+		if status_code == 404 and item.type == "game":
+			item.error_message = "Server has no file for this ROM (HTTP 404) - it may have been removed or replaced on the server"
+		else:
+			item.error_message = error_msg
 		item.status = "failed"
-		item.error_message = error_msg
-		print("[SystemManager.download] Download failed for " + item.name + ": " + error_msg)
+		print("[SystemManager.download] Download failed for " + item.name + ": " + item.error_message)
 		_notify_download_failed(item)
 		_cleanup_item(item)
 		_stop_foreground_service()  # Stop foreground service on failure
-		download_completed.emit(item.id, false, error_msg)
+		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
@@ -3154,6 +3168,25 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		queue_changed.emit()
 		_process_queue()
 		return
+
+	# Size verification for RomM game downloads: a 200 response with the wrong
+	# byte count means a truncated or substituted body (accept_gzip is disabled,
+	# so sizes must match exactly).
+	if item.type == "game" and item.expected_file_size > 0:
+		var actual_size := FSM.get_file_size(item.destination_path)
+		if actual_size != item.expected_file_size:
+			FSM.delete_file(item.destination_path)
+			item.status = "failed"
+			item.error_message = "Downloaded size mismatch (%d of %d bytes)" % [actual_size, item.expected_file_size]
+			print("[SystemManager.download] " + item.error_message + ": " + item.destination_path)
+			_notify_download_failed(item)
+			_cleanup_item(item)
+			_stop_foreground_service()
+			download_completed.emit(item.id, false, item.error_message)
+			_active_items.erase(item.id)
+			queue_changed.emit()
+			_process_queue()
+			return
 
 	# Finish download completion
 	_finish_download_completion(item)
@@ -3208,6 +3241,14 @@ func _fail_download(item_id: String, error_msg: String):
 	item.http_request = null
 	item.status = "failed"
 	item.error_message = error_msg
+
+	# Single-stream downloads have no resume support - a timed-out/stalled
+	# partial would otherwise linger and get matched as complete by the next
+	# filesystem scan. Chunked downloads (incl. Android flush mode, which
+	# writes into the destination) keep their partials for resume.
+	if not _chunked_downloads.has(item_id):
+		if FSM.file_exists(item.destination_path):
+			FSM.delete_file(item.destination_path)
 
 	_cleanup_download_tracking(item_id)
 	_cleanup_item(item)
