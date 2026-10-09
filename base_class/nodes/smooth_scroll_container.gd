@@ -285,6 +285,14 @@ func _reconnect_scrollbars():
 func _get_current_scroll() -> float:
 	return scroll_vertical if vertical else scroll_horizontal
 
+## Diagnostic for the single scroll-writer contract: counts scroll writes
+## observed on the scrollbar that did NOT pass through this class's write
+## paths (_set_current_scroll). External writers (the grid poking
+## scroll_vertical directly, engine clamps engaging because the extent was
+## not pre-raised) show up here. Read/reset from tests; should stay 0.
+var external_write_count := 0
+var _write_depth := 0
+
 func _set_current_scroll(value: float):
 	# Motion model vs layout truth: the ScrollBar stores ints (content moves in
 	# 1px steps), but the tracked float keeps the raw fractional position so
@@ -293,10 +301,12 @@ func _set_current_scroll(value: float):
 	# the quantization symmetric, and every terminal write lands on the target
 	# exactly, so at rest float and content are pixel-identical.
 	_scroll_float = value
+	_write_depth += 1
 	if vertical:
 		scroll_vertical = roundi(value)
 	else:
 		scroll_horizontal = roundi(value)
+	_write_depth -= 1
 
 func _get_scrollbar():
 	if vertical:
@@ -304,6 +314,10 @@ func _get_scrollbar():
 	return get_h_scroll_bar()
 
 func _on_internal_scroll_changed(value: float):
+	if _write_depth == 0:
+		# A write that bypassed this class's write paths (or the engine's own
+		# clamp). Violates the single-writer contract; counted for tests.
+		external_write_count += 1
 	# This handler ALSO fires as a synchronous echo of our own _set_current_scroll
 	# writes (Range emits on the int change). While a smooth operation owns the
 	# scroll (tween or wheel chase), the float motion model is authoritative:

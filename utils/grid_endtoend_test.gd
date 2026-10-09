@@ -3,8 +3,9 @@
 ##  2. Scrolls to several positions (including far jumps) and lets tweens run.
 ##  3. At each rest, verifies every active card's stamped visual transform
 ##     matches the deterministic grid offset (column-sync / no drift).
-## Run: godot --headless --path . -s res://utils/grid_endtoend_test.gd
-extends SceneTree
+## Run: godot --headless --path . res://utils/grid_endtoend_test.tscn
+## (scene-based so autoloads register before grid scripts compile)
+extends Node
 
 var _failures := 0
 var _grid: VirtualScrollGridContainer
@@ -18,14 +19,14 @@ func _make_game(i: int) -> GameResource:
 	g.platform = "Test"
 	return g
 
-func _initialize() -> void:
+func _ready() -> void:
 	# Wait for autoloads to settle.
 	for i in 5:
-		await process_frame
+		await get_tree().process_frame
 
 	var win := Window.new()
 	win.size = Vector2i(1600, 900)
-	root.add_child(win)
+	get_tree().root.add_child(win)
 
 	var host := Control.new()
 	host.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -52,7 +53,7 @@ func _initialize() -> void:
 
 	# Settle layout over several frames.
 	for i in 10:
-		await process_frame
+		await get_tree().process_frame
 
 	_check_sync("initial")
 
@@ -63,14 +64,14 @@ func _initialize() -> void:
 		_grid.scroll_to_index(int(t / stride) * _grid._get_items_per_line(), true)
 		# Let snap + tween + sorts + reveal run.
 		for i in 40:
-			await process_frame
+			await get_tree().process_frame
 		_check_sync("scroll->%.0f" % t)
 
 	if _failures == 0:
 		print("GRID E2E TEST PASSED")
 	else:
 		print("GRID E2E TEST FAILED: ", _failures)
-	quit(_failures)
+	get_tree().quit(_failures)
 
 func _check_sync(tag: String) -> void:
 	if _grid._active_cards.is_empty():

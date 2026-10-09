@@ -7,8 +7,9 @@
 ##  5. Level round-trip: set_zoom_level -> recalc -> card_size matches stop.
 ##  6. Resize: shrinking the viewport re-floors the stops; clamped levels stay
 ##     valid and fit.
-## Run: godot --headless --path . -s res://utils/zoom_stops_test.gd
-extends SceneTree
+## Run: godot --headless --path . res://utils/zoom_stops_test.tscn
+## (scene-based so autoloads register before grid scripts compile)
+extends Node
 
 var _failures := 0
 var _grid: VirtualScrollGridContainer
@@ -20,13 +21,19 @@ func _check(cond: bool, msg: String) -> void:
 		_failures += 1
 		print("FAIL ", msg)
 
-func _initialize() -> void:
+func _ready() -> void:
 	for i in 5:
-		await process_frame
+		await get_tree().process_frame
+
+	# Bare-window test: UIManager only creates the settings state when it
+	# initializes the real app UI, so do it here the same way.
+	if UIManager.card_settings_state == null:
+		UIManager.card_settings_state = CardSettingsState.new()
+		UIManager.card_settings_state.sync_from_settings_manager()
 
 	var win := Window.new()
 	win.size = Vector2i(1600, 900)
-	root.add_child(win)
+	get_tree().root.add_child(win)
 	var host := Control.new()
 	host.set_anchors_preset(Control.PRESET_FULL_RECT)
 	win.add_child(host)
@@ -38,7 +45,7 @@ func _initialize() -> void:
 	_grid.setup(card_scene, 200)
 	_grid.size = Vector2(1600, 900)
 	for i in 8:
-		await process_frame
+		await get_tree().process_frame
 
 	# Portrait box art (2:3), media-only display: base dims (200, 300).
 	UIManager.card_settings_state.display_mode = 2
@@ -80,14 +87,14 @@ func _initialize() -> void:
 	# --- 5. Round-trip: set level 0 -> card fits ---
 	_grid.set_zoom_level(0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	_check(_grid.card_size.y <= _grid._get_available_size().y + 0.5,
 		"set_zoom_level(0) card fits (h=%.0f <= %.0f)" % [_grid.card_size.y, _grid._get_available_size().y])
 
 	# --- 3. LIST stops ---
 	_grid.set_grid_orientation(_grid.ViewMode.LIST, true, 1.0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	var list_stops := _grid.get_scroll_stop_lines()
 	_check(list_stops.size() >= 2, "list stops exist (%s)" % list_stops)
 	var list_ok := true
@@ -102,14 +109,14 @@ func _initialize() -> void:
 		"list snap ratios mirror stops (%d)" % list_ratios.size())
 	_grid.set_zoom_level(0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	_check(is_equal_approx(_grid.card_size.y, _grid._get_available_size().y),
 		"list level 0 = one full card (%.0f)" % _grid.card_size.y)
 
 	# --- 4. CAROUSEL stops ---
 	_grid.set_grid_orientation(_grid.ViewMode.CAROUSEL, true, 1.0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	var car_stops := _grid.get_scroll_stop_lines()
 	_check(car_stops.size() >= 2, "carousel stops exist (%s)" % car_stops)
 	var car_ok := true
@@ -121,7 +128,7 @@ func _initialize() -> void:
 		"carousel k=1 fills viewport exactly (%.0f)" % _grid._scroll_stop_size(1).x)
 	_grid.set_zoom_level(0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	_check(is_equal_approx(_grid.card_size.x, _grid._get_available_size().x),
 		"carousel level 0 = one full card (%.0f)" % _grid.card_size.x)
 
@@ -130,7 +137,7 @@ func _initialize() -> void:
 	_grid.size = Vector2(800, 480)
 	_grid.refresh_dimensions()
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	var small_levels := _grid.get_snap_levels()
 	var small_avail := _grid._get_available_size()
 	var small_worst := -INF
@@ -140,7 +147,7 @@ func _initialize() -> void:
 	_check(small_worst <= 0.5, "resized viewport stops still fit (levels[0]=%d)" % small_levels[0])
 	_grid.set_zoom_level(0)
 	for i in 6:
-		await process_frame
+		await get_tree().process_frame
 	_check(_grid.card_size.y <= _grid._get_available_size().y + 0.5,
 		"clamped max zoom on small viewport fits (h=%.0f <= %.0f)" % [_grid.card_size.y, _grid._get_available_size().y])
 
@@ -148,4 +155,4 @@ func _initialize() -> void:
 		print("ZOOM STOPS TEST PASSED")
 	else:
 		print("ZOOM STOPS TEST FAILED: ", _failures)
-	quit(_failures)
+	get_tree().quit(_failures)
