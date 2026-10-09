@@ -510,6 +510,10 @@ func record_variant_download(group_ids: Array, downloaded_id: int, file_path: St
 			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
 		return
 	invalidate_downloaded_games_count_cache()
+	if not group_ids.has(downloaded_id):
+		# Stale in-memory sibling list: the group cache must still cover the
+		# row we are about to stamp.
+		group_ids.append(downloaded_id)
 	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
@@ -535,6 +539,8 @@ func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callabl
 			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
 		return
 	invalidate_downloaded_games_count_cache()
+	if not group_ids.has(deleted_id):
+		group_ids.append(deleted_id)
 	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
