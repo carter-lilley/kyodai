@@ -39,6 +39,7 @@ var _sync_current_updated_after: String = ""  # updated_after timestamp for curr
 # Server-deletion reconciliation state (full syncs only)
 var _sync_seen_ids: Array = []               # romm_ids seen in current platform's full sync
 var _sync_platform_fully_enumerated: bool = false  # Current platform enumerated without errors
+var _sync_current_window_completed: bool = false   # Incremental window completed (last_sync advanced)
 var _sync_total_removed: int = 0             # Games removed by reconciliation this sync
 # Above-threshold deletion batches held for user confirmation.
 # platform_slug -> Array of doomed rows (romm_id, cover_url, is_master_entry, siblings)
@@ -450,6 +451,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		_sync_current_synced = 0
 		_sync_seen_ids = []
 		_sync_platform_fully_enumerated = false
+		_sync_current_window_completed = false
 		_sync_precalc_platform_total = _precalc_platform_totals.get(str(platform_id), 0)
 
 		var platform_complete = false
@@ -510,6 +512,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 					var current_time = Time.get_datetime_string_from_system(true)
 					_set_last_sync_time_sync(platform.slug, current_time)
+					_sync_current_window_completed = true
 				else:
 					# Paged past the end with games still unprocessed (a batch
 					# failed or the server total drifted): leave last_sync alone
@@ -574,6 +577,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				var current_time = Time.get_datetime_string_from_system(true)
 				_set_last_sync_time_sync(platform.slug, current_time)
 				_sync_platform_fully_enumerated = true
+				_sync_current_window_completed = true
 				platform_complete = true
 			else:
 				_sync_current_offset += batch_size
@@ -582,11 +586,14 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 
 		if DEBUG_LOG: print("[SyncThread] Platform '%s' complete (%d batches, %d/%d games)" % [platform.name, platform_batch_count, _sync_current_synced, _sync_current_total])
 
-		# Server-deletion reconciliation: only safe after a complete full
-		# enumeration of this platform (incremental syncs never see deletions,
-		# and a partial/failed sync must not delete anything).
+		# Server-deletion reconciliation. Full syncs reconcile directly from
+		# their complete enumeration. Incremental syncs can't see deletions in
+		# their updated_after window, so they reconcile via a cheap server-total
+		# tripwire (only enumerating all ids when counts disagree).
 		if _sync_current_updated_after == "" and _sync_platform_fully_enumerated:
 			_sync_total_removed += _reconcile_platform_deletions(platform.slug)
+		elif _sync_current_updated_after != "" and _sync_current_window_completed:
+			_sync_total_removed += _reconcile_platform_deletions_count_checked(platform.slug, platform_id)
 
 	# 7. Drain any covers still queued or in flight from the interleaved
 	#    dispatch. Silent (no visible phase) and timeout-guarded so a stalled
@@ -911,6 +918,64 @@ const RECONCILE_MIN_SEEN_FRACTION := 0.5
 const RECONCILE_AUTO_DELETE_THRESHOLD := 5
 
 
+func _reconcile_platform_deletions_count_checked(platform_slug: String, platform_id: int) -> int:
+	"""Sync thread: deletion reconcile for INCREMENTAL syncs. The
+	updated_after window never contains deletions, so use the server's rom
+	total as a cheap tripwire: when it disagrees with the local row count,
+	enumerate all server ids for this platform and run the standard
+	(guardrailed) reconcile. Returns the number removed.
+
+	Count equality can mask a same-window add+delete pair; the weekly full
+	sync remains the backstop for that case."""
+	var probe = SystemManager.network.fetch_games_sync(str(platform_id), 0, 1, "")
+	if not probe.success:
+		if DEBUG_LOG: print("[SyncThread] Incremental reconcile probe failed for %s - skipping" % platform_slug)
+		return 0
+	var server_total := int(probe.data.get("total", -1))
+	if server_total < 0:
+		return 0
+
+	var local_count = _wait_for_async(func(callback: Callable):
+		MemorySubManager.queue_db_task(
+			func():
+				return data_manager.database.count_platform_rows(platform_slug),
+			func(count):
+				# null when the queue dropped the task (overflow).
+				callback.call(count if count is int else null)
+		)
+	, 60000)
+	if local_count == null or not (local_count is int):
+		return 0
+	if server_total == local_count:
+		return 0
+	if server_total == 0:
+		# An emptied platform would trip the mass-deletion guardrails anyway;
+		# leave it to an explicit full sync.
+		print("[SyncThread] Incremental reconcile for %s: server reports 0 roms vs %d local rows - skipping (force a full sync to reconcile)" % [platform_slug, local_count])
+		return 0
+
+	print("[SyncThread] Incremental reconcile for %s: server total %d != %d local rows - enumerating server ids" % [platform_slug, server_total, local_count])
+	var seen: Array = []
+	var offset := 0
+	var batch_size := 250
+	while offset < server_total:
+		var page = SystemManager.network.fetch_games_sync(str(platform_id), offset, batch_size, "")
+		if not page.success:
+			# Never delete on a partial enumeration.
+			print("[SyncThread] Incremental reconcile enumeration failed for %s at offset %d - nothing deleted" % [platform_slug, offset])
+			return 0
+		var items = page.data.get("items", [])
+		if items.is_empty():
+			break
+		for item in items:
+			if item is Dictionary:
+				seen.append(int(item.get("id", 0)))
+		offset += batch_size
+	_sync_seen_ids = seen
+	_sync_platform_fully_enumerated = true
+	return _reconcile_platform_deletions(platform_slug)
+
+
 func _reconcile_platform_deletions(platform_slug: String) -> int:
 	"""Sync thread: delete local rows whose romm_id the server no longer lists
 	for this platform. Only call after a COMPLETE full enumeration - partial or
@@ -1060,10 +1125,11 @@ func _delete_server_removed_games(platform_slug: String, doomed: Array) -> Dicti
 	and every deleted romm_id is written to reconciliation_log (inside the
 	transaction, so a rollback leaves no log rows).
 
-	Sibling handling: when a deleted row was its group's master, every
-	surviving sibling is unfolded (is_master_entry = 1). The next sync's
-	_assign_sibling_masters re-folds each group onto its canonical master -
-	simpler than computing the correct surviving master here."""
+	Sibling handling: when a deleted row was its group's master, the lowest
+	surviving romm_id immediately becomes the new master (the same fallback
+	_assign_group_master uses). Doomed ids are scrubbed from survivors'
+	siblings arrays, and every affected group's download cache is rebuilt
+	from member-row truth."""
 	var db = data_manager.database
 	if doomed.is_empty():
 		return {"count": 0, "cover_urls": []}
@@ -1074,7 +1140,11 @@ func _delete_server_removed_games(platform_slug: String, doomed: Array) -> Dicti
 
 	var chunk_size = 500
 
-	# Unfold sibling groups whose master is being deleted.
+	var doomed_id_set := {}
+	for row in doomed:
+		doomed_id_set[int(row.get("romm_id", 0))] = true
+
+	# Re-fold sibling groups whose master is being deleted.
 	for row in doomed:
 		if int(row.get("is_master_entry", 0)) != 1:
 			continue
@@ -1086,12 +1156,26 @@ func _delete_server_removed_games(platform_slug: String, doomed: Array) -> Dicti
 		for sib in parsed:
 			if sib is Dictionary:
 				var sid := int(sib.get("id", 0))
-				if sid != 0 and sid != doomed_id:
+				if sid != 0 and sid != doomed_id and not doomed_id_set.has(sid):
 					candidate_ids.append(sid)
 		if candidate_ids.is_empty():
 			continue
 		var ph = ", ".join(candidate_ids.map(func(_id): return "?"))
-		db.query_bool_unlocked("UPDATE games SET is_master_entry = 1 WHERE romm_id IN (%s)" % ph, candidate_ids)
+		var survivors = db.query_array_unlocked(
+			"SELECT romm_id FROM games WHERE romm_id IN (%s) ORDER BY romm_id ASC" % ph,
+			candidate_ids)
+		if survivors.is_empty():
+			continue
+		var new_master := int(survivors[0].get("romm_id", 0))
+		var other_ids: Array = []
+		for s in survivors:
+			var sid := int(s.get("romm_id", 0))
+			if sid != new_master:
+				other_ids.append(sid)
+		db.query_bool_unlocked("UPDATE games SET is_master_entry = 1 WHERE romm_id = ?", [new_master])
+		if not other_ids.is_empty():
+			var oph = ", ".join(other_ids.map(func(_id): return "?"))
+			db.query_bool_unlocked("UPDATE games SET is_master_entry = 0 WHERE romm_id IN (%s)" % oph, other_ids)
 
 	var doomed_ids = doomed.map(func(r): return int(r.get("romm_id", 0)))
 
@@ -1125,6 +1209,50 @@ func _delete_server_removed_games(platform_slug: String, doomed: Array) -> Dicti
 		print("[SyncThread] ERROR: Reconciliation delete failed for %s, rolling back" % platform_slug)
 		db.query_bool_unlocked("ROLLBACK")
 		return {"count": 0, "cover_urls": []}
+
+	# Scrub doomed ids from surviving rows' sibling arrays - otherwise a
+	# deleted sibling lingers in the details-sheet dropdown and the group
+	# master's download cache until the member happens to re-sync.
+	var survivor_ref_ids := {}
+	for row in doomed:
+		var parsed = JSON.parse_string(str(row.get("siblings", "[]")))
+		if parsed is Array:
+			for sib in parsed:
+				if sib is Dictionary:
+					var sid := int(sib.get("id", 0))
+					if sid != 0 and not doomed_id_set.has(sid):
+						survivor_ref_ids[sid] = true
+	if not survivor_ref_ids.is_empty():
+		var sph = ", ".join(survivor_ref_ids.keys().map(func(_id): return "?"))
+		var survivor_rows = db.query_array_unlocked(
+			"SELECT romm_id, siblings FROM games WHERE romm_id IN (%s)" % sph,
+			survivor_ref_ids.keys())
+		var rebuilt_groups := {}
+		for srow in survivor_rows:
+			var srid := int(srow.get("romm_id", 0))
+			var entries = JSON.parse_string(str(srow.get("siblings", "[]")))
+			if not (entries is Array):
+				continue
+			var changed := false
+			for i in range(entries.size() - 1, -1, -1):
+				if entries[i] is Dictionary and doomed_id_set.has(int(entries[i].get("id", 0))):
+					entries.remove_at(i)
+					changed = true
+			if changed:
+				db.query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(entries), srid])
+			# Rebuild this group's download cache (a member row was deleted).
+			var member_ids: Array = [srid]
+			for e in entries:
+				if e is Dictionary:
+					var eid := int(e.get("id", 0))
+					if eid != 0 and not member_ids.has(eid):
+						member_ids.append(eid)
+			var sorted_ids := member_ids.duplicate()
+			sorted_ids.sort()
+			var group_key := str(sorted_ids)
+			if member_ids.size() > 1 and not rebuilt_groups.has(group_key):
+				rebuilt_groups[group_key] = true
+				db.refresh_group_download_cache_unlocked(member_ids)
 
 	# Cover files are only safe to delete when no surviving game references them
 	var cover_urls: Array = []
@@ -1333,10 +1461,18 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 				# same batch must see each other - checking everything before
 				# inserting made every same-batch sibling a master, so folding
 				# only worked for groups split across batches.
-				_assign_sibling_masters(games)
+				var groups := _assign_sibling_masters(games)
 
-				# Step 2: Insert all games in one transaction
-				var insert_success = _insert_games_transaction(games)
+				# Step 2: Prefetch existing rows once (preservation + propagation)
+				var existing_rows := _prefetch_existing_rows(games)
+
+				# Step 3: Insert all games in one transaction
+				var insert_success = _insert_games_transaction(games, existing_rows)
+
+				# Step 4: Post-insert group maintenance: reciprocal sibling
+				# lists on DB-resident members + group download caches.
+				if insert_success:
+					_post_insert_group_maintenance(games, groups, existing_rows)
 				return insert_success,
 			func(db_success):
 				# null when the queue dropped the task (overflow).
@@ -1358,31 +1494,40 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 		return 0
 
 
-func _insert_games_transaction(games: Array[GameResource]) -> bool:
-	"""Insert multiple games within a single database transaction.
-
-	This provides 10-50x speedup over individual inserts by reducing
-	disk sync operations. All games in the batch succeed or fail together.
-	"""
-	if not data_manager.database.is_database_ready() or games.is_empty():
-		return false
-	data_manager.database.lock()
-
-	# Prefetch existing rows for the whole batch in ONE query so
-	# _build_insert_query doesn't do a per-game SELECT (N+1).
+func _prefetch_existing_rows(games: Array[GameResource]) -> Dictionary:
+	"""DB thread: one-query prefetch of preservation/propagation columns for
+	the whole batch, keyed by romm_id. Avoids a per-game SELECT (N+1)."""
 	var romm_ids: Array = []
 	for game in games:
 		if game != null and game.romm_id > 0:
 			romm_ids.append(game.romm_id)
 	var existing_rows: Dictionary = {}
-	if romm_ids.size() > 0:
-		var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
-		var existing_result = data_manager.database.query_array_unlocked(
-			"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
-			romm_ids
-		)
-		for row in existing_result:
-			existing_rows[row.get("romm_id", 0)] = row
+	if romm_ids.is_empty() or not data_manager.database.is_database_ready():
+		return existing_rows
+	data_manager.database.lock()
+	var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
+	var existing_result = data_manager.database.query_array_unlocked(
+		"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
+		romm_ids
+	)
+	for row in existing_result:
+		existing_rows[row.get("romm_id", 0)] = row
+	data_manager.database.unlock()
+	return existing_rows
+
+
+func _insert_games_transaction(games: Array[GameResource], existing_rows: Dictionary = {}) -> bool:
+	"""Insert multiple games within a single database transaction.
+
+	This provides 10-50x speedup over individual inserts by reducing
+	disk sync operations. All games in the batch succeed or fail together.
+	existing_rows should come from _prefetch_existing_rows; when omitted it
+	is fetched here (single-batch callers)."""
+	if not data_manager.database.is_database_ready() or games.is_empty():
+		return false
+	if existing_rows.is_empty():
+		existing_rows = _prefetch_existing_rows(games)
+	data_manager.database.lock()
 
 	# Start transaction
 	var begin_result = data_manager.database.query_bool_unlocked("BEGIN TRANSACTION")
@@ -1425,6 +1570,133 @@ func _insert_games_transaction(games: Array[GameResource]) -> bool:
 		data_manager.database.query_bool_unlocked("ROLLBACK")
 		data_manager.database.unlock()
 		return false
+
+
+func _post_insert_group_maintenance(games: Array[GameResource], groups: Dictionary, existing_rows: Dictionary) -> void:
+	"""DB thread: after a batch is inserted, bring DB-resident group members
+	up to date with the server's sibling relationships and rebuild every
+	touched group's download cache from member-row truth."""
+	var db = data_manager.database
+	if not groups.is_empty():
+		db.lock()
+		for root in groups:
+			db.refresh_group_download_cache_unlocked(groups[root])
+		db.unlock()
+	_propagate_sibling_lists(games, existing_rows)
+
+
+func _sibling_entry_for(game: GameResource) -> Dictionary:
+	"""Sibling-JSON entry for a batch game, matching the shape sync stores
+	(fs_name_no_ext convention: no extension until resolved on-demand)."""
+	var base_name := game.file_name.get_basename()
+	return {
+		"id": game.romm_id,
+		"name": game.title,
+		"file_name": base_name,
+		"file_size": game.file_size,
+		"title_id": "",
+		"is_main_sibling": game.romm_is_main_sibling,
+		"sort_comparator": "",
+		"disc_number": GameResource.parse_disc_number(base_name),
+	}
+
+
+func _propagate_sibling_lists(games: Array[GameResource], existing_rows: Dictionary) -> void:
+	"""DB thread: keep siblings JSON reciprocal across group members.
+
+	A sync batch only rewrites rows for roms the server returned. When a rom
+	joins a group whose other members synced earlier, those members' stored
+	sibling arrays never learned about it - the group folds, but the details
+	sheet (built from the master's siblings array) can't see the new entry,
+	and unfolded it looks like an unrelated duplicate. The batch rom's server
+	sibling list is authoritative for ITS relationships, so mirror them onto
+	DB-resident members here (adds AND removals)."""
+	var db = data_manager.database
+	if not db.is_database_ready():
+		return
+
+	# Collect every member referenced by (or formerly referenced by) a batch
+	# game's sibling list.
+	var ref_ids := {}
+	var new_lists := {}  # romm_id -> Array[int] (fresh server sibling ids)
+	var old_lists := {}  # romm_id -> Array[int] (previously stored ids)
+	for game in games:
+		if game == null or game.romm_id <= 0:
+			continue
+		var new_ids: Array[int] = []
+		for sibling in game.siblings:
+			var sid := int(sibling.get("id", 0))
+			if sid != 0 and sid != game.romm_id:
+				new_ids.append(sid)
+				ref_ids[sid] = true
+		new_lists[game.romm_id] = new_ids
+		var old_ids: Array[int] = []
+		var existing: Dictionary = existing_rows.get(game.romm_id, {})
+		var parsed_old = JSON.parse_string(str(existing.get("siblings", "[]")))
+		if parsed_old is Array:
+			for sib in parsed_old:
+				if sib is Dictionary:
+					var sid := int(sib.get("id", 0))
+					if sid != 0 and sid != game.romm_id:
+						old_ids.append(sid)
+						ref_ids[sid] = true
+		old_lists[game.romm_id] = old_ids
+	if ref_ids.is_empty():
+		return
+
+	db.lock()
+	var placeholders = ", ".join(ref_ids.keys().map(func(_id): return "?"))
+	var member_rows = db.query_array_unlocked(
+		"SELECT romm_id, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
+		ref_ids.keys())
+	var member_siblings := {}  # romm_id -> Array (parsed, mutated in place)
+	for row in member_rows:
+		var rid := int(row.get("romm_id", 0))
+		var parsed = JSON.parse_string(str(row.get("siblings", "[]")))
+		member_siblings[rid] = parsed if parsed is Array else []
+
+	var tx_ok = db.query_bool_unlocked("BEGIN TRANSACTION")
+	var dirty := {}
+	if tx_ok:
+		for game in games:
+			if game == null or game.romm_id <= 0:
+				continue
+			var new_ids: Array[int] = new_lists.get(game.romm_id, [])
+			var related := {}
+			for sid in new_ids:
+				related[sid] = true
+			for sid in old_lists.get(game.romm_id, []):
+				related[sid] = true
+			for sid in related.keys():
+				if not member_siblings.has(sid):
+					continue  # member row not in the DB (not synced yet)
+				var entries: Array = member_siblings[sid]
+				var idx := -1
+				for i in range(entries.size()):
+					if entries[i] is Dictionary and int(entries[i].get("id", 0)) == game.romm_id:
+						idx = i
+						break
+				if new_ids.has(sid) and idx == -1:
+					# New relationship: add this game to the member's array.
+					# Existing entries are never overwritten, preserving any
+					# resolved full file names.
+					entries.append(_sibling_entry_for(game))
+					dirty[sid] = true
+				elif not new_ids.has(sid) and idx != -1:
+					# The server no longer lists this relationship.
+					entries.remove_at(idx)
+					dirty[sid] = true
+		for sid in dirty.keys():
+			if not db.query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(member_siblings[sid]), sid]):
+				tx_ok = false
+				break
+	if tx_ok:
+		db.query_bool_unlocked("COMMIT")
+	else:
+		db.query_bool_unlocked("ROLLBACK")
+	db.unlock()
+	if not dirty.is_empty() and tx_ok:
+		if DEBUG_LOG: print("[SyncThread] Propagated sibling lists to %d DB-resident group member(s)" % dirty.size())
 
 
 func _show_sync_notification():
@@ -1479,12 +1751,13 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 	return false
 
 
-func _assign_sibling_masters(games: Array[GameResource]) -> void:
+func _assign_sibling_masters(games: Array[GameResource]) -> Dictionary:
 	"""Pick exactly one master entry per sibling group in this batch.
 
 	Master preference: RomM's own is_main_sibling flag, then an existing DB
 	master from the same group, then the lowest romm_id. All other members
-	are folded (is_master_entry = false). To be run on the DB thread."""
+	are folded (is_master_entry = false). To be run on the DB thread.
+	Returns {group_root: [member romm_ids]} for post-insert maintenance."""
 	var parent := {}
 	var games_by_id := {}
 
@@ -1507,11 +1780,14 @@ func _assign_sibling_masters(games: Array[GameResource]) -> void:
 			groups[root] = []
 		groups[root].append(game)
 
+	var group_members := {}
 	for root in groups:
-		_assign_group_master(groups[root], parent, root)
+		group_members[root] = _assign_group_master(groups[root], parent, root)
+	return group_members
 
 
-func _assign_group_master(members: Array, parent: Dictionary, root: int) -> void:
+func _assign_group_master(members: Array, parent: Dictionary, root: int) -> Array:
+	"""Returns all romm_ids in this group, including siblings not in this batch."""
 	# All romm_ids belonging to this group, including siblings not in this batch
 	var member_ids: Array = []
 	for id in parent.keys():
@@ -1537,7 +1813,7 @@ func _assign_group_master(members: Array, parent: Dictionary, root: int) -> void
 				# Master lives in the DB but isn't in this batch - fold all members under it
 				for game in members:
 					game.is_master_entry = false
-				return
+				return member_ids
 
 	# 3) Fallback: deterministic pick (lowest romm_id)
 	if master == null:
@@ -1552,6 +1828,7 @@ func _assign_group_master(members: Array, parent: Dictionary, root: int) -> void
 	# Demote any stale DB master in this group that disagrees with our pick
 	# (repairs groups folded incorrectly by older sync logic on re-sync)
 	_demote_stale_db_masters(member_ids, master.romm_id)
+	return member_ids
 
 
 func _get_db_master_id(member_ids: Array) -> int:
