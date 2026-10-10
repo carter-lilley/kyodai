@@ -39,6 +39,10 @@ func _create_entry(game: GameResource) -> Dictionary:
 		"active": false,
 		"emulator_id": "",
 		"suspend_method": "",
+		# Captured X11 window ID for this game's window (Linux/X11 backend).
+		# Treated as a cache: validated before use and re-captured when the
+		# emulator recreates its window (Vita3K/Cemu boot behavior).
+		"window_xid": "",
 		"status": EntryStatus.QUEUED,
 		"download_id": "",
 		# How many times this slot has been swapped for a candidate so far.

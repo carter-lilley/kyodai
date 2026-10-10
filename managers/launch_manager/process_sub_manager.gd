@@ -14,18 +14,39 @@ var _background_active_game: GameResource = null
 var _background_active_signature: String = ""
 var _background_active_exe_signature: String = ""
 var _is_in_background_state: bool = false
-# Linux AppImage launches fork a runtime wrapper (comm=AppRun, exe under /tmp/.mount_*)
-# that outlives the actual emulator payload. We keep its PID so we can clean it up
-# once the real emulator process is gone.
-var _background_wrapper_pid: int = -1
 var _background_poll_timer: Timer = null
 var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
-# Game Mode (gamescope) tracks the game window rather than the process PID,
-# because the compositor reparents/forks emulator wrappers in ways that defeat
-# /proc polling. The XID is captured once and then polled for existence.
+# Linux launches run under setsid: the spawned PID becomes a process-group
+# leader and every wrapper/payload descendant (AppImage AppRun, sh, env)
+# shares its PGID. Group liveness is the source of truth for "is the game
+# still running" — it survives the reparenting/forking that gamescope and
+# AppImage runtimes inflict on single-PID tracking.
+var _background_active_pgid: int = -1
+# Two consecutive dead reads are required before exiting background state;
+# a single /proc race right after a fork/exec must not tear down input gating.
+var _background_dead_streak: int = 0
+const DEAD_STREAK_EXIT_THRESHOLD: int = 2
+# Game Mode (gamescope) additionally tracks the game window by XID — as a
+# CACHE, not an identity. Emulators recreate their window (Vita3K, Cemu game
+# boot, fullscreen transitions), so a vanished XID triggers a re-find against
+# the whole process group rather than an exit. Only a window that stays gone
+# while the process group lingers ends the session (and reaps the group).
 var _background_window_xid: String = ""
 var _background_window_hint: String = ""
+var _background_window_misses: int = 0
+const WINDOW_MISS_EXIT_THRESHOLD: int = 5
+# Safety net: if background state is exited while the emulator's process
+# group is somehow still alive (forced exits, detection misses), launcher
+# input stays blocked until the group actually dies. Degrades a detection
+# miss into "input briefly stuck" instead of "double-inputting two apps".
+var _lingering_pgid: int = -1
+var _lingering_timer: Timer = null
+const LINGERING_POLL_INTERVAL: float = 2.0
+# Cached own-process PGID: group signals must never target Kyodai's own group.
+var _own_pgid: int = -1
+# Resolved absolute path to setsid(1), "" when unavailable, "?" until checked.
+var _setsid_path: String = "?"
 
 var launch_manager: Node
 
@@ -171,6 +192,33 @@ func _resolve_x11_windowctl_path() -> String:
 		return AndroidBinaryExtractor.extract_binary("res://bin/linux/x11_windowctl", "x11_windowctl")
 	return ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
 
+## Resolves setsid(1) once. Every Linux emulator launch runs under it so the
+## emulator becomes a process-group leader and all of its wrapper/payload
+## descendants (AppImage AppRun, shell wrappers) share one PGID — which makes
+## group liveness checks and group SIGSTOP/SIGCONT/SIGKILL possible.
+## Returns "" when setsid is unavailable (callers fall back to plain spawn).
+func _get_setsid() -> String:
+	if _setsid_path != "?":
+		return _setsid_path
+	_setsid_path = ""
+	if SystemManager.platform.is_linux():
+		var output: Array = []
+		if OS.execute("setsid", ["--version"], output, true) == 0:
+			_setsid_path = "setsid"
+		elif FileAccess.file_exists("/usr/bin/setsid"):
+			_setsid_path = "/usr/bin/setsid"
+		elif FileAccess.file_exists("/bin/setsid"):
+			_setsid_path = "/bin/setsid"
+		else:
+			var which_out: Array = []
+			if OS.execute("sh", ["-c", "command -v setsid"], which_out, true) == 0 and which_out.size() > 0:
+				var candidate := str(which_out[0]).strip_edges()
+				if candidate != "":
+					_setsid_path = candidate
+		if _setsid_path == "":
+			push_warning("[ProcessManager] setsid not found; process-group tracking disabled for this session")
+	return _setsid_path
+
 # ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
 
 ## Returns true if currently in background state (emulator running)
@@ -197,13 +245,20 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 
 	print("[ProcessManager] Entering background state with PID: ", pid)
 	_background_active_pid = pid
-	_background_wrapper_pid = -1
+	_background_active_pgid = get_pgid(pid)
+	if _background_active_pgid <= 0 and SystemManager.platform.is_linux():
+		# setsid makes the spawned leader its own group; assume that layout
+		# when the stat read raced the process.
+		_background_active_pgid = pid
+	_background_dead_streak = 0
+	_background_window_misses = 0
 	_background_active_game = game
 	_is_in_background_state = true
 	_background_window_xid = ""
 	_background_window_hint = ""
 	if intent != null:
 		_background_window_hint = intent.emulator_id
+	dump_process_state("enter_background_state")
 
 	# Build command-line signatures for /proc fallback scanning. The ROM path is
 	# the most reliable signature because it appears in the actual emulator's
@@ -248,25 +303,27 @@ func exit_background_state(exit_code: int = 0) -> void:
 	if not _is_in_background_state:
 		return
 
-	print("[ProcessManager] Exiting background state. PID was: ", _background_active_pid)
+	print("[ProcessManager] Exiting background state. PID was: ", _background_active_pid, " PGID was: ", _background_active_pgid)
 
 	var game = _background_active_game
 
 	if _background_poll_timer:
 		_background_poll_timer.stop()
 
-	# Clean up any Linux AppImage runtime wrapper that outlived the payload.
-	if _background_wrapper_pid > 0:
-		if DEBUG_LOG: print("[ProcessManager] Terminating AppImage wrapper PID ", _background_wrapper_pid)
-		OS.kill(_background_wrapper_pid)
-		_background_wrapper_pid = -1
+	# If the process group somehow outlives the session (forced exits,
+	# detection misses), keep launcher input blocked until it actually dies.
+	if SystemManager.platform.is_linux() and _background_active_pgid > 1 and is_group_alive(_background_active_pgid):
+		_start_lingering_watch(_background_active_pgid)
 
 	_background_active_pid = -1
+	_background_active_pgid = -1
 	_background_active_game = null
 	_background_active_signature = ""
 	_background_active_exe_signature = ""
 	_background_window_xid = ""
 	_background_window_hint = ""
+	_background_window_misses = 0
+	_background_dead_streak = 0
 	_is_in_background_state = false
 
 	launch_manager.background_state_exited.emit(game, exit_code)
@@ -281,17 +338,13 @@ func _on_background_poll_timeout() -> void:
 		if DEBUG_LOG: print("[ProcessManager] Poll skipped: previous check still in flight")
 		return
 
-	# Game Mode (gamescope): track the game window, not the PID. The compositor
-	# reparents/forks emulator wrappers in ways that make /proc polling unreliable,
-	# but the X11 window lifetime matches what the user actually sees.
-	if SystemManager.platform.is_gamemode():
+	if SystemManager.platform.is_linux():
 		_poll_in_flight = true
-		_poll_gamemode_window(func(exists: bool):
+		_poll_linux_background(func(should_exit: bool):
 			_poll_in_flight = false
 			if not _is_in_background_state:
 				return
-			if DEBUG_LOG: print("[ProcessManager] Gamemode window poll result: exists=", exists)
-			if not exists:
+			if should_exit:
 				exit_background_state(0)
 		)
 		return
@@ -306,90 +359,223 @@ func _on_background_poll_timeout() -> void:
 			if DEBUG_LOG: print("[ProcessManager] Poll result ignored: state changed")
 			return
 		if DEBUG_LOG: print("[ProcessManager] Poll result for PID ", pid, ": running=", running)
-		# Linux AppImage wrappers (comm=AppRun, exe under /tmp/.mount_*) stay alive
-		# after the real emulator payload exits. If we're tracking a wrapper, find
-		# and switch to the actual payload process instead.
-		if running and SystemManager.platform.is_linux() and _is_appimage_wrapper_pid(pid):
-			if DEBUG_LOG: print("[ProcessManager] Tracked PID ", pid, " is an AppImage wrapper; searching for payload")
-			var payload_pid := _find_process_by_signature()
-			if payload_pid > 0 and payload_pid != pid:
-				if DEBUG_LOG: print("[ProcessManager] AppImage payload found at PID ", payload_pid, "; wrapper PID ", pid, " will be cleaned up on exit")
-				_background_wrapper_pid = pid
-				_background_active_pid = payload_pid
-				_poll_in_flight = false
-				return
-		if running:
-			_poll_in_flight = false
-			return
-		# PID is gone or zombie. On Linux, fall back to scanning /proc by the
-		# ROM/cmdline signature in case the emulator process was reparented
-		# away from the wrapper we were tracking.
-		if SystemManager.platform.is_linux() and (_background_active_signature != "" or _background_active_exe_signature != ""):
-			if DEBUG_LOG: print("[ProcessManager] PID ", pid, " not running; scanning /proc by signature")
-			var found_pid := _find_process_by_signature()
-			if found_pid > 0 and found_pid != pid:
-				if DEBUG_LOG: print("[ProcessManager] Reparented emulator found at PID ", found_pid, "; updating tracker")
-				_background_active_pid = found_pid
-				_poll_in_flight = false
-				return
-			elif found_pid > 0:
-				if DEBUG_LOG: print("[ProcessManager] Signature still matches PID ", pid, " (zombie?), keeping background state")
-				_poll_in_flight = false
-				return
-			else:
-				if DEBUG_LOG: print("[ProcessManager] No signature match found in /proc")
 		_poll_in_flight = false
-		if DEBUG_LOG: print("[ProcessManager] Process ", pid, " no longer running")
-		exit_background_state(0)
+		if not running:
+			if DEBUG_LOG: print("[ProcessManager] Process ", pid, " no longer running")
+			exit_background_state(0)
 	)
 
-## Poll callback for Game Mode (gamescope): track the game window by XID.
-## Captures the XID on the first call if needed, then checks whether it still
-## exists. Calls back with true while the window is alive, false once it closes.
+## Linux poll: the process group is the source of truth for liveness.
+## Launches run under setsid, so wrappers (AppImage AppRun, sh, env) and the
+## real emulator payload all share one PGID — the group survives exactly the
+## reparenting/forking that used to defeat single-PID /proc polling under
+## gamescope. Only if the group is dead do we fall back to a cmdline
+## signature scan for emulators that escaped the group entirely.
+func _poll_linux_background(callback: Callable) -> void:
+	if _linux_target_alive():
+		_background_dead_streak = 0
+	else:
+		_background_dead_streak += 1
+		print("[ProcessManager] Linux poll: no live process found (streak ", _background_dead_streak, "/", DEAD_STREAK_EXIT_THRESHOLD, ")")
+		if _background_dead_streak >= DEAD_STREAK_EXIT_THRESHOLD:
+			callback.call(true)
+			return
+		callback.call(false)
+		return
+
+	# Process is alive. In Game Mode we additionally watch the game window:
+	# if the window is gone for good while the process lingers (e.g. the user
+	# closed an emulator menu window), end the session rather than trapping
+	# input behind a windowless process.
+	if not SystemManager.platform.is_gamemode():
+		callback.call(false)
+		return
+	_poll_gamemode_window(callback)
+
+## Synchronous /proc liveness check for the tracked launch. Also re-adopts
+## tracking (pid + pgid) when the emulator was reparented or escaped its
+## original group. Returns true while anything belonging to the launch lives.
+func _linux_target_alive() -> bool:
+	if _background_active_pgid > 1 and is_group_alive(_background_active_pgid):
+		return true
+	if _background_active_pid > 0:
+		var stat := _parse_proc_stat(_background_active_pid)
+		if stat.ok and stat.state != "Z":
+			# Alive but outside the tracked group (PGID was stale): re-adopt.
+			var pgrp := int(stat.get("pgrp", -1))
+			if pgrp > 1 and pgrp != _background_active_pgid:
+				if DEBUG_LOG: print("[ProcessManager] Adopting PGID ", pgrp, " from live PID ", _background_active_pid)
+				_background_active_pgid = pgrp
+			return true
+	# Group and PID are gone: scan /proc by the launch signature in case the
+	# emulator escaped the group entirely (own setsid, double-fork daemon).
+	if _background_active_signature != "" or _background_active_exe_signature != "":
+		var found_pid := _find_process_by_signature()
+		if found_pid > 0:
+			print("[ProcessManager] Emulator found by signature at PID ", found_pid, "; re-adopting")
+			_background_active_pid = found_pid
+			var pgrp := get_pgid(found_pid)
+			if pgrp > 0:
+				_background_active_pgid = pgrp
+			return true
+	return false
+
+## Game Mode window watch. The XID is a cache layered on top of group
+## liveness: a vanished window first triggers a re-find against every process
+## in the group (window recreation is normal for Vita3K/Cemu), and only a
+## window that stays gone for WINDOW_MISS_EXIT_THRESHOLD polls while the
+## process group keeps running ends the session (reaping the lingerer).
+## Calls back with true only when background state should exit.
 func _poll_gamemode_window(callback: Callable) -> void:
 	var tool := _resolve_x11_windowctl_path()
 	if tool == "" or not FileAccess.file_exists(tool):
-		push_warning("[ProcessManager] x11_windowctl not available in gamemode; falling back to PID poll")
-		callback.call(true)
+		# Window layer unavailable; group liveness alone decides.
+		callback.call(false)
 		return
 
 	if _background_window_xid == "":
-		# First poll: try to find the game window. We may need a few attempts
-		# while the emulator is still starting up.
-		var args: Array = ["find", str(_background_active_pid)]
-		if _background_window_hint != "":
-			args.append(_background_window_hint)
-		MemorySubManager.queue_os_execute(tool, args, func(result: Dictionary):
-			if not _is_in_background_state:
-				callback.call(true)
-				return
-			if result.get("exit_code", -1) != 0:
-				if DEBUG_LOG: print("[ProcessManager] Gamemode window not found yet; will retry")
-				callback.call(true)
-				return
-			var output: Array = result.get("output", [])
-			var text := ("".join(output)).strip_edges()
-			var xid := ""
-			for line: String in text.split("\n", false):
-				var l := line.strip_edges().to_lower()
-				if l.length() > 0 and l.is_valid_hex_number(false):
-					xid = l
-			if xid == "":
-				callback.call(true)
-				return
-			_background_window_xid = xid
-			print("[ProcessManager] Gamemode captured game window xid: ", xid)
-			callback.call(true)
+		# Best-effort capture; never blocks exit decisions.
+		_find_game_window(tool, func(xid: String):
+			if xid != "" and _is_in_background_state:
+				_background_window_xid = xid
+				_background_window_misses = 0
+				print("[ProcessManager] Gamemode captured game window xid: ", xid)
+			callback.call(false)
 		)
-	else:
-		# Subsequent polls: check if the captured window still exists.
-		MemorySubManager.queue_os_execute(tool, ["exists", "xid:" + _background_window_xid], func(result: Dictionary):
+		return
+
+	MemorySubManager.queue_os_execute(tool, ["exists", "xid:" + _background_window_xid], func(result: Dictionary):
+		if not _is_in_background_state:
+			callback.call(false)
+			return
+		var exit_code: int = result.get("exit_code", -1)
+		if exit_code == 0:
+			if _background_window_misses > 0:
+				_background_window_misses = 0
+			callback.call(false)
+			return
+		if exit_code != 1:
+			# The helper itself failed to run (spawn error, display hiccup):
+			# not evidence that the window closed. Ignore this poll.
+			if DEBUG_LOG: print("[ProcessManager] Gamemode exists check failed to run (exit=", exit_code, "); ignoring")
+			callback.call(false)
+			return
+		# Window confirmed gone. Try to bind a replacement window first —
+		# emulators recreate windows on game boot / fullscreen transitions.
+		_background_window_misses += 1
+		if DEBUG_LOG: print("[ProcessManager] Gamemode window gone (miss ", _background_window_misses, "); attempting re-find")
+		_find_game_window(tool, func(new_xid: String):
 			if not _is_in_background_state:
+				callback.call(false)
+				return
+			if new_xid != "":
+				if new_xid != _background_window_xid:
+					print("[ProcessManager] Gamemode window recreated; re-captured xid: ", new_xid, " (was ", _background_window_xid, ")")
+					_background_window_xid = new_xid
+				_background_window_misses = 0
+				callback.call(false)
+				return
+			if _background_window_misses >= WINDOW_MISS_EXIT_THRESHOLD:
+				print("[ProcessManager] Gamemode window gone for ", _background_window_misses, " polls with a live process; exiting and reaping lingering group")
+				dump_process_state("window_miss_exit")
+				_kill_background_group()
 				callback.call(true)
 				return
-			var exit_code: int = result.get("exit_code", -1)
-			callback.call(exit_code == 0)
+			callback.call(false)
 		)
+	)
+
+## Runs x11_windowctl find against every process in the tracked group (the
+## payload's _NET_WM_PID rarely matches the leader we spawned) plus the name
+## hint. Calls back with the hex XID, or "" when no window matched.
+func _find_game_window(tool: String, callback: Callable) -> void:
+	var args: Array = ["find", _background_window_pid_list()]
+	if _background_window_hint != "":
+		args.append(_background_window_hint)
+	MemorySubManager.queue_os_execute(tool, args, func(result: Dictionary):
+		if result.get("exit_code", -1) != 0:
+			callback.call("")
+			return
+		var output: Array = result.get("output", [])
+		var text := ("".join(output)).strip_edges()
+		var xid := ""
+		for line: String in text.split("\n", false):
+			var l := line.strip_edges().to_lower()
+			if l.length() > 0 and l.is_valid_hex_number(false):
+				xid = l
+		callback.call(xid)
+	)
+
+## Comma-separated PIDs the game window could belong to: the tracked PID
+## plus every live member of its process group.
+func _background_window_pid_list() -> String:
+	var pids := {}
+	if _background_active_pid > 0:
+		pids[_background_active_pid] = true
+	if _background_active_pgid > 1:
+		for member in get_group_members(_background_active_pgid):
+			pids[member] = true
+	var list: Array = []
+	for p in pids.keys():
+		list.append(str(p))
+	return ",".join(list)
+
+## Kills the tracked process group (SIGCONT first so SIGSTOPped members can
+## die). Used when the session ends but the emulator process lingers.
+func _kill_background_group() -> void:
+	if _background_active_pgid > 1 and _background_active_pgid != _get_own_pgid():
+		var pgid := _background_active_pgid
+		var script := "kill -CONT -- -%d 2>/dev/null; kill -9 -- -%d 2>/dev/null" % [pgid, pgid]
+		MemorySubManager.queue_os_execute("sh", ["-c", script])
+	elif _background_active_pid > 0:
+		kill_process_async(_background_active_pid)
+
+# ==================== LINGERING PROCESS WATCH ====================
+
+## Keeps launcher input blocked after background state exits while the
+## emulator's process group is still alive. See _lingering_pgid declaration.
+func _start_lingering_watch(pgid: int) -> void:
+	push_warning("[ProcessManager] Background state exited but process group %d is still alive; keeping input blocked until it exits" % pgid)
+	_lingering_pgid = pgid
+	if _lingering_timer == null:
+		_lingering_timer = Timer.new()
+		_lingering_timer.wait_time = LINGERING_POLL_INTERVAL
+		_lingering_timer.one_shot = false
+		_lingering_timer.timeout.connect(_on_lingering_poll)
+		add_child(_lingering_timer)
+	_lingering_timer.start()
+
+func _on_lingering_poll() -> void:
+	if _lingering_pgid <= 0:
+		if _lingering_timer:
+			_lingering_timer.stop()
+		return
+	if not is_group_alive(_lingering_pgid):
+		print("[ProcessManager] Lingering process group ", _lingering_pgid, " has exited; unblocking input")
+		_lingering_pgid = -1
+		if _lingering_timer:
+			_lingering_timer.stop()
+
+## True while a previously-tracked emulator process group is still alive after
+## its background state ended. main.gd ORs this into its input gate.
+func has_lingering_process() -> bool:
+	return _lingering_pgid > 0
+
+## Logs the current tracking state: pid, pgid, group members, window XID.
+func dump_process_state(context: String) -> void:
+	if not SystemManager.platform.is_linux():
+		return
+	var members := ""
+	if _background_active_pgid > 1:
+		var states := _get_group_states(_background_active_pgid)
+		var parts: Array = []
+		for member_pid in states.keys():
+			parts.append(str(member_pid) + "(" + str(states[member_pid]) + ")")
+		members = ",".join(parts)
+	print("[ProcessManager] state[%s]: pid=%d pgid=%d members=[%s] xid=%s window_misses=%d dead_streak=%d lingering=%d" % [
+		context, _background_active_pid, _background_active_pgid, members,
+		_background_window_xid, _background_window_misses, _background_dead_streak, _lingering_pgid
+	])
 
 ## Scans /proc for a live (non-zombie) emulator process whose cmdline contains
 ## the stored launch signature (usually the ROM path). This catches emulators
@@ -457,11 +643,18 @@ func _is_process_running_async(pid: int, callback: Callable) -> void:
 	# Linux fast path: /proc check is effectively free, no process spawn needed.
 	# Also parse /proc/{pid}/stat so we don't treat zombie (defunct) processes
 	# as still running — OS.create_process can leave children unreaped.
+	# Zombies fall through to a group check: the payload may still be alive in
+	# the same process group even when the tracked leader is defunct.
 	if SystemManager.platform.is_linux():
 		var stat := _parse_proc_stat(pid)
 		if stat.ok:
 			if DEBUG_LOG: print("[ProcessManager] /proc/" + str(pid) + "/stat state=" + stat.state)
 			if stat.state == "Z":
+				var pgrp := int(stat.get("pgrp", -1))
+				if pgrp > 1 and pgrp != _get_own_pgid() and is_group_alive(pgrp):
+					if DEBUG_LOG: print("[ProcessManager] PID " + str(pid) + " is a zombie but its group lives; treating as running")
+					callback.call(true)
+					return
 				if DEBUG_LOG: print("[ProcessManager] PID " + str(pid) + " is a zombie, treating as not running")
 				callback.call(false)
 				return
@@ -498,14 +691,21 @@ func is_running_async(pid: int) -> bool:
 		await get_tree().process_frame
 	return state["running"]
 
-## Kills a process by PID without blocking the main thread.
+## Kills a process by PID without blocking the main thread. On Linux the
+## whole process group is killed (SIGCONT first so SIGSTOPped members can
+## die): wrappers like AppImage AppRun would otherwise orphan the payload.
 func kill_process_async(pid: int) -> void:
 	if pid <= 0:
 		return
 	if SystemManager.platform.is_windows():
 		MemorySubManager.queue_os_execute("taskkill", ["/F", "/PID", str(pid)])
 	else:
-		MemorySubManager.queue_os_execute("kill", ["-9", str(pid)])
+		var pgid := get_pgid(pid)
+		if pgid > 1 and pgid != _get_own_pgid():
+			var script := "kill -CONT -- -%d 2>/dev/null; kill -9 -- -%d 2>/dev/null" % [pgid, pgid]
+			MemorySubManager.queue_os_execute("sh", ["-c", script])
+		else:
+			MemorySubManager.queue_os_execute("kill", ["-9", str(pid)])
 
 ## Waits until the process exits (or timeout). Returns true if confirmed dead.
 func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
@@ -519,6 +719,9 @@ func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
 	return false
 
 ## Suspends a process via pssuspend (Windows only; path supplied by caller).
+## On Linux the whole process group gets SIGSTOP: single-PID suspension only
+## ever froze the wrapper on AppImage/forking emulators (e.g. Cemu's AppRun),
+## leaving the payload running alongside the next game.
 ## on_done(result: Dictionary {exit_code, output}) fires on the main thread
 ## when pssuspend exits - callers that must not race the suspended process
 ## (e.g. launching a new emulator instance) should await it.
@@ -534,13 +737,18 @@ func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable =
 			return
 		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)], on_done)
 	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
-		MemorySubManager.queue_os_execute("kill", ["-STOP", str(pid)], on_done)
+		var pgid := get_pgid(pid)
+		if pgid > 1 and pgid != _get_own_pgid():
+			MemorySubManager.queue_os_execute("kill", ["-STOP", "--", "-" + str(pgid)], on_done)
+		else:
+			MemorySubManager.queue_os_execute("kill", ["-STOP", str(pid)], on_done)
 	else:
 		push_warning("[ProcessManager] suspend_process_async is only supported on Windows and Linux/BSD")
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
 
 ## Resumes a suspended process via pssuspend (Windows) or kill -CONT (Linux/BSD).
+## Group-aware on Linux, mirroring suspend_process_async.
 func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
 	if pid <= 0:
 		if on_done.is_valid():
@@ -553,7 +761,11 @@ func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = 
 			return
 		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)], on_done)
 	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
-		MemorySubManager.queue_os_execute("kill", ["-CONT", str(pid)], on_done)
+		var pgid := get_pgid(pid)
+		if pgid > 1 and pgid != _get_own_pgid():
+			MemorySubManager.queue_os_execute("kill", ["-CONT", "--", "-" + str(pgid)], on_done)
+		else:
+			MemorySubManager.queue_os_execute("kill", ["-CONT", str(pid)], on_done)
 	else:
 		push_warning("[ProcessManager] resume_process_async is only supported on Windows and Linux/BSD")
 		if on_done.is_valid():
@@ -700,9 +912,17 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 
 	if effective_working_dir == "" and not use_env_wrapper:
 		# No working directory needed and no env sanitization: call executable directly
-		# (no shell, no injection risk)
-		if DEBUG_LOG: print("[ProcessManager] Direct launch: exe=", exe_path, " args=", arguments)
-		pid = OS.create_process(exe_path, arguments, false)
+		# (no shell, no injection risk). Under setsid when available so the
+		# emulator leads its own process group.
+		var setsid := _get_setsid()
+		if setsid != "":
+			var setsid_args: Array = [exe_path]
+			setsid_args.append_array(arguments)
+			if DEBUG_LOG: print("[ProcessManager] Direct launch via setsid: exe=", exe_path, " args=", arguments)
+			pid = OS.create_process(setsid, setsid_args, false)
+		else:
+			if DEBUG_LOG: print("[ProcessManager] Direct launch: exe=", exe_path, " args=", arguments)
+			pid = OS.create_process(exe_path, arguments, false)
 		print("[ProcessManager] Direct launch returned pid: ", pid)
 	elif effective_working_dir == "" and use_env_wrapper:
 		# Linux with env sanitization: wrap env(1) in sh -c with exec so the
@@ -724,8 +944,13 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		)
 		var safe_log := _escape_sh_arg(launch_log)
 		var inner_cmd = 'exec env %s%s %s > %s 2>&1' % [env_prefix, safe_exe, " ".join(safe_args), safe_log]
-		if DEBUG_LOG: print("[ProcessManager] env launch via sh: sh -c ", inner_cmd)
-		pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		var setsid := _get_setsid()
+		if setsid != "":
+			if DEBUG_LOG: print("[ProcessManager] env launch via setsid sh: sh -c ", inner_cmd)
+			pid = OS.create_process(setsid, ["sh", "-c", inner_cmd], false)
+		else:
+			if DEBUG_LOG: print("[ProcessManager] env launch via sh: sh -c ", inner_cmd)
+			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 		print("[ProcessManager] env launch via sh returned pid: ", pid)
 	elif not SystemManager.platform.is_windows():
 		# Linux: sh -c with exec, so the shell REPLACES itself with the
@@ -740,8 +965,13 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		)
 		var safe_log := _escape_sh_arg(launch_log)
 		var inner_cmd = 'cd %s && exec env %s%s %s > %s 2>&1' % [safe_working_dir, env_prefix, safe_exe, " ".join(safe_args), safe_log]
-		if DEBUG_LOG: print("[ProcessManager] shell launch: sh -c ", inner_cmd)
-		pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		var setsid := _get_setsid()
+		if setsid != "":
+			if DEBUG_LOG: print("[ProcessManager] shell launch via setsid: sh -c ", inner_cmd)
+			pid = OS.create_process(setsid, ["sh", "-c", inner_cmd], false)
+		else:
+			if DEBUG_LOG: print("[ProcessManager] shell launch: sh -c ", inner_cmd)
+			pid = OS.create_process("sh", ["-c", inner_cmd], false)
 		print("[ProcessManager] shell launch returned pid: ", pid)
 	else:
 		# Windows: Start-Process sets the working directory AND reports the real
@@ -821,6 +1051,8 @@ func _parse_proc_stat(pid: int) -> Dictionary:
 	var result := {
 		"ok": false,
 		"state": "",
+		"ppid": -1,
+		"pgrp": -1,
 	}
 	if pid <= 0:
 		return result
@@ -832,11 +1064,93 @@ func _parse_proc_stat(pid: int) -> Dictionary:
 		return result
 	var tail := content.substr(close_paren + 1).strip_edges()
 	var fields := tail.split(" ", false)
-	# Field 0 after ')' is the process state.
+	# Fields after ')': 0 = state, 1 = ppid, 2 = pgrp.
 	if fields.size() >= 1:
 		result["ok"] = true
 		result["state"] = fields[0]
+	if fields.size() >= 3:
+		result["ppid"] = fields[1].to_int()
+		result["pgrp"] = fields[2].to_int()
 	return result
+
+# ==================== PROCESS GROUP TRACKING (LINUX) ====================
+
+## Returns the process group ID of a live process, or -1 when unknown.
+func get_pgid(pid: int) -> int:
+	if pid <= 0 or not SystemManager.platform.is_linux():
+		return -1
+	var stat := _parse_proc_stat(pid)
+	if stat.ok:
+		return int(stat.get("pgrp", -1))
+	return -1
+
+## Kyodai's own process group; group signals must never target it (an
+## emulator whose PGID resolution failed must degrade to single-PID signals).
+func _get_own_pgid() -> int:
+	if _own_pgid <= 0:
+		_own_pgid = get_pgid(OS.get_process_id())
+	return _own_pgid
+
+## Maps every live (non-zombie) member of a process group: pid -> state char.
+func _get_group_states(pgid: int) -> Dictionary:
+	var states := {}
+	if pgid <= 1 or not SystemManager.platform.is_linux():
+		return states
+	var proc_dir := DirAccess.open("/proc")
+	if proc_dir == null:
+		return states
+	proc_dir.list_dir_begin()
+	var entry := proc_dir.get_next()
+	while entry != "":
+		if entry.is_valid_int():
+			var scan_pid := entry.to_int()
+			if scan_pid > 0:
+				var stat := _parse_proc_stat(scan_pid)
+				if stat.ok and int(stat.get("pgrp", -1)) == pgid and stat.state != "Z":
+					states[scan_pid] = stat.state
+		entry = proc_dir.get_next()
+	proc_dir.list_dir_end()
+	return states
+
+## Returns all live (non-zombie) member PIDs of the given process group.
+func get_group_members(pgid: int) -> Array[int]:
+	var members: Array[int] = []
+	for member_pid in _get_group_states(pgid).keys():
+		members.append(member_pid)
+	return members
+
+## True while any non-zombie process belongs to the group.
+func is_group_alive(pgid: int) -> bool:
+	return not _get_group_states(pgid).is_empty()
+
+## True when every live member of the group is stopped (SIGSTOP/SIGTSTP).
+## False when the group is empty (nothing left to be stopped).
+func are_group_members_stopped(pgid: int) -> bool:
+	var states := _get_group_states(pgid)
+	if states.is_empty():
+		return false
+	for state in states.values():
+		if state != "T" and state != "t":
+			return false
+	return true
+
+## Group-aware stopped check for callers that only know a PID (shuffler).
+## A dead PID counts as stopped: there is nothing left to freeze.
+func are_group_stopped_for_pid(pid: int) -> bool:
+	if pid <= 0:
+		return true
+	var pgid := get_pgid(pid)
+	if pgid <= 1:
+		# PID is gone or has no group of its own; verify the PID itself died.
+		var stat := _parse_proc_stat(pid)
+		return not stat.ok or stat.state == "Z" or stat.state == "T" or stat.state == "t"
+	var states := _get_group_states(pgid)
+	if states.is_empty():
+		return true  # whole group already dead
+	for state in states.values():
+		if state != "T" and state != "t":
+			return false
+	return true
 
 ## Reads immediate child PIDs of a process from /proc.
 func _get_process_children(pid: int) -> Array[int]:

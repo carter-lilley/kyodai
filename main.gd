@@ -584,8 +584,12 @@ func _input(event: InputEvent):
 			or event is InputEventMouseButton or event is InputEventMouseMotion \
 			or event is InputEventScreenTouch or event is InputEventScreenDrag:
 		WarmupBudget.note_input()
-	# Block all input during background state (emulator running)
-	if LaunchManager and LaunchManager.is_in_background_state():
+	# Block all input during background state (emulator running), and also
+	# while a previously-tracked emulator process group is still alive after
+	# its session ended — a detection miss must degrade to "input briefly
+	# stuck", never "double-inputting the game and the launcher".
+	if LaunchManager and (LaunchManager.is_in_background_state() \
+			or (LaunchManager.process and LaunchManager.process.has_lingering_process())):
 		get_viewport().set_input_as_handled()
 		return
 

@@ -1,7 +1,7 @@
 /*
  * Minimal X11 window controller for Kyodai's shuffler.
  *
- * Usage: x11_windowctl <minimize|raise|hide|show|find> <pid|xid:HEX> [name_hint]
+ * Usage: x11_windowctl <minimize|raise|hide|show|find> <pid[,pid,...]|xid:HEX> [name_hint]
  *
  * Target selection:
  *   xid:HEX  -> use that window directly, no lookup (unambiguous; the
@@ -9,6 +9,10 @@
  *   pid+hint -> first window whose _NET_WM_PID matches AND whose WM_CLASS or
  *               title contains the hint (exact for multi-window apps)
  *   pid      -> first window whose _NET_WM_PID matches
+ *   pid,pid  -> a comma-separated PID list matches a window whose
+ *               _NET_WM_PID equals ANY listed pid. Kyodai launches emulators
+ *               under setsid and passes the whole process group: the window
+ *               owner (_NET_WM_PID) is usually the payload, not the leader.
  *   hint     -> NEWEST window (highest XID) whose WM_CLASS or title contains
  *               the hint. Many minimal X11 clients (RetroArch) never set
  *               _NET_WM_PID, and several instances can be alive at once
@@ -112,13 +116,25 @@ static int window_matches_hint(Display *dpy, Window win, const char *hint)
 	return 0;
 }
 
+#define MAX_PIDS 64
+
 struct match_state {
-	pid_t pid;
+	pid_t pids[MAX_PIDS]; /* any window whose _NET_WM_PID is in this list */
+	int pid_count;
 	const char *hint;
 	Window pid_hint_win; /* first window matching both pid and hint */
 	Window pid_win;      /* first window matching pid */
 	Window hint_win;     /* newest (highest XID) window matching hint */
 };
+
+static int pid_list_contains(const struct match_state *st, pid_t pid)
+{
+	for (int i = 0; i < st->pid_count; i++) {
+		if (st->pids[i] == pid)
+			return 1;
+	}
+	return 0;
+}
 
 static void collect_matches(Display *dpy, Window win, struct match_state *st)
 {
@@ -126,7 +142,7 @@ static void collect_matches(Display *dpy, Window win, struct match_state *st)
 	int has_pid = window_pid(dpy, win, &pid);
 	int hint_match = st->hint && window_matches_hint(dpy, win, st->hint);
 
-	if (has_pid && pid == st->pid) {
+	if (has_pid && pid_list_contains(st, pid)) {
 		if (hint_match && st->pid_hint_win == None)
 			st->pid_hint_win = win;
 		if (st->pid_win == None)
@@ -181,7 +197,7 @@ static void send_client_message(Display *dpy, Window win, Atom msg_type,
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid|xid:HEX> [name_hint] | %s active | %s set-transient <xid:CHILD> <xid:PARENT>\n", argv[0], argv[0], argv[0]);
+		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid[,pid,...]|xid:HEX> [name_hint] | %s active | %s set-transient <xid:CHILD> <xid:PARENT>\n", argv[0], argv[0], argv[0]);
 		return 2;
 	}
 
@@ -252,7 +268,7 @@ int main(int argc, char **argv)
 	}
 
 	if (argc < 3 || argc > 4) {
-		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid|xid:HEX> [name_hint]\n", argv[0]);
+		fprintf(stderr, "Usage: %s <minimize|raise|hide|show|find|exists|xkill> <pid[,pid,...]|xid:HEX> [name_hint]\n", argv[0]);
 		XCloseDisplay(dpy);
 		return 2;
 	}
@@ -269,13 +285,28 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	} else {
-		pid_t target = (pid_t)atoi(target_str);
-		if (target <= 0) {
+		/* Parse a comma-separated PID list: the window may be owned by any
+		 * process in the emulator's process group. */
+		struct match_state st = { {0}, 0, hint, None, None, None };
+		char *buf = strdup(target_str);
+		if (!buf) {
+			fprintf(stderr, "Out of memory\n");
+			XCloseDisplay(dpy);
+			return 2;
+		}
+		char *saveptr = NULL;
+		for (char *tok = strtok_r(buf, ",", &saveptr); tok;
+		     tok = strtok_r(NULL, ",", &saveptr)) {
+			pid_t p = (pid_t)atoi(tok);
+			if (p > 0 && st.pid_count < MAX_PIDS)
+				st.pids[st.pid_count++] = p;
+		}
+		free(buf);
+		if (st.pid_count == 0) {
 			fprintf(stderr, "Invalid PID: %s\n", target_str);
 			XCloseDisplay(dpy);
 			return 2;
 		}
-		struct match_state st = { target, hint, None, None, None };
 		collect_matches(dpy, root, &st);
 		if (st.pid_hint_win != None) {
 			win = st.pid_hint_win;
@@ -283,10 +314,10 @@ int main(int argc, char **argv)
 			win = st.pid_win;
 		} else if (st.hint_win != None) {
 			win = st.hint_win;
-			fprintf(stderr, "PID lookup failed for %d; matched newest window by name hint '%s'\n",
-			        target, hint);
+			fprintf(stderr, "PID lookup failed for %s; matched newest window by name hint '%s'\n",
+			        target_str, hint);
 		} else {
-			fprintf(stderr, "No window found for PID %d\n", target);
+			fprintf(stderr, "No window found for PID %s\n", target_str);
 			XCloseDisplay(dpy);
 			return 1;
 		}

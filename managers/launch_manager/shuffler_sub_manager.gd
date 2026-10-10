@@ -63,6 +63,10 @@ var _x11_windowctl_path: String = ""
 # launching the next emulator instance (defensive: a wedged pssuspend must
 # not stall switching forever).
 const SUSPEND_AWAIT_TIMEOUT_SEC := 2.0
+# Max time to verify every process-group member reached stopped state after
+# SIGSTOP. Generous on purpose: a member briefly stuck in uninterruptible I/O
+# (shader cache writes) must not false-positive into a hard kill.
+const SUSPEND_VERIFY_TIMEOUT_SEC := 2.0
 # Max time to wait for minimize_window.ahk before suspending. AHK must finish
 # its window messages before pssuspend freezes the emulator, otherwise the
 # script wedges on a synchronous send to a suspended UI thread.
@@ -1502,6 +1506,9 @@ func _launch_game(entry: Dictionary) -> void:
 			# launch of this entry so it is re-captured below.
 			entry["window_xid"] = ""
 			_maximize_with_retry(pid, entry.emulator_id)
+			# Vita3K/Cemu create the real game window seconds after the first;
+			# re-capture on a schedule so the stored XID tracks it.
+			_capture_window_xid_delayed(pid, entry.emulator_id)
 		else:
 			push_error("[ShufflerSubManager] Failed to launch game: " + game.title)
 			# Skip immediately instead of idling out the round on a dead launch;
@@ -1601,10 +1608,21 @@ func _suspend_game(entry: Dictionary) -> void:
 	var exe_name = ""
 	var launch_config = emulator.get("launch", {})
 	var platforms = launch_config.get("platforms", {})
-	var pc = platforms.get("windows", {})
+	# Read the CURRENT platform's executable name (used as the Windows AHK
+	# target). Previously this always read platforms.windows, which produced
+	# names like "Cemu.exe" that can never substring-match a Linux WM_CLASS.
+	var platform_key := SystemManager.platform.get_platform_name().to_lower()
+	var pc: Dictionary = platforms.get(platform_key, {})
+	if pc.is_empty():
+		pc = platforms.get("windows", {})
 	exe_name = pc.get("executable", "")
 
 	print("[ShufflerSubManager] _suspend_game: " + _format_entry(entry) + " exe=" + exe_name)
+
+	# The stored window XID may be stale (Vita3K/Cemu recreate their window on
+	# game boot); drop it so the hide below falls back to a fresh lookup.
+	await _validate_window_xid(entry)
+
 	await _hide_window_awaited(entry.pid, exe_name, entry.emulator_id)
 
 	# Await the suspension before returning: _switch_to_game launches the next
@@ -1620,13 +1638,32 @@ func _suspend_game(entry: Dictionary) -> void:
 	while not done.complete and elapsed < SUSPEND_AWAIT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.05).timeout
 		elapsed = (Time.get_ticks_msec() - suspend_start) / 1000.0
-	if done.complete and done.exit_code == 0:
+
+	var suspended: bool = done.complete and done.exit_code == 0
+	if suspended and SystemManager.platform.is_linux():
+		# SIGSTOP exiting 0 only proves the signal was delivered, not that the
+		# emulator actually froze (the tracked PID may have been a wrapper, or
+		# the emulator may have forked helpers outside its group). Verify every
+		# live member of the process group is in stopped state before we
+		# launch the next game on top of it.
+		var verify_start := Time.get_ticks_msec()
+		var verified := false
+		while Time.get_ticks_msec() - verify_start < int(SUSPEND_VERIFY_TIMEOUT_SEC * 1000):
+			if LaunchManager.process.are_group_stopped_for_pid(entry.pid):
+				verified = true
+				break
+			await get_tree().create_timer(0.05).timeout
+		if not verified:
+			push_warning("[ShufflerSubManager] _suspend_game: SIGSTOP delivered but process group still running for pid " + str(entry.pid))
+			suspended = false
+
+	if suspended:
 		print("[ShufflerSubManager] _suspend_game: pid " + str(entry.pid) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(done.exit_code) + ")")
 	else:
 		# A failed/wedged suspend leaves the outgoing game running and playing
 		# alongside the next one. Kill it instead; the slot relaunches fresh
 		# the next time it is picked.
-		push_warning("[ShufflerSubManager] _suspend_game: pssuspend failed for pid " + str(entry.pid) + " (complete=" + str(done.complete) + " exit_code=" + str(done.exit_code) + "); killing to keep only one live game")
+		push_warning("[ShufflerSubManager] _suspend_game: suspend failed for pid " + str(entry.pid) + " (complete=" + str(done.complete) + " exit_code=" + str(done.exit_code) + "); killing to keep only one live game")
 		_kill_entry_processes(entry)
 		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
 		entry.pid = -1
@@ -1654,6 +1691,10 @@ func _resume_game(entry: Dictionary) -> void:
 		push_warning("[ShufflerSubManager] _resume_game: timed out waiting for pssuspend -r (pid " + str(entry.pid) + "); maximizing anyway")
 
 	await get_tree().create_timer(0.2).timeout
+
+	# A recreated window (Vita3K/Cemu boot a game window seconds after the
+	# first) invalidates the stored XID; drop stale ones before maximizing.
+	await _validate_window_xid(entry)
 
 	await _maximize_with_retry(entry.pid, entry.emulator_id)
 
@@ -1941,8 +1982,10 @@ func _x11_logging_callback(action: String, pid: int, callback: Callable) -> Call
 
 ## Returns the x11_windowctl target for a game's window: the captured XID if
 ## we have one (unambiguous when several instances of the same emulator are
-## alive, e.g. suspended games), else the PID for the helper's pid/hint
-## lookup.
+## alive, e.g. suspended games), else a comma-separated list of every PID in
+## the game's process group (the window's _NET_WM_PID rarely matches the
+## leader we spawned — AppImage AppRun, sh wrappers — but always matches
+## SOME member of the group).
 func _windowctl_target(pid: int) -> String:
 	if pid <= 0:
 		return str(pid)
@@ -1952,8 +1995,67 @@ func _windowctl_target(pid: int) -> String:
 				var xid: String = entry.get("window_xid", "")
 				if xid != "":
 					return "xid:" + xid
-				break
+				return _group_pid_list(pid)
 	return str(pid)
+
+## Comma-separated PID list covering the tracked PID plus every live member
+## of its process group, for x11_windowctl's multi-pid window matching.
+func _group_pid_list(pid: int) -> String:
+	var pids := {}
+	pids[pid] = true
+	if SystemManager.platform.is_linux():
+		var pgid: int = LaunchManager.process.get_pgid(pid)
+		if pgid > 1:
+			for member in LaunchManager.process.get_group_members(pgid):
+				pids[member] = true
+	var list: Array = []
+	for p in pids.keys():
+		list.append(str(p))
+	return ",".join(list)
+
+## Drops a stored window XID when the window no longer exists (emulators like
+## Vita3K and Cemu recreate their window on game boot). After clearing, the
+## next hide/show falls back to a fresh pid+hint lookup and re-captures.
+func _validate_window_xid(entry: Dictionary) -> void:
+	if _window_backend != WindowBackend.LINUX_X11 or _x11_windowctl_path.is_empty():
+		return
+	var xid: String = entry.get("window_xid", "")
+	if xid == "":
+		return
+	var state := {"done": false, "ok": true}
+	MemorySubManager.queue_os_execute(_x11_windowctl_path, ["exists", "xid:" + xid], func(result: Dictionary):
+		state.done = true
+		state.ok = result.get("exit_code", -1) != 1  # 1 = confirmed gone
+	)
+	var waited := 0.0
+	while not state.done and waited < 1.0:
+		await get_tree().create_timer(0.05).timeout
+		waited += 0.05
+	if state.done and not state.ok:
+		print("[ShufflerSubManager] stored window xid " + xid + " is stale (window recreated?); clearing for re-capture")
+		entry["window_xid"] = ""
+
+## Re-captures the window XID a few times after launch: Vita3K/Cemu create
+## the real game window seconds after the first one appears, so a single
+## early capture can bind to a doomed boot window.
+func _capture_window_xid_delayed(pid: int, hint: String) -> void:
+	for delay in [1.0, 3.0, 6.0]:
+		await get_tree().create_timer(delay).timeout
+		if not _pid_is_live_entry(pid):
+			return
+		_capture_window_xid(pid, hint)
+
+## True while the given pid still belongs to a started bag entry (i.e. the
+## game wasn't switched away from or stopped while a capture was pending).
+func _pid_is_live_entry(pid: int) -> bool:
+	if _state != State.ACTIVE and _state != State.PAUSED:
+		return false
+	if not _bag or not _bag.entries:
+		return false
+	for entry in _bag.entries:
+		if entry.pid == pid:
+			return entry.started
+	return false
 
 ## Captures the exact X11 window ID the helper matched for this game (same
 ## matching rules as show/hide) and stores it on the bag entry, so later
@@ -1961,7 +2063,7 @@ func _windowctl_target(pid: int) -> String:
 func _capture_window_xid(pid: int, hint: String) -> void:
 	if _x11_windowctl_path.is_empty():
 		return
-	var args: Array = ["find", str(pid)]
+	var args: Array = ["find", _group_pid_list(pid)]
 	if hint != "":
 		args.append(hint)
 	MemorySubManager.queue_os_execute(_x11_windowctl_path, args, func(result: Dictionary):
@@ -2001,10 +2103,17 @@ func _kill_entry_processes(entry: Dictionary) -> void:
 			MemorySubManager.queue_os_execute("taskkill", ["/F", "/T", "/PID", str(pid)])
 	else:
 		if pid > 0:
-			# kill_tree: SIGKILLs the pid and all of its descendants,
-			# bottom-up. Plain sh function; no process-group kill because
-			# Godot-spawned children can share our own process group.
-			var script := "kill_tree() { kill -CONT \"$1\" 2>/dev/null; for child in $(ps -o pid= --ppid \"$1\" 2>/dev/null); do kill_tree \"$child\"; done; kill -9 \"$1\" 2>/dev/null; }; kill_tree " + str(pid)
+			# Group kill first (SIGCONT so SIGSTOPped members can die): the
+			# whole launch tree shares one PGID thanks to setsid, so this
+			# reaches the payload even when the tracked pid is a wrapper.
+			# kill_tree remains as a fallback for anything that escaped the
+			# group (plain sh function; no process-group kill of our own group
+			# because Godot-spawned children can share our process group).
+			var pgid: int = LaunchManager.process.get_pgid(pid)
+			var script := ""
+			if pgid > 1:
+				script += "kill -CONT -- -%d 2>/dev/null; kill -9 -- -%d 2>/dev/null; " % [pgid, pgid]
+			script += "kill_tree() { kill -CONT \"$1\" 2>/dev/null; for child in $(ps -o pid= --ppid \"$1\" 2>/dev/null); do kill_tree \"$child\"; done; kill -9 \"$1\" 2>/dev/null; }; kill_tree " + str(pid)
 			MemorySubManager.queue_os_execute("/bin/sh", ["-c", script])
 		if xid != "" and not _x11_windowctl_path.is_empty():
 			MemorySubManager.queue_os_execute(_x11_windowctl_path, ["xkill", "xid:" + xid], _x11_logging_callback("xkill", pid, Callable()))
@@ -2035,7 +2144,7 @@ func _x11_raise_async(pid: int, callback: Callable = Callable(), hint: String = 
 	if hint != "":
 		args.append(hint)
 	MemorySubManager.queue_os_execute(_x11_windowctl_path, args, _x11_logging_callback(action, pid, func(result: Dictionary):
-		if result.get("exit_code", -1) == 0 and _windowctl_target(pid) == str(pid):
+		if result.get("exit_code", -1) == 0 and not _windowctl_target(pid).begins_with("xid:"):
 			# Raised via pid/hint lookup: capture the exact window ID so the
 			# next hide/show for this entry is unambiguous.
 			_capture_window_xid(pid, hint)
