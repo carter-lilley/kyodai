@@ -142,12 +142,7 @@
 		"linux": {
 		  "action_type": "download_repo",
 		  "github_repo": "pkgforge-dev/Dolphin-emu-AppImage",
-		  "asset_pattern": "Dolphin_Emulator-.*-anylinux-x86_64\\.AppImage",
-		  "validate": {
-			"action_type": "files_exist",
-			"path": ".",
-			"pattern": "Dolphin_Emulator-*.AppImage"
-		  }
+		  "asset_pattern": "Dolphin_Emulator-.*-anylinux-x86_64\\.AppImage"
 		},
 		"android": {
 		  "action_type": "download_scrape",

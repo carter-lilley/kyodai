@@ -96,7 +96,8 @@
 			},
 			"linux": {
 				"type": "command",
-				"executable": "Vita3K",
+				"executable": "squashfs-root/AppRun",
+				"working_directory": "{emulator_dir}",
 				"template": [
 					"{exe}",
 					"--fullscreen",
@@ -152,11 +153,7 @@
 					"action_type": "move",
 					"source_pattern": "Vita3K-*.AppImage",
 					"destination": "Vita3K",
-					"replace": true,
-					"validate": {
-						"action_type": "file_exists",
-						"file": "Vita3K"
-					}
+					"replace": true
 				},
 				"android": {
 					"action_type": "apk_install",
@@ -178,10 +175,26 @@
 				"linux": {
 					"action_type": "chmod",
 					"file": "Vita3K",
-					"mode": "+x",
+					"mode": "+x"
+				},
+				"android": {
+					"action_type": "none"
+				}
+			}
+		},
+		{
+			"step": "extract_appimage",
+			"platforms": {
+				"windows": {
+					"action_type": "none"
+				},
+				"linux": {
+					"action_type": "appimage_extract",
+					"pattern": "Vita3K",
 					"validate": {
-						"action_type": "file_exists",
-						"file": "Vita3K"
+						"action_type": "files_exist",
+						"path": "squashfs-root",
+						"pattern": "AppRun"
 					}
 				},
 				"android": {

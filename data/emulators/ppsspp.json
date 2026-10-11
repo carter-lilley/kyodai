@@ -112,12 +112,7 @@
 				"linux": {
 					"action_type": "download_repo",
 					"github_repo": "hrydgard/ppsspp",
-					"asset_pattern": "PPSSPP-.*-anylinux-x86_64\\.AppImage",
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "PPSSPP-*.AppImage"
-					}
+					"asset_pattern": "PPSSPP-.*-anylinux-x86_64\\.AppImage"
 				},
 				"android": {
 					"action_type": "download_scrape",

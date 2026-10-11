@@ -78,7 +78,12 @@
 					"-g",
 					"{rom}",
 					"-f"
-				]
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
+					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
+					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+				}
 			}
 		}
 	},
@@ -94,12 +99,7 @@
 				"linux": {
 					"action_type": "download_repo",
 					"github_repo": "cemu-project/Cemu",
-					"asset_pattern": "Cemu-.*\\.AppImage",
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "*.AppImage"
-					}
+					"asset_pattern": "Cemu-.*\\.AppImage"
 				}
 			}
 		},

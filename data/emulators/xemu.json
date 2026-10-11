@@ -77,7 +77,7 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "xemu",
+		"executable": "squashfs-root/AppRun",
 		"template": [
 		  "{exe}",
 		  "-full-screen",
@@ -126,11 +126,7 @@
 		  "action_type": "move",
 		  "source_pattern": "xemu-*.AppImage",
 		  "destination": "xemu",
-		  "replace": true,
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "xemu"
-		  }
+		  "replace": true
 		}
 	  }
 	},
@@ -143,10 +139,23 @@
 		"linux": {
 		  "action_type": "chmod",
 		  "file": "xemu",
-		  "mode": "+x",
+		  "mode": "+x"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "xemu",
 		  "validate": {
-			"action_type": "file_exists",
-			"file": "xemu"
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
 		  }
 		}
 	  }

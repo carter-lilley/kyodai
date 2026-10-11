@@ -86,7 +86,7 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "pcsx2-qt",
+		"executable": "squashfs-root/AppRun",
 		"template": [
 		  "{exe}",
 		  "-nogui",
@@ -134,11 +134,7 @@
 		  "action_type": "move",
 		  "source_pattern": "pcsx2-*.AppImage",
 		  "destination": "pcsx2-qt",
-		  "replace": true,
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "pcsx2-qt"
-		  }
+		  "replace": true
 		}
 	  }
 	},
@@ -151,10 +147,23 @@
 		"linux": {
 		  "action_type": "chmod",
 		  "file": "pcsx2-qt",
-		  "mode": "+x",
+		  "mode": "+x"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "pcsx2-qt",
 		  "validate": {
-			"action_type": "file_exists",
-			"file": "pcsx2-qt"
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
 		  }
 		}
 	  }

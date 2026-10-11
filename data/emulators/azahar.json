@@ -83,7 +83,12 @@
 					"{exe}",
 					"-f",
 					"{rom}"
-				]
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
+					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
+					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+				}
 			},
 			"android": {
 				"action": "android.intent.action.VIEW",
@@ -104,11 +109,7 @@
 				"linux": {
 					"action_type": "download_repo",
 					"github_repo": "azahar-emu/azahar",
-					"asset_pattern": "azahar\\.AppImage",
-					"validate": {
-						"action_type": "file_exists",
-						"file": "azahar.AppImage"
-					}
+					"asset_pattern": "azahar\\.AppImage"
 				},
 				"android": {
 					"action_type": "download_repo",

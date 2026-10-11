@@ -39,6 +39,7 @@
 		"{emulator_dir}/xenia.config.toml"
 	  ],
 	  "linux": [
+		"{emulator_dir}/.local/share/Xenia/xenia-edge.config.toml",
 		"{emulator_dir}/xenia-edge.config.toml",
 		"{emulator_dir}/xenia.config.toml"
 	  ]
@@ -73,12 +74,18 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "xenia_edge_linux.AppImage",
+		"executable": "squashfs-root/AppRun",
+		"working_directory": "{emulator_dir}",
 		"template": [
 		  "{exe}",
 		  "--fullscreen=true",
 		  "{rom}"
-		]
+		],
+		"environment": {
+		  "XDG_CONFIG_HOME": "{emulator_dir}/.config",
+		  "XDG_DATA_HOME": "{emulator_dir}/.local/share",
+		  "XDG_CACHE_HOME": "{emulator_dir}/.cache"
+		}
 	  }
 	}
   },
@@ -94,11 +101,7 @@
 		"linux": {
 		  "action_type": "download_repo",
 		  "github_repo": "has207/xenia-edge",
-		  "asset_pattern": "xenia_edge_linux\\.AppImage",
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "xenia_edge_linux.AppImage"
-		  }
+		  "asset_pattern": "xenia_edge_linux\\.AppImage"
 		}
 	  }
 	},
@@ -128,10 +131,23 @@
 		"linux": {
 		  "action_type": "chmod",
 		  "file": "xenia_edge_linux.AppImage",
-		  "mode": "+x",
+		  "mode": "+x"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "*.AppImage",
 		  "validate": {
-			"action_type": "file_exists",
-			"file": "xenia_edge_linux.AppImage"
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
 		  }
 		}
 	  }

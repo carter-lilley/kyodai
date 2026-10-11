@@ -22,6 +22,14 @@ var _pending_emulator_version: Dictionary = {}
 ## Set for updates/reinstalls; cleared on completion or failure.
 var _force_install_step: Dictionary = {}
 
+## Per-emulator count of how many times each install step has executed in the
+## current chain. A healthy chain visits each step once or twice (retries); a
+## step that keeps re-executing indicates a retry ping-pong between steps
+## (e.g. skip-forward vs retry-backward on a missing input), which would
+## otherwise recurse synchronously until the stack overflows.
+var _install_step_executions: Dictionary = {}
+const MAX_STEP_EXECUTIONS := 5
+
 ## Config guard state: emulator_id -> Array of {original, backup}. Populated
 ## by _begin_config_guard() when an update/reinstall starts, consumed by
 ## _restore_config_guard() at every terminal point.
@@ -410,6 +418,7 @@ func _restore_config_guard(emulator_id: String) -> void:
 func _end_force_install(emulator_id: String) -> void:
 	_restore_config_guard(emulator_id)
 	_force_install_step.erase(emulator_id)
+	_install_step_executions.erase(emulator_id)
 
 ## Executes a single install step by index
 func _execute_install_step(emulator_id: String, step_index: int) -> bool:
@@ -425,6 +434,7 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	
 	if step_index >= install_steps.size():
 		# All steps completed successfully
+		_install_step_executions.erase(emulator_id)
 		_create_emulator_save_directory(emulator_id)
 		_emulator_install_progress[emulator_id] = ""
 		# Persist the version resolved during the first download step now that the
@@ -441,7 +451,17 @@ func _execute_install_step(emulator_id: String, step_index: int) -> bool:
 	var step = install_steps[step_index]
 	var step_name = step.get("step", "")
 	var platform_config = launch_manager.registry._get_step_platform_config(step)
-	
+
+	# Retry-loop guard: bail out before a step ping-pong can overflow the stack.
+	var exec_counts: Dictionary = _install_step_executions.get_or_add(emulator_id, {})
+	exec_counts[step_index] = int(exec_counts.get(step_index, 0)) + 1
+	if exec_counts[step_index] > MAX_STEP_EXECUTIONS:
+		push_error("[EmulatorManager] Install step '" + step_name + "' executed " + str(exec_counts[step_index]) + " times for " + emulator_id + " - aborting (retry loop detected)")
+		_install_step_executions.erase(emulator_id)
+		_end_force_install(emulator_id)
+		install_steps_failed.emit(emulator_id, "Install retry loop detected")
+		return false
+
 	if platform_config.is_empty():
 		# Step is scoped to another OS (e.g. the linux-only chmod step): skip it
 		# instead of failing the install on a platform where it never applies.
@@ -507,8 +527,29 @@ func _retry_previous_step(emulator_id: String, current_step_index: int) -> bool:
 	if target_step < 0:
 		push_error("[EmulatorManager] Cannot retry - would go before first step")
 		return false
-	
+
 	return _execute_install_step(emulator_id, target_step)
+
+## Walks back to the FIRST download step in the chain and re-runs it, so a
+## missing input (archive, AppImage) is actually re-fetched.
+## Retrying only the immediate previous step cannot help when that step has no
+## input either — worse, it ping-pongs: extract skip-forwards on a missing
+## archive while chmod retries backwards on a missing binary, recursing
+## synchronously until the stack overflows. And retrying the NEAREST download
+## step is wrong for multi-download chains (shadPS4 core + Qt launcher): the
+## input may come from an earlier download, so the whole chain restarts.
+## AppImages are deleted after extraction, so "no AppImage" always means
+## "re-download".
+func _retry_from_download_step(emulator_id: String, current_step_index: int) -> bool:
+	var install_steps: Array = launch_manager.registry.get_emulator(emulator_id).get("install", [])
+	for i in range(0, current_step_index):
+		var prev_config: Dictionary = launch_manager.registry._get_step_platform_config(install_steps[i])
+		var prev_action: String = prev_config.get("action_type", "")
+		if prev_action in ["download_repo", "download_scrape", "download_url", "batch_url_download"]:
+			print("[EmulatorManager] Input missing - restarting download chain at step " + str(i) + " for " + emulator_id)
+			return _execute_install_step(emulator_id, i)
+	push_error("[EmulatorManager] No download step found before step " + str(current_step_index) + " for " + emulator_id)
+	return false
 
 ## Executes APK install action for a step (Android only)
 ## Uses simple file:// URI approach with OS.shell_open()
@@ -808,8 +849,12 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 					if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: file exists check failed for " + full_path)
 		if DEBUG_LOG: print("[EmulatorManager] _execute_extract_step: after expected_file loop, archive_path=" + archive_path)
 	
-	# If no expected_file match, scan for common archive extensions (first match only)
-	if archive_path == "":
+	# If no expected_file match, scan for common archive extensions (first match
+	# only). When expected_file IS set there is no fallback: grabbing a random
+	# unrelated archive (e.g. the Qt launcher zip when the core zip is missing)
+	# extracts the wrong payload and corrupts the whole chain — treat it as
+	# missing and walk back to the download step instead.
+	if archive_path == "" and expected_file == "":
 		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
 		var files = FSM.list_dir(emulator_dir)
 		for file_name in files:
@@ -834,8 +879,8 @@ func _execute_extract_step(emulator_id: String, step_index: int, extract_config:
 	
 	# Check if archive was found
 	if not archive_exists:
-		# Go back to download step to re-download
-		return _retry_previous_step(emulator_id, step_index)
+		# Go back to the download step to re-fetch the archive
+		return _retry_from_download_step(emulator_id, step_index)
 	
 	# Get step name from install_steps for display
 	var step_name = ""
@@ -916,8 +961,9 @@ func _execute_batch_extract_step(emulator_id: String, step_index: int, extract_c
 				if FSM.file_exists(full_path):
 					archive_paths.append(full_path)
 	
-	# If no expected_file match, scan for common archive extensions
-	if archive_paths.is_empty():
+	# If no expected_file match, scan for common archive extensions — but only
+	# when no expected_file was configured (see _execute_extract_step).
+	if archive_paths.is_empty() and expected_file == "":
 		var archive_extensions = [".zip", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".rar", ".tar"]
 		var files = FSM.list_dir(emulator_dir)
 		for file_name in files:
@@ -1323,12 +1369,15 @@ func _execute_chmod_step(emulator_id: String, step_index: int, platform_config: 
 	
 	if targets.is_empty():
 		# If the step specified files/patterns to chmod but none were found, the
-		# previous download step probably failed or the file was deleted. Retry it
-		# instead of silently advancing to a step that will fail on the missing file.
+		# input was never downloaded or was already consumed (AppImages are
+		# deleted after extraction). Step back to the download step instead of
+		# retrying the immediate previous step: that one has no input either,
+		# and its skip-forward would ping-pong with this retry until the stack
+		# overflows.
 		var expected_something: bool = file != "" or (files is Array and files.size() > 0) or pattern != ""
 		if expected_something:
-			push_warning("[EmulatorManager] chmod targets missing for " + emulator_id + "; retrying previous step")
-			return _retry_previous_step(emulator_id, step_index)
+			push_warning("[EmulatorManager] chmod targets missing for " + emulator_id + "; retrying from download step")
+			return _retry_from_download_step(emulator_id, step_index)
 		push_warning("[EmulatorManager] chmod step has no targets for " + emulator_id)
 		return _execute_install_step(emulator_id, step_index + 1)
 
@@ -1509,8 +1558,8 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 				break
 
 	if appimage_path == "":
-		push_warning("[EmulatorManager] appimage_extract step found no AppImage matching '" + pattern + "' for " + emulator_id + "; retrying previous download step")
-		return _retry_previous_step(emulator_id, step_index)
+		push_warning("[EmulatorManager] appimage_extract step found no AppImage matching '" + pattern + "' for " + emulator_id + "; retrying from download step")
+		return _retry_from_download_step(emulator_id, step_index)
 
 	# Detect whether RetroArch's bundled config data (assets, autoconfig, shaders)
 	# is missing so we can repair existing installs without a full re-extraction.
@@ -1532,9 +1581,11 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 		if already_valid and needs_config_copy:
 			print("[EmulatorManager] RetroArch assets missing, copying bundled config from AppImage home")
 			_copy_retroarch_bundled_config(emulator_dir, appimage_path)
+			_delete_extracted_appimage(appimage_path)
 			return _execute_install_step(emulator_id, step_index + 1)
 		if already_valid:
 			if DEBUG_LOG: print("[EmulatorManager] AppImage extraction already valid for " + emulator_id + ", skipping")
+			_delete_extracted_appimage(appimage_path)
 			return _execute_install_step(emulator_id, step_index + 1)
 
 	var abs_appimage = FSM.resolve_path(appimage_path, {"format": FSM.PathFormat.ABSOLUTE})
@@ -1591,10 +1642,25 @@ func _execute_appimage_extract_step(emulator_id: String, step_index: int, platfo
 			return
 
 		launch_manager.emulator_extraction_completed.emit(emulator_id, true)
+		# The extracted squashfs-root tree is the install now; the AppImage is
+		# dead weight. Kyodai has no repair-from-AppImage flow — a broken install
+		# is fixed by reinstalling, which fetches a fresh AppImage.
+		_delete_extracted_appimage(appimage_path)
 		_execute_install_step(emulator_id, step_index + 1)
 
 	MemorySubManager.queue_os_execute("sh", ["-c", inner_cmd], extract_callback)
 	return true
+
+## Deletes a source AppImage after its extraction has been validated. Only the
+## file this step actually extracted is removed — e.g. shadPS4's Qt launcher
+## AppImage is never extracted and must be left alone.
+func _delete_extracted_appimage(appimage_path: String) -> void:
+	if appimage_path == "" or not FSM.file_exists(appimage_path):
+		return
+	print("[EmulatorManager] Deleting extracted AppImage: " + appimage_path)
+	var err := DirAccess.remove_absolute(appimage_path)
+	if err != OK:
+		push_warning("[EmulatorManager] Failed to delete extracted AppImage " + appimage_path + " (error " + str(err) + ")")
 
 func _copy_retroarch_bundled_config(emulator_dir: String, appimage_path: String) -> void:
 	"""Copy RetroArch's bundled assets, autoconfigs, shaders, overlays, core info,
@@ -1830,6 +1896,9 @@ func _create_emulator_save_directory(emulator_id: String) -> void:
 
 ## Executes install steps from new step-based format (entry point)
 func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install_steps: Array) -> bool:
+	# Fresh install attempt: reset the retry-loop guard.
+	_install_step_executions.erase(emulator_id)
+
 	# Find the first incomplete step to start from
 	var progress = get_install_progress(emulator_id)
 	var start_step = 0

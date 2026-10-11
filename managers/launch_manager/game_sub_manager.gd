@@ -762,7 +762,10 @@ func _prepare_vita3k_game(game: GameResource, intent: LaunchIntent, is_shuffler:
 			emulator_path = launch_manager.registry.get_emulator_install_path("vita3k")
 		
 		if emulator_path != "":
-			emulator_dir = emulator_path.get_base_dir()
+			# Use the managed emulator directory, not the executable's parent:
+			# extracted AppImages nest the exe inside squashfs-root/, which is
+			# wiped and re-created on updates — user data must never live there.
+			emulator_dir = launch_manager.registry._get_emulator_directory(intent.emulator_id if intent.emulator_id != "" else "vita3k").rstrip("/")
 		else:
 			# Emulator not installed yet, use the default emulator directory
 			# We can still extract the TitleID and prepare the game files
@@ -1165,7 +1168,9 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if not SystemManager.platform.is_android():
 		var emulator_install_path = launch_manager.registry.get_emulator_install_path(intent.emulator_id)
 		if emulator_install_path != "":
-			rpcs3_install_dir = emulator_install_path.get_base_dir()
+			# Managed emulator directory, not the exe's parent: extracted
+			# AppImages nest the exe inside the update-wiped squashfs-root/.
+			rpcs3_install_dir = launch_manager.registry._get_emulator_directory(intent.emulator_id).rstrip("/")
 			desktop_disc_path = FSM.join_paths(rpcs3_install_dir, "games", title_id)
 			desktop_digital_path = FSM.join_paths(rpcs3_install_dir, "dev_hdd0", "game", title_id)
 			if DEBUG_LOG: print("[GameManager] RPCS3: Desktop disc path: " + desktop_disc_path)
@@ -1567,7 +1572,8 @@ func cleanup_extracted_game_files(game: GameResource) -> void:
 		"ps3":
 			var emulator_path = launch_manager.registry.get_emulator_install_path("rpcs3")
 			if emulator_path != "":
-				var emulator_dir = emulator_path.get_base_dir()
+				# Managed emulator dir, not the exe's parent (squashfs-root-safe)
+				var emulator_dir = launch_manager.registry._get_emulator_directory("rpcs3").rstrip("/")
 				var disc_path = emulator_dir + "/games/" + title_id
 				var digital_path = emulator_dir + "/dev_hdd0/game/" + title_id
 				if FSM.dir_exists(disc_path):
@@ -1579,7 +1585,8 @@ func cleanup_extracted_game_files(game: GameResource) -> void:
 		"psvita":
 			var emulator_path = launch_manager.registry.get_emulator_install_path("vita3k")
 			if emulator_path != "":
-				var emulator_dir = emulator_path.get_base_dir()
+				# Managed emulator dir, not the exe's parent (squashfs-root-safe)
+				var emulator_dir = launch_manager.registry._get_emulator_directory("vita3k").rstrip("/")
 				var vita_path = emulator_dir + "/ux0/app/" + title_id
 				if FSM.dir_exists(vita_path):
 					print("[GameManager] Cleaning up extracted Vita game: " + vita_path)

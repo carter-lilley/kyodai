@@ -79,7 +79,7 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "rpcs3",
+		"executable": "squashfs-root/AppRun",
 		"template": [
 		  "{exe}",
 		  "{rom}",
@@ -126,11 +126,7 @@
 		  "action_type": "move",
 		  "source_pattern": "rpcs3-*.AppImage",
 		  "destination": "rpcs3",
-		  "replace": true,
-		  "validate": {
-			"action_type": "file_exists",
-			"file": "rpcs3"
-		  }
+		  "replace": true
 		}
 	  }
 	},
@@ -143,10 +139,23 @@
 		"linux": {
 		  "action_type": "chmod",
 		  "file": "rpcs3",
-		  "mode": "+x",
+		  "mode": "+x"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "rpcs3",
 		  "validate": {
-			"action_type": "file_exists",
-			"file": "rpcs3"
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
 		  }
 		}
 	  }

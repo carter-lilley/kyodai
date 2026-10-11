@@ -1523,7 +1523,9 @@ func _launch_game(entry: Dictionary) -> void:
 			if title_id != "":
 				var install_path = LaunchManager.get_emulator_install_path(emulator_id)
 				if install_path != "":
-					var ux0_app_path = install_path.get_base_dir() + "/ux0/app/" + title_id
+					# Managed emulator dir, not the exe's parent: extracted
+					# AppImages nest the exe inside the update-wiped squashfs-root/.
+					var ux0_app_path = LaunchManager._get_emulator_directory(emulator_id).rstrip("/") + "/ux0/app/" + title_id
 					entry.vita_title_id = title_id
 					entry.vita_app_path = ux0_app_path
 					var already_tracked := false

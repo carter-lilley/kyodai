@@ -51,7 +51,12 @@
 					"{rom}",
 					"--fullscreen",
 					"true"
-				]
+				],
+				"environment": {
+					"XDG_CONFIG_HOME": "{emulator_dir}/.config",
+					"XDG_DATA_HOME": "{emulator_dir}/.local/share",
+					"XDG_CACHE_HOME": "{emulator_dir}/.cache"
+				}
 			}
 		}
 	},
@@ -87,11 +92,7 @@
 					"action_type": "extract",
 					"extract_to": ".",
 					"strip_top_directory": false,
-					"validate": {
-						"action_type": "files_exist",
-						"path": ".",
-						"pattern": "Shadps4-*.AppImage"
-					}
+					"expected_file": "shadps4-linux-sdl-*.zip"
 				}
 			}
 		},
@@ -126,6 +127,7 @@
 					"action_type": "extract",
 					"extract_to": ".",
 					"strip_top_directory": false,
+					"expected_file": "shadPS4QtLauncher-linux-qt-*.zip",
 					"validate": {
 						"action_type": "files_exist",
 						"path": ".",

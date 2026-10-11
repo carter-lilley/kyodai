@@ -38,7 +38,7 @@
 	"anchor": "{emulator_dir}",
 	"config_candidates": {
 	  "windows": ["{emulator_dir}/melonDS.ini"],
-	  "linux": ["{emulator_dir}/melonDS.ini"]
+	  "linux": ["{emulator_dir}/.config/melonDS/melonDS.ini", "{emulator_dir}/melonDS.ini"]
 	},
 	"enforce": {
 	  "windows": {
@@ -97,13 +97,18 @@
 	  },
 	  "linux": {
 		"type": "command",
-		"executable": "melonDS",
+		"executable": "squashfs-root/AppRun",
 		"working_directory": "{emulator_dir}",
 		"template": [
 		  "{exe}",
 		  "-f",
 		  "{rom}"
-		]
+		],
+		"environment": {
+		  "XDG_CONFIG_HOME": "{emulator_dir}/.config",
+		  "XDG_DATA_HOME": "{emulator_dir}/.local/share",
+		  "XDG_CACHE_HOME": "{emulator_dir}/.cache"
+		}
 	  }
 	}
   },
@@ -138,10 +143,36 @@
 		"linux": {
 		  "action_type": "extract",
 		  "extract_to": ".",
-		  "strip_top_directory": false,
+		  "strip_top_directory": false
+		}
+	  }
+	},
+	{
+	  "step": "chmod_emulator",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "chmod",
+		  "file": "melonDS",
+		  "mode": "+x"
+		}
+	  }
+	},
+	{
+	  "step": "extract_appimage",
+	  "platforms": {
+		"windows": {
+		  "action_type": "none"
+		},
+		"linux": {
+		  "action_type": "appimage_extract",
+		  "pattern": "melonDS",
 		  "validate": {
-			"action_type": "file_exists",
-			"file": "melonDS"
+			"action_type": "files_exist",
+			"path": "squashfs-root",
+			"pattern": "AppRun"
 		  }
 		}
 	  }
