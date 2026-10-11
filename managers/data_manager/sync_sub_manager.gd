@@ -3,6 +3,12 @@ class_name SyncSubManager
 
 const DEBUG_LOG: bool = false
 
+## Metadata providers RomM's sibling_roms view matches on, in RomM's own
+## priority order (the gallery's group_by_meta_id coalesce order). The first
+## provider with a non-null ID is a rom's canonical identity source; two roms
+## in one sibling component with conflicting values there are different games.
+const FOLD_ID_PRIORITY: Array[String] = ["igdb", "ss", "moby", "ra", "hasheous", "launchbox", "tgdb"]
+
 var data_manager: Node
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
@@ -1526,11 +1532,11 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 	var result = _wait_for_async(func(callback: Callable):
 		MemorySubManager.queue_db_task(
 			func():
-				# Step 1: Assign master entries per sibling group. Siblings in the
+				# Step 1: Assign master entries per fold group. Siblings in the
 				# same batch must see each other - checking everything before
 				# inserting made every same-batch sibling a master, so folding
 				# only worked for groups split across batches.
-				var groups := _assign_sibling_masters(games)
+				var fold_data := _assign_sibling_masters(games)
 
 				# Step 2: Prefetch existing rows once (preservation + propagation)
 				var existing_rows := _prefetch_existing_rows(games)
@@ -1541,7 +1547,7 @@ func _check_and_insert_games_sync(games: Array[GameResource]) -> int:
 				# Step 4: Post-insert group maintenance: reciprocal sibling
 				# lists on DB-resident members + group download caches.
 				if insert_success:
-					_post_insert_group_maintenance(games, groups, existing_rows)
+					_post_insert_group_maintenance(games, fold_data, existing_rows)
 				return insert_success,
 			func(db_success):
 				# null when the queue dropped the task (overflow).
@@ -1641,16 +1647,19 @@ func _insert_games_transaction(games: Array[GameResource], existing_rows: Dictio
 		return false
 
 
-func _post_insert_group_maintenance(games: Array[GameResource], groups: Dictionary, existing_rows: Dictionary) -> void:
+func _post_insert_group_maintenance(games: Array[GameResource], fold_data: Dictionary, existing_rows: Dictionary) -> void:
 	"""DB thread: after a batch is inserted, bring DB-resident group members
-	up to date with the server's sibling relationships and rebuild every
-	touched group's download cache from member-row truth."""
+	up to date with the server's sibling relationships, prune sibling entries
+	that cross conflict-split fold lines, and rebuild every touched group's
+	download cache from member-row truth."""
 	var db = data_manager.database
+	var groups: Dictionary = fold_data.get("groups", {})
 	if not groups.is_empty():
 		db.lock()
-		for root in groups:
-			db.refresh_group_download_cache_unlocked(groups[root])
+		for key in groups:
+			db.refresh_group_download_cache_unlocked(groups[key])
 		db.unlock()
+	_prune_cross_group_siblings(fold_data.get("member_group", {}))
 	_propagate_sibling_lists(games, existing_rows)
 
 
@@ -1768,6 +1777,61 @@ func _propagate_sibling_lists(games: Array[GameResource], existing_rows: Diction
 		if DEBUG_LOG: print("[SyncThread] Propagated sibling lists to %d DB-resident group member(s)" % dirty.size())
 
 
+func _prune_cross_group_siblings(member_group: Dictionary) -> void:
+	"""DB thread: drop stored sibling entries that cross fold sub-group lines.
+
+	RomM's sibling relation can bridge genuinely different games (a shared weak
+	or mis-scraped metadata ID). When conflict splitting separates them, every
+	touched component member's stored list is filtered to its own sub-group so
+	the details dropdown and m3u disc pools never span games. Entries pointing
+	at roms outside the touched components (unknown grouping) are kept."""
+	if member_group.is_empty() or not data_manager.database.is_database_ready():
+		return
+	var db = data_manager.database
+	db.lock()
+	var ids: Array = member_group.keys()
+	var placeholders = ", ".join(ids.map(func(_id): return "?"))
+	var rows = db.query_array_unlocked(
+		"SELECT romm_id, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
+		ids)
+	var tx_ok = db.query_bool_unlocked("BEGIN TRANSACTION")
+	var dirty := {}
+	if tx_ok:
+		for row in rows:
+			var rid := int(row.get("romm_id", 0))
+			var my_group: int = member_group.get(rid, 0)
+			if my_group == 0:
+				continue
+			var parsed = JSON.parse_string(str(row.get("siblings", "[]")))
+			if not (parsed is Array) or parsed.is_empty():
+				continue
+			var filtered: Array = []
+			var changed := false
+			for entry in parsed:
+				if entry is Dictionary:
+					var sid := int(entry.get("id", 0))
+					# Unknown counterpart (not part of a touched component): keep.
+					if sid == 0 or member_group.get(sid, my_group) == my_group:
+						filtered.append(entry)
+					else:
+						changed = true
+				else:
+					filtered.append(entry)
+			if changed:
+				dirty[rid] = filtered
+		for rid in dirty:
+			if not db.query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(dirty[rid]), rid]):
+				tx_ok = false
+				break
+	if tx_ok:
+		db.query_bool_unlocked("COMMIT")
+	else:
+		db.query_bool_unlocked("ROLLBACK")
+	db.unlock()
+	if not dirty.is_empty() and tx_ok:
+		if DEBUG_LOG: print("[SyncThread] Pruned cross-game sibling entries from %d row(s)" % dirty.size())
+
+
 func _show_sync_notification():
 	"""Show sync notification on main thread."""
 	_sync_notification_id = SystemManager.notifications.show_notification(
@@ -1829,47 +1893,207 @@ func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
 
 
 func _assign_sibling_masters(games: Array[GameResource]) -> Dictionary:
-	"""Pick exactly one master entry per sibling group in this batch.
+	"""Pick exactly one master entry per fold group in this batch.
+
+	RomM's sibling relation bridges roms sharing ANY metadata ID (transitively),
+	so one weak or mis-scraped ID can chain genuinely different games (sequels,
+	series entries) into a single sibling component. Each component is therefore
+	split on canonical-source conflicts (see _split_component_by_conflicts)
+	before masters are assigned per resulting sub-group.
 
 	Master preference: RomM's own is_main_sibling flag, then an existing DB
-	master from the same group, then the lowest romm_id. All other members
-	are folded (is_master_entry = false). To be run on the DB thread.
-	Returns {group_root: [member romm_ids]} for post-insert maintenance."""
+	master from the same sub-group, then the lowest romm_id. All other members
+	are folded (is_master_entry = false). Batch games' sibling lists are scoped
+	to their own sub-group in place. To be run on the DB thread.
+	Returns {"groups": {key: [member romm_ids]}, "member_group": {romm_id: key}}
+	for post-insert maintenance."""
 	var parent := {}
 	var games_by_id := {}
+	var adjacency := {}  # romm_id -> {sibling romm_id: true} (direct server edges, both directions)
 
 	for game in games:
 		if game == null or game.siblings.is_empty():
 			continue
 		games_by_id[game.romm_id] = game
 		_uf_add(parent, game.romm_id)
+		if not adjacency.has(game.romm_id):
+			adjacency[game.romm_id] = {}
 		for sibling in game.siblings:
 			var sid: int = sibling.get("id", 0)
-			if sid != 0:
+			if sid != 0 and sid != game.romm_id:
 				_uf_add(parent, sid)
 				_uf_union(parent, game.romm_id, sid)
+				adjacency[game.romm_id][sid] = true
+				if not adjacency.has(sid):
+					adjacency[sid] = {}
+				adjacency[sid][game.romm_id] = true
 
-	# Bucket batch games by group root
-	var groups := {}
+	# Bucket batch games by component root
+	var components := {}
 	for game in games_by_id.values():
 		var root := _uf_find(parent, game.romm_id)
-		if not groups.has(root):
-			groups[root] = []
-		groups[root].append(game)
+		if not components.has(root):
+			components[root] = []
+		components[root].append(game)
 
-	var group_members := {}
-	for root in groups:
-		group_members[root] = _assign_group_master(groups[root], parent, root)
-	return group_members
+	# Provider IDs for every component member: fresh payload IDs for batch
+	# games, DB-stored IDs for the rest. Also folds DB-stored sibling edges
+	# into the adjacency map for conflict-split attachment votes.
+	var provider_map := _prefetch_member_provider_ids(parent, games_by_id, adjacency)
+
+	var groups := {}
+	var member_group := {}
+	var group_seq := 0
+	for root in components:
+		var member_ids: Array = []
+		for id in parent.keys():
+			if _uf_find(parent, id) == root:
+				member_ids.append(id)
+		for sub_group in _split_component_by_conflicts(member_ids, provider_map, adjacency):
+			group_seq += 1
+			_assign_group_master(components[root], sub_group)
+			groups[group_seq] = sub_group
+			for id in sub_group:
+				member_group[id] = group_seq
+
+	# Scope batch games' sibling lists to their own sub-group, so the details
+	# dropdown and m3u disc pools never span genuinely different games that
+	# RomM bridged into the component. Sibling ids missing from member_group
+	# (shouldn't happen - every sibling id is unioned in) are kept.
+	for game in games_by_id.values():
+		var my_key: int = member_group.get(game.romm_id, 0)
+		if my_key == 0:
+			continue
+		var scoped: Array[Dictionary] = []
+		for sibling in game.siblings:
+			var sid: int = sibling.get("id", 0)
+			if sid == 0 or member_group.get(sid, my_key) == my_key:
+				scoped.append(sibling)
+		game.siblings = scoped
+
+	return {"groups": groups, "member_group": member_group}
 
 
-func _assign_group_master(members: Array, parent: Dictionary, root: int) -> Array:
-	"""Returns all romm_ids in this group, including siblings not in this batch."""
-	# All romm_ids belonging to this group, including siblings not in this batch
-	var member_ids: Array = []
+func _prefetch_member_provider_ids(parent: Dictionary, games_by_id: Dictionary, adjacency: Dictionary) -> Dictionary:
+	"""DB thread: romm_id -> provider_ids Dictionary for every component member.
+
+	Batch games contribute their fresh payload IDs; DB-resident members are
+	fetched in one query, which also folds their stored sibling edges into
+	adjacency so conflict-split attachment votes see DB-only relationships."""
+	var provider_map := {}
+	var db_ids: Array = []
 	for id in parent.keys():
-		if _uf_find(parent, id) == root:
-			member_ids.append(id)
+		if games_by_id.has(id):
+			provider_map[id] = games_by_id[id].provider_ids
+		else:
+			db_ids.append(id)
+	if db_ids.is_empty() or not data_manager.database.is_database_ready():
+		return provider_map
+	data_manager.database.lock()
+	var placeholders = ", ".join(db_ids.map(func(_id): return "?"))
+	var rows = data_manager.database.query_array_unlocked(
+		"SELECT romm_id, provider_ids, igdb_id, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
+		db_ids)
+	data_manager.database.unlock()
+	for row in rows:
+		var rid := int(row.get("romm_id", 0))
+		var parsed_ids = JSON.parse_string(str(row.get("provider_ids", "{}")))
+		var ids_dict: Dictionary = parsed_ids if parsed_ids is Dictionary else {}
+		# Rows synced before provider_ids existed still carry the igdb_id column;
+		# fall back to it so conflict splitting works before a full re-sync.
+		if not ids_dict.has("igdb"):
+			var legacy_igdb := int(row.get("igdb_id", 0))
+			if legacy_igdb > 0:
+				ids_dict["igdb"] = legacy_igdb
+		provider_map[rid] = ids_dict
+		var parsed_siblings = JSON.parse_string(str(row.get("siblings", "[]")))
+		if parsed_siblings is Array:
+			if not adjacency.has(rid):
+				adjacency[rid] = {}
+			for sib in parsed_siblings:
+				if sib is Dictionary:
+					var sid := int(sib.get("id", 0))
+					if sid != 0 and sid != rid:
+						adjacency[rid][sid] = true
+						if not adjacency.has(sid):
+							adjacency[sid] = {}
+						adjacency[sid][rid] = true
+	return provider_map
+
+
+func _split_component_by_conflicts(member_ids: Array, provider_map: Dictionary, adjacency: Dictionary) -> Array:
+	"""Split a RomM sibling component into fold sub-groups.
+
+	The canonical source is the highest-priority provider (FOLD_ID_PRIORITY)
+	any member carries. Members agreeing on a single value there (or carrying
+	nothing) fold together; conflicting values mean genuinely different games
+	and split the component. Members not carrying the canonical source attach
+	to the one sub-group all their direct siblings vote for - conflicting or
+	absent votes leave them standalone rather than guessing."""
+	var canonical := ""
+	for provider in FOLD_ID_PRIORITY:
+		for id in member_ids:
+			if int(provider_map.get(id, {}).get(provider, 0)) > 0:
+				canonical = provider
+				break
+		if canonical != "":
+			break
+	if canonical == "":
+		return [member_ids]  # no metadata at all: nothing to judge conflicts by
+	var values := {}
+	for id in member_ids:
+		var v := int(provider_map.get(id, {}).get(canonical, 0))
+		if v > 0:
+			values[v] = true
+	if values.size() <= 1:
+		return [member_ids]  # agreement or uneven coverage: fold together
+	var sub_groups: Array = []
+	var by_value := {}
+	var unattached: Array = []
+	for id in member_ids:
+		var v := int(provider_map.get(id, {}).get(canonical, 0))
+		if v > 0:
+			if not by_value.has(v):
+				by_value[v] = []
+			by_value[v].append(id)
+		else:
+			unattached.append(id)
+	for v in by_value:
+		sub_groups.append(by_value[v])
+	for id in unattached:
+		var votes := {}
+		for sid in adjacency.get(id, {}).keys():
+			var sv := int(provider_map.get(sid, {}).get(canonical, 0))
+			if sv > 0:
+				votes[sv] = true
+		if votes.size() == 1:
+			by_value[votes.keys()[0]].append(id)
+		else:
+			sub_groups.append([id])
+	if DEBUG_LOG:
+		print("[SyncThread] Sibling component of %d split into %d fold groups (conflicting %s ids)" % [member_ids.size(), sub_groups.size(), canonical])
+	return sub_groups
+
+
+func _assign_group_master(component_batch: Array, member_ids: Array) -> void:
+	"""Assign is_master_entry for one fold sub-group. component_batch holds the
+	batch games of the whole sibling component; only those in member_ids are
+	considered. member_ids includes siblings not in this batch."""
+	var member_set := {}
+	for id in member_ids:
+		member_set[id] = true
+	var members: Array = []
+	for game in component_batch:
+		if member_set.has(game.romm_id):
+			members.append(game)
+
+	if members.is_empty():
+		# No batch members in this sub-group: its rows are already in the DB.
+		# Ensure it still has a master (e.g. it was folded under a different
+		# game before conflict splitting) by promoting the lowest romm_id.
+		if _get_db_master_id(member_ids) == 0:
+			_promote_lowest_db_member(member_ids)
+		return
 
 	# 1) RomM-flagged main sibling among batch members wins
 	var master: GameResource = null
@@ -1890,7 +2114,7 @@ func _assign_group_master(members: Array, parent: Dictionary, root: int) -> Arra
 				# Master lives in the DB but isn't in this batch - fold all members under it
 				for game in members:
 					game.is_master_entry = false
-				return member_ids
+				return
 
 	# 3) Fallback: deterministic pick (lowest romm_id)
 	if master == null:
@@ -1905,7 +2129,6 @@ func _assign_group_master(members: Array, parent: Dictionary, root: int) -> Arra
 	# Demote any stale DB master in this group that disagrees with our pick
 	# (repairs groups folded incorrectly by older sync logic on re-sync)
 	_demote_stale_db_masters(member_ids, master.romm_id)
-	return member_ids
 
 
 func _get_db_master_id(member_ids: Array) -> int:
@@ -1918,6 +2141,22 @@ func _get_db_master_id(member_ids: Array) -> int:
 	if result.size() > 0:
 		return result[0].get("romm_id", 0)
 	return 0
+
+
+func _promote_lowest_db_member(member_ids: Array) -> void:
+	"""Promote the lowest romm_id of a DB-resident group to master entry.
+	Used when a fold sub-group has no batch members and no existing master
+	(e.g. it was folded under a different game before conflict splitting)."""
+	if member_ids.is_empty() or not data_manager.database.is_database_ready():
+		return
+	var lowest: int = member_ids[0]
+	for id in member_ids:
+		if int(id) < lowest:
+			lowest = int(id)
+	# Only promote if the row actually exists in the DB (it may be a
+	# payload-referenced sibling that has never synced).
+	data_manager.database.query_bool(
+		"UPDATE games SET is_master_entry = 1 WHERE romm_id = ?", [lowest])
 
 
 func _demote_stale_db_masters(member_ids: Array, keep_master_id: int) -> void:
@@ -2007,6 +2246,16 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		game.igdb_metadata = {}
 	var raw_igdb_id = data.get("igdb_id", 0)
 	game.igdb_id = int(raw_igdb_id) if raw_igdb_id != null else 0
+
+	# Metadata provider IDs for conflict-aware sibling folding. RomM's
+	# sibling_roms relation bridges roms sharing ANY of these IDs (even
+	# transitively), so conflicting values at the same provider are the signal
+	# that a sibling group actually contains different games (e.g. sequels).
+	game.provider_ids = {}
+	for provider in FOLD_ID_PRIORITY:
+		var raw_id = data.get(provider + "_id", 0)
+		if raw_id != null and int(raw_id) > 0:
+			game.provider_ids[provider] = int(raw_id)
 
 	# Release date: RomM exposes first_release_date as unix seconds; fall back
 	# to the IGDB blob (also unix seconds) when the top-level field is missing.
@@ -2154,8 +2403,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, provider_ids, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -2188,6 +2437,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		1 if game.cover_group_master else 0,
 		JSON.stringify(game.igdb_metadata),
 		game.igdb_id,
+		JSON.stringify(game.provider_ids),
 		game.m3u_path,
 		game.status,
 		1 if game.now_playing else 0,

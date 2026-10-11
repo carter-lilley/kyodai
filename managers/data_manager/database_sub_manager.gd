@@ -26,6 +26,7 @@ const _EXPECTED_SCHEMA := {
 		"save_id": "TEXT DEFAULT ''", "save_usage": "TEXT DEFAULT ''",
 		"cover_group_id": "TEXT DEFAULT ''", "cover_group_master": "INTEGER DEFAULT 1",
 		"igdb_metadata": "TEXT DEFAULT '{}'", "igdb_id": "INTEGER DEFAULT 0",
+		"provider_ids": "TEXT DEFAULT '{}'",
 		"m3u_path": "TEXT DEFAULT ''", "unwrapped": "INTEGER DEFAULT 0",
 		"screenshots": "TEXT DEFAULT '[]'",
 	},
@@ -257,6 +258,7 @@ func _create_tables():
 		cover_group_master INTEGER DEFAULT 1,
 		igdb_metadata TEXT DEFAULT '{}',
 		igdb_id INTEGER DEFAULT 0,
+		provider_ids TEXT DEFAULT '{}',
 		m3u_path TEXT DEFAULT '',
 		unwrapped INTEGER DEFAULT 0,
 		screenshots TEXT DEFAULT '[]'
@@ -742,6 +744,16 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	game.release_date = int(release_date_value) if release_date_value != null else 0
 	var igdb_id_value = row.get("igdb_id", 0)
 	game.igdb_id = int(igdb_id_value) if igdb_id_value != null else 0
+
+	# Restore metadata provider IDs (used for conflict-aware sibling folding)
+	game.provider_ids = {}
+	if row.has("provider_ids") and row["provider_ids"] is String and row["provider_ids"] != "":
+		var parsed_ids = JSON.parse_string(row["provider_ids"])
+		if parsed_ids is Dictionary:
+			for provider in parsed_ids:
+				var id_value = parsed_ids[provider]
+				if id_value is int or id_value is float:
+					game.provider_ids[str(provider)] = int(id_value)
 
 	# Restore screenshot URLs
 	if row.has("screenshots") and row["screenshots"] is String and row["screenshots"] != "":

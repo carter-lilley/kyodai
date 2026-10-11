@@ -4,6 +4,8 @@
 ##   ":\name" prefix                         - relative to the cfg's directory
 ##   "<default>" / empty / absent            - no statement; caller falls back
 ##   sort_savefiles_enable + core save_name  - per-core sorted subdirectory
+##     (RetroArch's runtime default is true even when the key is absent; the
+##     bundled cfg omits it, so absent must resolve as true)
 ## Exactly one path is returned: the layout the config states. Flipping the
 ## sorting toggle moves where saves live; old-layout saves stay put until the
 ## user migrates them.
@@ -63,9 +65,12 @@ static func resolve(kind: String, context: Dictionary) -> Dictionary:
 
 	if kind == "save":
 		var save_name: String = context.get("core_save_name", "")
-		var sorted: bool = str(keys.get("sort_savefiles_enable", "false")) == "true"
+		var sorted: bool = str(keys.get("sort_savefiles_enable", "true")) == "true"
 		if sorted and save_name != "":
-			dir += save_name + "/"
+			# resolve_path above strips the trailing slash line 58 added;
+			# re-anchor explicitly so the core subdir never glues onto the
+			# base name ("savesPCSX-ReARMed").
+			dir = dir.rstrip("/") + "/" + save_name + "/"
 
 	result.path = dir
 	result.source = "config"

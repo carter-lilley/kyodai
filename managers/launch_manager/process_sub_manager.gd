@@ -1187,20 +1187,29 @@ func _get_process_comm(pid: int) -> String:
 	return _read_proc_file("/proc/" + str(pid) + "/comm").strip_edges()
 
 ## Returns true if the given PID is a Linux AppImage runtime wrapper.
-## These wrappers (commonly comm="AppRun", exe under /tmp/.mount_*) fork the
-## real emulator payload and stay alive to manage the FUSE mount, so they must
-## not be mistaken for the emulator process itself.
+## Raw-AppImage wrappers fork the real emulator payload and stay alive to
+## manage the FUSE mount, so they must not be mistaken for the emulator
+## process itself. They are identified by LOCATION (exe under /tmp/.mount_*),
+## never by name: for extracted installs AppRun IS the emulator (RetroArch's
+## AppRun is the retroarch binary itself, and it even daemonizes into its own
+## session), so a comm=="AppRun" name check would skip the exact process the
+## signature scan is meant to adopt.
 func _is_appimage_wrapper_pid(pid: int) -> bool:
 	if pid <= 0 or not SystemManager.platform.is_linux():
 		return false
-	if _get_process_comm(pid) == "AppRun":
-		return true
 	var exe_link := "/proc/" + str(pid) + "/exe"
 	if FileAccess.file_exists(exe_link):
-		var exe_path := DirAccess.open("/proc").read_link(exe_link) if DirAccess.open("/proc") != null else ""
+		var proc_dir := DirAccess.open("/proc")
+		var exe_path := proc_dir.read_link(exe_link) if proc_dir != null else ""
 		if exe_path != "" and exe_path.begins_with("/tmp/.mount_"):
 			return true
-	return false
+		if exe_path != "":
+			# Resolved exe is not on a FUSE mount: this is a real process,
+			# regardless of comm (extracted AppRun included).
+			return false
+	# exe unreadable (kernel task, permission, race): fall back to the legacy
+	# comm heuristic so raw-AppImage wrappers are still excluded.
+	return _get_process_comm(pid) == "AppRun"
 
 ## Reads the parent PID from /proc/<pid>/status.
 func _get_parent_pid(pid: int) -> int:

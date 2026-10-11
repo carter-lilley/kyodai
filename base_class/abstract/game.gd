@@ -34,6 +34,15 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## 0 means unknown / not IGDB-matched.
 @export var igdb_id: int = 0
 
+## Metadata provider IDs from RomM used for conflict-aware sibling folding:
+## {"igdb": int, "ss": int, "moby": int, "ra": int, "hasheous": int,
+## "launchbox": int, "tgdb": int} — only non-null entries. RomM's sibling_roms
+## relation bridges roms that share ANY of these IDs (even transitively), so a
+## shared weak ID can chain genuinely different games (e.g. sequels) into one
+## sibling group. Conflicting values at the same provider are the signal to
+## split a fold group.
+@export var provider_ids: Dictionary = {}
+
 ## Per-game emulator override (optional)
 @export var preferred_emulator_id: String = ""
 
@@ -222,6 +231,25 @@ static func parse_disc_number(p_name: String) -> int:
 		return m.get_string(1).to_int()
 	return 0
 
+## Strips all parenthesized/bracketed tags from a file/game name (RomM's
+## fs_name_no_tags semantics) and normalizes case/whitespace, so base titles
+## can be compared across regional/disc variants. A trailing file extension
+## is dropped first (main rom names carry one, sibling names don't), but only
+## a strict ".ext" suffix so titles containing dots ("Game Vol. 2") survive.
+static func strip_name_tags(p_name: String) -> String:
+	var ext_regex := RegEx.new()
+	ext_regex.compile("\\.[A-Za-z0-9]{1,5}$")
+	var stripped: String = ext_regex.sub(p_name.strip_edges(), "")
+	var tag_regex := RegEx.new()
+	tag_regex.compile("\\s*[\\(\\[][^\\)\\]]*[\\)\\]]")
+	# RegEx.sub replaces only the first match; loop to strip every tag.
+	while true:
+		var next := tag_regex.sub(stripped, "")
+		if next == stripped:
+			break
+		stripped = next
+	return stripped.strip_edges().to_lower()
+
 ## Returns true if this game has 2+ disc-tagged entries (main rom + siblings)
 func is_multi_disc() -> bool:
 	return get_disc_entries().size() >= 2
@@ -230,25 +258,36 @@ func is_multi_disc() -> bool:
 ## Only disc-tagged entries are included - untagged siblings (regional variants
 ## etc.) are never treated as discs. If the main rom lacks a disc tag but at
 ## least one sibling has one, the main rom counts as disc 1.
+## Siblings whose tag-stripped base title differs from the main rom's (e.g. a
+## sequel RomM bridged into the sibling group via a shared metadata ID) are
+## never treated as discs of this game.
 ## Each entry: {id, file_name, file_size, disc_number, downloaded}
 func get_disc_entries() -> Array[Dictionary]:
 	var entries: Array[Dictionary] = []
 	var main_disc := parse_disc_number(file_name)
+	var main_base := strip_name_tags(file_name)
 	for sibling in siblings:
 		var disc_number: int = sibling.get("disc_number", 0)
 		if disc_number <= 0:
 			disc_number = parse_disc_number(str(sibling.get("file_name", "")))
 		if disc_number <= 0:
 			disc_number = parse_disc_number(str(sibling.get("name", "")))
-		if disc_number > 0:
-			var sibling_id: int = sibling.get("id", 0)
-			entries.append({
-				"id": sibling_id,
-				"file_name": str(sibling.get("file_name", "")),
-				"file_size": int(sibling.get("file_size", 0)),
-				"disc_number": disc_number,
-				"downloaded": sibling_id in downloaded_sibling_ids
-			})
+		if disc_number <= 0:
+			continue
+		# Base-title guard: only same-title siblings can be discs of this game.
+		var sibling_base := strip_name_tags(str(sibling.get("file_name", "")))
+		if sibling_base == "":
+			sibling_base = strip_name_tags(str(sibling.get("name", "")))
+		if main_base != "" and sibling_base != "" and sibling_base != main_base:
+			continue
+		var sibling_id: int = sibling.get("id", 0)
+		entries.append({
+			"id": sibling_id,
+			"file_name": str(sibling.get("file_name", "")),
+			"file_size": int(sibling.get("file_size", 0)),
+			"disc_number": disc_number,
+			"downloaded": sibling_id in downloaded_sibling_ids
+		})
 	if main_disc > 0:
 		entries.append({
 			"id": romm_id,
