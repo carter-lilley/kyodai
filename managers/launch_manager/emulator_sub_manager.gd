@@ -761,7 +761,12 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		)
 		
 		if item_id == "":
+			# Count as completed so the all-done gate below can still fire and
+			# surface the failure; otherwise the batch hangs at (N-1)/N forever.
+			progress.completed += 1
 			progress.failed += 1
+			failed_cores.append(core_name)
+			push_error("[EmulatorManager] Failed to queue core download: " + core_name)
 		else:
 			download_ids.append(item_id)
 			

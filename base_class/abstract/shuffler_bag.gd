@@ -35,6 +35,11 @@ func _create_entry(game: GameResource) -> Dictionary:
 		"game": game,
 		"temp_path": "",
 		"pid": -1,
+		# Process group of the real emulator payload. Refreshed from the game
+		# window's _NET_WM_PID owner: emulators re-exec/fork away from the
+		# spawned leader (AppImage AppRun, Vita3K's second window), so the
+		# launch-time pid's group can point at a dead wrapper.
+		"pgid": -1,
 		"started": false,
 		"active": false,
 		"emulator_id": "",

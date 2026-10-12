@@ -533,9 +533,12 @@ func record_variant_download(group_ids: Array, downloaded_id: int, file_path: St
 
 
 ## Clears one variant's row after its file was deleted, then rebuilds the
-## group's download cache from the remaining member rows. Callback receives
+## group's download cache from the remaining member rows. When reconcile_root
+## is non-empty, group members still flagged downloaded whose files are gone
+## from disk are cleared first - otherwise their stale stamps would re-fill
+## the cache and keep the group on Home after the delete. Callback receives
 ## {"success": bool, "master_id": int, "cache": Array[int]}.
-func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callable = Callable()) -> void:
+func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callable = Callable(), reconcile_root: String = "") -> void:
 	if not _is_db_ready:
 		if callback.is_valid():
 			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
@@ -547,6 +550,8 @@ func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callabl
 		func():
 			_db_lock()
 			var ok = query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [deleted_id])
+			if reconcile_root != "":
+				_clear_missing_group_files_unlocked(group_ids, deleted_id, reconcile_root)
 			var info := refresh_group_download_cache_unlocked(group_ids)
 			_db_unlock()
 			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
@@ -557,6 +562,35 @@ func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callabl
 			if callback.is_valid():
 				callback.call(result)
 	)
+
+
+## Clears group member rows still flagged downloaded whose files are gone from
+## disk. Mirrors the negative pass of _scan_and_update_downloaded_games,
+## scoped to one sibling group. DB thread, lock held by caller.
+func _clear_missing_group_files_unlocked(group_ids: Array, exclude_id: int, root_folder: String) -> void:
+	var ids: Array = []
+	for id in group_ids:
+		if int(id) != 0 and int(id) != exclude_id:
+			ids.append(int(id))
+	if ids.is_empty():
+		return
+	var placeholders = ", ".join(ids.map(func(_id): return "?"))
+	var rows = query_array_unlocked(
+		"SELECT romm_id, file_path, file_name, platform_slug FROM games WHERE has_local_copy = 1 AND romm_id IN (%s)" % placeholders,
+		ids)
+	for row in rows:
+		var present := false
+		var stored_path := str(row.get("file_path", ""))
+		if stored_path != "" and (FSM.file_exists(stored_path) or FSM.dir_exists(stored_path)):
+			present = true
+		else:
+			var file_name := str(row.get("file_name", ""))
+			if file_name != "":
+				var candidate := root_folder + "/" + str(row.get("platform_slug", "")) + "/" + file_name
+				if FSM.file_exists(candidate) or FSM.dir_exists(candidate):
+					present = true
+		if not present:
+			query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [int(row.get("romm_id", 0))])
 
 
 # ==================== LIBRARY FILTERS ====================

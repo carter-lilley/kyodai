@@ -48,6 +48,11 @@ class QueueItem:
 var _queue: Array[QueueItem] = []
 var _active_items: Dictionary = {}  # id -> QueueItem
 
+# Monotonic serial for queue item IDs. Batch installs queue dozens of items in
+# the same millisecond, so ticks+randi alone collided regularly (~30% per
+# 27-item batch), silently stranding one download's callback.
+var _item_serial: int = 0
+
 # Max concurrent downloads is now driven by the download_speed_profile setting.
 var _max_concurrent: int = 5  # Default; updated in _ready and when settings change.
 
@@ -640,18 +645,22 @@ func _stop_foreground_service():
 ## Returns the item ID or empty string if failed
 func queue_download(url: String, destination: String, type: String = "file", item_name: String = "", auto_extract: bool = false, extract_dir: String = "", game: GameResource = null, callbacks: Dictionary = {}, romm_id: int = 0, delete_after_extract: bool = true, suppress_notification: bool = false, expected_file_size: int = 0, update_game_resource: bool = true, suppress_sound: bool = false, group_id: String = "") -> String:
 	# Generate unique ID
-	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(randi() % 1000)
+	_item_serial += 1
+	var item_id = type + "_" + str(Time.get_ticks_msec()) + "_" + str(_item_serial)
 
 	# Check if already downloading this URL (in queue OR active)
 	for item in _queue:
 		if item.url == url:
+			push_warning("[SystemManager.download] queue_download rejected duplicate queued URL: " + url)
 			return ""
 
 	for active_id in _active_items:
 		if _active_items[active_id].url == url:
+			push_warning("[SystemManager.download] queue_download rejected duplicate active URL: " + url)
 			return ""
 
 	if _active_items.has(item_id):
+		push_warning("[SystemManager.download] queue_download rejected colliding item id: " + item_id)
 		return ""
 
 	# Create item

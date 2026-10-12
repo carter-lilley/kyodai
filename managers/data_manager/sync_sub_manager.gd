@@ -673,6 +673,11 @@ func _complete_sync_on_main_thread(total_synced: int, games_from_cache: int, tot
 		data_manager.sync_completed.emit(true, completion_msg)
 		_invoke_sync_callback(true, completion_msg, total_synced, 0)
 
+		# Reconcile downloaded state with the files actually on disk after every
+		# library sync (clears rows whose files vanished). Owned by the data
+		# layer so it runs no matter which view initiated the sync.
+		data_manager.scan_for_downloaded_games()
+
 		# Collections/favorites otherwise only sync at startup; mirror that
 		# here so favorites and collection membership stay current after a
 		# library sync. Views refresh via collections_synced when it lands.

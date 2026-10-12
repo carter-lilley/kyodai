@@ -7,6 +7,7 @@ signal remove_requested()
 signal stop_requested()
 
 const CURSOR_PATH := "res://assets/Cursor.png"
+const AndroidBinaryExtractor = preload("res://utils/launch/android_binary_extractor.gd")
 
 @onready var _button_group: M3ButtonGroup = $Root/M3ButtonGroup
 @onready var _shuffle_btn: M3IconButton = $Root/M3ButtonGroup/ShuffleButton
@@ -253,19 +254,30 @@ func hide_controls() -> void:
 		focused.release_focus()
 	queue_free()
 
+## Resolves the x11_windowctl helper, extracting it from the package in
+## shipped builds (res:// paths don't exist on disk there, which produced
+## exit=127 "No such file or directory" from a bare globalize_path).
+func _x11_windowctl_path() -> String:
+	if SystemManager.platform.is_packaged():
+		return AndroidBinaryExtractor.extract_binary("res://bin/linux/x11_windowctl", "x11_windowctl")
+	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
+	if not FileAccess.file_exists(tool):
+		return ""
+	return tool
+
 ## Activates this window through the EWMH _NET_ACTIVE_WINDOW path (via
 ## x11_windowctl), which gamescope honors even when it ignores Godot's raw
 ## XSetInputFocus from grab_focus().
 func _activate_self_ewmh() -> void:
-	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
-	if not FileAccess.file_exists(tool):
+	var tool := _x11_windowctl_path()
+	if tool == "":
 		return
-	MemorySubManager.queue_os_execute(tool, ["show", str(OS.get_process_id()), "kyodai-controls"], func(result: Dictionary):
+	LaunchManager.process.queue_helper_execute(tool, ["show", str(OS.get_process_id()), "kyodai-controls"], func(result: Dictionary):
 		var output := ("".join(result.get("output", []))).strip_edges()
 		print("[ShufflerControlsWindow] EWMH self-activate: exit=" + str(result.get("exit_code", -1)) + " " + output)
 	)
 	# Diagnostic: log which window gamescope considers active shortly after.
-	MemorySubManager.queue_os_execute(tool, ["active"], func(result: Dictionary):
+	LaunchManager.process.queue_helper_execute(tool, ["active"], func(result: Dictionary):
 		var output := ("".join(result.get("output", []))).strip_edges()
 		print("[ShufflerControlsWindow] active window after summon: " + output)
 	)
@@ -277,14 +289,14 @@ func _set_transient_for_game() -> void:
 	if game_window_xid == "":
 		print("[ShufflerControlsWindow] no game window xid; skipping transient")
 		return
-	var tool := ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
-	if not FileAccess.file_exists(tool):
+	var tool := _x11_windowctl_path()
+	if tool == "":
 		return
 	var own_xid := "%x" % DisplayServer.window_get_native_handle(DisplayServer.WINDOW_HANDLE, get_window_id())
 	if own_xid == "0":
 		return
 	print("[ShufflerControlsWindow] set-transient: " + own_xid + " -> " + game_window_xid)
-	MemorySubManager.queue_os_execute(tool, ["set-transient", "xid:" + own_xid, "xid:" + game_window_xid])
+	LaunchManager.process.queue_helper_execute(tool, ["set-transient", "xid:" + own_xid, "xid:" + game_window_xid])
 
 func _warp_cursor_to_top_button() -> void:
 	var top_btn := _button_group.get_child(0) as Control

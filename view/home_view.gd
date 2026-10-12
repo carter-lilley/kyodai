@@ -328,15 +328,16 @@ func _scan_for_downloaded_games():
 	DataManager.scan_for_downloaded_games(func(found_count: int):
 		_is_scanning = false
 		if DEBUG_LOG: print("[DEBUG] Scan callback called with found_count: %d" % found_count)
-		if found_count > 0:
-			# Force complete grid refresh (don't preserve cache - we need fresh data from DB)
-			_load_total_count(false, false)
-		else:
+		# Grid refresh on found_count > 0 is handled by _on_scan_completed
+		# (signal-driven, fires no matter who started the scan).
+		if found_count <= 0:
 			_update_status("No downloaded games found")
 	)
 
 func _on_scan_completed(found_count: int):
-	"""Called when scan for downloaded games completes."""
+	"""Called when scan for downloaded games completes. Fires regardless of who
+	started the scan (sync completion is owned by the data layer), so the grid
+	refresh must live here rather than in the starter's callback."""
 	if DEBUG_LOG: print("[DEBUG] _on_scan_completed called with found_count: %d" % found_count)
 	if found_count > 0:
 		SystemManager.notifications.show_notification("Found %d downloaded games" % found_count, SystemManager.notifications.Type.SUCCESS)
@@ -344,12 +345,17 @@ func _on_scan_completed(found_count: int):
 		_merged_cache_start = 0
 		_merged_cache_end = 0
 		_merged_cache_dirty = true
+		# Reload the grid: the scan may have added OR cleared downloaded rows
+		# (negative pass), so the current window can hold stale entries.
+		_load_total_count(false, false)
 
 func _on_sync_completed(success: bool, _message: String):
 	"""Called when library sync completes."""
 	_seen_library_generation = DataManager.library_generation
 	if success:
-		_scan_for_downloaded_games()
+		# Post-sync downloaded-games scan is owned by the data layer (sync
+		# completion in SyncSubManager); results arrive via
+		# scan_for_downloaded_games_completed -> _on_scan_completed.
 		_merged_games_cache.clear()
 		_merged_cache_start = 0
 		_merged_cache_end = 0

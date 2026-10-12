@@ -25,7 +25,10 @@
  *   hide     -> XUnmapWindow (bypasses WM policy; works on frozen clients
  *               and compositors like gamescope that ignore EWMH hints)
  *   show     -> XMapRaised + _NET_ACTIVE_WINDOW
- *   find     -> prints the matched window's XID (hex) to stdout
+ *   find     -> prints the matched window's XID (hex) to stdout, followed by
+ *               a second line "pid=N" with the window's _NET_WM_PID owner when
+ *               known (lets callers adopt the real payload process/group
+ *               instead of the launcher wrapper)
  *
  * Exit codes:
  *   0 success
@@ -337,6 +340,12 @@ int main(int argc, char **argv)
 		send_client_message(dpy, win, net_active_window, 2 /* source: pager */, 0);
 	} else if (strcmp(action, "find") == 0) {
 		printf("%lx\n", (unsigned long)win);
+		/* Second line: the window's owning pid. Emulators fork/re-exec
+		 * away from the pid Kyodai spawned (AppImage AppRun, Vita3K's
+		 * second window), so the group to signal belongs to this owner. */
+		pid_t owner = 0;
+		if (window_pid(dpy, win, &owner) && owner > 0)
+			printf("pid=%d\n", (int)owner);
 	} else if (strcmp(action, "exists") == 0) {
 		/* Verifies the referenced XID is still a valid window. Gamescope
 		 * manages windows, not PIDs, so this is the reliable liveness signal

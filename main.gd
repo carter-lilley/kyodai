@@ -13,6 +13,22 @@ var root_layout: Control
 
 var _keyboard: PanelContainer = null
 var _ui_layer: CanvasLayer = null
+var _input_gate: Node = null
+
+## Swallows all input while an emulator is running (background state or a
+## lingering process group). Exists as Main's rightmost child because _input
+## propagates deepest/rightmost-first: views would otherwise consume the
+## event before Main._input ever gets to block it.
+class BackgroundInputGate:
+	extends Node
+	func _input(_event: InputEvent) -> void:
+		if LaunchManager and (LaunchManager.is_in_background_state() \
+				or (LaunchManager.process and LaunchManager.process.has_lingering_process())):
+			get_viewport().set_input_as_handled()
+
+func _on_main_child_entered_tree(node: Node) -> void:
+	if node != _input_gate and is_instance_valid(_input_gate) and _input_gate.get_parent() == self:
+		move_child(_input_gate, get_child_count() - 1)
 
 var _zoom_in_pressed: bool = false
 var _zoom_out_pressed: bool = false
@@ -133,6 +149,18 @@ func _ready():
 		# Hibernate (release reclaimable memory) before the process/intent starts
 		LaunchManager.pre_launch_hook = _pre_launch_trim
 		LaunchManager.launch_failed_hook = _restore_after_launch
+
+	# Background-state input gate: _input propagates in reverse tree order
+	# (deepest/rightmost first), so the blocking set_input_as_handled() in
+	# Main._input runs AFTER the views have already consumed bumpers/right
+	# stick (platform carousel, A-Z carousel). This gate sits rightmost so it
+	# swallows controller input BEFORE any view sees it while an emulator is
+	# running. Re-pinned on every child addition to stay last.
+	_input_gate = BackgroundInputGate.new()
+	_input_gate.name = "BackgroundInputGate"
+	child_entered_tree.connect(_on_main_child_entered_tree)
+	add_child(_input_gate)
+	move_child(_input_gate, get_child_count() - 1)
 
 	# Set initial view controls
 	phase_start_us = Time.get_ticks_usec()

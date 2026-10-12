@@ -17,9 +17,10 @@ var _is_in_background_state: bool = false
 var _background_poll_timer: Timer = null
 var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
-# Linux launches run under setsid: the spawned PID becomes a process-group
-# leader and every wrapper/payload descendant (AppImage AppRun, sh, env)
-# shares its PGID. Group liveness is the source of truth for "is the game
+# Linux launches lead their own process group (Godot's create_process calls
+# setsid() in the forked child): every wrapper/payload descendant (AppImage
+# AppRun, sh, env) shares its PGID. Group liveness is the source of truth
+# for "is the game
 # still running" — it survives the reparenting/forking that gamescope and
 # AppImage runtimes inflict on single-PID tracking.
 var _background_active_pgid: int = -1
@@ -45,8 +46,6 @@ var _lingering_timer: Timer = null
 const LINGERING_POLL_INTERVAL: float = 2.0
 # Cached own-process PGID: group signals must never target Kyodai's own group.
 var _own_pgid: int = -1
-# Resolved absolute path to setsid(1), "" when unavailable, "?" until checked.
-var _setsid_path: String = "?"
 
 var launch_manager: Node
 
@@ -185,39 +184,24 @@ func _escape_ps_arg(s: String) -> String:
 func _escape_ps_arg_quoted(s: String) -> String:
 	return "'\"" + s.replace("'", "''") + "\"'"
 
+## Spawns a short-lived helper (x11_windowctl, kill, ...) via the shared
+## queue. Under Steam/gamescope the session-wide LD_PRELOAD (32-bit
+## gameoverlayrenderer.so) only produces ld.so noise in our 64-bit helpers,
+## so it is stripped for the spawn.
+func queue_helper_execute(path: String, args: Array, callback: Callable = Callable()) -> void:
+	if SystemManager.platform.is_linux() and OS.get_environment("LD_PRELOAD") != "":
+		var env_args: Array = ["-u", "LD_PRELOAD", path]
+		env_args.append_array(args)
+		MemorySubManager.queue_os_execute("env", env_args, callback)
+		return
+	MemorySubManager.queue_os_execute(path, args, callback)
+
 ## Resolves the path to the x11_windowctl helper, extracting it from the
 ## package if running a shipped build so the binary is executable.
 func _resolve_x11_windowctl_path() -> String:
 	if SystemManager.platform.is_packaged():
 		return AndroidBinaryExtractor.extract_binary("res://bin/linux/x11_windowctl", "x11_windowctl")
 	return ProjectSettings.globalize_path("res://bin/linux/x11_windowctl")
-
-## Resolves setsid(1) once. Every Linux emulator launch runs under it so the
-## emulator becomes a process-group leader and all of its wrapper/payload
-## descendants (AppImage AppRun, shell wrappers) share one PGID — which makes
-## group liveness checks and group SIGSTOP/SIGCONT/SIGKILL possible.
-## Returns "" when setsid is unavailable (callers fall back to plain spawn).
-func _get_setsid() -> String:
-	if _setsid_path != "?":
-		return _setsid_path
-	_setsid_path = ""
-	if SystemManager.platform.is_linux():
-		var output: Array = []
-		if OS.execute("setsid", ["--version"], output, true) == 0:
-			_setsid_path = "setsid"
-		elif FileAccess.file_exists("/usr/bin/setsid"):
-			_setsid_path = "/usr/bin/setsid"
-		elif FileAccess.file_exists("/bin/setsid"):
-			_setsid_path = "/bin/setsid"
-		else:
-			var which_out: Array = []
-			if OS.execute("sh", ["-c", "command -v setsid"], which_out, true) == 0 and which_out.size() > 0:
-				var candidate := str(which_out[0]).strip_edges()
-				if candidate != "":
-					_setsid_path = candidate
-		if _setsid_path == "":
-			push_warning("[ProcessManager] setsid not found; process-group tracking disabled for this session")
-	return _setsid_path
 
 # ==================== BACKGROUND STATE (DESKTOP ONLY) ====================
 
@@ -247,8 +231,8 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 	_background_active_pid = pid
 	_background_active_pgid = get_pgid(pid)
 	if _background_active_pgid <= 0 and SystemManager.platform.is_linux():
-		# setsid makes the spawned leader its own group; assume that layout
-		# when the stat read raced the process.
+		# Godot setsid()s the spawned leader, making it its own group; assume
+		# that layout when the stat read raced the process.
 		_background_active_pgid = pid
 	_background_dead_streak = 0
 	_background_window_misses = 0
@@ -366,7 +350,8 @@ func _on_background_poll_timeout() -> void:
 	)
 
 ## Linux poll: the process group is the source of truth for liveness.
-## Launches run under setsid, so wrappers (AppImage AppRun, sh, env) and the
+## The launched pid leads its own group (Godot setsid()s the child), so
+## wrappers (AppImage AppRun, sh, env) and the
 ## real emulator payload all share one PGID — the group survives exactly the
 ## reparenting/forking that used to defeat single-PID /proc polling under
 ## gamescope. Only if the group is dead do we fall back to a cmdline
@@ -444,7 +429,7 @@ func _poll_gamemode_window(callback: Callable) -> void:
 		)
 		return
 
-	MemorySubManager.queue_os_execute(tool, ["exists", "xid:" + _background_window_xid], func(result: Dictionary):
+	queue_helper_execute(tool, ["exists", "xid:" + _background_window_xid], func(result: Dictionary):
 		if not _is_in_background_state:
 			callback.call(false)
 			return
@@ -492,17 +477,30 @@ func _find_game_window(tool: String, callback: Callable) -> void:
 	var args: Array = ["find", _background_window_pid_list()]
 	if _background_window_hint != "":
 		args.append(_background_window_hint)
-	MemorySubManager.queue_os_execute(tool, args, func(result: Dictionary):
+	queue_helper_execute(tool, args, func(result: Dictionary):
 		if result.get("exit_code", -1) != 0:
 			callback.call("")
 			return
 		var output: Array = result.get("output", [])
 		var text := ("".join(output)).strip_edges()
 		var xid := ""
+		var owner_pid := -1
 		for line: String in text.split("\n", false):
 			var l := line.strip_edges().to_lower()
-			if l.length() > 0 and l.is_valid_hex_number(false):
+			if l.begins_with("pid="):
+				owner_pid = l.trim_prefix("pid=").to_int()
+			elif l.length() > 0 and l.is_valid_hex_number(false):
 				xid = l
+		# The window owner is the real payload even when it escaped the
+		# tracked group (AppImage runtimes fork/setsid it away); adopt its
+		# pid/group so liveness and group signals follow the emulator.
+		if owner_pid > 0 and _is_in_background_state:
+			var owner_pgid := get_pgid(owner_pid)
+			if owner_pid != _background_active_pid or (owner_pgid > 1 and owner_pgid != _background_active_pgid):
+				print("[ProcessManager] Adopting window owner pid=", owner_pid, " pgid=", owner_pgid, " (was pid=", _background_active_pid, " pgid=", _background_active_pgid, ")")
+				_background_active_pid = owner_pid
+				if owner_pgid > 1 and owner_pgid != _get_own_pgid():
+					_background_active_pgid = owner_pgid
 		callback.call(xid)
 	)
 
@@ -581,22 +579,40 @@ func dump_process_state(context: String) -> void:
 ## the stored launch signature (usually the ROM path). This catches emulators
 ## that were reparented away from the wrapper PID Kyodai was tracking.
 func _find_process_by_signature() -> int:
-	if _background_active_signature == "" and _background_active_exe_signature == "":
-		return -1
+	return find_process_by_signature(_background_active_signature, _background_active_exe_signature)
+
+## Signature scan with explicit signatures, so callers other than the launcher
+## background tracker (e.g. the shuffler) can re-adopt an escaped payload.
+func find_process_by_signature(signature: String, exe_signature: String = "") -> int:
+	var matches := find_pids_by_signature(signature, exe_signature)
+	return matches[0] if not matches.is_empty() else -1
+
+## Returns every live (non-zombie, non-wrapper) process whose cmdline/exe
+## matches ANY of the given launch signatures. The plural/multi variant
+## matters for emulators whose payload escaped the launch process group
+## (sharun/bwrap setsid): suspend/resume/kill must reach ALL matching
+## processes, not the first.
+func find_pids_by_signatures(signatures: Array[String], exe_signature: String = "") -> Array[int]:
+	var matches: Array[int] = []
+	var sigs: Array[String] = []
+	for s in signatures:
+		if s != "" and not sigs.has(s):
+			sigs.append(s)
+	if sigs.is_empty() and exe_signature == "":
+		return matches
 
 	if not SystemManager.platform.is_linux():
-		return -1
+		return matches
 
 	var proc_dir := DirAccess.open("/proc")
 	if proc_dir == null:
-		return -1
+		return matches
 
-	var best_pid := -1
-	var filename_signature := ""
-	if _background_active_signature != "":
-		filename_signature = _background_active_signature.get_file()
-		if filename_signature == _background_active_signature:
-			filename_signature = ""
+	var filename_sigs: Array[String] = []
+	for signature in sigs:
+		var filename_signature = signature.get_file()
+		if filename_signature != signature and filename_signature != "":
+			filename_sigs.append(filename_signature)
 
 	proc_dir.list_dir_begin()
 	var entry := proc_dir.get_next()
@@ -607,32 +623,68 @@ func _find_process_by_signature() -> int:
 				var stat := _parse_proc_stat(scan_pid)
 				if stat.ok and stat.state != "Z" and not _is_appimage_wrapper_pid(scan_pid):
 					var cmdline := _get_process_cmdline(scan_pid)
-					if _background_active_signature != "" and cmdline.find(_background_active_signature) != -1:
-						if DEBUG_LOG: print("[ProcessManager] Signature match in cmdline for PID ", scan_pid, ": ", cmdline)
-						best_pid = scan_pid
-						break
-					if filename_signature != "" and cmdline.find(filename_signature) != -1:
-						if DEBUG_LOG: print("[ProcessManager] Filename signature match in cmdline for PID ", scan_pid, ": ", cmdline)
-						best_pid = scan_pid
-						break
-					if _background_active_exe_signature != "" and cmdline.to_lower().find(_background_active_exe_signature) != -1:
-						if DEBUG_LOG: print("[ProcessManager] Exe-signature match in cmdline for PID ", scan_pid, ": ", cmdline)
-						best_pid = scan_pid
-						break
-					if _background_active_exe_signature != "":
-						var exe_link := "/proc/" + str(scan_pid) + "/exe"
-						if FileAccess.file_exists(exe_link):
-							var exe_path := proc_dir.read_link(exe_link)
-							if exe_path != "":
-								var exe_base := exe_path.get_file().get_basename().to_lower()
-								if exe_base == _background_active_exe_signature or exe_base.contains(_background_active_exe_signature):
-									if DEBUG_LOG: print("[ProcessManager] Exe-signature match for PID ", scan_pid, ": ", exe_path)
-									best_pid = scan_pid
-									break
+					var matched := false
+					for signature in sigs:
+						if cmdline.find(signature) != -1:
+							if DEBUG_LOG: print("[ProcessManager] Signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+							matched = true
+							break
+					if not matched:
+						for filename_signature in filename_sigs:
+							if cmdline.find(filename_signature) != -1:
+								if DEBUG_LOG: print("[ProcessManager] Filename signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+								matched = true
+								break
+					if not matched and exe_signature != "":
+						if cmdline.to_lower().find(exe_signature) != -1:
+							if DEBUG_LOG: print("[ProcessManager] Exe-signature match in cmdline for PID ", scan_pid, ": ", cmdline)
+							matched = true
+						else:
+							var exe_link := "/proc/" + str(scan_pid) + "/exe"
+							if FileAccess.file_exists(exe_link):
+								var exe_path := proc_dir.read_link(exe_link)
+								if exe_path != "":
+									var exe_base := exe_path.get_file().get_basename().to_lower()
+									if exe_base == exe_signature or exe_base.contains(exe_signature):
+										if DEBUG_LOG: print("[ProcessManager] Exe-signature match for PID ", scan_pid, ": ", exe_path)
+										matched = true
+					if matched:
+						matches.append(scan_pid)
 		entry = proc_dir.get_next()
 	proc_dir.list_dir_end()
 
-	return best_pid
+	return matches
+
+func find_pids_by_signature(signature: String, exe_signature: String = "") -> Array[int]:
+	return find_pids_by_signatures([signature] as Array[String], exe_signature)
+
+## Dumps state/pgrp/ppid/cmdline for the given pids — diagnostic for launches
+## whose payload escapes tracking (sharun/bwrap chains).
+func dump_pid_diagnostics(tag: String, pids: Array) -> void:
+	if not SystemManager.platform.is_linux():
+		return
+	for pid in pids:
+		var p := int(pid)
+		if p <= 0:
+			continue
+		var stat := _parse_proc_stat(p)
+		if stat.ok:
+			print("[ProcessManager] diag[", tag, "] pid=", p, " state=", stat.state, " pgrp=", stat.pgrp, " ppid=", stat.ppid, " cmdline=\"", _get_process_cmdline(p), "\"")
+		else:
+			print("[ProcessManager] diag[", tag, "] pid=", p, " unreadable/dead")
+
+## Public process-state accessor ("" when unreadable/dead).
+func get_process_state(pid: int) -> String:
+	var stat := _parse_proc_stat(pid)
+	return str(stat.get("state", "")) if stat.ok else ""
+
+## Public cmdline accessor for ownership checks.
+func get_process_cmdline_pub(pid: int) -> String:
+	return _get_process_cmdline(pid)
+
+## Kyodai's own process group (public; group signals must never target it).
+func get_own_pgid() -> int:
+	return _get_own_pgid()
 
 ## Async process liveness check; callback receives `running: bool` on the main thread.
 func _is_process_running_async(pid: int, callback: Callable) -> void:
@@ -694,13 +746,15 @@ func is_running_async(pid: int) -> bool:
 ## Kills a process by PID without blocking the main thread. On Linux the
 ## whole process group is killed (SIGCONT first so SIGSTOPped members can
 ## die): wrappers like AppImage AppRun would otherwise orphan the payload.
-func kill_process_async(pid: int) -> void:
+## pgid_override lets callers pass a freshly re-resolved group (the tracked
+## PID's group goes stale when the payload re-execs into its own group).
+func kill_process_async(pid: int, pgid_override: int = -1) -> void:
 	if pid <= 0:
 		return
 	if SystemManager.platform.is_windows():
 		MemorySubManager.queue_os_execute("taskkill", ["/F", "/PID", str(pid)])
 	else:
-		var pgid := get_pgid(pid)
+		var pgid := pgid_override if pgid_override > 1 else get_pgid(pid)
 		if pgid > 1 and pgid != _get_own_pgid():
 			var script := "kill -CONT -- -%d 2>/dev/null; kill -9 -- -%d 2>/dev/null" % [pgid, pgid]
 			MemorySubManager.queue_os_execute("sh", ["-c", script])
@@ -725,7 +779,7 @@ func confirm_process_dead_async(pid: int, timeout_sec: float = 5.0) -> bool:
 ## on_done(result: Dictionary {exit_code, output}) fires on the main thread
 ## when pssuspend exits - callers that must not race the suspended process
 ## (e.g. launching a new emulator instance) should await it.
-func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
+func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable(), pgid_override: int = -1) -> void:
 	if pid <= 0:
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
@@ -737,10 +791,12 @@ func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable =
 			return
 		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", str(pid)], on_done)
 	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
-		var pgid := get_pgid(pid)
+		var pgid := pgid_override if pgid_override > 1 else get_pgid(pid)
 		if pgid > 1 and pgid != _get_own_pgid():
+			print("[ProcessManager] SIGSTOP group: pid=%d pgid=%d members=[%s]" % [pid, pgid, format_group_states(pgid)])
 			MemorySubManager.queue_os_execute("kill", ["-STOP", "--", "-" + str(pgid)], on_done)
 		else:
+			print("[ProcessManager] SIGSTOP single pid=%d (pgid resolution failed or own group)" % pid)
 			MemorySubManager.queue_os_execute("kill", ["-STOP", str(pid)], on_done)
 	else:
 		push_warning("[ProcessManager] suspend_process_async is only supported on Windows and Linux/BSD")
@@ -749,7 +805,7 @@ func suspend_process_async(pid: int, pssuspend_path: String, on_done: Callable =
 
 ## Resumes a suspended process via pssuspend (Windows) or kill -CONT (Linux/BSD).
 ## Group-aware on Linux, mirroring suspend_process_async.
-func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable()) -> void:
+func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = Callable(), pgid_override: int = -1) -> void:
 	if pid <= 0:
 		if on_done.is_valid():
 			on_done.call({"exit_code": -1, "output": []})
@@ -761,10 +817,12 @@ func resume_process_async(pid: int, pssuspend_path: String, on_done: Callable = 
 			return
 		MemorySubManager.queue_os_execute(pssuspend_path, ["-accepteula", "-r", str(pid)], on_done)
 	elif OS.get_name() == "Linux" or OS.get_name().ends_with("BSD"):
-		var pgid := get_pgid(pid)
+		var pgid := pgid_override if pgid_override > 1 else get_pgid(pid)
 		if pgid > 1 and pgid != _get_own_pgid():
+			print("[ProcessManager] SIGCONT group: pid=%d pgid=%d members=[%s]" % [pid, pgid, format_group_states(pgid)])
 			MemorySubManager.queue_os_execute("kill", ["-CONT", "--", "-" + str(pgid)], on_done)
 		else:
+			print("[ProcessManager] SIGCONT single pid=%d (pgid resolution failed or own group)" % pid)
 			MemorySubManager.queue_os_execute("kill", ["-CONT", str(pid)], on_done)
 	else:
 		push_warning("[ProcessManager] resume_process_async is only supported on Windows and Linux/BSD")
@@ -912,17 +970,11 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 
 	if effective_working_dir == "" and not use_env_wrapper:
 		# No working directory needed and no env sanitization: call executable directly
-		# (no shell, no injection risk). Under setsid when available so the
-		# emulator leads its own process group.
-		var setsid := _get_setsid()
-		if setsid != "":
-			var setsid_args: Array = [exe_path]
-			setsid_args.append_array(arguments)
-			if DEBUG_LOG: print("[ProcessManager] Direct launch via setsid: exe=", exe_path, " args=", arguments)
-			pid = OS.create_process(setsid, setsid_args, false)
-		else:
-			if DEBUG_LOG: print("[ProcessManager] Direct launch: exe=", exe_path, " args=", arguments)
-			pid = OS.create_process(exe_path, arguments, false)
+		# (no shell, no injection risk). Godot's create_process already calls
+		# setsid() in the forked child, so the returned pid leads its own
+		# process group; wrapping in setsid(1) would double-fork and orphan it.
+		if DEBUG_LOG: print("[ProcessManager] Direct launch: exe=", exe_path, " args=", arguments)
+		pid = OS.create_process(exe_path, arguments, false)
 		print("[ProcessManager] Direct launch returned pid: ", pid)
 	elif effective_working_dir == "" and use_env_wrapper:
 		# Linux with env sanitization: wrap env(1) in sh -c with exec so the
@@ -944,13 +996,8 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		)
 		var safe_log := _escape_sh_arg(launch_log)
 		var inner_cmd = 'exec env %s%s %s > %s 2>&1' % [env_prefix, safe_exe, " ".join(safe_args), safe_log]
-		var setsid := _get_setsid()
-		if setsid != "":
-			if DEBUG_LOG: print("[ProcessManager] env launch via setsid sh: sh -c ", inner_cmd)
-			pid = OS.create_process(setsid, ["sh", "-c", inner_cmd], false)
-		else:
-			if DEBUG_LOG: print("[ProcessManager] env launch via sh: sh -c ", inner_cmd)
-			pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		if DEBUG_LOG: print("[ProcessManager] env launch via sh: sh -c ", inner_cmd)
+		pid = OS.create_process("sh", ["-c", inner_cmd], false)
 		print("[ProcessManager] env launch via sh returned pid: ", pid)
 	elif not SystemManager.platform.is_windows():
 		# Linux: sh -c with exec, so the shell REPLACES itself with the
@@ -965,13 +1012,8 @@ func _create_desktop_process(intent: LaunchIntent) -> int:
 		)
 		var safe_log := _escape_sh_arg(launch_log)
 		var inner_cmd = 'cd %s && exec env %s%s %s > %s 2>&1' % [safe_working_dir, env_prefix, safe_exe, " ".join(safe_args), safe_log]
-		var setsid := _get_setsid()
-		if setsid != "":
-			if DEBUG_LOG: print("[ProcessManager] shell launch via setsid: sh -c ", inner_cmd)
-			pid = OS.create_process(setsid, ["sh", "-c", inner_cmd], false)
-		else:
-			if DEBUG_LOG: print("[ProcessManager] shell launch: sh -c ", inner_cmd)
-			pid = OS.create_process("sh", ["-c", inner_cmd], false)
+		if DEBUG_LOG: print("[ProcessManager] shell launch: sh -c ", inner_cmd)
+		pid = OS.create_process("sh", ["-c", inner_cmd], false)
 		print("[ProcessManager] shell launch returned pid: ", pid)
 	else:
 		# Windows: Start-Process sets the working directory AND reports the real
@@ -1135,22 +1177,75 @@ func are_group_members_stopped(pgid: int) -> bool:
 	return true
 
 ## Group-aware stopped check for callers that only know a PID (shuffler).
-## A dead PID counts as stopped: there is nothing left to freeze.
-func are_group_stopped_for_pid(pid: int) -> bool:
+## Lenient mode: a dead PID/group counts as stopped (nothing left to freeze).
+## Strict mode (suspend verification): "can't find anything" is NOT proof of
+## "stopped" — an escaped payload reads identically to a dead one, and only
+## strict mode forces the caller's kill-and-relaunch fallback instead of
+## silently leaving a live emulator playing in the background.
+func are_group_stopped_for_pid(pid: int, strict: bool = false) -> bool:
 	if pid <= 0:
-		return true
+		return not strict
 	var pgid := get_pgid(pid)
 	if pgid <= 1:
-		# PID is gone or has no group of its own; verify the PID itself died.
+		# No resolvable group; fall back to the PID's own state. A missing or
+		# zombie PID proves nothing in strict mode.
 		var stat := _parse_proc_stat(pid)
-		return not stat.ok or stat.state == "Z" or stat.state == "T" or stat.state == "t"
+		if not stat.ok or stat.state == "Z":
+			return not strict
+		return stat.state == "T" or stat.state == "t"
 	var states := _get_group_states(pgid)
 	if states.is_empty():
-		return true  # whole group already dead
+		# Whole group dead, or the payload escaped the group and the leader
+		# is a zombie: indistinguishable from here, so strict mode fails safe.
+		return not strict
 	for state in states.values():
 		if state != "T" and state != "t":
 			return false
 	return true
+
+## Resolves the process that actually represents a launch right now: the
+## tracked PID when it (or its group) still lives, else a payload found by
+## launch signature (emulators re-exec/fork away from the spawned leader —
+## AppImage AppRun, Vita3K's second window process). Returns
+## {"pid": -1, "pgid": -1} when nothing belonging to the launch is alive.
+## pgid stays -1 when the only viable group is Kyodai's own (unsafe to
+## group-signal); callers then degrade to single-PID signals.
+func resolve_live_target(pid: int, signature: String = "", exe_signature: String = "") -> Dictionary:
+	var result := {"pid": -1, "pgid": -1}
+	if not SystemManager.platform.is_linux():
+		if pid > 0:
+			result["pid"] = pid
+		return result
+	if pid > 0:
+		var stat := _parse_proc_stat(pid)
+		if stat.ok:
+			var pgrp := int(stat.get("pgrp", -1))
+			if stat.state != "Z":
+				result["pid"] = pid
+				if pgrp > 1 and pgrp != _get_own_pgid():
+					result["pgid"] = pgrp
+				return result
+			# Zombie leader: the payload may still live in its group.
+			if pgrp > 1 and pgrp != _get_own_pgid() and is_group_alive(pgrp):
+				result["pid"] = pid
+				result["pgid"] = pgrp
+				return result
+	if signature != "" or exe_signature != "":
+		var found := find_process_by_signature(signature, exe_signature)
+		if found > 0:
+			result["pid"] = found
+			var pgrp := get_pgid(found)
+			if pgrp > 1 and pgrp != _get_own_pgid():
+				result["pgid"] = pgrp
+	return result
+
+## Formats a process group as "pid(state),pid(state)" for diagnostics.
+func format_group_states(pgid: int) -> String:
+	var states := _get_group_states(pgid)
+	var parts: Array = []
+	for member_pid in states.keys():
+		parts.append(str(member_pid) + "(" + str(states[member_pid]) + ")")
+	return ",".join(parts)
 
 ## Reads immediate child PIDs of a process from /proc.
 func _get_process_children(pid: int) -> Array[int]:

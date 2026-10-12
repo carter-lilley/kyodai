@@ -473,7 +473,10 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	# Clean up extracted game files for platforms that extract during launch
 	LaunchManager.cleanup_extracted_game_files(game)
 
-	# Persist to database and mirror the authoritative result in memory
+	# Persist to database and mirror the authoritative result in memory.
+	# reconcile_root lets the DB clear group siblings whose files are also
+	# gone - otherwise a stale sibling stamp re-fills the group cache and the
+	# entry survives the delete on Home.
 	database.record_variant_deleted(group_ids, active_id, func(result: Dictionary):
 		var success: bool = result.get("success", false)
 		print("[DataManager] delete_game_download: DB update result for " + game.title + " = " + str(success))
@@ -488,7 +491,7 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 			game_updated.emit(game)
 		if callback.is_valid():
 			callback.call(success)
-	)
+	, root_path)
 	return true
 
 
