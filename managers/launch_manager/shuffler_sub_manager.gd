@@ -2147,6 +2147,12 @@ func _resolve_entry_target(entry: Dictionary) -> Dictionary:
 		# The tracked pid is gone/unreadable; the payload may still live under
 		# a different pid (sharun/bwrap forks, re-execs). Try every signature.
 		LaunchManager.process.dump_pid_diagnostics("resolve-miss", [pid])
+		# Decisive context: if the entry's group still has live members while
+		# the tracked pid is unreadable, the game is alive but invisible to
+		# /proc (bwrap dumpable=0); an empty group means it truly died.
+		var miss_pgid: int = entry.get("pgid", -1)
+		if miss_pgid > 1:
+			print("[ShufflerSubManager] resolve-miss: entry group " + str(miss_pgid) + " members=[" + LaunchManager.process.format_group_states(miss_pgid) + "]")
 		var matches: Array[int] = LaunchManager.process.find_pids_by_signatures(_entry_signatures(entry))
 		if not matches.is_empty():
 			LaunchManager.process.dump_pid_diagnostics("resolve-found", matches)
@@ -2154,6 +2160,16 @@ func _resolve_entry_target(entry: Dictionary) -> Dictionary:
 			var pgrp: int = LaunchManager.process.get_pgid(matches[0])
 			if pgrp > 1 and pgrp != LaunchManager.process.get_own_pgid():
 				target["pgid"] = pgrp
+	if int(target.get("pid", -1)) <= 0:
+		# bwrap/sandboxed payloads can be entirely unreadable via /proc
+		# (dumpable=0: empty cmdline, stat restricted). The wrapper group
+		# leader stays alive for exactly as long as the launch does (sharun
+		# waits on bwrap waits on the payload), so a live entry group means
+		# the game is still there — group signals reach the payload in place.
+		var entry_pgid: int = entry.get("pgid", -1)
+		if entry_pgid > 1 and LaunchManager.process.is_group_alive(entry_pgid):
+			target["pid"] = entry_pgid
+			target["pgid"] = entry_pgid
 	return target
 
 ## Every process group this entry's launch currently occupies: the cached
@@ -2256,16 +2272,20 @@ func _capture_window_xid(pid: int, hint: String) -> void:
 	LaunchManager.process.queue_helper_execute(_x11_windowctl_path, args, func(result: Dictionary):
 		if result.get("exit_code", -1) != 0:
 			return
-		# The helper prints the hex XID on stdout (plus an optional "pid=N"
-		# owner line); LD_PRELOAD noise from the Steam overlay can precede it,
-		# so scan line-by-line instead of trusting the whole blob.
+		# The helper prints the hex XID on stdout (plus optional "pid=N" owner
+		# and "name=..." title lines); LD_PRELOAD noise from the Steam overlay
+		# can precede it, so scan line-by-line instead of trusting the blob.
 		var text := ("".join(result.get("output", []))).strip_edges()
 		var xid := ""
 		var owner_pid := -1
+		var window_name := ""
 		for line in text.split("\n", false):
-			var l := line.strip_edges().to_lower()
-			if l.begins_with("pid="):
-				owner_pid = l.trim_prefix("pid=").to_int()
+			var l := line.strip_edges()
+			var ll := l.to_lower()
+			if ll.begins_with("pid="):
+				owner_pid = ll.trim_prefix("pid=").to_int()
+			elif ll.begins_with("name="):
+				window_name = l.trim_prefix("name=")
 			elif l.length() > 0 and l.is_valid_hex_number(false):
 				xid = l
 		if xid == "":
@@ -2273,6 +2293,23 @@ func _capture_window_xid(pid: int, hint: String) -> void:
 		if _bag and _bag.entries:
 			for entry in _bag.entries:
 				if entry.pid == pid:
+					# With several instances of the same emulator running, the
+					# pid/hint fallback can grab a DIFFERENT game's window.
+					# Reject the capture when the window title clearly names
+					# another started entry's game (Vita3K/Cemu put the game
+					# title in the window title).
+					if window_name != "":
+						var owner_title := ""
+						for other in _bag.entries:
+							if other == entry or not other.started:
+								continue
+							var t := (other.game.title as String).to_lower()
+							if t != "" and window_name.to_lower().find(t) != -1:
+								owner_title = other.game.title
+								break
+						if owner_title != "":
+							print("[ShufflerSubManager] rejecting window xid " + xid + " for pid " + str(pid) + ": title names '" + owner_title + "' (\"" + window_name + "\")")
+							return
 					entry["window_xid"] = xid
 					# The window owner is the real payload (AppRun/Vita3K
 					# re-exec away from the spawned leader); adopt its group

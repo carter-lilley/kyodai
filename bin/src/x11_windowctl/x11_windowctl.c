@@ -346,6 +346,15 @@ int main(int argc, char **argv)
 		pid_t owner = 0;
 		if (window_pid(dpy, win, &owner) && owner > 0)
 			printf("pid=%d\n", (int)owner);
+		/* Third line: the window title. With several instances of the same
+		 * emulator running (shuffler), pid/hint matching can grab the wrong
+		 * game's window; callers verify the title against the entry's game. */
+		char *name = NULL;
+		XFetchName(dpy, win, &name);
+		if (name) {
+			printf("name=%s\n", name);
+			XFree(name);
+		}
 	} else if (strcmp(action, "exists") == 0) {
 		/* Verifies the referenced XID is still a valid window. Gamescope
 		 * manages windows, not PIDs, so this is the reliable liveness signal

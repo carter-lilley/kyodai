@@ -39,6 +39,13 @@ var _replayed_accept: InputEventAction = null
 const SUMMON_INPUT_LOCKOUT_MSEC := 200
 var _input_locked_until_msec: int = -1
 
+# Gamescope can drop a summon's focus/stacking assertion after the user
+# switched windows manually (Steam menu rewrites its bookkeeping). Instead of
+# asserting blindly on a timer, verify once against gamescope's active window
+# and retry the assertion only if it didn't take (bounded attempts).
+const ASSERT_VERIFY_DELAY_SEC := 0.3
+const ASSERT_MAX_ATTEMPTS := 4
+
 func set_reroll_enabled(enabled: bool) -> void:
 	if _shuffle_btn and is_instance_valid(_shuffle_btn):
 		_shuffle_btn.disabled = not enabled
@@ -144,6 +151,7 @@ func _ready():
 		# draws it above the game as a dialog even when focus moves fail.
 		_activate_self_ewmh()
 		_set_transient_for_game()
+		_verify_assertion(ASSERT_MAX_ATTEMPTS)
 	else:
 		move_to_foreground()
 	var top_btn := _button_group.get_child(0) as Control
@@ -224,6 +232,44 @@ func _press_focused_button(btn: Button) -> void:
 	release.action = "ui_accept"
 	release.pressed = false
 	get_viewport().push_input(release)
+
+## This window's own XID as a lowercase hex string ("" when unavailable).
+func _my_xid_hex() -> String:
+	var handle: int = DisplayServer.window_get_native_handle(DisplayServer.WINDOW_HANDLE, get_window_id())
+	return "%x" % handle if handle > 0 else ""
+
+## Post-summon: check whether gamescope actually made this window active; if
+## the assertion didn't take, re-assert and re-check (bounded). Event-driven:
+## runs only in response to a summon, never on a free-running timer.
+func _verify_assertion(attempts_left: int) -> void:
+	if attempts_left <= 0:
+		return
+	await get_tree().create_timer(ASSERT_VERIFY_DELAY_SEC).timeout
+	if _dismissing or not visible or not _gamemode:
+		return
+	var my_xid := _my_xid_hex()
+	var tool := _x11_windowctl_path()
+	if my_xid == "" or tool == "":
+		return
+	var state := {"done": false, "active": ""}
+	LaunchManager.process.queue_helper_execute(tool, ["active"], func(result: Dictionary):
+		state.done = true
+		state.active = ("".join(result.get("output", []))).strip_edges()
+	)
+	var waited := 0.0
+	while not state.done and waited < 1.0:
+		await get_tree().create_timer(0.05).timeout
+		waited += 0.05
+	if _dismissing or not visible:
+		return
+	var active_xid := (state.active.split(" ")[0] if state.active != "" else "").trim_prefix("0x").to_lower()
+	if active_xid == my_xid:
+		return
+	print("[ShufflerControlsWindow] summon assertion not active (active=", state.active, " mine=", my_xid, "); re-asserting (", attempts_left - 1, " left)")
+	grab_focus()
+	_activate_self_ewmh()
+	_set_transient_for_game()
+	_verify_assertion(attempts_left - 1)
 
 ## Reasserts the window stacking after something else (a newly launched
 ## emulator window, a skip/restart raise) has taken foreground.
