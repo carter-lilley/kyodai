@@ -585,6 +585,199 @@ func _get_save_base_name(game: GameResource) -> String:
 		return game.m3u_path.get_file().get_basename()
 	return game.get_active_file_name().get_basename()
 
+## Returns the normalized slot string used by RomM save records.
+func _remote_save_slot(remote: Dictionary) -> String:
+	var slot = remote.get("slot", "")
+	return SLOT_DEFAULT if slot == null else str(slot)
+
+
+## Normalizes local save paths before using them as grouping keys. Directory
+## save roots sometimes differ only by a trailing slash.
+func _normalized_save_path(path: String) -> String:
+	var normalized := FSM.normalize_path(path)
+	if normalized.length() > 1:
+		normalized = normalized.rstrip("/")
+	return normalized
+
+
+## Collapses duplicate save_sync rows that point at the same physical file or
+## folder. Filename aliases (notably pre-m3u disc saves) must not keep separate
+## baselines for one local path, or one alias can overwrite the other and the
+## later hash change is misread as gameplay.
+func _dedupe_save_sync_records(game: GameResource, emulator_id: String, db_records: Array[Dictionary], remote_saves: Array) -> Array[Dictionary]:
+	var live_remote_ids := {}
+	for remote in remote_saves:
+		if remote is Dictionary and _remote_save_slot(remote) == SLOT_DEFAULT:
+			live_remote_ids[int(remote.get("id", 0))] = true
+
+	var records_by_path := {}
+	var records_without_path: Array[Dictionary] = []
+	for rec in db_records:
+		var slot = rec.get("slot", SLOT_DEFAULT)
+		if slot == null:
+			slot = SLOT_DEFAULT
+		# Slots are independent save namespaces; never collapse across them.
+		if str(slot) != SLOT_DEFAULT:
+			records_without_path.append(rec)
+			continue
+		var path := _normalized_save_path(str(rec.get("file_path", "")))
+		if path == "":
+			records_without_path.append(rec)
+			continue
+		if not records_by_path.has(path):
+			records_by_path[path] = []
+		records_by_path[path].append(rec)
+
+	var survivors: Array[Dictionary] = records_without_path.duplicate()
+	for path_key in records_by_path.keys():
+		var path := str(path_key)
+		var group: Array = records_by_path[path_key]
+		if group.size() == 1:
+			survivors.append(group[0])
+			continue
+
+		var path_name := path.get_file()
+		var best: Dictionary = {}
+		var best_score := -1
+		var best_time := -1
+		for rec in group:
+			var file_name := str(rec.get("file_name", ""))
+			var score := 0
+			# The natural record names the file/folder it points at. For folder
+			# saves uploaded as Name.zip, compare the basename too.
+			if file_name == path_name or file_name.get_basename() == path_name:
+				score += 100
+			# Prefer a record whose remote save still exists.
+			if live_remote_ids.has(int(rec.get("remote_save_id", 0))):
+				score += 50
+			if str(rec.get("local_hash", "")) != "" and rec.get("local_hash", "") == rec.get("server_hash", ""):
+				score += 10
+			var rec_time := parse_iso_timestamp(str(rec.get("last_synced_at", "")))
+			if score > best_score or (score == best_score and rec_time > best_time):
+				best = rec
+				best_score = score
+				best_time = rec_time
+
+		if best.is_empty():
+			best = group[0]
+		survivors.append(best)
+
+		for rec in group:
+			if int(rec.get("id", 0)) == int(best.get("id", 0)):
+				continue
+			var removed: bool = DataManager.delete_save_sync_record(game.romm_id, emulator_id, str(rec.get("file_name", "")), SLOT_DEFAULT)
+			var status := "removed" if removed else "failed to remove"
+			push_warning("[GameSaveSubManager] " + status + " duplicate save_sync record '" + str(rec.get("file_name", "")) + "' (remote id " + str(rec.get("remote_save_id", 0)) + ") sharing local path '" + path + "' with '" + str(best.get("file_name", "")) + "'")
+
+	return survivors
+
+
+## Resolves where a remote save would land locally. This must mirror
+## _execute_save_download(); RetroArch and folder-save emulators derive the
+## destination from the game, so differently named remote saves can alias to
+## the same local path.
+func _resolve_remote_save_destination(game: GameResource, emulator_id: String, save_dir: String, remote: Dictionary, local_by_name: Dictionary, is_folder_save: bool) -> String:
+	var file_name := str(remote.get("file_name", "save"))
+	var local = local_by_name.get(file_name)
+	if local != null:
+		return str(local.get("file_path", ""))
+
+	if emulator_id == "retroarch" or is_folder_save:
+		var record_path := _resolve_emulator_save_path(emulator_id, save_dir, game)
+		if record_path == "" and is_folder_save:
+			var result := _resolve_default_save_path(save_dir, game.get_active_title_id())
+			if result.error == "":
+				record_path = result.path
+		return record_path
+
+	return FSM.join_paths(save_dir, file_name)
+
+
+## Chooses the one remote record allowed to write to a destination. Exact
+## filename matches win; folder-save zips can match their folder basename;
+## otherwise the newest server head is the least surprising choice.
+func _preferred_remote_for_path(candidates: Array, path: String) -> Dictionary:
+	var path_name := path.get_file()
+	for remote in candidates:
+		if str(remote.get("file_name", "")) == path_name:
+			return remote
+	for remote in candidates:
+		if str(remote.get("file_name", "")).get_basename() == path_name:
+			return remote
+
+	var newest: Dictionary = {}
+	var newest_time := -1
+	for remote in candidates:
+		var updated := parse_iso_timestamp(str(remote.get("updated_at", "")))
+		if newest.is_empty() or updated > newest_time:
+			newest = remote
+			newest_time = updated
+	return newest
+
+
+## Filters remote saves so no sync pass can write two remote filenames to one
+## local path. If a path is already occupied, only the remote carrying the
+## occupant's exact filename may sync; aliases are skipped instead of
+## overwriting the local save before the emulator starts.
+func _filter_remote_saves_by_destination(game: GameResource, emulator_id: String, local_saves: Array, remote_saves: Array, save_dir: String, is_folder_save: bool) -> Array:
+	var local_by_name := {}
+	var local_by_path := {}
+	for local in local_saves:
+		local_by_name[str(local.get("file_name", ""))] = local
+		var local_path := _normalized_save_path(str(local.get("file_path", "")))
+		if local_path != "":
+			local_by_path[local_path] = local
+
+	var remote_by_path := {}
+	var filtered: Array = []
+	for remote in remote_saves:
+		if not (remote is Dictionary):
+			continue
+		if _remote_save_slot(remote) != SLOT_DEFAULT:
+			filtered.append(remote)
+			continue
+		var destination := _resolve_remote_save_destination(game, emulator_id, save_dir, remote, local_by_name, is_folder_save)
+		if destination == "":
+			# Preserve the existing error path for unresolvable destinations.
+			filtered.append(remote)
+			continue
+		var key := _normalized_save_path(destination)
+		if not remote_by_path.has(key):
+			remote_by_path[key] = []
+		remote_by_path[key].append(remote)
+
+	for path in remote_by_path.keys():
+		var candidates: Array = remote_by_path[path]
+		var local = local_by_path.get(path)
+		if local != null:
+			var exact: Dictionary = {}
+			for remote in candidates:
+				if str(remote.get("file_name", "")) == str(local.get("file_name", "")):
+					exact = remote
+					break
+			if not exact.is_empty():
+				filtered.append(exact)
+				for remote in candidates:
+					if int(remote.get("id", 0)) == int(exact.get("id", 0)):
+						continue
+					push_warning("[GameSaveSubManager] Skipping remote save alias '" + str(remote.get("file_name", "")) + "' (id " + str(remote.get("id", 0)) + "); it resolves to '" + path + "', which belongs to local save '" + str(local.get("file_name", "")) + "'")
+			else:
+				for remote in candidates:
+					push_warning("[GameSaveSubManager] Refusing to download remote save '" + str(remote.get("file_name", "")) + "' (id " + str(remote.get("id", 0)) + ") over existing local save '" + str(local.get("file_name", "")) + "' at '" + path + "'")
+			continue
+
+		var winner := _preferred_remote_for_path(candidates, path)
+		if winner.is_empty():
+			continue
+		filtered.append(winner)
+		for remote in candidates:
+			if int(remote.get("id", 0)) == int(winner.get("id", 0)):
+				continue
+			push_warning("[GameSaveSubManager] Skipping remote save '" + str(remote.get("file_name", "")) + "' (id " + str(remote.get("id", 0)) + "); '" + str(winner.get("file_name", "")) + "' (id " + str(winner.get("id", 0)) + ") owns destination '" + path + "'")
+
+	return filtered
+
+
 ## Discovers local saves for a game, migrating pre-m3u disc-named saves to the
 ## m3u base name so the emulator keeps reading them and sync matching works.
 func _discover_game_saves(save_dir: String, game: GameResource, extensions: Array[String]) -> Array[Dictionary]:
@@ -593,29 +786,50 @@ func _discover_game_saves(save_dir: String, game: GameResource, extensions: Arra
 		results = _migrate_legacy_disc_saves(save_dir, game, extensions)
 	return results
 
-## Renames saves named after the main rom (written by disc-1 launches before the
+## Renames saves named after any folded ROM/disc variant (written before the
 ## m3u existed) to the m3u base name. Returns the migrated save entries.
 func _migrate_legacy_disc_saves(save_dir: String, game: GameResource, extensions: Array[String]) -> Array[Dictionary]:
 	var results: Array[Dictionary] = []
 	if game.m3u_path == "":
 		return results
+
 	var new_base := _get_save_base_name(game)
-	var legacy_base := game.file_name.get_basename()
-	if legacy_base == new_base:
-		return results
-	var legacy := discover_local_saves(save_dir, legacy_base, extensions)
-	for save in legacy:
-		var new_path: String = save["file_path"].get_base_dir() + "/" + new_base + "." + save["file_path"].get_extension()
-		if FSM.file_exists(new_path):
-			continue
-		if FSM.move(save["file_path"], new_path):
-			print("[GameSaveSubManager] Migrated legacy disc save: " + save["file_path"] + " -> " + new_path)
-			results.append({
-				"file_name": new_path.get_file(),
-				"file_path": new_path,
-				"modified_time": save["modified_time"],
-				"extension": save["extension"]
-			})
+	var legacy_bases: Array[String] = []
+	var add_legacy_base := func(file_name: String) -> void:
+		var base := file_name.get_basename()
+		if base != "" and base != new_base and not legacy_bases.has(base):
+			legacy_bases.append(base)
+
+	# Prefer the variant that would have been launched before considering the
+	# rest of the folded sibling set.
+	add_legacy_base.call(game.get_active_file_name())
+	add_legacy_base.call(game.file_name)
+	for sibling in game.siblings:
+		if sibling is Dictionary:
+			add_legacy_base.call(str(sibling.get("file_name", "")))
+
+	for extension in extensions:
+		var candidates: Array[Dictionary] = []
+		for legacy_base in legacy_bases:
+			candidates.append_array(discover_local_saves(save_dir, legacy_base, [extension]))
+		# If more than one pre-m3u save exists, the most recently written card
+		# is the safest migration candidate. The first successful move claims
+		# the canonical m3u path; the others remain untouched.
+		candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return int(a.get("modified_time", 0)) > int(b.get("modified_time", 0))
+		)
+		for save in candidates:
+			var new_path: String = save["file_path"].get_base_dir() + "/" + new_base + "." + save["file_path"].get_extension()
+			if FSM.file_exists(new_path):
+				continue
+			if FSM.move(save["file_path"], new_path):
+				print("[GameSaveSubManager] Migrated legacy disc save: " + save["file_path"] + " -> " + new_path)
+				results.append({
+					"file_name": new_path.get_file(),
+					"file_path": new_path,
+					"modified_time": save["modified_time"],
+					"extension": save["extension"]
+				})
 	return results
 
 func uses_folder_saves(emulator_id: String, platform_slug: String = "", core_id: String = "") -> bool:
@@ -2358,6 +2572,12 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 
 func _run_sync(game: GameResource, emulator_id: String, local_saves: Array, remote_saves: Array, device_id: String, callback: Callable) -> void:
 	var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
+	db_records = _dedupe_save_sync_records(game, emulator_id, db_records, remote_saves)
+
+	var core_id := _get_core_id_for_save_resolution(emulator_id, game)
+	var save_dir := resolve_active_save_directory(emulator_id, game.platform_slug, core_id)
+	var is_folder_save := uses_folder_saves(emulator_id, game.platform_slug, core_id)
+	remote_saves = _filter_remote_saves_by_destination(game, emulator_id, local_saves, remote_saves, save_dir, is_folder_save)
 
 	var local_by_name: Dictionary = {}
 	for save in local_saves:
@@ -2492,6 +2712,7 @@ func _execute_save_upload(game: GameResource, emulator_id: String, upload: Dicti
 	var upload_file_name = upload.local.file_name
 	var original_path = upload.local.file_path
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+	print("[GameSaveSubManager] Uploading local save '" + original_path + "' as '" + upload_file_name + "'")
 
 	if is_folder_save:
 		var save_name = _get_save_name_for_upload(emulator_id, game, original_path)
@@ -2646,9 +2867,20 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 		if emulator_id == "retroarch":
 			FSM.make_dir_recursive(record_path.get_base_dir())
 
+	# Last-line defense for filename aliases. A remote-only record should only
+	# materialize a missing save; it must never overwrite a file/folder that
+	# discovery already associates with a different filename.
+	if local == null and record_path != "":
+		var destination_exists := FSM.dir_exists(record_path) if is_folder_save else FSM.file_exists(record_path)
+		if destination_exists:
+			push_warning("[GameSaveSubManager] Refusing to download remote save '" + file_name + "' (id " + str(save_id) + ") over existing unresolved local path: " + record_path)
+			on_done.call(false)
+			return
+
 	_ensure_save_directory_exists(emulator_id)
 
 	boundary_path = record_path
+	print("[GameSaveSubManager] Downloading remote save '" + file_name + "' (id " + str(save_id) + ") -> '" + local_path + "' (record path: '" + record_path + "')")
 
 	SystemManager.network.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
 		if not _success:
@@ -2848,6 +3080,11 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 				SystemManager.notifications.show_notification("Save sync skipped: could not verify server state", SystemManager.notifications.Type.ERROR)
 				_end_save_sync(sync_key)
 				return
+
+			db_records = _dedupe_save_sync_records(game, emulator_id, db_records, remote_saves)
+			var save_dir := resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+			var is_folder_save := uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
+			remote_saves = _filter_remote_saves_by_destination(game, emulator_id, local_saves, remote_saves, save_dir, is_folder_save)
 
 			var db_by_name: Dictionary = {}
 			for rec in db_records:
@@ -3228,9 +3465,6 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			print("[GameSaveSubManager] auto_download: fetched " + str(remote_saves.size()) + " remote saves for romm_id=" + str(game.romm_id))
 			
 			var db_records = DataManager.get_save_sync_records(game.romm_id, emulator_id)
-			var db_by_name: Dictionary = {}
-			for rec in db_records:
-				db_by_name[rec.file_name] = rec
 
 			# A successful fetch that comes back empty while the DB knows save
 			# records is a transient server/network lie - skip this sync rather
@@ -3240,6 +3474,11 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				if on_complete.is_valid():
 					on_complete.call()
 				return
+
+			db_records = _dedupe_save_sync_records(game, emulator_id, db_records, remote_saves)
+			var db_by_name: Dictionary = {}
+			for rec in db_records:
+				db_by_name[rec.file_name] = rec
 			
 			var local_saves: Array[Dictionary]
 			if is_folder_save:
@@ -3280,6 +3519,8 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 				local_by_name[save.file_name] = save
 				save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
 			
+			remote_saves = _filter_remote_saves_by_destination(game, emulator_id, local_saves, remote_saves, save_dir, is_folder_save)
+
 			var current_timestamp = Time.get_datetime_string_from_system(true, true)
 			var state = {"pending": 0, "failed": 0, "fired": false}
 			
