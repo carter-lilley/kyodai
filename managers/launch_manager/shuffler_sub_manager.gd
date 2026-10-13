@@ -2260,12 +2260,154 @@ func _pid_is_live_entry(pid: int) -> bool:
 			return entry.started
 	return false
 
-## Captures the exact X11 window ID the helper matched for this game (same
-## matching rules as show/hide) and stores it on the bag entry, so later
-## hide/show calls target that window unambiguously.
+## Captures the exact X11 window ID for this game and stores it on the bag
+## entry, so later hide/show calls target that window unambiguously. When the
+## entry has a game title, the window list is matched by title first (some
+## emulators, Vita3K in particular, open TWO windows per instance — a main
+## window and a game window named after the game — and pid/hint matching can
+## pick the wrong one); falls back to pid/hint matching otherwise.
 func _capture_window_xid(pid: int, hint: String) -> void:
 	if _x11_windowctl_path.is_empty():
 		return
+	var entry: Dictionary = {}
+	if _bag and _bag.entries:
+		for e in _bag.entries:
+			if e.pid == pid:
+				entry = e
+				break
+	var title := ""
+	if not entry.is_empty() and entry.get("game"):
+		title = entry.game.title
+	if title != "":
+		_capture_window_xid_from_list(pid, hint, entry)
+	else:
+		_capture_window_xid_find(pid, hint)
+
+## Lowercase alnum-only form of a title, so "Cladun Returns: This is
+## Sengoku!" still matches a window titled "Cladun Returns - This Is
+## Sengoku! (PCSE01234)" regardless of punctuation/case differences.
+func _norm_title(s: String) -> String:
+	var out := ""
+	for i in s.length():
+		var c := s.unicode_at(i)
+		if (c >= 48 and c <= 57) or (c >= 97 and c <= 122):
+			out += char(c)
+		elif c >= 65 and c <= 90:
+			out += char(c + 32)
+	return out
+
+## Selects this entry's window from the full window list by title match;
+## falls back to pid/hint find when no window names the game.
+func _capture_window_xid_from_list(pid: int, hint: String, entry: Dictionary) -> void:
+	LaunchManager.process.queue_helper_execute(_x11_windowctl_path, ["list"], func(result: Dictionary):
+		if not _pid_is_live_entry(pid):
+			return
+		var norm_title := _norm_title(entry.game.title)
+		var best_xid := ""
+		var best_owner := -1
+		var best_name := ""
+		var best_in_group := false
+		if result.get("exit_code", -1) == 0 and norm_title != "":
+			var text := ("".join(result.get("output", []))).strip_edges()
+			for line in text.split("\n", false):
+				var l := line.strip_edges()
+				var sp := l.find(" ")
+				if sp == -1:
+					continue
+				var wxid := l.substr(0, sp)
+				if not wxid.is_valid_hex_number(false):
+					continue
+				var rest := l.substr(sp + 1)
+				var name_idx := rest.find("name=")
+				if name_idx == -1:
+					continue
+				var wname := rest.substr(name_idx + 5)
+				var wowner := -1
+				var pid_part := rest.substr(0, name_idx).strip_edges()
+				if pid_part.begins_with("pid="):
+					wowner = pid_part.trim_prefix("pid=").to_int()
+				var nn := _norm_title(wname)
+				if nn.find(norm_title) == -1:
+					continue
+				var foreign := false
+				for other in _bag.entries:
+					if other == entry or not other.started:
+						continue
+					var ot := _norm_title(other.game.title)
+					if ot != "" and ot != norm_title and nn.find(ot) != -1:
+						foreign = true
+						break
+				if foreign:
+					continue
+				var in_group := false
+				if wowner > 0:
+					var wpgid: int = LaunchManager.process.get_pgid(wowner)
+					var epgid := int(entry.get("pgid", -1))
+					if epgid <= 1:
+						epgid = LaunchManager.process.get_pgid(pid)
+					in_group = wpgid > 1 and wpgid == epgid
+				if best_xid == "" or (in_group and not best_in_group) or (in_group == best_in_group and wxid.hex_to_int() > best_xid.hex_to_int()):
+					best_xid = wxid
+					best_owner = wowner
+					best_name = wname
+					best_in_group = in_group
+		if best_xid != "":
+			_store_captured_xid(entry, pid, best_xid, best_owner, best_name)
+		else:
+			_capture_window_xid_find(pid, hint)
+	)
+
+## Stores a captured window on the entry, adopting the window owner's process
+## group so suspend/resume/kill reach the real payload. Returns false when the
+## window clearly belongs to a different started game.
+func _store_captured_xid(entry: Dictionary, pid: int, xid: String, owner_pid: int, window_name: String) -> bool:
+	if xid == "":
+		return false
+	if not _pid_is_live_entry(pid):
+		return false
+	if window_name != "" and _bag and _bag.entries:
+		var owner_title := ""
+		for other in _bag.entries:
+			if other == entry or not other.started:
+				continue
+			var t := (other.game.title as String).to_lower()
+			if t != "" and window_name.to_lower().find(t) != -1:
+				owner_title = other.game.title
+				break
+		if owner_title != "":
+			print("[ShufflerSubManager] rejecting window xid " + xid + " for pid " + str(pid) + ": title names '" + owner_title + "' (\"" + window_name + "\")")
+			return false
+	entry["window_xid"] = xid
+	# The window owner is the real payload (AppRun/Vita3K re-exec away from
+	# the spawned leader); adopt its group so suspend/resume/kill reach the
+	# emulator itself. Guards: hint-matched windows can belong to a DIFFERENT
+	# launch entirely (a leaked/suspended instance of the same emulator) — a
+	# stopped owner or one whose cmdline doesn't carry this entry's launch
+	# signature must never overwrite the entry's live pgid.
+	if owner_pid > 0 and SystemManager.platform.is_linux():
+		var owner_state: String = LaunchManager.process.get_process_state(owner_pid)
+		var owner_ok := owner_state != "" and owner_state != "T" and owner_state != "t" and owner_state != "Z"
+		if owner_ok and owner_pid != pid:
+			var sigs := _entry_signatures(entry)
+			if not sigs.is_empty():
+				var owner_cmd: String = LaunchManager.process.get_process_cmdline_pub(owner_pid)
+				owner_ok = false
+				for sig in sigs:
+					if owner_cmd.find(sig) != -1:
+						owner_ok = true
+						break
+		if owner_ok:
+			var owner_pgid: int = LaunchManager.process.get_pgid(owner_pid)
+			if owner_pgid > 1 and owner_pgid != entry.pgid:
+				print("[ShufflerSubManager] adopting pgid " + str(owner_pgid) + " from window owner pid " + str(owner_pid) + " (was pgid " + str(entry.pgid) + ")")
+				entry.pgid = owner_pgid
+		else:
+			print("[ShufflerSubManager] ignoring window owner pid " + str(owner_pid) + " for pgid adoption (state=" + LaunchManager.process.get_process_state(owner_pid) + ")")
+	print("[ShufflerSubManager] captured window xid " + xid + " for pid " + str(pid) + " (\"" + window_name + "\")")
+	return true
+
+## pid/hint matching fallback (same rules as show/hide targeting).
+func _capture_window_xid_find(pid: int, hint: String) -> void:
 	var args: Array = ["find", _group_pid_list(pid)]
 	if hint != "":
 		args.append(hint)
@@ -2293,52 +2435,7 @@ func _capture_window_xid(pid: int, hint: String) -> void:
 		if _bag and _bag.entries:
 			for entry in _bag.entries:
 				if entry.pid == pid:
-					# With several instances of the same emulator running, the
-					# pid/hint fallback can grab a DIFFERENT game's window.
-					# Reject the capture when the window title clearly names
-					# another started entry's game (Vita3K/Cemu put the game
-					# title in the window title).
-					if window_name != "":
-						var owner_title := ""
-						for other in _bag.entries:
-							if other == entry or not other.started:
-								continue
-							var t := (other.game.title as String).to_lower()
-							if t != "" and window_name.to_lower().find(t) != -1:
-								owner_title = other.game.title
-								break
-						if owner_title != "":
-							print("[ShufflerSubManager] rejecting window xid " + xid + " for pid " + str(pid) + ": title names '" + owner_title + "' (\"" + window_name + "\")")
-							return
-					entry["window_xid"] = xid
-					# The window owner is the real payload (AppRun/Vita3K
-					# re-exec away from the spawned leader); adopt its group
-					# so suspend/resume/kill reach the emulator itself.
-					# Guards: hint-matched windows can belong to a DIFFERENT
-					# launch entirely (a leaked/suspended instance of the same
-					# emulator) — a stopped owner or one whose cmdline doesn't
-					# carry this entry's launch signature must never overwrite
-					# the entry's live pgid.
-					if owner_pid > 0 and SystemManager.platform.is_linux():
-						var owner_state: String = LaunchManager.process.get_process_state(owner_pid)
-						var owner_ok := owner_state != "" and owner_state != "T" and owner_state != "t" and owner_state != "Z"
-						if owner_ok and owner_pid != pid:
-							var sigs := _entry_signatures(entry)
-							if not sigs.is_empty():
-								var owner_cmd: String = LaunchManager.process.get_process_cmdline_pub(owner_pid)
-								owner_ok = false
-								for sig in sigs:
-									if owner_cmd.find(sig) != -1:
-										owner_ok = true
-										break
-						if owner_ok:
-							var owner_pgid: int = LaunchManager.process.get_pgid(owner_pid)
-							if owner_pgid > 1 and owner_pgid != entry.pgid:
-								print("[ShufflerSubManager] adopting pgid " + str(owner_pgid) + " from window owner pid " + str(owner_pid) + " (was pgid " + str(entry.pgid) + ")")
-								entry.pgid = owner_pgid
-						else:
-							print("[ShufflerSubManager] ignoring window owner pid " + str(owner_pid) + " for pgid adoption (state=" + LaunchManager.process.get_process_state(owner_pid) + ")")
-					print("[ShufflerSubManager] captured window xid " + xid + " for pid " + str(pid))
+					_store_captured_xid(entry, pid, xid, owner_pid, window_name)
 					break
 	)
 

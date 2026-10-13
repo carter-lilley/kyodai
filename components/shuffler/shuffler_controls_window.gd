@@ -262,7 +262,7 @@ func _verify_assertion(attempts_left: int) -> void:
 		waited += 0.05
 	if _dismissing or not visible:
 		return
-	var active_xid := (state.active.split(" ")[0] if state.active != "" else "").trim_prefix("0x").to_lower()
+	var active_xid: String = (state.active.split(" ")[0] if state.active != "" else "").trim_prefix("0x").to_lower()
 	if active_xid == my_xid:
 		return
 	print("[ShufflerControlsWindow] summon assertion not active (active=", state.active, " mine=", my_xid, "); re-asserting (", attempts_left - 1, " left)")

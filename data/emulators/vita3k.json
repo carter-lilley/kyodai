@@ -91,6 +91,7 @@
 				"executable": "Vita3K.exe",
 				"template": [
 					"{exe}",
+					"--frontend=sdl",
 					"{rom}"
 				]
 			},
@@ -100,6 +101,7 @@
 				"working_directory": "{emulator_dir}",
 				"template": [
 					"{exe}",
+					"--frontend=sdl",
 					"--fullscreen",
 					"{rom}"
 				],

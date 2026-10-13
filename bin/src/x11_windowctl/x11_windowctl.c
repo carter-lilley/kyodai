@@ -247,6 +247,38 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	/* Lists every top-level window with a title:
+	 * "<xid> pid=<n> name=<title>" (pid omitted when _NET_WM_PID is unset).
+	 * Lets callers pick the right window among several per emulator instance
+	 * (e.g. Vita3K's main window vs the game-titled window). */
+	if (strcmp(action, "list") == 0) {
+		Window root_return, parent;
+		Window *children = NULL;
+		unsigned int nchildren = 0;
+		if (XQueryTree(dpy, root, &root_return, &parent, &children, &nchildren) != 0) {
+			for (unsigned int i = 0; i < nchildren; i++) {
+				Window w = children[i];
+				char *name = NULL;
+				if (!XFetchName(dpy, w, &name) || !name || !*name) {
+					if (name)
+						XFree(name);
+					continue;
+				}
+				pid_t owner = 0;
+				int has_owner = window_pid(dpy, w, &owner);
+				printf("%lx ", (unsigned long)w);
+				if (has_owner && owner > 0)
+					printf("pid=%d ", (int)owner);
+				printf("name=%s\n", name);
+				XFree(name);
+			}
+		}
+		if (children)
+			XFree(children);
+		XCloseDisplay(dpy);
+		return 0;
+	}
+
 	/* Marks CHILD as a transient/dialog of PARENT (WM_TRANSIENT_FOR):
 	 * compositors like gamescope draw dialogs above their parent window
 	 * without any focus change. */
