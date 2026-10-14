@@ -777,8 +777,15 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 	var disc_id: int = entry["id"]
 	var file_name: String = entry["file_name"]
 	# Sibling file names from sync lack an extension (fs_name_no_ext) until full
-	# details are fetched; resolve the real file name before queueing.
-	if file_name != "" and file_name.contains("."):
+	# details are fetched; resolve the real file name before queueing. The main
+	# entry always carries its full fs_name from sync.
+	var resolved: bool = disc_id == game.romm_id or entry.get("name_resolved", false) == true
+	if not resolved:
+		for sibling in game.siblings:
+			if sibling.get("id", 0) == disc_id:
+				resolved = sibling.get("name_resolved", false)
+				break
+	if file_name != "" and resolved:
 		_do_queue_disc(game, disc_id, file_name, int(entry.get("file_size", 0)), dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound, group_id)
 		return
 	SystemManager.network.fetch_game_details(disc_id, func(data: Dictionary, error: String):
@@ -795,6 +802,7 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 			if game.siblings[i].get("id", 0) == disc_id:
 				game.siblings[i]["file_name"] = full_file_name
 				game.siblings[i]["file_size"] = file_size
+				game.siblings[i]["name_resolved"] = true
 				DataManager.update_game_siblings(game.romm_id, game.siblings)
 				break
 		_do_queue_disc(game, disc_id, full_file_name, file_size, dest_dir, update_game_resource, suppress_notification, on_done, suppress_sound, group_id)
@@ -3623,9 +3631,12 @@ func _finish_download_completion(item: QueueItem):
 		# Extract TitleID in background if needed
 		if item.game_resource.get_active_title_id() == "" and _needs_title_id(item.game_resource):
 			var game = item.game_resource
+			# Extract from the file just downloaded; game.file_path can point at
+			# a different sibling (or a server-relative path) instead.
+			var downloaded_path := item.destination_path
 			var notify_id = SystemManager.notifications.show_notification("Extracting TitleID for " + game.title + "...", SystemManager.notifications.Type.INFO, null, 3.0, Callable(), Callable(), true, true)
 			SystemManager.memory.queue_extraction_task(func():
-				return TitleIDParser.extract_for_game_result(game)
+				return TitleIDParser.extract_for_game_result(game, downloaded_path)
 			, func(result: Dictionary):
 				SystemManager.notifications.dismiss_notification(notify_id)
 				var title_id = result.get("title_id", "")

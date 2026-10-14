@@ -1677,6 +1677,7 @@ func _sibling_entry_for(game: GameResource) -> Dictionary:
 		"name": game.title,
 		"file_name": base_name,
 		"file_size": game.file_size,
+		"name_resolved": false,
 		"title_id": "",
 		"is_main_sibling": game.romm_is_main_sibling,
 		"sort_comparator": "",
@@ -2291,9 +2292,10 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 			var sibling = {
 				"id": sibling_data.get("id", 0),
 				"name": str(sibling_data.get("name", "")),
-				"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
-				"file_size": sibling_data.get("fs_size_bytes", 0),
-				"title_id": "",  # Will be extracted on launch
+			"file_name": str(sibling_data.get("fs_name_no_ext", "")),  # Will be updated on-demand
+			"file_size": sibling_data.get("fs_size_bytes", 0),
+			"name_resolved": false,
+			"title_id": "",  # Will be extracted on launch
 			"is_main_sibling": sibling_data.get("is_main_sibling", false) == true,
 			"sort_comparator": str(sibling_data.get("sort_comparator", "")),
 			"disc_number": GameResource.parse_disc_number(str(sibling_data.get("fs_name_no_ext", "")))
@@ -2353,7 +2355,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -2403,6 +2405,27 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_save_usage = existing.get("save_usage", "")
 		if existing_save_usage != "":
 			save_usage = existing_save_usage
+		# Preserve resolved sibling metadata: full file names/sizes are fetched
+		# on-demand locally; the server payload only carries fs_name_no_ext, so
+		# a resync would otherwise reset them (breaking downloads-on-disk paths).
+		var prev_siblings = JSON.parse_string(str(existing.get("siblings", "")))
+		if prev_siblings is Array:
+			var prev_by_id := {}
+			for prev in prev_siblings:
+				if prev is Dictionary:
+					prev_by_id[int(prev.get("id", 0))] = prev
+			for i in range(game.siblings.size()):
+				var prev: Dictionary = prev_by_id.get(int(game.siblings[i].get("id", 0)), {})
+				if prev.is_empty():
+					continue
+				if prev.get("name_resolved", false):
+					game.siblings[i]["file_name"] = str(prev.get("file_name", game.siblings[i]["file_name"]))
+					game.siblings[i]["file_size"] = int(prev.get("file_size", 0))
+					game.siblings[i]["name_resolved"] = true
+				for field in ["title_id", "save_id", "save_usage"]:
+					var prev_val := str(prev.get(field, ""))
+					if prev_val != "":
+						game.siblings[i][field] = prev_val
 
 	var query = """
 		INSERT OR REPLACE INTO games

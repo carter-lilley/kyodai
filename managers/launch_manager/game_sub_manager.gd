@@ -119,6 +119,14 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 	if rom_path_override != "":
 		temp_intent.rom_path = rom_path_override
 		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Using shuffler override path = " + rom_path_override)
+	elif game.get_active_game_id() != game.romm_id:
+		# A sibling variant is selected: its file lives under the library root
+		# named by the sibling's (resolved) file_name. game.file_path belongs
+		# to the main entry and points at a different file.
+		var sibling_root_folder = DataManager.get_setting("games_root_folder")
+		var sibling_root_path = sibling_root_folder.value if sibling_root_folder else "user://roms/"
+		temp_intent.rom_path = game.get_sibling_file_path(game.get_active_game_id(), sibling_root_path)
+		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Using sibling path = " + temp_intent.rom_path)
 	elif game.file_path != "":
 		temp_intent.rom_path = game.file_path
 		if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Using game.file_path = " + game.file_path)
@@ -1455,7 +1463,7 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		print("[GameManager] shadPS4: ERROR - game or intent is null")
 		return false
 	
-	var rom_path := game.file_path
+	var rom_path := intent.rom_path if intent.rom_path != "" else game.file_path
 	if DEBUG_LOG: print("[GameManager] shadPS4: ROM path: " + rom_path)
 	
 	if rom_path == "":

@@ -1105,13 +1105,19 @@ func _on_card_pressed():
 		# launch-time extraction); only fall back to reconstructing the archive
 		# path when the stored path is gone.
 		var present := false
-		if game.file_path != "" and (FSM.dir_exists(game.file_path) or FSM.file_exists(game.file_path)):
+		var active_id = game.get_active_game_id()
+		var root_folder = DataManager.get_setting("games_root_folder") if DataManager else null
+		var root_path: String = root_folder.value if root_folder else ""
+		if active_id != game.romm_id:
+			# Sibling selected: check its own file, not the main entry's path
+			if root_path != "":
+				present = FSM.file_exists(game.get_sibling_file_path(active_id, root_path))
+		elif game.file_path != "" and (FSM.dir_exists(game.file_path) or FSM.file_exists(game.file_path)):
 			present = true
 		else:
-			var root_folder = DataManager.get_setting("games_root_folder") if DataManager else null
-			if root_folder and root_folder.value != "":
+			if root_path != "":
 				var active_file_name = game.get_active_file_name()
-				present = FSM.file_exists(FSM.join_paths(root_folder.value, game.platform_slug, active_file_name))
+				present = FSM.file_exists(FSM.join_paths(root_path, game.platform_slug, active_file_name))
 		if not present:
 			if SystemManager.notifications:
 				SystemManager.notifications.show_notification("File not found - redownloading", SystemManager.notifications.Type.WARNING)

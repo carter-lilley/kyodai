@@ -1204,8 +1204,8 @@ static func get_sfo_title(path: String) -> String:
 ## Returns {title_id, save_id, raw_serial, usage, source, experimental} for
 ## sigil-routed platforms; legacy platforms return only title_id.
 ## Returns an empty Dictionary if extraction fails or not needed.
-static func extract_for_game_result(game: GameResource) -> Dictionary:
-	var rom_path = game.file_path
+static func extract_for_game_result(game: GameResource, rom_path_override: String = "") -> Dictionary:
+	var rom_path = rom_path_override if rom_path_override != "" else game.file_path
 	if rom_path == "":
 		return {}
 

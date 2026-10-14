@@ -285,6 +285,7 @@ func get_disc_entries() -> Array[Dictionary]:
 			"id": sibling_id,
 			"file_name": str(sibling.get("file_name", "")),
 			"file_size": int(sibling.get("file_size", 0)),
+			"name_resolved": sibling.get("name_resolved", false),
 			"disc_number": disc_number,
 			"downloaded": sibling_id in downloaded_sibling_ids
 		})
@@ -293,6 +294,7 @@ func get_disc_entries() -> Array[Dictionary]:
 			"id": romm_id,
 			"file_name": file_name,
 			"file_size": file_size,
+			"name_resolved": true,
 			"disc_number": main_disc,
 			"downloaded": has_local_copy
 		})
@@ -302,6 +304,7 @@ func get_disc_entries() -> Array[Dictionary]:
 			"id": romm_id,
 			"file_name": file_name,
 			"file_size": file_size,
+			"name_resolved": true,
 			"disc_number": 1,
 			"downloaded": has_local_copy
 		})

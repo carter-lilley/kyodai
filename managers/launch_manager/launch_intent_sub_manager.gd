@@ -92,15 +92,21 @@ func create_launch_intent(game: GameResource, rom_path_override: String = "") ->
 	else:
 		# Get the correct file path for the active variant
 		var active_file_name = game.get_active_file_name()
-		
-		# Use the actual file_path from game resource
-		# Only fall back to constructing path if file_path is empty
-		if game.file_path != "":
+		var root_folder = DataManager.get_setting("games_root_folder")
+		var root_path = root_folder.value if root_folder else "user://roms/"
+
+		var active_id = game.get_active_game_id()
+		if active_id != game.romm_id:
+			# A sibling variant is selected: its file lives under the library
+			# root named by the sibling's (resolved) file_name. The main
+			# entry's file_path points at a different file.
+			intent.rom_path = game.get_sibling_file_path(active_id, root_path)
+		elif game.file_path != "":
+			# Use the actual file_path from game resource
+			# Only fall back to constructing path if file_path is empty
 			intent.rom_path = game.file_path
 		else:
 			# Fallback: construct path from components (for legacy or if file_path not set)
-			var root_folder = DataManager.get_setting("games_root_folder")
-			var root_path = root_folder.value if root_folder else "user://roms/"
 			intent.rom_path = FSM.join_paths(root_path, game.platform_slug, active_file_name)
 	
 	intent.platform_slug = game.platform_slug

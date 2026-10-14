@@ -1482,9 +1482,8 @@ func _on_sibling_selected(index: int) -> void:
 	if _current_game and selected_id != 0:
 		_current_game.selected_sibling_id = selected_id
 
-		# Check if we need to fetch full sibling details (no file extension means incomplete data)
-		var sibling_file_name = selected.get("file_name", "")
-		if selected_id != _current_game.romm_id and not sibling_file_name.contains("."):
+		# Check if we need to fetch full sibling details (name/size unresolved from sync)
+		if selected_id != _current_game.romm_id and not selected.get("name_resolved", false):
 			_fetch_sibling_details(selected_id, index)
 			return
 
@@ -1510,12 +1509,14 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 				if _current_game.siblings[i].get("id", 0) == sibling_id:
 					_current_game.siblings[i]["file_name"] = full_file_name
 					_current_game.siblings[i]["file_size"] = data.get("fs_size_bytes", 0)
+					_current_game.siblings[i]["name_resolved"] = true
 					break
 
 			# Also update _sibling_options
 			if dropdown_index < _sibling_options.size():
 				_sibling_options[dropdown_index]["file_name"] = full_file_name
 				_sibling_options[dropdown_index]["file_size"] = data.get("fs_size_bytes", 0)
+				_sibling_options[dropdown_index]["name_resolved"] = true
 
 			# Save updated game data
 			DataManager.update_game(_current_game)
@@ -1835,13 +1836,19 @@ func _on_action_button_pressed() -> void:
 		# launch-time extraction); only fall back to reconstructing the archive
 		# path when the stored path is gone.
 		var present := false
-		if _current_game.file_path != "" and (FSM.dir_exists(_current_game.file_path) or FSM.file_exists(_current_game.file_path)):
+		var active_id = _current_game.get_active_game_id()
+		var root_folder = DataManager.get_setting("games_root_folder")
+		var root_path: String = root_folder.value if root_folder else ""
+		if active_id != _current_game.romm_id:
+			# Sibling selected: check its own file, not the main entry's path
+			if root_path != "":
+				present = FSM.file_exists(_current_game.get_sibling_file_path(active_id, root_path))
+		elif _current_game.file_path != "" and (FSM.dir_exists(_current_game.file_path) or FSM.file_exists(_current_game.file_path)):
 			present = true
 		else:
-			var root_folder = DataManager.get_setting("games_root_folder")
-			if root_folder and root_folder.value != "":
+			if root_path != "":
 				var active_file_name = _current_game.get_active_file_name()
-				present = FSM.file_exists(FSM.join_paths(root_folder.value, _current_game.platform_slug, active_file_name))
+				present = FSM.file_exists(FSM.join_paths(root_path, _current_game.platform_slug, active_file_name))
 
 		if not present:
 			# File is marked as downloaded but doesn't exist - redownload

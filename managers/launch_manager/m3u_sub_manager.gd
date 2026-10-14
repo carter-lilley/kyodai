@@ -67,8 +67,9 @@ func _resolve_disc_files(game: GameResource) -> Array[String]:
 		if FSM.file_exists(path):
 			disc_files.append(path)
 			continue
-		# File name has no extension (fs_name_no_ext) - find the real file on disk
-		if not file_name.contains("."):
+		# File name may be unresolved (fs_name_no_ext, which can itself contain
+		# dots) - find the real file on disk by matching the basename.
+		if not entry.get("name_resolved", false) or not file_name.contains("."):
 			var found := _find_disc_file(platform_dir, file_name)
 			if found != "":
 				disc_files.append(found)
