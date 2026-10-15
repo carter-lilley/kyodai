@@ -1,8 +1,8 @@
 class_name LibraryBackground
 extends Control
 
-## Layered library background: a configurable base gradient at the bottom,
-## any number of stackable BackgroundEffect layers (child order = draw order),
+## Layered library background: the M3 surface color at the bottom, any
+## number of stackable BackgroundEffect layers (child order = draw order),
 ## and standard card effects (e.g. gradient_overlay) composited on top.
 
 const EFFECT_REGISTRY: Dictionary = {
@@ -37,12 +37,9 @@ const OVERLAY_REGISTRY: Dictionary = {
 	"gradient_overlay": "res://effects/shared/gradient_overlay_effect.gd",
 }
 
-const _BASE_SHADER := preload("res://shaders/background/library_background_gradient.gdshader")
-
 var _config: Dictionary = {}
 
 var _base_rect: ColorRect = null
-var _base_gradient_hash: String = ""
 
 # Effect layers: [{entry, node, viewport}] in draw order (bottom first)
 var _layers: Array = []
@@ -91,111 +88,16 @@ func _initialize_background() -> void:
 	_apply_background_state(true)
 
 static func _empty_config() -> Dictionary:
-	return {"base": {"settings": {}}, "effects": [], "overlays": []}
-
-static func default_base_settings() -> Dictionary:
-	var gradient = Gradient.new()
-	gradient.offsets = [0.0, 1.0]
-	gradient.colors = [Color(0.1, 0.1, 0.15), Color(0.05, 0.05, 0.08)]
-	return {
-		"gradient": gradient,
-		"gradient_angle": 180.0,
-		"gradient_radial": false,
-	}
-
-static func _solid_base_settings(color: Color) -> Dictionary:
-	var gradient = Gradient.new()
-	gradient.offsets = [0.0, 1.0]
-	gradient.colors = [color, color]
-	return {"gradient": gradient, "gradient_angle": 180.0, "gradient_radial": false}
-
-# XMB effects derived their backdrop gradient from wave_color using this ratio
-const _XMB_COLOR_RATIO := Vector3(1.0, 0.275, 0.621)
-
-static func _convert_legacy_settings(effect_id: String, settings: Dictionary) -> Dictionary:
-	## Splits a legacy single-effect settings dict into base settings +
-	## per-layer effect settings (baked backgrounds become the base gradient).
-	var base_settings: Dictionary = {}
-	var effect_settings := settings.duplicate(true)
-	match effect_id:
-		"gradient":
-			var g = settings.get("background_gradient")
-			if g is Gradient:
-				base_settings = {
-					"gradient": g,
-					"gradient_angle": EffectBase.get_gradient_angle(settings, "gradient_angle"),
-					"gradient_radial": settings.get("gradient_radial", false),
-				}
-		"dotgrid", "isolines", "cafeos":
-			var bg = settings.get("background_color")
-			if bg is Color:
-				base_settings = _solid_base_settings(bg)
-				effect_settings.erase("background_color")
-		"horizon3d":
-			var top = settings.get("bg_color_top")
-			var bottom = settings.get("bg_color_bottom")
-			if top is Color and bottom is Color:
-				var gradient = Gradient.new()
-				gradient.offsets = [0.0, 1.0]
-				gradient.colors = [top, bottom]
-				base_settings = {"gradient": gradient, "gradient_angle": 180.0, "gradient_radial": false}
-				effect_settings.erase("bg_color_top")
-				effect_settings.erase("bg_color_bottom")
-		"xmb", "xmb_classic":
-			var wave = settings.get("wave_color")
-			if wave is Color:
-				var gradient = Gradient.new()
-				gradient.offsets = [0.0, 1.0]
-				gradient.colors = [
-					Color(wave.r * _XMB_COLOR_RATIO.x, wave.g * _XMB_COLOR_RATIO.y, wave.b * _XMB_COLOR_RATIO.z),
-					wave,
-				]
-				base_settings = {"gradient": gradient, "gradient_angle": 180.0, "gradient_radial": false}
-		"motes", "osdsys":
-			base_settings = _solid_base_settings(Color.BLACK)
-	return {"base_settings": base_settings, "effect_settings": effect_settings}
+	return {"effects": [], "overlays": []}
 
 static func normalize_config(config: Dictionary) -> Dictionary:
-	## Accepts both the current layered shape and the legacy single-effect
-	## shape ({effect_id, settings, light_settings?, dark_settings?}).
+	## Sanitizes a layered background config; unknown keys (e.g. the retired
+	## "base" gradient block) are dropped.
 	var out := _empty_config()
-	if config.has("base"):
-		out = config.duplicate(true)
-		if not out.get("base") is Dictionary:
-			out["base"] = {"settings": {}}
-		if not out["base"].get("settings") is Dictionary:
-			out["base"]["settings"] = {}
-		if not out.get("effects") is Array:
-			out["effects"] = []
-		if not out.get("overlays") is Array:
-			out["overlays"] = []
-		return out
-
-	var effect_id: String = config.get("effect_id", "none")
-	var settings = config.get("settings", {})
-	if not settings is Dictionary:
-		settings = {}
-
-	if effect_id == "none":
-		return out
-
-	var converted := _convert_legacy_settings(effect_id, settings)
-	if not converted.base_settings.is_empty():
-		out["base"]["settings"] = converted.base_settings
-	if effect_id != "gradient" and EffectRegistry.background_effect_exists(effect_id):
-		out["effects"] = [{"effect_id": effect_id, "settings": converted.effect_settings}]
-
-	# Convert legacy light/dark variants (they held same-shape settings dicts)
-	for mode_key in [EffectThemeAdapter.LIGHT_CACHE_KEY, EffectThemeAdapter.DARK_CACHE_KEY]:
-		var variant = config.get(mode_key)
-		if not variant is Dictionary:
-			continue
-		var variant_converted := _convert_legacy_settings(effect_id, variant)
-		if not variant_converted.base_settings.is_empty():
-			out["base"][mode_key] = variant_converted.base_settings
-		if out["effects"].size() > 0 and not variant_converted.effect_settings.is_empty():
-			out["effects"][0][mode_key] = variant_converted.effect_settings
-
+	if config.get("effects") is Array:
+		out["effects"] = config["effects"].duplicate(true)
+	if config.get("overlays") is Array:
+		out["overlays"] = config["overlays"].duplicate(true)
 	return out
 
 func _apply_background_state(full_rebuild: bool) -> void:
@@ -205,7 +107,6 @@ func _apply_background_state(full_rebuild: bool) -> void:
 		_build_layers()
 		_build_overlays()
 	else:
-		_apply_base()
 		# Re-zip entries from the fresh config: normalize_config deep-duplicates
 		# on every call, so stored entries would otherwise go stale. The
 		# signature check guarantees identical ids and order, so index-matching
@@ -238,28 +139,15 @@ func _build_base() -> void:
 	_base_rect = ColorRect.new()
 	_base_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_base_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var mat := ShaderMaterial.new()
-	mat.shader = _BASE_SHADER
-	_base_rect.material = mat
 	add_child(_base_rect)
 	move_child(_base_rect, 0)
-	_base_gradient_hash = ""
-	_apply_base()
+	refresh_theme()
 
-func _apply_base() -> void:
-	if not _base_rect:
-		return
-	var base_settings: Dictionary = _config.get("base", {}).get("settings", {})
-	if base_settings.is_empty():
-		base_settings = default_base_settings()
-	var gradient = base_settings.get("gradient")
-	if gradient is Gradient:
-		var key := EffectBase.gradient_content_hash(gradient)
-		if key != _base_gradient_hash:
-			_base_gradient_hash = key
-			_base_rect.material.set_shader_parameter("gradient_texture", EffectBase.get_shared_gradient_texture(gradient))
-	_base_rect.material.set_shader_parameter("gradient_angle", base_settings.get("gradient_angle", 180.0))
-	_base_rect.material.set_shader_parameter("gradient_radial", base_settings.get("gradient_radial", false))
+## Re-applies the M3 base color. ThemeSubManager's tree walk calls this on
+## dark-mode toggles, seed-color changes, and preset switches.
+func refresh_theme() -> void:
+	if _base_rect:
+		_base_rect.color = M3Theme.get_surface_container_low()
 
 func _build_layers() -> void:
 	for entry in _config.get("effects", []):
@@ -342,11 +230,6 @@ func _config_signature(config: Dictionary) -> String:
 		if entry is Dictionary:
 			parts.append(entry.get("effect_id", ""))
 	return ",".join(parts)
-
-# Legacy method for backward compatibility
-func set_background_color(color: Color) -> void:
-	_config["base"]["settings"] = _solid_base_settings(color)
-	_apply_base()
 
 # Get available effect IDs for dropdowns/designers
 static func get_available_effects() -> Array[String]:

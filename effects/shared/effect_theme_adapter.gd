@@ -6,11 +6,11 @@ extends RefCounted
 ## caches the generated counterpart as light_settings / dark_settings.
 ##
 ## Effects opt out with `static func is_theme_adaptive() -> false` on their
-## script (declared on EffectBase, overridden per effect — currently shine).
+## script (declared on EffectBase, overridden per effect — currently shine,
+## glow, and drop shadow).
 ## Locked entries keep identical settings in both modes, never gain mode
 ## caches, and have any existing ones erased on swap and on preset save.
-## Unknown ids (custom shader effects) and id-less holders (the background
-## base gradient) remain adaptive.
+## Unknown ids (custom shader effects) remain adaptive.
 
 const LIGHT_CACHE_KEY := "light_settings"
 const DARK_CACHE_KEY := "dark_settings"
@@ -111,13 +111,8 @@ static func swap_effect_list(config: Dictionary, to_dark: bool) -> Dictionary:
 		out[list_key] = new_list
 	return out
 
-# Layered background configs keep their base gradient in a settings-holder
-# shaped like an effect entry, so swap_settings_mode applies directly.
 static func swap_background_config(config: Dictionary, to_dark: bool) -> Dictionary:
-	var out := swap_effect_list(config, to_dark)
-	if out.has("base") and out["base"] is Dictionary:
-		out["base"] = swap_settings_mode(out["base"], to_dark)
-	return out
+	return swap_effect_list(config, to_dark)
 
 static func on_dark_mode_changed(to_dark: bool) -> void:
 	if not DataManager:
@@ -154,8 +149,6 @@ static func strip_generated_from_config(config: Dictionary) -> Dictionary:
 			else:
 				new_list.append(entry)
 		out[list_key] = new_list
-	if out.has("base") and out["base"] is Dictionary:
-		out["base"] = strip_generated_variants(out["base"])
 	return out
 
 static func strip_generated_variants(holder: Dictionary) -> Dictionary:

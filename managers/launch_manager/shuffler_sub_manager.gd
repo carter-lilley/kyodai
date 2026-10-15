@@ -328,7 +328,7 @@ func start_session(config: Dictionary) -> void:
 		return
 
 	var platforms = config.get("platforms", [])
-	var bag_size = config.get("bag_size", 4)
+	var bag_size = config.get("bag_size", 10)
 	var filters: Dictionary = config.get("filters", {})
 	# Platform balance as a 0-1 fraction (slider percent / 100): 0 = pure
 	# proportional sampling, 1 = equal shares per platform.
@@ -1133,8 +1133,8 @@ func _await_first_ready() -> void:
 
 func _random_round_time() -> float:
 	return randf_range(
-		_config.get("round_time_min", 30.0),
-		_config.get("round_time_max", 120.0)
+		_config.get("round_time_min", 40.0),
+		_config.get("round_time_max", 130.0)
 	)
 
 func _reset_reroll_state() -> void:

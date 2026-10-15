@@ -144,7 +144,6 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 
 # Internal background effect configuration (managed by the Background Designer)
 @export var library_background_config := _preset(SettingsVar.new(Type.DICTIONARY, {
-	"base": {"settings": {}},
 	"effects": [],
 	"overlays": []
 }, State.INTERNAL, "Background Effect Configuration"))

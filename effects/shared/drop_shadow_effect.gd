@@ -7,6 +7,12 @@ static func is_material_shareable() -> bool:
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
+## A shadow is meant to stay dark in both modes; converting its color across
+## dark/light swaps (brightening it in light mode) reads as the effect
+## breaking, so its settings never convert — see EffectThemeAdapter.
+static func is_theme_adaptive() -> bool:
+	return false
+
 const SHADOW_MARGIN_RATIO = 0.05
 
 var _draw_rect: Rect2 = Rect2()

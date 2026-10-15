@@ -68,19 +68,19 @@ values = {
 "hero_height": 0
 },
 "library_background_config": {
-"base": {
+"effects": [{
 "dark_settings": {
-"gradient": SubResource("Gradient_yyatg"),
+"background_gradient": SubResource("Gradient_yyatg"),
 "gradient_angle": 90.0,
 "gradient_radial": false
 },
+"effect_id": "gradient",
 "settings": {
-"gradient": SubResource("Gradient_jpx8s"),
+"background_gradient": SubResource("Gradient_jpx8s"),
 "gradient_angle": 90.0,
 "gradient_radial": false
 }
-},
-"effects": [],
+}],
 "overlays": []
 },
 "library_card_content_alignment": 1,

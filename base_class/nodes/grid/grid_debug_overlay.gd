@@ -25,6 +25,13 @@ var _drawaudit_last_deltas: Dictionary = {}
 func setup(grid: VirtualScrollGridContainer) -> void:
 	_grid = grid
 
+func _enter_tree() -> void:
+	# _exit_tree drops the audit connection and _ready does not re-fire on
+	# reparents, so re-establish it here while debug visuals are up (the
+	# camera only exists when enabled).
+	if _debug_camera and not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
+		RenderingServer.frame_post_draw.connect(_on_frame_post_draw_audit)
+
 func _exit_tree() -> void:
 	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw_audit):
 		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw_audit)

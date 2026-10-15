@@ -201,7 +201,17 @@ func _ready():
 	if not scroll_ended.is_connected(_on_native_scroll_ended):
 		scroll_ended.connect(_on_native_scroll_ended)
 
-	# Connect to viewport's focus changed signal
+	# Connect to viewport's focus changed signal. _enter_tree owns the
+	# reconnect on later tree entries; this covers first-entry timing (the
+	# hub registers itself in its own _ready, which may not have run yet —
+	# hence also the post-frame await above).
+	_connect_focus_signal()
+
+func _enter_tree() -> void:
+	# The hub focus connection is dropped in _exit_tree, and _ready fires only
+	# once per node lifetime — so the reconnect must live here to survive
+	# reparents (nav-layout rebuilds, DS swaps), or follow-focus scrolling
+	# silently dies.
 	_connect_focus_signal()
 
 func _exit_tree():

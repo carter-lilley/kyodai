@@ -14,8 +14,6 @@ extends RefCounted
 
 const SCAN_DIRS := ["res://shaders", "res://addons/m3/shaders"]
 const BACKGROUND_DIR := "res://shaders/background/"
-## Always drawn: LibraryBackground bakes its base layer with this shader.
-const BASE_BACKGROUND_SHADER := BACKGROUND_DIR + "library_background_gradient.gdshader"
 
 ## A render frame this long after kicking a compile means the compile stalled
 ## the render thread; idle a few frames before the next one so stalls can't
@@ -172,10 +170,10 @@ static func _plan_paths(paths: Array[String]) -> Array[String]:
 			out.append(path)
 	return out
 
-## Shader paths the active library background actually draws: the base
-## gradient (always present) plus each configured effect layer's shader.
+## Shader paths the active library background actually draws: each configured
+## effect layer's shader.
 static func _active_background_paths() -> Array[String]:
-	var out: Array[String] = [BASE_BACKGROUND_SHADER]
+	var out: Array[String] = []
 	var config: Dictionary = {}
 	if DataManager:
 		var setting = DataManager.get_setting("library_background_config")
@@ -185,9 +183,6 @@ static func _active_background_paths() -> Array[String]:
 	for entry in config.get("effects", []):
 		if entry is Dictionary:
 			ids.append(str(entry.get("effect_id", "")))
-	if ids.is_empty() and config.has("effect_id"):
-		# Legacy single-effect config shape.
-		ids.append(str(config.get("effect_id", "")))
 	for effect_id in ids:
 		if effect_id.is_empty() or effect_id == "none":
 			continue

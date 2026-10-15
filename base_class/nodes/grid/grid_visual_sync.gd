@@ -48,8 +48,8 @@ func _init(grid: VirtualScrollGridContainer) -> void:
 	_grid = grid
 
 func _ready() -> void:
-	# _ready re-fires on every tree entry (DS reparents, nav rebuilds); the
-	# layer is created once.
+	# One-time setup: the layer persists across tree re-entries (DS reparents,
+	# nav rebuilds).
 	if not layer:
 		layer = Control.new()
 		layer.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -72,9 +72,11 @@ func _ready() -> void:
 		layer.position = Vector2.ZERO
 		layer.size = get_viewport().get_visible_rect().size
 
-	# _exit_tree disconnects and _ready re-runs on every tree entry (DS
-	# reparents, nav rebuilds) — otherwise the stamping loop dies for this
-	# grid instance.
+func _enter_tree() -> void:
+	# _ready fires only once per node lifetime, so the reconnect must live
+	# here: _exit_tree disconnects, and tree re-entries (DS reparents, nav
+	# rebuilds) would otherwise leave the stamping loop dead for this grid
+	# instance.
 	if not RenderingServer.frame_pre_draw.is_connected(_on_frame_pre_draw):
 		RenderingServer.frame_pre_draw.connect(_on_frame_pre_draw)
 
@@ -85,9 +87,12 @@ func _exit_tree() -> void:
 ## Keep the top-level layer pinned to the viewport (called on resize and
 ## display-size changes so the layer never holds a stale viewport rect).
 func resize_to_viewport() -> void:
-	if layer and layer.top_level:
+	# Query the viewport through the grid, not self: during the grid's
+	# _enter_tree (nav-rebuild reparent) _enter_tree fires parent-first, so
+	# this module hasn't re-entered yet and self.get_viewport() is null.
+	if layer and layer.top_level and _grid.is_inside_tree():
 		layer.position = Vector2.ZERO
-		layer.size = get_viewport().get_visible_rect().size
+		layer.size = _grid.get_viewport().get_visible_rect().size
 
 func configure_card(card: Control) -> void:
 	if card.has_method("set_visual_layer"):

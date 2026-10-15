@@ -90,11 +90,11 @@ func _build_content() -> void:
 	_bag_size_slider.min_value = 2
 	_bag_size_slider.max_value = 12
 	_bag_size_slider.step = 1
-	_bag_size_slider.value = 4
+	_bag_size_slider.value = 10
 	_bag_size_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_bag_size_slider)
 	
-	var bag_size_value_label = _create_value_label("4 games")
+	var bag_size_value_label = _create_value_label("10 games")
 	_bag_size_slider.value_changed.connect(func(v): bag_size_value_label.text = str(int(v)) + " games")
 	vbox.add_child(bag_size_value_label)
 	
@@ -114,10 +114,10 @@ func _build_content() -> void:
 	_round_time_min_slider.min_value = 10
 	_round_time_min_slider.max_value = 300
 	_round_time_min_slider.step = 5
-	_round_time_min_slider.value = 30
+	_round_time_min_slider.value = 40
 	_round_time_min_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	min_vbox.add_child(_round_time_min_slider)
-	var min_value_label = _create_value_label("30s")
+	var min_value_label = _create_value_label("40s")
 	_round_time_min_slider.value_changed.connect(func(v): min_value_label.text = str(int(v)) + "s")
 	min_vbox.add_child(min_value_label)
 	time_hbox.add_child(min_vbox)
@@ -130,10 +130,10 @@ func _build_content() -> void:
 	_round_time_max_slider.min_value = 10
 	_round_time_max_slider.max_value = 300
 	_round_time_max_slider.step = 5
-	_round_time_max_slider.value = 120
+	_round_time_max_slider.value = 130
 	_round_time_max_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	max_vbox.add_child(_round_time_max_slider)
-	var max_value_label = _create_value_label("120s")
+	var max_value_label = _create_value_label("130s")
 	_round_time_max_slider.value_changed.connect(func(v): max_value_label.text = str(int(v)) + "s")
 	max_vbox.add_child(max_value_label)
 	time_hbox.add_child(max_vbox)

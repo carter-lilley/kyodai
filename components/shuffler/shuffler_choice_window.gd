@@ -108,10 +108,9 @@ func _ready() -> void:
 
 ## Gradient Flow behind the cards, rendered through the same LibraryBackground
 ## pipeline as the main library. Reuses the player's Gradient Flow settings
-## (and base gradient) from their library background config when present.
+## from their library background config when present.
 func _setup_background() -> void:
 	var config := {
-		"base": {"settings": {}},
 		# Half-speed drift for the fallback; the player's own saved Gradient
 		# Flow settings win when present.
 		"effects": [{"effect_id": "gradient_flow", "settings": {"time_scale": 0.5}}],
@@ -120,9 +119,6 @@ func _setup_background() -> void:
 	var saved = DataManager.get_setting("library_background_config")
 	if saved and saved.value is Dictionary:
 		var lib_config := LibraryBackground.normalize_config(saved.value)
-		var base_settings: Dictionary = lib_config.get("base", {}).get("settings", {})
-		if not base_settings.is_empty():
-			config["base"]["settings"] = base_settings
 		for entry in lib_config.get("effects", []):
 			if entry is Dictionary and entry.get("effect_id", "") == "gradient_flow":
 				config["effects"][0]["settings"] = entry.get("settings", {})

@@ -795,8 +795,8 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
-	# frame_pre_draw (visual stamping) reconnects in _visual_sync's own _ready
-	# on every tree entry (DS reparents, nav rebuilds).
+	# frame_pre_draw (visual stamping) reconnects in _visual_sync's own
+	# _enter_tree on every tree entry (DS reparents, nav rebuilds).
 	# Connect to centralized card settings state (idempotent via is_connected guards)
 	if UIManager and UIManager.card_settings_state:
 		var state = UIManager.card_settings_state

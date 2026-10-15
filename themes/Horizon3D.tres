@@ -73,14 +73,14 @@ values = {
 "card_media_aspect_ratio": 3,
 "dark_mode": false,
 "library_background_config": {
-"base": {
+"effects": [{
+"effect_id": "gradient",
 "settings": {
-"gradient": SubResource("Gradient_vktvg"),
+"background_gradient": SubResource("Gradient_vktvg"),
 "gradient_angle": 90.0,
 "gradient_radial": false
 }
-},
-"effects": [],
+}],
 "overlays": []
 },
 "library_card_content_alignment": 0,

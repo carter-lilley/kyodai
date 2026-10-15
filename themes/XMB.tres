@@ -49,14 +49,14 @@ values = {
 "hero_height": 0
 },
 "library_background_config": {
-"base": {
+"effects": [{
+"effect_id": "gradient",
 "settings": {
-"gradient": SubResource("Gradient_basebg"),
+"background_gradient": SubResource("Gradient_basebg"),
 "gradient_angle": 180.0,
 "gradient_radial": false
 }
-},
-"effects": [{
+}, {
 "effect_id": "xmb_classic",
 "settings": {
 "frequency": 4.3,

@@ -1,14 +1,13 @@
 class_name BackgroundDesignerView
 extends Control
 
-## Background Designer: base gradient + stackable background effect layers +
-## standard-effect overlays, with a live preview pane.
+## Background Designer: stackable background effect layers + standard-effect
+## overlays over the M3 surface base color, with a live preview pane.
 
 var _config: Dictionary = {}
 var _config_loaded: bool = false
 var _suppress_config_signal: bool = false
 
-var _base_menu: SettingsMenu
 var _effects_designer: EffectDesignerUI
 var _overlay_designer: EffectDesignerUI
 var _preview_background: LibraryBackground
@@ -69,11 +68,6 @@ func _setup_ui():
 	left_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	scroll.add_child(left_vbox)
 
-	# Base gradient (bottom of the stack)
-	_base_menu = SettingsMenu.new()
-	left_vbox.add_child(_base_menu)
-	_rebuild_base_menu()
-
 	# Stackable background effect layers
 	_effects_designer = EffectDesignerUI.new()
 	_effects_designer.use_internal_scroll = false
@@ -103,37 +97,6 @@ func _setup_ui():
 	right_container.add_child(library_bg)
 	_preview_background = library_bg
 
-func _base_schema() -> Array[SettingsVar]:
-	var schema: Array[SettingsVar] = []
-	var Type = SettingsVar.SettingType
-	var State = SettingsVar.SettingState
-
-	var base_settings: Dictionary = _config.get("base", {}).get("settings", {})
-	if base_settings.is_empty():
-		base_settings = LibraryBackground.default_base_settings()
-
-	var gradient_var = SettingsVar.new(Type.GRADIENT, base_settings.get("gradient"), State.ENABLED, "Base Gradient")
-	gradient_var.property_name = "gradient"
-	schema.append(gradient_var)
-
-	var angle_var = SettingsVar.new(Type.ANGLE, base_settings.get("gradient_angle", 180.0), State.ENABLED, "Gradient Angle", "", 0.0, 360.0, 15.0)
-	angle_var.property_name = "gradient_angle"
-	schema.append(angle_var)
-
-	var radial_var = SettingsVar.new(Type.BOOL, base_settings.get("gradient_radial", false), State.ENABLED, "Radial (Vignette)")
-	radial_var.property_name = "gradient_radial"
-	schema.append(radial_var)
-
-	return schema
-
-func _rebuild_base_menu():
-	if not _base_menu:
-		return
-	_base_menu.clear_controls()
-	_base_menu.build_controls_from_settingsvars(_base_schema(), "Base", "image-outline")
-	if not _base_menu.setting_changed.is_connected(_on_base_setting_changed):
-		_base_menu.setting_changed.connect(_on_base_setting_changed)
-
 func _load_current_config():
 	_config_loaded = false
 	if DataManager:
@@ -141,9 +104,8 @@ func _load_current_config():
 		if config_setting and config_setting.value is Dictionary:
 			_config = LibraryBackground.normalize_config(config_setting.value)
 	if _config.is_empty():
-		_config = {"base": {"settings": {}}, "effects": [], "overlays": []}
+		_config = {"effects": [], "overlays": []}
 
-	_rebuild_base_menu()
 	if _effects_designer:
 		_effects_designer.set_config(_config)
 	if _overlay_designer:
@@ -151,14 +113,6 @@ func _load_current_config():
 	_update_preview()
 
 	_config_loaded = true
-
-func _on_base_setting_changed(value: Variant, setting: SettingsVar) -> void:
-	if not _config_loaded:
-		return
-	if not _config.has("base") or not _config["base"] is Dictionary:
-		_config["base"] = {"settings": {}}
-	_config["base"]["settings"][setting.property_name] = value
-	_apply()
 
 func _on_effects_config_changed(config: Dictionary):
 	if not _config_loaded:
