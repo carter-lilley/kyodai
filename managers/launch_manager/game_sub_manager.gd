@@ -1328,7 +1328,16 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if not is_shuffler:
 		_store_file_path(game, final_extract_path)
 		print("[GameManager] RPCS3: Updated game.file_path to: " + final_extract_path)
-	
+
+	# Mark shuffler-managed desktop installs so session cleanup can safely
+	# delete them — they land in the emulator dir, which TEMP_DIR cleanup
+	# never touches. Pre-existing installs get no sentinel and are kept.
+	if is_shuffler and is_desktop:
+		var sentinel_path = final_extract_path + "/.kyodai_shuffler"
+		if not FSM.file_exists(sentinel_path):
+			if not FSM.write_file(sentinel_path, ""):
+				push_warning("[GameManager] RPCS3: Failed to create shuffler sentinel at " + sentinel_path)
+
 	print("[GameManager] RPCS3: Game extracted successfully at: " + final_extract_path)
 	return true
 
@@ -1573,34 +1582,62 @@ func _extract_shadps4_zip(zip_path: String, extract_to: String) -> bool:
 ## Cleans up extracted game files when a game is deleted
 ## Platforms that extract: PS3 (RPCS3), Vita (Vita3K)
 func cleanup_extracted_game_files(game: GameResource) -> void:
-	if not game or game.title_id == "":
+	if not game:
 		return
-	var title_id = game.title_id
+	# Extraction paths are keyed on the active variant's title id.
+	var title_id := game.get_active_title_id()
+	if title_id == "":
+		title_id = game.title_id
+	if title_id == "":
+		return
 	match game.platform_slug:
 		"ps3":
 			var emulator_path = launch_manager.registry.get_emulator_install_path("rpcs3")
 			if emulator_path != "":
 				# Managed emulator dir, not the exe's parent (squashfs-root-safe)
 				var emulator_dir = launch_manager.registry._get_emulator_directory("rpcs3").rstrip("/")
-				var disc_path = emulator_dir + "/games/" + title_id
-				var digital_path = emulator_dir + "/dev_hdd0/game/" + title_id
-				if FSM.dir_exists(disc_path):
-					print("[GameManager] Cleaning up extracted PS3 disc game: " + disc_path)
-					FSM.delete_dir_recursive(disc_path)
-				if FSM.dir_exists(digital_path):
-					print("[GameManager] Cleaning up extracted PS3 digital game: " + digital_path)
-					FSM.delete_dir_recursive(digital_path)
+				for sub_path in ["games", "dev_hdd0/game"]:
+					var ps3_path = emulator_dir + "/" + sub_path + "/" + title_id
+					if FSM.dir_exists(ps3_path):
+						print("[GameManager] Cleaning up extracted PS3 game: " + ps3_path)
+						FSM.delete_dir_recursive(ps3_path)
+			# Android/legacy layouts extract next to the source zip and store
+			# that folder in file_path. The name guard ensures a stale/wrong
+			# file_path can only ever match this game's own extracted folder.
+			if game.file_path != "" and game.file_path.get_file() == title_id and FSM.dir_exists(game.file_path):
+				print("[GameManager] Cleaning up extracted PS3 game folder: " + game.file_path)
+				FSM.delete_dir_recursive(game.file_path)
 		"psvita":
+			# Mirror _prepare_vita3k_game's path resolution: desktop extracts
+			# under the managed emulator dir, Android under the app-data path.
+			# Check both so layout drift never strands an install.
+			var vita_bases: Array[String] = []
 			var emulator_path = launch_manager.registry.get_emulator_install_path("vita3k")
 			if emulator_path != "":
 				# Managed emulator dir, not the exe's parent (squashfs-root-safe)
-				var emulator_dir = launch_manager.registry._get_emulator_directory("vita3k").rstrip("/")
-				var vita_path = emulator_dir + "/ux0/app/" + title_id
-				if FSM.dir_exists(vita_path):
-					print("[GameManager] Cleaning up extracted Vita game: " + vita_path)
-					FSM.delete_dir_recursive(vita_path)
+				vita_bases.append(launch_manager.registry._get_emulator_directory("vita3k").rstrip("/"))
+			var app_data = launch_manager.registry.get_app_data_path("vita3k")
+			if app_data != "":
+				vita_bases.append(app_data.rstrip("/") + "/vita")
+			for base in vita_bases:
+				# ux0/app holds the extracted game; ux0/license holds the rif
+				# moved there by _ensure_vita3k_license (derived content).
+				for sub_path in ["ux0/app", "ux0/license"]:
+					var vita_path = base + "/" + sub_path + "/" + title_id
+					if FSM.dir_exists(vita_path):
+						print("[GameManager] Cleaning up extracted Vita game data: " + vita_path)
+						FSM.delete_dir_recursive(vita_path)
 		"xbox360":
 			# XBLA archives extract next to the source archive; file_path points at the folder
 			if game.file_path != "" and FSM.dir_exists(game.file_path):
 				print("[GameManager] Cleaning up extracted Xbox 360 game: " + game.file_path)
 				FSM.delete_dir_recursive(game.file_path)
+			# The extraction path is deterministic (<roms>/<platform>/<title_id>):
+			# check it directly so shuffler-created extractions (which never
+			# rewrite file_path) and legacy folders don't survive the delete.
+			var root_folder = DataManager.get_setting("games_root_folder")
+			var root_path: String = root_folder.value if root_folder else "user://roms/"
+			var extracted_path = root_path + "/" + game.platform_slug + "/" + title_id
+			if extracted_path != game.file_path and FSM.dir_exists(extracted_path):
+				print("[GameManager] Cleaning up extracted Xbox 360 game folder: " + extracted_path)
+				FSM.delete_dir_recursive(extracted_path)

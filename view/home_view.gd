@@ -427,8 +427,14 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				"gamenative_indices": result_gamenative_indices
 			},
 		func(result):
-			# null when the queue dropped the task (overflow).
-			if result == null or not is_instance_valid(games_grid):
+			if not is_instance_valid(games_grid):
+				return
+			# null when the queue dropped the task (overflow): still notify the
+			# grid with an empty result so the pending ledger entry is erased —
+			# otherwise the indices stay "pending" forever and are never retried.
+			if result == null:
+				var dropped: Array[GameResource] = []
+				games_grid.on_items_loaded(dropped, offset, is_preload)
 				return
 			var callback_start_us := Time.get_ticks_usec()
 			var games = result["games"] as Array[GameResource]

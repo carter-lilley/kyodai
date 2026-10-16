@@ -538,20 +538,24 @@ func record_variant_download(group_ids: Array, downloaded_id: int, file_path: St
 ## from disk are cleared first - otherwise their stale stamps would re-fill
 ## the cache and keep the group on Home after the delete. Callback receives
 ## {"success": bool, "master_id": int, "cache": Array[int]}.
-func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callable = Callable(), reconcile_root: String = "") -> void:
+func record_variants_deleted(group_ids: Array, deleted_ids: Array, callback: Callable = Callable(), reconcile_root: String = "") -> void:
 	if not _is_db_ready:
 		if callback.is_valid():
 			callback.call({"success": false, "master_id": 0, "cache": [] as Array[int]})
 		return
 	invalidate_downloaded_games_count_cache()
-	if not group_ids.has(deleted_id):
-		group_ids.append(deleted_id)
+	for deleted_id in deleted_ids:
+		if not group_ids.has(deleted_id):
+			group_ids.append(deleted_id)
 	MemorySubManager.queue_db_task(
 		func():
 			_db_lock()
-			var ok = query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [deleted_id])
+			var ok := true
+			for deleted_id in deleted_ids:
+				if not query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [deleted_id]):
+					ok = false
 			if reconcile_root != "":
-				_clear_missing_group_files_unlocked(group_ids, deleted_id, reconcile_root)
+				_clear_missing_group_files_unlocked(group_ids, deleted_ids, reconcile_root)
 			var info := refresh_group_download_cache_unlocked(group_ids)
 			_db_unlock()
 			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
@@ -567,10 +571,10 @@ func record_variant_deleted(group_ids: Array, deleted_id: int, callback: Callabl
 ## Clears group member rows still flagged downloaded whose files are gone from
 ## disk. Mirrors the negative pass of _scan_and_update_downloaded_games,
 ## scoped to one sibling group. DB thread, lock held by caller.
-func _clear_missing_group_files_unlocked(group_ids: Array, exclude_id: int, root_folder: String) -> void:
+func _clear_missing_group_files_unlocked(group_ids: Array, exclude_ids: Array, root_folder: String) -> void:
 	var ids: Array = []
 	for id in group_ids:
-		if int(id) != 0 and int(id) != exclude_id:
+		if int(id) != 0 and not exclude_ids.has(int(id)):
 			ids.append(int(id))
 	if ids.is_empty():
 		return

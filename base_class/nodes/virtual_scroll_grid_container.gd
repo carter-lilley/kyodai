@@ -566,8 +566,15 @@ func _create_data_cache() -> GridDataCache:
 ## flooding the DB worker with windows nobody is looking at.
 const BUFFER_LOAD_VELOCITY_STRIDES: float = 2.0
 const BUFFER_LOAD_IDLE_FLUSH_MS: int = 150
+## Idle missing-data sweep cooldown. In-flight requests can be dropped without
+## a retry (pruned by a window jump while the DB task was queued, or the task
+## queue overflowing), and steady-state window passes take the light path
+## which skips data requests — so without a sweep the hole never heals. The
+## cooldown keeps a genuinely unfetchable index from hammering the DB.
+const MISSING_DATA_SWEEP_MS: int = 500
 var _deferred_data_indices: Dictionary = {}  # idx -> true
 var _last_scroll_active_ms: int = 0          # last frame with nonzero velocity
+var _last_missing_data_sweep_ms: int = 0
 
 func _configure_view_mode() -> void:
 	"""Update scroll/flow container flags for the current view_mode/grid_vertical without rebuilding cards."""
@@ -1010,6 +1017,10 @@ func _process(_delta: float):
 
 	# Buffer-zone data loads deferred during fast scroll flush here on settle.
 	_flush_deferred_data_loads()
+
+	# Safety net: re-find missing card data at idle (dropped requests leave
+	# no pending entry, and steady-state passes never re-request).
+	_sweep_missing_data_at_idle()
 
 	# Top up the card pool a few per frame after zoom-out/resize grew the layout.
 	_process_pool_growth()
@@ -2777,12 +2788,10 @@ func _request_missing_data():
 			var limit = batch.size()
 			_data.request(offset, limit)
 
-## Flush buffer-zone data loads deferred during fast scroll. Runs from
-## _process: drains when the scroll velocity drops below the threshold OR the
-## viewport has been idle BUFFER_LOAD_IDLE_FLUSH_MS, whichever first.
-func _flush_deferred_data_loads() -> void:
-	if _deferred_data_indices.is_empty():
-		return
+## True when the scroll is settled enough for deferred/best-effort data work:
+## velocity below the threshold OR the viewport idle BUFFER_LOAD_IDLE_FLUSH_MS,
+## whichever first. Updates _last_scroll_active_ms as a side effect.
+func _scroll_is_settled() -> bool:
 	var velocity := absf(_get_scroll_velocity())
 	var now_ms := Time.get_ticks_msec()
 	if velocity > 1.0:
@@ -2790,7 +2799,15 @@ func _flush_deferred_data_loads() -> void:
 	var stride := _get_normal_stride()
 	var slow := velocity <= maxf(stride, 1.0) * BUFFER_LOAD_VELOCITY_STRIDES
 	var idle := _last_scroll_active_ms == 0 or now_ms - _last_scroll_active_ms >= BUFFER_LOAD_IDLE_FLUSH_MS
-	if not slow and not idle:
+	return slow or idle
+
+## Flush buffer-zone data loads deferred during fast scroll. Runs from
+## _process: drains when the scroll velocity drops below the threshold OR the
+## viewport has been idle BUFFER_LOAD_IDLE_FLUSH_MS, whichever first.
+func _flush_deferred_data_loads() -> void:
+	if _deferred_data_indices.is_empty():
+		return
+	if not _scroll_is_settled():
 		return
 	var indices: Array = _deferred_data_indices.keys()
 	_deferred_data_indices.clear()
@@ -2814,6 +2831,24 @@ func _flush_deferred_data_loads() -> void:
 			limit += 1
 		_data.request(offset, limit)
 		i += limit
+
+## Safety net for stranded skeletons. In-flight data requests can be dropped
+## without a retry — pruned by a window jump while the DB task was still
+## queued (its result then lands empty via is_load_pending), or the task
+## queue overflowing — and steady-state window passes take the light path
+## which skips data requests, so the hole would never heal at idle. Re-run
+## the missing-data sweep when the scroll is settled, on a cooldown so a
+## genuinely unfetchable index can't re-query the DB every frame.
+func _sweep_missing_data_at_idle() -> void:
+	if _active_cards.is_empty():
+		return
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _last_missing_data_sweep_ms < MISSING_DATA_SWEEP_MS:
+		return
+	if not _scroll_is_settled():
+		return
+	_last_missing_data_sweep_ms = now_ms
+	_request_missing_data()
 
 ## True when idx is within one buffer-window width of the current buffer
 ## window. Stale prefetch/decode completions use it to drop work for content

@@ -386,7 +386,11 @@ func set_game_favorite(game: GameResource, favorite: bool, notify: bool = true, 
 
 func delete_game_download(game: GameResource, callback: Callable = Callable(), force_db_update: bool = false) -> bool:
 	"""Delete a downloaded game file and update the database.
-	If force_db_update is true and the file doesn't exist, the DB entry will be updated anyway."""
+	Multi-disc games delete as a unit — every downloaded disc plus the
+	generated m3u — mirroring the download side, which fetches every disc.
+	Other sibling groups (regional variants etc.) delete only the active
+	variant. If force_db_update is true and files don't exist, the DB
+	entries are cleared anyway."""
 	if not database.is_database_ready() or not game:
 		push_error("[DataManager] Cannot delete: DB not ready or game is null")
 		if callback.is_valid():
@@ -396,79 +400,91 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	# Deleting a download changes the downloaded-games count.
 	database.invalidate_downloaded_games_count_cache()
 
-	# Get the file path to delete - construct it from components (like launch_manager does)
-	var active_id = game.get_active_game_id()
-	var active_file_name = ""
-
-	if active_id == game.romm_id:
-		active_file_name = game.file_name
-	else:
-		# Get sibling file name
-		for sibling in game.siblings:
-			if sibling.get("id", 0) == active_id:
-				active_file_name = sibling.get("file_name", "")
-				break
-
-	if active_file_name == "":
-		push_error("[DataManager] Cannot delete: empty file name")
-		if callback.is_valid():
-			callback.call(false)
-		return false
-
-	# Construct the full path (same as launch_manager.gd line 1162)
 	var root_folder = get_setting("games_root_folder")
-	var root_path = root_folder.value if root_folder else "user://roms/"
-	var abs_path = root_path + "/" + game.platform_slug + "/" + active_file_name
+	var root_path: String = root_folder.value if root_folder else "user://roms/"
 
-	# Check if file exists
-	var file_exists = FSM.file_exists(abs_path)
-
-	if not file_exists:
-		if force_db_update:
-			print("[DataManager] File not found but force_db_update=true, removing DB entry for: " + game.title)
-		else:
-			push_error("[DataManager] File does not exist: " + abs_path)
-			if callback.is_valid():
-				callback.call(false)
-			return false
-
-	# Attempt to delete the file (only if it exists)
-	var file_deleted = not file_exists  # If file doesn't exist, consider it "deleted" when forcing
-	var error_msg = ""
-
-	if file_exists:
-		if FSM.delete_file(abs_path):
-			file_deleted = true
-		else:
-			error_msg = "SystemManager.filesystem.delete_file failed"
-
-		# If file deletion failed, don't update the database (unless forcing)
-		if not file_deleted and not force_db_update:
-			push_error("[DataManager] Failed to delete file: " + abs_path + " | " + error_msg)
-			if callback.is_valid():
-				callback.call(false)
-			return false
-
-		# Verify file was actually deleted
-		var file_still_exists = FSM.file_exists(abs_path)
-
-		if file_still_exists and not force_db_update:
-			push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
-			if callback.is_valid():
-				callback.call(false)
-			return false
-
-	# Update game state (after successful deletion or forced removal).
-	# Per-row truth: clear only the deleted variant's own row; the group's
-	# download cache is rebuilt from the remaining member rows. Sibling files
-	# still on disk keep their downloaded state (they weren't deleted).
+	# Sibling group (master + all sibling rows) for the group cache rebuild.
 	var group_ids: Array = [game.romm_id]
 	for sibling in game.siblings:
 		var sid := int(sibling.get("id", 0))
 		if sid != 0 and sid != game.romm_id and not group_ids.has(sid):
 			group_ids.append(sid)
 
-	print("[DataManager] delete_game_download: clearing variant " + str(active_id) + " of game " + game.title + " (romm_id=" + str(game.romm_id) + ")")
+	# Which rows/files to delete. Multi-disc: all downloaded discs (deleting
+	# one disc of a set leaves a broken half-install). Otherwise: the active
+	# variant only, so regional siblings keep their downloaded state.
+	var delete_ids: Array[int] = []
+	var delete_file_names: Array[String] = []
+	if game.is_multi_disc():
+		for entry in game.get_disc_entries():
+			if not entry.get("downloaded", false):
+				continue
+			var entry_id := int(entry.get("id", 0))
+			var entry_file := str(entry.get("file_name", ""))
+			if entry_id == 0 or entry_file == "":
+				continue
+			delete_ids.append(entry_id)
+			delete_file_names.append(entry_file)
+	else:
+		var active_id = game.get_active_game_id()
+		var active_file_name = ""
+		if active_id == game.romm_id:
+			active_file_name = game.file_name
+		else:
+			# Get sibling file name
+			for sibling in game.siblings:
+				if sibling.get("id", 0) == active_id:
+					active_file_name = sibling.get("file_name", "")
+					break
+		if active_file_name != "":
+			delete_ids.append(active_id)
+			delete_file_names.append(active_file_name)
+
+	if delete_ids.is_empty():
+		push_error("[DataManager] Cannot delete: empty file name")
+		if callback.is_valid():
+			callback.call(false)
+		return false
+
+	# Best-effort file deletion: a missing file never bails the operation
+	# (it may be a leftover from a previous partial delete), and inside a
+	# multi-disc set one stubborn file shouldn't strand the rest.
+	var any_existed := false
+	var any_failed := false
+	for del_file_name in delete_file_names:
+		var abs_path = root_path + "/" + game.platform_slug + "/" + del_file_name
+		if not FSM.file_exists(abs_path):
+			continue
+		any_existed = true
+		if not FSM.delete_file(abs_path):
+			any_failed = true
+			push_error("[DataManager] Failed to delete file: " + abs_path)
+		elif FSM.file_exists(abs_path):
+			any_failed = true
+			push_error("[DataManager] File still exists after deletion attempt: " + abs_path)
+
+	if not any_existed and not force_db_update:
+		push_error("[DataManager] No files found on disk for: " + game.title)
+		if callback.is_valid():
+			callback.call(false)
+		return false
+
+	if any_failed and not force_db_update:
+		# Leave the DB untouched so the rows still match what's on disk; the
+		# force dialog lets the user clear the entries anyway.
+		if callback.is_valid():
+			callback.call(false)
+		return false
+
+	# The generated playlist goes with the discs (regenerable cruft, so a
+	# failed delete here only logs).
+	if game.is_multi_disc() and game.m3u_path != "":
+		if FSM.file_exists(game.m3u_path) and not FSM.delete_file(game.m3u_path):
+			push_error("[DataManager] Failed to delete m3u: " + game.m3u_path)
+		game.m3u_path = ""
+		update_game_m3u_path(game.romm_id, "")
+
+	print("[DataManager] delete_game_download: clearing variants " + str(delete_ids) + " of game " + game.title + " (romm_id=" + str(game.romm_id) + ")")
 
 	# Clean up extracted game files for platforms that extract during launch
 	LaunchManager.cleanup_extracted_game_files(game)
@@ -477,17 +493,19 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	# reconcile_root lets the DB clear group siblings whose files are also
 	# gone - otherwise a stale sibling stamp re-fills the group cache and the
 	# entry survives the delete on Home.
-	database.record_variant_deleted(group_ids, active_id, func(result: Dictionary):
+	database.record_variants_deleted(group_ids, delete_ids, func(result: Dictionary):
 		var success: bool = result.get("success", false)
 		print("[DataManager] delete_game_download: DB update result for " + game.title + " = " + str(success))
 		if success:
-			if active_id == game.romm_id:
+			if delete_ids.has(game.romm_id):
 				game.has_local_copy = false
 				game.file_path = ""
 			if int(result.get("master_id", 0)) == game.romm_id:
 				game.downloaded_sibling_ids = result.get("cache", [])
-			elif active_id != game.romm_id:
-				game.downloaded_sibling_ids.erase(active_id)
+			else:
+				for deleted_id in delete_ids:
+					if deleted_id != game.romm_id:
+						game.downloaded_sibling_ids.erase(deleted_id)
 			game_updated.emit(game)
 		if callback.is_valid():
 			callback.call(success)

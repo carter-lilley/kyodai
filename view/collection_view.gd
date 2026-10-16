@@ -247,8 +247,14 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 				var games = DataManager.get_games_paginated(offset, limit, "title", true, platform_slug)
 				return games,
 			func(games):
-				# null when the queue dropped the task (overflow).
-				if games == null or not is_instance_valid(games_grid):
+				if not is_instance_valid(games_grid):
+					return
+				# null when the queue dropped the task (overflow): still notify
+				# the grid with an empty result so the pending ledger entry is
+				# erased — otherwise indices stay "pending" forever, unretried.
+				if games == null:
+					var dropped: Array[GameResource] = []
+					games_grid.on_items_loaded(dropped, offset, is_preload)
 					return
 				games_grid.on_items_loaded(games, offset, is_preload)
 		)
@@ -263,8 +269,14 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 			var games = DataManager.get_games_for_collection_paginated(collection_id, offset, limit)
 			return games,
 		func(games):
-			# null when the queue dropped the task (overflow).
-			if games == null or not is_instance_valid(games_grid):
+			if not is_instance_valid(games_grid):
+				return
+			# null when the queue dropped the task (overflow): still notify the
+			# grid with an empty result so the pending ledger entry is erased —
+			# otherwise the indices stay "pending" forever and are never retried.
+			if games == null:
+				var dropped: Array[GameResource] = []
+				games_grid.on_items_loaded(dropped, offset, is_preload)
 				return
 			games_grid.on_items_loaded(games, offset, is_preload)
 	)

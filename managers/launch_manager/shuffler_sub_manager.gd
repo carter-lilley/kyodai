@@ -97,6 +97,7 @@ var _session_log_path: String = "user://logs/session.log"
 var _session_log_start_offset: int = -1
 var _download_item_ids: Array[String] = []
 var _shuffler_vita_apps: Array[Dictionary] = []
+var _shuffler_ps3_games: Array[Dictionary] = []
 var _maximize_token: int = 0  # incremented whenever the foreground game changes; in-flight maximize coroutines check it and bail
 var _window_backend: int = WindowBackend.NONE
 
@@ -370,6 +371,7 @@ func start_session(config: Dictionary) -> void:
 	_pending_switch_index = -1
 	_reset_download_tracking()
 	_shuffler_vita_apps.clear()
+	_shuffler_ps3_games.clear()
 	_games_until_choice = randi_range(CHOICE_MIN_SHUFFLES, CHOICE_MAX_SHUFFLES)
 	_debit_choice_on_commit = false
 	_seen_entries.clear()
@@ -444,6 +446,7 @@ func stop_session() -> void:
 	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
 
 	_cleanup_vita3k_shuffler_apps()
+	_cleanup_rpcs3_shuffler_games()
 
 	if _controls_window and is_instance_valid(_controls_window):
 		_controls_window.queue_free()
@@ -1556,7 +1559,8 @@ func _launch_game(entry: Dictionary) -> void:
 				if install_path != "":
 					# Managed emulator dir, not the exe's parent: extracted
 					# AppImages nest the exe inside the update-wiped squashfs-root/.
-					var ux0_app_path = LaunchManager._get_emulator_directory(emulator_id).rstrip("/") + "/ux0/app/" + title_id
+					var vita_emu_dir = LaunchManager._get_emulator_directory(emulator_id).rstrip("/")
+					var ux0_app_path = vita_emu_dir + "/ux0/app/" + title_id
 					entry.vita_title_id = title_id
 					entry.vita_app_path = ux0_app_path
 					var already_tracked := false
@@ -1567,11 +1571,40 @@ func _launch_game(entry: Dictionary) -> void:
 					if not already_tracked:
 						_shuffler_vita_apps.append({
 							"title_id": title_id,
-							"ux0_app_path": ux0_app_path
+							"ux0_app_path": ux0_app_path,
+							# The license rif _ensure_vita3k_license installs
+							# alongside the app; cleaned with it.
+							"ux0_license_path": vita_emu_dir + "/ux0/license/" + title_id
 						})
 						if DEBUG_LOG: print("[ShufflerSubManager] Tracked Vita3K shuffler app for cleanup: " + ux0_app_path)
 			else:
 				push_warning("[ShufflerSubManager] Vita3K game launched but no TitleID was extracted: " + game.title)
+
+		if emulator_id.begins_with("rpcs3"):
+			var ps3_title_id = game.get_active_title_id()
+			if ps3_title_id != "":
+				var ps3_install_path = LaunchManager.get_emulator_install_path(emulator_id)
+				if ps3_install_path != "":
+					# Managed emulator dir, not the exe's parent (AppImage-safe).
+					# Desktop shuffler launches extract straight into it; both
+					# candidate layouts are candidates for session cleanup.
+					var rpcs3_emu_dir = LaunchManager._get_emulator_directory(emulator_id).rstrip("/")
+					var already_tracked_ps3 := false
+					for tracked in _shuffler_ps3_games:
+						if tracked.get("title_id", "") == ps3_title_id:
+							already_tracked_ps3 = true
+							break
+					if not already_tracked_ps3:
+						_shuffler_ps3_games.append({
+							"title_id": ps3_title_id,
+							"paths": [
+								rpcs3_emu_dir + "/games/" + ps3_title_id,
+								rpcs3_emu_dir + "/dev_hdd0/game/" + ps3_title_id,
+							]
+						})
+						if DEBUG_LOG: print("[ShufflerSubManager] Tracked RPCS3 shuffler game for cleanup: " + ps3_title_id)
+			else:
+				push_warning("[ShufflerSubManager] RPCS3 game launched but no TitleID was extracted: " + game.title)
 
 	LaunchManager.launch_shuffler_game(game, entry.temp_path, on_pid_ready)
 
@@ -2719,7 +2752,33 @@ func _cleanup_vita3k_shuffler_apps() -> void:
 		else:
 			print("[ShufflerSubManager] Vita3K shuffler app folder already gone: " + app_path)
 
+		# Sentinel passed, so this install is shuffler-created: the license
+		# rif folder installed alongside it is derived content and goes too.
+		var license_path = entry.get("ux0_license_path", "") as String
+		if license_path != "" and FSM.dir_exists(license_path):
+			print("[ShufflerSubManager] Cleaning up Vita3K shuffler license folder: " + license_path)
+			FSM.delete_dir_recursive(license_path)
+
 	_shuffler_vita_apps.clear()
+
+## PS3 counterpart of the Vita cleanup: desktop shuffler launches extract
+## straight into the RPCS3 emulator dir (games/ or dev_hdd0/game/), which
+## TEMP_DIR cleanup never reaches. Sentinel-guarded like the Vita path so a
+## pre-existing (non-shuffler) install is never deleted.
+func _cleanup_rpcs3_shuffler_games() -> void:
+	for entry in _shuffler_ps3_games:
+		for raw_path in entry.get("paths", []):
+			var game_path := str(raw_path)
+			if game_path == "" or not FSM.dir_exists(game_path):
+				continue
+			var sentinel_path = game_path + "/.kyodai_shuffler"
+			if not FSM.file_exists(sentinel_path):
+				push_warning("[ShufflerSubManager] Refusing to clean up RPCS3 game folder without sentinel: " + game_path)
+				continue
+			print("[ShufflerSubManager] Cleaning up RPCS3 shuffler game folder: " + game_path)
+			FSM.delete_dir_recursive(game_path)
+
+	_shuffler_ps3_games.clear()
 
 func _cleanup_temp_files() -> void:
 	if DirAccess.dir_exists_absolute(TEMP_DIR):
