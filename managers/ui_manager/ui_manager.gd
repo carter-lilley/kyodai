@@ -40,11 +40,11 @@ var _content_margin: MarginContainer = null
 var _status_bar: StatusBar = null
 # Desktop windowed chrome: the custom title bar and the invisible edge resize
 # grips live on _chrome_layer (CanvasLayer, OverlayLayers.CHROME) so they render
-# above every overlay and stay reachable; _title_bar_spacer holds the title
-# bar's layout space in the status layout below it. Null on Android.
+# above every overlay and stay reachable. The layout below them is offset via
+# NavigationSubManager._apply_chrome_offset() (InnerLayout.offset_top). Null
+# on Android.
 var _chrome_layer: CanvasLayer = null
 var _title_bar: PanelContainer = null
-var _title_bar_spacer: Control = null
 var _window_resize_grips: Control = null
 
 # Cached on-screen keyboard reference (survives reparenting in dual-screen mode)
@@ -157,9 +157,10 @@ func initialize(
 	# dialogs, menus, and the launch/view transitions can never cover or block
 	# the window controls. It is parented to Main (sibling of UILayer), NOT
 	# RootLayout: DS-mode reparenting moves RootLayout into a SubViewport, and
-	# window chrome belongs to the root window. The spacer row keeps the title
-	# bar's layout space in the status layout, synced to its visibility (the
-	# bar hides itself when the chrome is inactive, e.g. fullscreen).
+	# window chrome belongs to the root window. The layout below it is offset
+	# by the strip height via NavigationSubManager._apply_chrome_offset()
+	# (InnerLayout.offset_top), which covers the nav rail/bar and the content
+	# alike; the bar hides itself when the chrome is inactive (fullscreen).
 	if SystemManager and SystemManager.display and SystemManager.display.supports_window_chrome():
 		_chrome_layer = CanvasLayer.new()
 		_chrome_layer.name = "ChromeLayer"
@@ -173,19 +174,12 @@ func initialize(
 		_chrome_layer.add_child(_title_bar)  # _ready() anchors the strip and syncs visibility
 		if not _title_bar.visibility_changed.is_connected(_on_title_bar_visibility_changed):
 			_title_bar.visibility_changed.connect(_on_title_bar_visibility_changed)
-		_title_bar_spacer = Control.new()
-		_title_bar_spacer.name = "TitleBarSpacer"
-		_title_bar_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_title_bar_spacer.custom_minimum_size = Vector2(0, M3Units.dpi(TITLE_BAR_SCRIPT.BAR_HEIGHT_DP))
-		_title_bar_spacer.visible = _title_bar.visible
 	_status_bar = StatusBar.new()
 	var status_layout := VBoxContainer.new()
 	status_layout.set_anchors_preset(Control.PRESET_FULL_RECT)
 	status_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	status_layout.add_theme_constant_override("separation", 0)
-	if _title_bar_spacer:
-		status_layout.add_child(_title_bar_spacer)
 	status_layout.add_child(_status_bar)
 	status_layout.add_child(content_margin)
 
@@ -234,6 +228,12 @@ func initialize(
 	phase_start_us = Time.get_ticks_usec()
 	dual_screen.setup(_root_control)
 	print("[UIManager] dual_screen.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+
+	# Apply the window-chrome top offset to the inner layout. The first nav
+	# rebuild (inside navigation.setup above) ran before overlay.setup()
+	# registered the inset resolver, so it read 0; re-assert now that every
+	# piece is in place.
+	navigation._apply_chrome_offset()
 
 	# Reconnect dual-screen detection signal and re-evaluate current state.
 	if SystemManager.display:
@@ -328,10 +328,9 @@ func _on_ui_scale_changed(_new_scale: float) -> void:
 	"""Live-apply a UI scale change: rescale baked sizes, rebuild nav + views."""
 	if _content_margin:
 		_apply_content_margin(_content_margin)
-	# The chrome strip's pixel height scales with the UI; re-bake the spacer
-	# (the title bar itself re-bakes in the refresh walk via refresh_scale).
-	if _title_bar_spacer and is_instance_valid(_title_bar_spacer):
-		_title_bar_spacer.custom_minimum_size = Vector2(0, M3Units.dpi(TITLE_BAR_SCRIPT.BAR_HEIGHT_DP))
+	# The chrome strip's pixel height scales with the UI; the nav rebuild below
+	# re-asserts the inner layout's top offset after the refresh walk has
+	# re-baked the title bar's height (see _rebuild_nav_and_layout).
 	theme._do_refresh_scale()
 	navigation._rebuild_nav_and_layout()
 	view._rebuild_views("ui_scale")
@@ -362,13 +361,12 @@ func _create_window_resize_grips() -> void:
 
 
 func _on_title_bar_visibility_changed() -> void:
-	"""Mirror the title bar's visibility into its layout spacer, then re-stamp
-	open overlays against the new chrome inset. The bar toggles on chrome
+	"""Re-offset the layout and re-stamp open overlays when the chrome strip
+	appears/disappears (windowed <-> fullscreen). The bar toggles on chrome
 	changes, window resizes, and focus-in (shuffler sessions restore window
 	modes directly), so this catches every path."""
-	if _title_bar_spacer and is_instance_valid(_title_bar_spacer) \
-			and _title_bar and is_instance_valid(_title_bar):
-		_title_bar_spacer.visible = _title_bar.visible
+	if navigation:
+		navigation._apply_chrome_offset()
 	M3Overlay.notify_chrome_inset_changed()
 
 
@@ -1085,7 +1083,6 @@ func _exit_tree() -> void:
 	_content_wrapper = null
 	_chrome_layer = null
 	_title_bar = null
-	_title_bar_spacer = null
 	_window_resize_grips = null
 
 	# Release static caches that hold resources.

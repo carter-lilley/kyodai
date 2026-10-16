@@ -46,6 +46,12 @@ func _enter_tree():
 	# defers its expensive pool creation and layout until Main settles it once.
 	VirtualScrollGridContainer.startup_layout_suppressed = true
 
+	# Boot at full frame throughput: startup is a long chain of
+	# await-process_frame stages, and low-processor mode's idle sleep taxes
+	# every one of them. SystemManager.display.reapply_power_mode() restores
+	# the configured pacing once the home grid has settled.
+	OS.low_processor_usage_mode = false
+
 	# Kick the settings dialog script load immediately: its deep preload chain
 	# takes ~500ms on the loader thread, so starting here (instead of in
 	# overlay.setup) lets it finish before the pre-create consumes it.
@@ -463,26 +469,25 @@ func _prewarm_shader_pipelines() -> void:
 		return
 	ShaderPrewarmer.prewarm(get_tree())
 
-func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, available_size: Vector2, settle_start_us: int, attempts: int = 0) -> void:
+func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, available_size: Vector2, settle_start_us: int) -> void:
 	"""Defer the pool build + startup settle until the grid's total count is
 	known (it arrives asynchronously when the DB cache is cold at startup)."""
 	if not is_instance_valid(grid):
 		return
 	var source_total: int = grid.get_visible_range().get("source_total", 0)
-	# Empty-library case: the view's count load has resolved with 0 items —
-	# settle empty rather than polling forever.
-	var count_resolved_empty := false
-	if source_total <= 0:
-		var pending = view.get("_total_count_load_pending")
-		var loading = view.get("_is_loading")
-		if pending is bool and not pending and loading is bool and not loading:
-			count_resolved_empty = true
-	if source_total <= 0 and not count_resolved_empty and attempts < 120:
-		await get_tree().process_frame
-		_settle_grid_when_data_ready(grid, view, available_size, settle_start_us, attempts + 1)
-		return
-	if attempts > 0:
-		if DEBUG_LOG: print("[Main] settle waited ", attempts, " frames for grid data (source_total=", source_total, ", count_resolved_empty=", count_resolved_empty, ")")
+	if source_total <= 0 and not _view_count_resolved_empty(view):
+		# Cold cache: wait on the count application itself (same-frame wakeup)
+		# instead of polling the view's load flags once per frame. The timeout
+		# covers the queue-overflow drop path, where no count ever lands.
+		var wait := {"fired": false}
+		grid.total_count_applied.connect(func(_c: int) -> void: wait.fired = true, CONNECT_ONE_SHOT)
+		get_tree().create_timer(SETTLE_COUNT_WAIT_TIMEOUT_SEC).timeout.connect(func() -> void: wait.fired = true, CONNECT_ONE_SHOT)
+		var wait_start_ms := Time.get_ticks_msec()
+		while not wait.fired:
+			await get_tree().process_frame
+			if not is_instance_valid(grid):
+				return
+		if DEBUG_LOG: print("[Main] settle waited ", Time.get_ticks_msec() - wait_start_ms, "ms for grid count (source_total=", grid.get_visible_range().get("source_total", 0), ")")
 	WarmupBudget.tag("grid_settle")
 	var sub_start_us := Time.get_ticks_usec()
 	grid._instantiate_card_pool()
@@ -494,8 +499,24 @@ func _settle_grid_when_data_ready(grid: VirtualScrollGridContainer, view: View, 
 	# Open the warmup gates (platform card pool waits on this) and start the
 	# countdown out of startup budgeting back to steady-state.
 	WarmupBudget.notify_home_grid_settled()
+	# The startup perf window ends here: restore the configured frame pacing
+	# (low-processor mode was disabled in _enter_tree for boot throughput).
+	if SystemManager.display:
+		SystemManager.display.reapply_power_mode()
 	await get_tree().create_timer(2.0).timeout
 	WarmupBudget.set_startup_mode(false)
+
+## Cap on the startup wait for the grid's first total-count application; the
+## queue-overflow drop path resolves without any set_total_count call.
+const SETTLE_COUNT_WAIT_TIMEOUT_SEC := 2.0
+
+func _view_count_resolved_empty(view: View) -> bool:
+	"""True when the view's count load has already resolved with 0 items, so
+	the startup settle can proceed with an empty grid instead of waiting for a
+	count application that already happened."""
+	var pending = view.get("_total_count_load_pending")
+	var loading = view.get("_is_loading")
+	return pending is bool and not pending and loading is bool and not loading
 
 func reset_focus_to_home_button() -> void:
 	"""Reset focus to the Home destination in the M3 nav."""
@@ -866,12 +887,24 @@ func _pre_launch_trim(_game: GameResource) -> void:
 	await get_tree().process_frame
 	_log_rss("pre-launch trim done")
 
+# Monotonic token bumped by every trim so an in-flight restore coroutine
+# aborts at its next await when a new launch re-trims mid-restore.
+var _restore_generation: int = 0
+
 func _trim_memory(reason: String) -> void:
 	"""Idempotent entry point for launch hibernation."""
+	# Abort any in-flight restore from a previous launch, even when this trim
+	# turns out to be a no-op (already trimmed).
+	_restore_generation += 1
 	if _trimmed_for_launch:
 		return
 	_trimmed_for_launch = true
 	_release_heavy_resources(reason)
+	# Game session starting: restore the configured frame pacing for the
+	# background stretch (the post-launch restore disables low-processor
+	# mode again during its brief rebuild window).
+	if SystemManager and SystemManager.display:
+		SystemManager.display.reapply_power_mode()
 
 func _release_heavy_resources(reason: String) -> void:
 	"""Free every reclaimable memory hold that existing lazy paths can rebuild.
@@ -921,14 +954,66 @@ func _release_heavy_resources(reason: String) -> void:
 	if DEBUG_LOG: print("[Main] Memory trim (", reason, ") total elapsed_us=", Time.get_ticks_usec() - trim_start_us)
 
 func _restore_after_launch() -> void:
-	"""Undo launch hibernation. Pools, covers, and the settings dialog all
-	rebuild through existing lazy paths; only polling needs an explicit nudge."""
+	"""Undo launch hibernation. The visible card window survives the trim with
+	its textures, so the resume frame is already correct; what the trim removed
+	is everything AROUND it. Restore that eagerly (below) instead of letting it
+	rebuild lazily inside the scroll/dialog hot paths."""
 	if not _trimmed_for_launch:
 		return
 	_trimmed_for_launch = false
 	if UIManager:
 		UIManager.set_status_bar_polling(true)
 	_log_rss("post-resume")
+	_eager_restore_after_trim()
+
+func _eager_restore_after_trim() -> void:
+	"""Rebuild what _release_heavy_resources() tore down, budget-gated like
+	startup: current view's grid first (pool reseed + cover prefetch around
+	the window), then the other instantiated grids, then the settings dialog
+	once interaction settles."""
+	_restore_generation += 1
+	var generation := _restore_generation
+	var restore_start_us := Time.get_ticks_usec()
+
+	# Treat the restore like startup so pool growth, buffer expansion, and
+	# texture-upload drains share the per-frame budget instead of stacking
+	# into blown frames right as the user starts interacting again. Also run
+	# at full frame throughput for the duration (see _enter_tree).
+	WarmupBudget.set_startup_mode(true)
+	OS.low_processor_usage_mode = false
+
+	# Current view first: it is what the user is looking at and scrolls first.
+	var current_view: View = UIManager.get_current_view() if UIManager else null
+	var current_grid: VirtualScrollGridContainer = UIManager.get_view_grid(current_view) if current_view else null
+	if current_grid and is_instance_valid(current_grid):
+		current_grid.restore_after_trim()
+	if DEBUG_LOG: print("[Main] restore: current grid elapsed_us=", Time.get_ticks_usec() - restore_start_us)
+
+	# Then the other instantiated grids (hidden views seed their minimum).
+	if UIManager and UIManager.view:
+		for grid in UIManager.view.get_all_grids():
+			if generation != _restore_generation:
+				return
+			if grid == current_grid or not is_instance_valid(grid):
+				continue
+			grid.restore_after_trim()
+			await get_tree().process_frame
+
+	# Rebuild the settings dialog once interaction settles (same idle-gated
+	# path as startup; the trim released it).
+	if generation != _restore_generation:
+		return
+	call_deferred("_pre_create_settings_dialog")
+
+	# Count down out of startup budgeting back to steady state, mirroring the
+	# post-settle countdown in _settle_grid_when_data_ready.
+	await get_tree().create_timer(2.0).timeout
+	if generation != _restore_generation:
+		return
+	WarmupBudget.set_startup_mode(false)
+	if SystemManager and SystemManager.display:
+		SystemManager.display.reapply_power_mode()
+	if DEBUG_LOG: print("[Main] eager restore done, total elapsed_us=", Time.get_ticks_usec() - restore_start_us)
 
 func _log_rss(label: String) -> void:
 	var rss_kb := _get_process_rss_kb()

@@ -72,6 +72,7 @@ values = {
 },
 "card_media_aspect_ratio": 3,
 "dark_mode": false,
+"frosted_look": true,
 "library_background_config": {
 "effects": [{
 "effect_id": "gradient",

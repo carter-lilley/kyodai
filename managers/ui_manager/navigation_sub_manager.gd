@@ -215,6 +215,10 @@ func _rebuild_nav_and_layout() -> void:
 	# Re-add children in correct order
 	_update_inner_layout_children()
 
+	# The InnerLayout was just rebuilt (and possibly replaced); re-assert the
+	# window-chrome top offset so the nav never slides under the title bar.
+	_apply_chrome_offset()
+
 	# Emit signal
 	ui_manager.layout_changed.emit("bar" if is_bar else "rail")
 
@@ -305,6 +309,17 @@ func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
 	layout.add_theme_constant_override("separation", 0)
 
 	return layout
+
+## Push the whole inner layout (nav rail/bar AND content wrapper) below the
+## window-chrome strip. The custom title bar floats full-width on the
+## ChromeLayer above everything, so without this the rail's top destinations
+## slide under it. The InnerLayout node is REPLACED on every nav rebuild
+## (type switch, pin changes), so this is re-applied at the end of each
+## rebuild; UIManager re-applies it on chrome visibility and scale changes.
+func _apply_chrome_offset() -> void:
+	if not _inner_layout or not is_instance_valid(_inner_layout):
+		return
+	_inner_layout.offset_top = M3Overlay.get_chrome_top_inset()
 
 func _update_inner_layout_children() -> void:
 	"""Update the order of children in InnerLayout based on nav type."""

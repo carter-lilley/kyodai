@@ -20,6 +20,10 @@ const SMALL_LIBRARY_THRESHOLD: int = 50
 signal items_requested(offset, limit)
 signal visible_range_changed(start, end, total)
 signal item_created(item, index)
+## Emitted at the end of set_total_count. The startup settle in main.gd waits
+## on this (same-frame wakeup) instead of polling per frame while the
+## cold-cache count load is in flight.
+signal total_count_applied(count)
 
 @export var card_scene: PackedScene
 @export var data_buffer_multiplier: int = 5
@@ -873,6 +877,40 @@ func clear_pool() -> void:
 	server shuts down at engine exit.
 	"""
 	_pool.free_all(true)
+
+## Lead beyond the visible window, in lines, when re-warming covers post-trim.
+const RESTORE_PREFETCH_LEAD_LINES := 2
+
+## Rebuild what Main's launch-hibernation trim released for this grid: the
+## inactive card pool (the active window survives the trim with its textures)
+## and the cover texture cache around the current window. Called on
+## resume/launch-failure so the first scroll afterwards doesn't pay card
+## instantiations and disk decodes inside the recycle hot path.
+func restore_after_trim() -> void:
+	if not _card_scene or _total_items <= 0:
+		return
+	_instantiate_card_pool()
+	prefetch_covers_around_window()
+
+## Warm the cover texture cache for the visible window plus a small lead in
+## both directions. Disk-only (preload_cover never downloads) and a no-op for
+## entries already cached; worker decodes and main-thread texture uploads
+## self-pace through MemorySubManager's queue drains.
+func prefetch_covers_around_window() -> void:
+	if _total_items <= 0:
+		return
+	var items_per_line := _get_items_per_line()
+	if items_per_line <= 0:
+		return
+	var range_info := get_visible_range()
+	var start: int = maxi(0, int(range_info.get("start", 0)) - RESTORE_PREFETCH_LEAD_LINES * items_per_line)
+	var end: int = mini(_source_total_items, int(range_info.get("end", 0)) + RESTORE_PREFETCH_LEAD_LINES * items_per_line)
+	if end <= start:
+		return
+	var bucket := CardMediaLoader.decode_bucket_for_card_size(card_size, CardMediaLoader.current_dpr())
+	for idx in range(start, end):
+		if _data.has_index(idx):
+			CardMediaLoader.preload_cover(_data.get_game(idx), bucket, self, idx)
 
 func _on_card_settings_state_changed(mask: int) -> void:
 	if not UIManager or not UIManager.card_settings_state:
@@ -2268,6 +2306,8 @@ func set_total_count(count: int, preserve_cache: bool = false):
 	# or if preserve_cache is explicitly false
 	if count_changed or not preserve_cache:
 		_refresh_buffer()
+
+	total_count_applied.emit(count)
 
 ## Geometry item count: pads the source count with trailing placeholder slots
 ## so the last page (paginated) or last row/column (plain grid) fills evenly.

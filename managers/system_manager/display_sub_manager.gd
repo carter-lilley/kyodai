@@ -444,28 +444,46 @@ func _apply_initial_window_size() -> void:
 	var viewport_before: Vector2i = viewport.size
 	var viewport_size_before := get_viewport_size()
 	var windowed_setting = settings_man.get_setting("windowed")
+	# Track whether anything below can actually resize the window or viewport.
+	# When nothing can (Android, or desktop already in the target state), the
+	# stable-frame polling loop further down is pure boot latency: skip it.
+	var resize_possible := false
 	# Apply the borderless chrome BEFORE the mode/size changes below: the saved
 	# window size is a client-area size, so it must be restored against the
 	# final frame style (custom title bar vs. native title bar).
 	if windowed_setting and not windowed_setting.value:
 		# Fullscreen (windowed = false): restore borderless fullscreen. Matches
 		# windowed_toggle(); exclusive mode fights compositors like gamescope.
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
-		print("[SystemManager.display] Restored fullscreen mode")
+		# Android is always fullscreen, so no mode switch is ever issued there.
+		if not SystemManager.platform.is_android() \
+				and DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_FULLSCREEN:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+			resize_possible = true
+			print("[SystemManager.display] Restored fullscreen mode")
 	elif windowed_setting and windowed_setting.value:
 		# Windowed: strip the native frame (custom title bar on desktop), then
 		# restore last size if available; otherwise let the existing
 		# signal/resize path handle it.
-		apply_window_chrome(true)
+		if supports_window_chrome():
+			apply_window_chrome(true)
+			resize_possible = true
 		var last_size := restore_last_window_size()
 		if last_size == Vector2i.ZERO:
 			print("[SystemManager.display] No saved window size, using resolution preset")
 		else:
+			resize_possible = true
 			print("[SystemManager.display] Restored saved window size: ", last_size)
 	else:
 		# Setting missing; leave default window mode alone, but match the
 		# chrome to the mode we actually ended up in.
 		apply_window_chrome(DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED)
+
+	if not resize_possible:
+		# Fast path: window and viewport are already at their final size, so
+		# there is nothing for the stability loop below to wait for.
+		print("[SystemManager.display] _apply_initial_window_size: no resize issued, settling immediately (window=", DisplayServer.window_get_size(), ")")
+		initial_window_size_settled.emit()
+		return
 
 	# Wait for the OS window size and viewport size to stabilize. The OS may need
 	# a few frames to apply the new window size, and the Godot viewport can lag
@@ -600,19 +618,31 @@ func _apply_hdr_user_setting() -> void:
 
 func _apply_vrr_setting() -> void:
 	"""Toggle low-processor mode and vsync based on the VRR user setting."""
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_SWAP_BUFFERS):
-		return
 	if _vrr_enabled:
-		var target_fps := _get_target_refresh_rate()
 		OS.low_processor_usage_mode = false
-		Engine.max_fps = target_fps
-		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-		print("[SystemManager.display] VRR enabled: low_processor_mode=false max_fps=%d vsync=disabled" % target_fps)
+		if DisplayServer.has_feature(DisplayServer.FEATURE_SWAP_BUFFERS):
+			var target_fps := _get_target_refresh_rate()
+			Engine.max_fps = target_fps
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+			print("[SystemManager.display] VRR enabled: low_processor_mode=false max_fps=%d vsync=disabled" % target_fps)
 	else:
-		OS.low_processor_usage_mode = true
-		Engine.max_fps = 0
-		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
-		print("[SystemManager.display] VRR disabled: low_processor_mode=true max_fps=unlimited vsync=adaptive")
+		# Startup perf window: main.gd disables low-processor mode at _enter_tree
+		# so the frame-chained boot stages run at full throughput. Don't let this
+		# call (which runs deferred during boot) re-enable it until the home grid
+		# has settled; reapply_power_mode() is the hotpoint that restores it.
+		# (Low-processor mode is applied outside the SWAP_BUFFERS gate: Android
+		# doesn't expose vsync control but still uses CPU frame pacing.)
+		OS.low_processor_usage_mode = WarmupBudget.home_grid_settled
+		if DisplayServer.has_feature(DisplayServer.FEATURE_SWAP_BUFFERS):
+			Engine.max_fps = 0
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
+			print("[SystemManager.display] VRR disabled: low_processor_mode=", OS.low_processor_usage_mode, " max_fps=unlimited vsync=adaptive")
+
+## Re-apply the configured frame pacing (VRR / low-processor mode). main.gd
+## disables low-processor mode during the startup and post-launch-restore perf
+## windows; this is the hotpoint that restores steady state afterwards.
+func reapply_power_mode() -> void:
+	_apply_vrr_setting()
 
 func _get_target_refresh_rate() -> int:
 	"""Best-effort current refresh rate: DisplayServer first, then gamescope/Steam env hints, then 60."""

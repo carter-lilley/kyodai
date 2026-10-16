@@ -26,6 +26,7 @@ values = {
 },
 "card_media_aspect_ratio": 3,
 "dark_mode": true,
+"frosted_look": true,
 "hero_effect_config": {
 "corner_radius": 0.06,
 "effects": [],
@@ -59,6 +60,7 @@ values = {
 "library_focus_ring_thickness": 2.5,
 "library_focus_scale": 0.01,
 "library_grid_padding": 30,
+"library_grid_staggered": false,
 "library_grid_vertical": true,
 "library_layout_mode": 2,
 "library_navigation_type": 0,

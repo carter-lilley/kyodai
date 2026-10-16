@@ -40,6 +40,7 @@ values = {
 },
 "card_media_aspect_ratio": 0,
 "dark_mode": true,
+"frosted_look": true,
 "library_background_config": {
 "effects": [{
 "effect_id": "gradient",
