@@ -81,6 +81,10 @@ func _on_dialog_count_changed(count: int) -> void:
 
 func _input(_event: InputEvent) -> void:
 	if _is_animating and visible and not UIManager.has_active_dialog():
+		# The window chrome (custom title bar) renders above this overlay and
+		# must stay reachable even mid-animation.
+		if OverlayLayers.is_mouse_over_chrome(_event):
+			return
 		get_viewport().set_input_as_handled()
 
 func _on_game_launch_initiated(launched_game: GameResource, _focus_index: int):

@@ -52,9 +52,10 @@ func _ready() -> void:
 	offset_right = 0.0
 	offset_bottom = 0.0
 	mouse_filter = Control.MOUSE_FILTER_IGNORE  # the edge strips still hit-test
-	# Above app content (grid z = -1, toolbar/status z = 10); every overlay
-	# lives on its own CanvasLayer and still renders above this.
-	z_index = OverlayLayers.TOOLBAR_Z + 1
+	# One step above the title bar (z = 0) inside the ChromeLayer CanvasLayer:
+	# the top strips win the top GRIP_DP px of the bar, and the layer itself
+	# (OverlayLayers.CHROME) keeps every grip hoverable above all overlays.
+	z_index = 1
 
 	# Corners are created last so they sit on top of the edge strips they
 	# overlap (later siblings win hit-testing).

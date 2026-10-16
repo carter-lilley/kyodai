@@ -106,8 +106,11 @@ func _apply_margins() -> void:
 	if not is_instance_valid(_margin):
 		return
 	var m := M3Units.dp(MARGIN_DP)
+	# Top margin additionally clears the window-chrome strip (custom title
+	# bar), which renders above this overlay.
+	var chrome := M3Overlay.get_chrome_top_inset()
 	_margin.add_theme_constant_override("margin_left", m)
-	_margin.add_theme_constant_override("margin_top", m)
+	_margin.add_theme_constant_override("margin_top", int(m + chrome))
 	_margin.add_theme_constant_override("margin_right", m)
 	_margin.add_theme_constant_override("margin_bottom", m)
 
@@ -116,10 +119,12 @@ func _update_close_geometry() -> void:
 		return
 	var box := M3Units.dp(CLOSE_BOX_DP)
 	var inset := M3Units.dp(CLOSE_INSET_DP)
+	# Below the window-chrome strip so the button stays visible and clickable.
+	var top := M3Overlay.get_chrome_top_inset() + inset
 	_close_button.offset_left = -box - inset
-	_close_button.offset_top = inset
+	_close_button.offset_top = top
 	_close_button.offset_right = -inset
-	_close_button.offset_bottom = inset + box
+	_close_button.offset_bottom = top + box
 
 func _style_frame() -> void:
 	if not is_instance_valid(_frame):
@@ -143,6 +148,7 @@ func _restamp() -> void:
 		return
 	var margin := M3Units.dp(MARGIN_DP)
 	var avail := viewport.get_visible_rect().size - Vector2(margin, margin) * 2.0
+	avail.y -= M3Overlay.get_chrome_top_inset()  # the margin above clears the chrome strip
 	avail.x = maxf(avail.x, 1.0)
 	avail.y = maxf(avail.y, 1.0)
 	var aspect := 16.0 / 9.0
@@ -198,9 +204,11 @@ func dismiss() -> void:
 	super.dismiss()
 
 ## Settled-geometry hook (broadcast by OverlaySubManager on debounced
-## resizes and DS swaps): re-stamp against the new viewport.
+## resizes and DS swaps, and by M3Overlay.notify_chrome_inset_changed).
 func on_viewport_settled() -> void:
 	if visible and is_inside_tree():
+		_apply_margins()
+		_update_close_geometry()
 		_restamp()
 
 func refresh_scale() -> void:

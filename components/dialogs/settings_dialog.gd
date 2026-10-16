@@ -761,7 +761,10 @@ func refresh_scale() -> void:
 ## Settled-geometry hook (broadcast by OverlaySubManager): re-tier
 ## sidebar/pane spacing when the viewport crosses the small breakpoint.
 ## M3Dialog._ready's own connection still handles the fullscreen chrome.
+## The super call re-stamps the dialog shell (viewport resize, DS swap, and
+## window-chrome inset toggles via M3Overlay.notify_chrome_inset_changed).
 func on_viewport_settled() -> void:
+	super.on_viewport_settled()
 	_apply_scale()
 
 func _apply_scale() -> void:

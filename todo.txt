@@ -6,6 +6,9 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 no cemu save sync?
 retroarch unknown ver.?
 - universal extraction normalizer (walk down for expected files...saves & games)
+	- to test: ps3 psn games
+	- shadps4
+	
 ## configs
 	- user/identity profile resolver for emulator installs and saves
 		- 3ds, xenia, eden, vita, (cemu & ps2?)
@@ -15,13 +18,12 @@ retroarch unknown ver.?
 	- online compat database scan perhaps?
 	- dolphin: controller inis
 	- all: optional hotkeys, x graphics settings, confirm on exit, etc?
+	
 	- resolver: android - no way to resolve nethersx2 based configs (no/inaccessible inis)
 	- installer: android - armsx2 & 3 unskippable OOBE & bios selection (no drop bios)
 	- installer: android - azahar requires unskippable OOBE to select user folder
 	- resolver: android - ppsspp no editable paths in ini, go by last updated ini
 	- resolver: android - melonds private path, uneditable/readable pref file
-	- to test: ps3 psn games
-	- shadps4
 	
 ## romm
  - xtra romm metadata - HL2B, guides, logos..

@@ -6,8 +6,11 @@ extends PanelContainer
 ## full-bleed strip replaces it: title + drag area on the left, and
 ## minimize/maximize/close buttons on the right.
 ##
-## Docked as the first row of UIManager's status layout (above the StatusBar),
-## so adding/removing it pushes the rest of the layout down automatically.
+## Lives on UIManager's ChromeLayer (OverlayLayers.CHROME), a CanvasLayer above
+## every app overlay, so the window controls always render on top and stay
+## clickable while dialogs, menus, or transition overlays are open. The layout
+## hole it leaves in the root layout is filled by a spacer row UIManager keeps
+## in sync with this bar's visibility.
 ## Hidden whenever the window chrome is inactive (fullscreen, unsupported OS).
 
 const BAR_HEIGHT_DP: float = 36
@@ -38,11 +41,13 @@ var _last_drag_press_ms: int = -1000000
 
 
 func _ready() -> void:
-	# Same z as the toolbar/status strip: above the card grid (z = -1), below
-	# every M3 overlay (those live on their own CanvasLayers).
-	z_index = OverlayLayers.TOOLBAR_Z
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	size_flags_vertical = Control.SIZE_SHRINK_BEGIN  # row height = custom_minimum_size
+	# Top-wide strip on the ChromeLayer CanvasLayer: anchors carry it across
+	# window resizes; the height comes from the fixed bottom offset (re-applied
+	# in refresh_scale). No z_index games here — the layer itself (CHROME =
+	# 1150) is what puts the bar above every overlay.
+	anchor_right = 1.0
+	grow_horizontal = Control.GROW_DIRECTION_BOTH
+	offset_bottom = M3Units.dpi(BAR_HEIGHT_DP)
 	custom_minimum_size = Vector2(0, M3Units.dpi(BAR_HEIGHT_DP))
 
 	_background = StyleBoxFlat.new()
@@ -260,6 +265,7 @@ func refresh_theme() -> void:
 
 func refresh_scale() -> void:
 	custom_minimum_size = Vector2(0, M3Units.dpi(BAR_HEIGHT_DP))
+	offset_bottom = M3Units.dpi(BAR_HEIGHT_DP)
 	if _background:
 		_background.content_margin_right = M3Units.dpi(2)
 	if _title_label:

@@ -9,6 +9,7 @@ var results_label: Label
 var last_search_button: M3Button
 
 var _scrim: ColorRect
+var _center_container: CenterContainer
 var _main_container: VBoxContainer
 var _last_search_text: String = ""
 var _is_active: bool = false
@@ -35,6 +36,7 @@ func _build_ui():
 	center_container.name = "CenterContainer"
 	center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_scrim.add_child(center_container)
+	_center_container = center_container
 	
 	# Main container
 	_main_container = VBoxContainer.new()
@@ -86,8 +88,9 @@ func show_overlay():
 	var parent = M3Overlay.get_overlay_parent()
 	if parent and get_parent() == null:
 		parent.add_child(self)
-	
+
 	_is_active = true
+	_apply_chrome_inset()
 	set_last_search(_last_search_text)
 	super.show_overlay()
 	search_bar.grab_focus_on_input()
@@ -114,6 +117,18 @@ func dismiss():
 
 func is_active() -> bool:
 	return _is_active
+
+## Push the centered content below the window-chrome strip (custom title bar),
+## which renders above this overlay. The scrim stays full-rect: the chrome
+## paints over it, so the strip never dims.
+func _apply_chrome_inset() -> void:
+	if _center_container:
+		_center_container.offset_top = M3Overlay.get_chrome_top_inset()
+
+## Settled-geometry hook (debounced resizes, DS swaps, chrome toggles).
+func on_viewport_settled() -> void:
+	if visible and is_inside_tree():
+		_apply_chrome_inset()
 
 func set_last_search(text: String) -> void:
 	_last_search_text = text.strip_edges()

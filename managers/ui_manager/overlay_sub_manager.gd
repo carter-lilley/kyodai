@@ -45,6 +45,10 @@ func setup(root_control: Control) -> void:
 	# the viewport overlays render in (MainViewport in dual-screen mode, root
 	# otherwise). Registered once for all M3 overlays.
 	M3Overlay.sizing_viewport_resolver = _resolve_sizing_viewport
+	# The window-chrome top inset overlays must clear: the custom title bar
+	# strip renders above every overlay (ChromeLayer), so overlay content sizes
+	# and positions against the viewport minus this strip.
+	M3Overlay.chrome_top_inset_resolver = _resolve_chrome_top_inset
 	# Settled-geometry hook: forward debounced viewport changes (resizes and DS
 	# swaps alike) to persistent overlays that opt in via on_viewport_settled().
 	SystemManager.display.viewport_size_changed.connect(_broadcast_viewport_settled)
@@ -61,6 +65,20 @@ func _resolve_sizing_viewport() -> Viewport:
 	if parent is Viewport:
 		return parent
 	return get_tree().root
+
+## Window-chrome top inset for M3 overlays: the title bar's pixel height while
+## the chrome strip is visible on the root window. Zero in dual-screen mode
+## (overlays render in the MainViewport SubViewport, which has no chrome),
+## on Android (no title bar exists), and whenever the chrome is inactive
+## (fullscreen), matching TitleBar's own visibility contract.
+func _resolve_chrome_top_inset() -> float:
+	var parent := M3Overlay.get_overlay_parent()
+	if parent != null and parent != get_tree().root:
+		return 0.0
+	if ui_manager and ui_manager._title_bar and is_instance_valid(ui_manager._title_bar) \
+			and ui_manager._title_bar.visible:
+		return maxf(ui_manager._title_bar.get_combined_minimum_size().y, ui_manager._title_bar.size.y)
+	return 0.0
 
 ## Forward a settled viewport change to every persistent overlay implementing
 ## on_viewport_settled(). display.viewport_size_changed is already debounced
@@ -653,6 +671,7 @@ func _release_overlays() -> void:
 
 func _exit_tree() -> void:
 	M3Overlay.sizing_viewport_resolver = Callable()
+	M3Overlay.chrome_top_inset_resolver = Callable()
 	if SystemManager.display and SystemManager.display.viewport_size_changed.is_connected(_broadcast_viewport_settled):
 		SystemManager.display.viewport_size_changed.disconnect(_broadcast_viewport_settled)
 	_release_overlays()

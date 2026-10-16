@@ -57,6 +57,10 @@ func _ready() -> void:
 
 func _input(_event: InputEvent) -> void:
 	if _is_animating and visible:
+		# The window chrome (custom title bar) renders above this overlay and
+		# must stay reachable even mid-transition.
+		if OverlayLayers.is_mouse_over_chrome(_event):
+			return
 		get_viewport().set_input_as_handled()
 
 func is_animating() -> bool:
