@@ -1090,8 +1090,8 @@ static func extract_archive_async(
 			return "%s... (%d files)%s" % [display_name, counts.extracted_files, file_part]
 		return display_name + "..."
 	
-	# Suppressed for shuffler preps etc.: a second progress snackbar would
-	# replace the currently displayed one (progress notifications are singletons).
+	# Suppressed for shuffler preps etc. where the caller runs its own
+	# notification and an extra extraction snackbar would just be noise.
 	var notification_id: int = -1
 	if show_notification:
 		notification_id = SystemManager.notifications.show_notification_safe(
@@ -1143,7 +1143,7 @@ static func extract_archive_async(
 				counts.extracted_bytes = counts.total_bytes
 			if counts.total_files > 0:
 				counts.extracted_files = counts.total_files
-			SystemManager.notifications.refresh_progress_notification()
+			SystemManager.notifications.refresh_progress_notification(notification_id)
 
 		if notification_id != -1:
 			SystemManager.notifications.dismiss_notification_safe(notification_id)

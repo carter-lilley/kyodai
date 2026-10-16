@@ -665,9 +665,9 @@ func _extract_xenia_archive(archive_path: String, extract_to: String, suppress_n
 	if not FSM.dir_exists(extract_to):
 		FSM.make_dir_recursive(extract_to)
 
-	# Shuffler preps suppress the extraction notification: progress snackbars
-	# are singletons, and one would replace the "Preparing Shuffle" download
-	# notification mid-session.
+	# Shuffler preps suppress the extraction notification: the shuffler runs
+	# its own "Preparing Shuffle" notification, so a second extraction
+	# snackbar would just be noise mid-session.
 	var item_id: String = SystemManager.download.queue_extraction(archive_path, extract_to, "xbox360_game", "Extracting Xbox 360 Game", false, suppress_notification)
 	if item_id == "":
 		push_error("[GameManager] Xenia: Failed to queue extraction")

@@ -1005,6 +1005,11 @@ static func prepare_image_for_texture(image: Image) -> Image:
 		img.convert(Image.FORMAT_RGBA8)
 	if img.is_empty():
 		return null
+	# Full mip chain for the card glow's pyramid blur (see glow.gdshader).
+	# Generated here on the worker thread so create_texture_from_image only
+	# pays for the upload. +~33% VRAM per texture; tiny images gain nothing.
+	if max(img.get_width(), img.get_height()) >= 64:
+		img.generate_mipmaps()
 	return img
 
 static func create_texture_from_image(image: Image) -> Texture2D:
@@ -1025,6 +1030,11 @@ static func create_texture_from_image(image: Image) -> Texture2D:
 
 	if img.is_empty():
 		return null
+
+	# Mip chain for images that skipped prepare_image_for_texture (direct
+	# callers); the glow blur samples the pyramid (see glow.gdshader).
+	if not img.has_mipmaps() and max(img.get_width(), img.get_height()) >= 64:
+		img.generate_mipmaps()
 
 	return ImageTexture.create_from_image(img)
 
