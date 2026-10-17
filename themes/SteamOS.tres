@@ -21,17 +21,9 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.0,
 "effects": [{
-"dark_settings": {
-"shadow_color": Color(0, 0, 0, 0.5),
-"shadow_expand": 0.066,
-"shadow_offset_x": 0.0,
-"shadow_offset_y": 0.04299999999999998,
-"shadow_softness": 0.15,
-"shadow_spread": 0.0
-},
 "effect_id": "drop_shadow",
 "settings": {
-"shadow_color": Color(0.8060456, 0.8060456, 0.8060456, 0.5),
+"shadow_color": Color(0, 0, 0, 0.5),
 "shadow_expand": 0.066,
 "shadow_offset_x": 0.0,
 "shadow_offset_y": 0.04299999999999998,
@@ -61,7 +53,7 @@ values = {
 "hero_height": 4
 },
 "card_media_aspect_ratio": 1,
-"dark_mode": false,
+"dark_mode": true,
 "frosted_look": true,
 "hero_effect_config": {
 "corner_radius": 0.06,
