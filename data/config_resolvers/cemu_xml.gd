@@ -10,13 +10,17 @@
 ## "use the built-in default", reported with the emulator-default caveat.
 ##
 ## The default anchor is derived from the matched config's parent dir, which
-## is correct for every in-scope layout (Cemu sets user data path = config
-## path in all of them):
+## is correct for the layouts where Cemu sets user data path = config path:
 ##   portable:  {emulator_dir}/portable/settings.xml -> {emulator_dir}/portable
 ##   legacy:    {emulator_dir}/settings.xml          -> {emulator_dir}
 ##   android:   {app_data}/settings.xml              -> {app_data}
-## Non-portable desktop installs (%APPDATA%/Cemu, XDG split dirs) are out of
-## scope; their configs are never candidates, so they resolve default-only.
+## The kyodai-managed Linux layout redirects XDG at launch, splitting config
+## and data; Cemu's default mlc anchors at the user data path there, not the
+## config's parent:
+##   linux-xdg: {emulator_dir}/.config/Cemu/settings.xml -> {emulator_dir}/.local/share/Cemu
+## Non-portable desktop installs outside kyodai's XDG redirect (%APPDATA%/Cemu,
+## system XDG dirs) are out of scope; their configs are never candidates, so
+## they resolve default-only.
 ## Relative mlc_path values anchor at the config's parent (Cemu itself
 ## resolves them against its CWD, the exe dir; absolute paths are the norm).
 ##
@@ -75,6 +79,11 @@ static func _resolve_from_text(text: String, config_path: String) -> Dictionary:
 	var mlc := _extract_mlc_path(text)
 	if mlc == "":
 		result.caveat = "emulator-default"
+		# XDG split layout: the config lives under .config/Cemu but the
+		# default mlc anchors at the user data path, .local/share/Cemu.
+		var normalized_anchor := anchor.replace("\\", "/")
+		if normalized_anchor.ends_with("/.config/Cemu"):
+			anchor = normalized_anchor.substr(0, normalized_anchor.length() - "/.config/Cemu".length()) + "/.local/share/Cemu"
 		result.path = anchor + DEFAULT_SUFFIX
 		return result
 
@@ -101,6 +110,15 @@ static func _unescape(value: String) -> String:
 	value = value.replace("&lt;", "<").replace("&gt;", ">")
 	value = value.replace("&quot;", "\"").replace("&apos;", "'")
 	return value.replace("&amp;", "&")
+
+## Reads one element's text from settings.xml for the caller's
+## already-enforced check (CSM has no XML value reader). null when the
+## element is absent or empty.
+static func read_key(config_path: String, key: String) -> Variant:
+	if key != "mlc_path" or not FSM.file_exists(config_path):
+		return null
+	var value := _extract_mlc_path(FSM.read_file(config_path))
+	return value if value != "" else null
 
 ## Enforces Cemu's <mlc_path> element in settings.xml.
 static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:

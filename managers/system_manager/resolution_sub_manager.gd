@@ -68,7 +68,13 @@ static func _paths_already_enforced(config_path: String, sections: Dictionary, s
 		var section_data: Dictionary = sections[section_name]
 		for key: String in section_data:
 			var expected: String = str(section_data[key])
-			var actual: Variant = CSM.get_value(config_path, key, file_section, fmt)
+			# settings.xml detects as RAW, which CSM.get_value cannot read;
+			# the cemu resolver owns its element extraction.
+			var actual: Variant
+			if strategy == "cemu_xml":
+				actual = CemuXml.read_key(config_path, key)
+			else:
+				actual = CSM.get_value(config_path, key, file_section, fmt)
 			if actual == null:
 				return false
 			var actual_str := str(actual).replace("\\", "/").rstrip("/")

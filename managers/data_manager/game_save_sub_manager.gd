@@ -399,10 +399,17 @@ func resolve_save_directories(emulator_id: String, platform_slug: String = "", c
 	var dir = directories.get(platform_name, "")
 	if dir == "":
 		dir = directories.get("all", "")
-	
+
 	if dir == "":
+		# The registry declares no save dir for this platform; the emulator's
+		# own config may still state one (config-first). Without this probe a
+		# missing JSON entry silently disables sync even when the config
+		# resolver could produce the path.
+		var resolution: Dictionary = RSM.resolve_save_dir(emulator_id, platform_slug, core_id)
+		if resolution.get("path", "") != "":
+			candidates.append(resolution.path)
 		return candidates
-	
+
 	if dir.contains("{save_root}") or dir.contains("{system_root}"):
 		# Root-anchored template: the resolver composes the complete directory
 		# config-first.

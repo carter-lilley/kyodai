@@ -15,7 +15,8 @@
 		"default_saves": {
 			"_default": {
 				"directories": {
-					"windows": "{emulator_dir}/portable/mlc01/usr/save/00050000"
+					"windows": "{emulator_dir}/portable/mlc01/usr/save/00050000",
+					"linux": "{emulator_dir}/.local/share/Cemu/mlc01/usr/save/00050000"
 				},
 				"extensions": [
 					"*"
@@ -37,6 +38,7 @@
 				"{emulator_dir}/settings.xml"
 			],
 			"linux": [
+				"{emulator_dir}/.config/Cemu/settings.xml",
 				"{emulator_dir}/portable/settings.xml",
 				"{emulator_dir}/settings.xml"
 			]
@@ -52,7 +54,7 @@
 			"linux": {
 				"sections": {
 					"": {
-						"mlc_path": "{emulator_dir}/portable/mlc01"
+						"mlc_path": "{emulator_dir}/.local/share/Cemu/mlc01"
 					}
 				}
 			}
