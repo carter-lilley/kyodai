@@ -49,21 +49,20 @@ public class SyncForegroundService extends Service {
     
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "SyncForegroundService started");
-        
         if (intent == null) {
             // Service was restarted by system, stop it
             stopSelf();
             return START_NOT_STICKY;
         }
-        
+
         String action = intent.getAction();
         if (action == null) {
             action = "";
         }
-        
+
         switch (action) {
             case "START_SYNC":
+                Log.d(TAG, "SyncForegroundService started");
                 String platformName = intent.getStringExtra("platform_name");
                 if (platformName == null) platformName = "Game Library";
                 int current = intent.getIntExtra("current", 0);

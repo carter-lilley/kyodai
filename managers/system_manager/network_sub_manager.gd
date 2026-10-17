@@ -296,6 +296,14 @@ func _check_connection():
 ## Delay before the single automatic retry of a transient connect-level failure.
 const API_RETRY_DELAY_SECONDS := 0.75
 
+## Timeouts for the synchronous (HTTPClient) request path used by the sync
+## thread. The connect phase already has a 10s cap below; these cover the
+## phases that previously spun forever when the server wedged mid-request,
+## making sync look frozen (found 2026-10-17 via a hung RomM worker).
+const SYNC_RESPONSE_TIMEOUT_MS := 30000  # waiting for response headers
+const SYNC_STALL_TIMEOUT_MS := 30000     # no body bytes received
+const SYNC_HEARTBEAT_MS := 10000         # "still waiting" log cadence
+
 ## Result codes that are usually transient (server/network still waking up).
 const RETRYABLE_RESULTS := [
 	HTTPRequest.RESULT_CHUNKED_BODY_SIZE_MISMATCH,
@@ -308,6 +316,11 @@ const RETRYABLE_RESULTS := [
 func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false, _retries_left: int = 1):
 	var http = _create_http_request()
 	_active_request_count += 1
+
+	# JSON API calls must fail within a bounded time: a hung request never
+	# emits request_completed, which would also defeat the retry logic below.
+	# (File downloads use a different path with their own stall watchdogs.)
+	http.timeout = 30.0
 
 	var url = _base_url.rstrip("/") + "/api" + endpoint
 
@@ -574,10 +587,19 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 	if err != OK:
 		return {"success": false, "body": PackedByteArray(), "error": "Failed to make request: " + str(err)}
 
-	# Wait for response headers
+	# Wait for response headers (bounded: a wedged server must not hang sync)
+	var header_wait_start = Time.get_ticks_msec()
+	var last_heartbeat_ms = header_wait_start
 	while http.get_status() == HTTPClient.STATUS_REQUESTING:
 		http.poll()
 		OS.delay_usec(1000)
+		var now_ms = Time.get_ticks_msec()
+		if now_ms - last_heartbeat_ms > SYNC_HEARTBEAT_MS:
+			print("[SystemManager.network] Still waiting for server response... (%ds)" % ((now_ms - header_wait_start) / 1000))
+			last_heartbeat_ms = now_ms
+		if now_ms - header_wait_start > SYNC_RESPONSE_TIMEOUT_MS:
+			http.close()
+			return {"success": false, "body": PackedByteArray(), "error": "Response timeout: no headers for %ds" % (SYNC_RESPONSE_TIMEOUT_MS / 1000)}
 
 	var response_code = http.get_response_code()
 
@@ -587,15 +609,25 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 	if response_code != 200:
 		return {"success": false, "body": PackedByteArray(), "error": "HTTP error: " + str(response_code)}
 
-	# Read body
+	# Read body (bounded stall: connection alive but delivering nothing)
 	var body = PackedByteArray()
+	var last_progress_ms = Time.get_ticks_msec()
+	var body_heartbeat_ms = last_progress_ms
 	while http.get_status() == HTTPClient.STATUS_BODY:
 		http.poll()
 		var chunk = http.read_response_body_chunk()
 		if chunk.size() > 0:
 			body.append_array(chunk)
+			last_progress_ms = Time.get_ticks_msec()
 		else:
 			OS.delay_usec(1000)
+			var now_ms = Time.get_ticks_msec()
+			if now_ms - body_heartbeat_ms > SYNC_HEARTBEAT_MS:
+				print("[SystemManager.network] Response stalled, still waiting... (%ds without data)" % ((now_ms - last_progress_ms) / 1000))
+				body_heartbeat_ms = now_ms
+			if now_ms - last_progress_ms > SYNC_STALL_TIMEOUT_MS:
+				http.close()
+				return {"success": false, "body": PackedByteArray(), "error": "Response stalled: no data for %ds" % (SYNC_STALL_TIMEOUT_MS / 1000)}
 
 	return {"success": true, "body": body, "error": ""}
 

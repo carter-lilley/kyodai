@@ -426,7 +426,8 @@ func show_custom_dialog(build_fn: Callable, on_dismissed: Callable = Callable(),
 	return dialog
 
 func _apply_dialog_options(dialog: M3Dialog, options: Dictionary) -> void:
-	"""Apply optional overlay styling to a generic dialog."""
+	"""Apply optional overlay styling/behavior to a generic dialog. Supported keys:
+	overlay_type, overlay_layer, dismissible, hero_icon_name, focus_restore_fallback (Callable)."""
 	if options.has("overlay_type"):
 		dialog.overlay_type = options["overlay_type"]
 	if options.has("overlay_layer"):
@@ -435,6 +436,8 @@ func _apply_dialog_options(dialog: M3Dialog, options: Dictionary) -> void:
 		dialog.dismissible = options["dismissible"]
 	if options.has("hero_icon_name"):
 		dialog.hero_icon_name = options["hero_icon_name"]
+	if options.has("focus_restore_fallback") and options["focus_restore_fallback"] is Callable:
+		dialog.set_focus_restore_fallback(options["focus_restore_fallback"])
 
 func show_shuffler_dialog() -> void:
 	"""Show the shuffler configuration dialog."""

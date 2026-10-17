@@ -249,7 +249,7 @@
 		"name": "Ps2",
 		"default_emulator": {
 			"_default": "pcsx2",
-			"android": "nethersx2"
+			"android": "armsx2"
 		},
 		"firmware": {
 			"expected_files": [

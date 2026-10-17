@@ -63,15 +63,17 @@ func set_enabled(enabled: bool) -> void:
 		_drawaudit_last_deltas.clear()
 		# Clean debug panels from both active cards and pool cards
 		for card in _grid._active_cards:
-			var debug_panel = card.get_meta("_debug_panel_ref", null)
-			if debug_panel and is_instance_valid(debug_panel):
-				debug_panel.queue_free()
-			card.remove_meta("_debug_panel_ref")
+			if card.has_meta("_debug_panel_ref"):
+				var debug_panel = card.get_meta("_debug_panel_ref")
+				if is_instance_valid(debug_panel):
+					debug_panel.queue_free()
+				card.remove_meta("_debug_panel_ref")
 		for card in _grid._pool.cards:
-			var debug_panel = card.get_meta("_debug_panel_ref", null)
-			if debug_panel and is_instance_valid(debug_panel):
-				debug_panel.queue_free()
-			card.remove_meta("_debug_panel_ref")
+			if card.has_meta("_debug_panel_ref"):
+				var debug_panel = card.get_meta("_debug_panel_ref")
+				if is_instance_valid(debug_panel):
+					debug_panel.queue_free()
+				card.remove_meta("_debug_panel_ref")
 		_debug_style_visible_data = null
 		_debug_style_visible_loading = null
 		_debug_style_buffer_data = null
@@ -106,7 +108,7 @@ func update_debug_visuals(visible_start_idx: int, visible_end_idx: int):
 		var has_data = _grid._data.has_index(idx)
 
 		# Use cached metadata reference instead of tree traversal for performance
-		var debug_panel = card.get_meta("_debug_panel_ref", null)
+		var debug_panel = card.get_meta("_debug_panel_ref") if card.has_meta("_debug_panel_ref") else null
 		if not debug_panel or not is_instance_valid(debug_panel):
 			debug_panel = Panel.new()
 			debug_panel.name = "_debug_panel"

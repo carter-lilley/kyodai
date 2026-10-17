@@ -174,6 +174,29 @@ func _wait_for_async(task_func: Callable, timeout_ms: int = 60000):
 	return state.result if state.completed else null
 
 
+## Delay before the single retry of a transient fetch failure during sync.
+const SYNC_FETCH_RETRY_DELAY_MS := 1500
+
+## Fetch errors that are usually transient (server wedged/restarting, network
+## blip) and therefore worth one retry before abandoning the platform until
+## the next sync. Anything else (auth, 404, parse errors) fails immediately.
+const TRANSIENT_FETCH_ERROR_PREFIXES := [
+	"HTTP error: 0",
+	"Connection timeout",
+	"Not connected",
+	"Response timeout",
+	"Response stalled",
+	"Failed to connect",
+	"Failed to make request",
+]
+
+func _is_transient_fetch_error(error: String) -> bool:
+	for prefix in TRANSIENT_FETCH_ERROR_PREFIXES:
+		if error.begins_with(prefix):
+			return true
+	return false
+
+
 # ==================== ANDROID SYNC FOREGROUND SERVICE ====================
 
 func _start_sync_fg_service(platform_name: String = "Game Library", current: int = 0, total: int = 0) -> void:
@@ -182,10 +205,23 @@ func _start_sync_fg_service(platform_name: String = "Game Library", current: int
 		_sync_fg_service_active = true
 
 
+var _fg_service_last_update_ms := 0
+var _fg_service_last_percent := -1
+var _fg_service_last_platform := ""
+
 func _update_sync_fg_service(platform_name: String = "", current: int = 0, total: int = 0) -> void:
 	if not _sync_fg_service_active:
 		return
+	# Throttle: batch progress can fire several times per second, and every
+	# update costs a service intent + notification rebuild on Android.
 	var service_name = platform_name if platform_name != "" else _sync_platform
+	var percent := int(current * 100.0 / max(total, 1))
+	var now_ms := Time.get_ticks_msec()
+	if percent == _fg_service_last_percent and service_name == _fg_service_last_platform and now_ms - _fg_service_last_update_ms < 500:
+		return
+	_fg_service_last_percent = percent
+	_fg_service_last_platform = service_name
+	_fg_service_last_update_ms = now_ms
 	SystemManager.platform.update_sync_foreground_service(service_name, current, total)
 
 
@@ -493,6 +529,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		while not platform_complete:
 
 			# Fetch batch (or wait for parallel fetch)
+			var fetch_retried := false
 			var fetch_start = Time.get_ticks_msec()
 			var result = null
 			var fetch_time = 0
@@ -508,6 +545,15 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				if DEBUG_LOG: print("[SyncThread] Using pre-fetched batch at offset %d" % _sync_current_offset)
 			else:
 				# Fetch synchronously
+				result = SystemManager.network.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
+				fetch_time = Time.get_ticks_msec() - fetch_start
+
+			if not result.success and not fetch_retried and _is_transient_fetch_error(result.error):
+				# Transient failure (server wedged/restarting, network blip):
+				# retry once before abandoning the platform until the next sync.
+				fetch_retried = true
+				print("[SyncThread] Transient fetch error on platform '%s': %s - retrying once in %.1fs" % [platform.name, result.error, SYNC_FETCH_RETRY_DELAY_MS / 1000.0])
+				OS.delay_msec(SYNC_FETCH_RETRY_DELAY_MS)
 				result = SystemManager.network.fetch_games_sync(str(platform_id), _sync_current_offset, batch_size, _sync_current_updated_after)
 				fetch_time = Time.get_ticks_msec() - fetch_start
 

@@ -240,11 +240,11 @@ func refresh_scale() -> void:
 	for control in controls.values():
 		if not is_instance_valid(control):
 			continue
-		var trailing: Variant = control.get_meta("trailing_width", null)
-		if trailing:
+		if control.has_meta("trailing_width"):
+			var trailing: Array = control.get_meta("trailing_width")
 			control.custom_minimum_size.x = _trailing_width(trailing[0], trailing[1])
-		if control is AngleDial:
-			var spinbox: SpinBox = control.get_meta("spinbox", null)
+		if control is AngleDial and control.has_meta("spinbox"):
+			var spinbox: SpinBox = control.get_meta("spinbox")
 			if spinbox and spinbox.has_meta("width_dp"):
 				spinbox.custom_minimum_size.x = M3Units.dp(spinbox.get_meta("width_dp"))
 	refresh_theme()
