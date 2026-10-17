@@ -67,16 +67,8 @@ func show_overlay():
 		_load_platforms()
 
 func _build_content() -> void:
-	# M3Dialog (FULL_SCREEN) already provides a ScrollContainer via _scroll.
-	# We just add a MarginContainer directly to content_slot.
-	var margin = MarginContainer.new()
-	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	margin.add_theme_constant_override("margin_left", int(M3Units.dp(24)))
-	margin.add_theme_constant_override("margin_right", int(M3Units.dp(24)))
-	margin.add_theme_constant_override("margin_top", int(M3Units.dp(16)))
-	margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(16)))
-	
+	# M3Dialog (FULL_SCREEN) already pads the scroll content, so pages are
+	# added directly to content_slot.
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -198,7 +190,7 @@ func _build_content() -> void:
 	cards_hbox.add_child(right_column)
 	_cards_right = right_column
 	
-	margin.add_child(vbox)
+	content_slot.add_child(vbox)
 	_setup_page = vbox
 
 	# Page 2: shuffle bag filters (same chips as the library filter sheet)
@@ -219,8 +211,7 @@ func _build_content() -> void:
 	_filters_panel = FilterChipsPanel.new()
 	_filters_page.add_child(_filters_panel)
 
-	margin.add_child(_filters_page)
-	content_slot.add_child(margin)
+	content_slot.add_child(_filters_page)
 
 func _build_actions() -> void:
 	_rebuild_actions()

@@ -156,10 +156,10 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 		if package_name == "":
 			push_error("[LaunchManager] No Android package configured for emulator: " + emulator_id)
 			return false
-		if not Engine.has_singleton("PackageChecker"):
-			push_error("[LaunchManager] PackageChecker plugin not available")
+		if not Engine.has_singleton("KyodaiBridge"):
+			push_error("[LaunchManager] KyodaiBridge plugin not available")
 			return false
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		var success: bool = plugin.call("launchAppByPackageName", package_name)
 		if success and process:
 			process.enter_background_state_android(null)

@@ -295,7 +295,7 @@ func is_game_native_installed() -> bool:
 	if not SystemManager.platform.is_android():
 		return false
 	
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		return false
 	
@@ -307,9 +307,9 @@ func launch_game(app_id: int) -> bool:
 		push_error("[GameNativeSubManager] Cannot launch GameNative game on non-Android platform")
 		return false
 	
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
-		push_error("[GameNativeSubManager] PackageChecker plugin not available")
+		push_error("[GameNativeSubManager] KyodaiBridge plugin not available")
 		return false
 	
 	return plugin.call("launchGameNativeGame", app_id)

@@ -44,7 +44,7 @@ func _end_save_sync(key: String) -> void:
 	_save_sync_in_flight.erase(key)
 
 ## Runs save-discovery/zip work off the main thread when safe. Android restricted
-## paths (/Android/data, /Android/obb) go through the PackageChecker plugin whose
+## paths (/Android/data, /Android/obb) go through the KyodaiBridge plugin whose
 ## worker-thread behavior is unverified - a false empty scan could trigger a
 ## remote-over-local download, so those run inline on the calling thread.
 func _should_thread_io(path: String) -> bool:
@@ -3255,7 +3255,7 @@ func _schedule_startup_dirty_sweep() -> void:
 ## Returns {game, emulator_id} when the most recently launched game has a
 ## local save whose hash differs from the recorded sync boundary, else {}.
 func _check_most_recent_save_dirty() -> Dictionary:
-	# Android restricted-path scans can't thread (PackageChecker), so resolve
+	# Android restricted-path scans can't thread (KyodaiBridge), so resolve
 	# the context inline there: the save dir decides whether the unit threads.
 	# On desktop even the context resolves inside the worker.
 	var prologue_start_us := Time.get_ticks_usec()

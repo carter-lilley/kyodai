@@ -5,6 +5,11 @@
 	
 	<!-- Permission to query all packages (Android 11+) -->
 	<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+	<!-- Permission to trigger APK installs (sideloaded emulators). Also requires
+	     the runtime "Install unknown apps" grant - see installApk() /
+	     requestInstallUnknownAppsPermission(). -->
+	<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 	
 	<!-- Permission to access all files (for FileProvider to serve external files) -->
 	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
@@ -40,8 +45,8 @@
 		</provider>
 		
 		<meta-data 
-			android:name="org.godotengine.plugin.v2.PackageChecker" 
-			android:value="com.heckpoint.kyodai.PackageCheckerPlugin" />
+			android:name="org.godotengine.plugin.v2.KyodaiBridge" 
+			android:value="com.heckpoint.kyodai.KyodaiBridgePlugin" />
 		
 		<!-- Foreground service for downloads to prevent app kill during large file downloads -->
 		<service

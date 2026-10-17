@@ -395,7 +395,7 @@ func _apply_download_state(chunked_info: ChunkedDownloadInfo, state: Dictionary)
 	# when the file extends past their end byte.
 	var flush_dest_size := -1
 	if chunked_info.flush_mode:
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		if plugin != null:
 			flush_dest_size = int(plugin.call("androidFileSize", chunked_info.final_path))
 		if flush_dest_size < 0:
@@ -2641,7 +2641,7 @@ var _flush_signal_connected: bool = false
 func _ensure_flush_signal_connected() -> void:
 	if _flush_signal_connected:
 		return
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		return
 	if not plugin.is_connected("chunk_flush_complete", _on_chunk_flush_complete):
@@ -2651,7 +2651,7 @@ func _ensure_flush_signal_connected() -> void:
 ## Probes whether the destination supports positioned writes (direct or SAF)
 ## and preallocates it. Returns true if flush mode can be used.
 func _prepare_flush_destination(chunked_info: ChunkedDownloadInfo, file_size: int) -> bool:
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		return false
 	_ensure_flush_signal_connected()
@@ -2669,7 +2669,7 @@ func _flush_chunk_async(item_id: String, chunk_index: int) -> void:
 	if not chunked_info.flush_mode:
 		return
 	var chunk = chunked_info.chunks[chunk_index]
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		_on_chunk_flush_failed(item_id, chunk_index, "Plugin not available")
 		return
@@ -2743,7 +2743,7 @@ func _maybe_finalize_flush_download(item_id: String) -> void:
 			return
 
 	var item = chunked_info.item
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	var final_size = int(plugin.call("androidFileSize", chunked_info.final_path)) if plugin != null else -1
 	if final_size != item.expected_file_size:
 		push_error("[SystemManager.download] Flush-mode final size mismatch: expected " + str(item.expected_file_size) + ", got " + str(final_size))
@@ -2913,9 +2913,9 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 	# Call native Java reassembly on the main thread.
 	# NOTE: This blocks the UI for the duration of reassembly, but a clear
 	# notification is shown beforehand so the user knows what is happening.
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
-		push_error("[SystemManager.download] PackageChecker plugin not available for reassembly")
+		push_error("[SystemManager.download] KyodaiBridge plugin not available for reassembly")
 		_stop_chunked_progress_timer(item_id)
 		item.status = "failed"
 		item.error_message = "Plugin not available for reassembly"
@@ -3109,7 +3109,7 @@ func _copy_partial_to_final(item_id: String, partial_path: String, final_path: S
 	# For restricted Android paths, use the plugin's async copy.
 	var use_plugin_copy = false
 	if SystemManager.platform.is_android():
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		if plugin != null:
 			use_plugin_copy = plugin.call("requiresDocumentsContract", final_path)
 
@@ -3122,9 +3122,9 @@ func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_
 	var chunked_info = _chunked_downloads[item_id]
 	var item = chunked_info.item
 
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
-		push_error("[SystemManager.download] PackageChecker plugin not available for copy")
+		push_error("[SystemManager.download] KyodaiBridge plugin not available for copy")
 		_final_copy_progress.erase(item_id)
 		item.status = "failed"
 		item.error_message = "Plugin not available for copy"

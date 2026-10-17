@@ -57,12 +57,12 @@ func _compute_cell_size() -> void:
 	_cell_size = (content_width - separation * (COLUMNS - 1)) / float(COLUMNS)
 
 func _load_apps() -> void:
-	if not Engine.has_singleton("PackageChecker"):
-		push_error("[AndroidAppPicker] PackageChecker plugin not available")
+	if not Engine.has_singleton("KyodaiBridge"):
+		push_error("[AndroidAppPicker] KyodaiBridge plugin not available")
 		_loading_label.text = "Error: plugin not available"
 		return
 
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	var json_str: String = plugin.call("getInstalledLaunchableApps")
 	if json_str.is_empty():
 		_loading_label.text = "No apps found"

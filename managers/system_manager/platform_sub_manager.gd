@@ -182,10 +182,10 @@ func open_install_unknown_apps_settings():
 	if not is_android():
 		return
 	
-	# Use the PackageChecker plugin to launch with the correct intent action
+	# Use the KyodaiBridge plugin to launch with the correct intent action
 	# (ACTION_APPLICATION_DETAILS_SETTINGS + package: URI). OS.shell_open uses
 	# ACTION_VIEW which many OEMs don't handle for settings pages.
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin:
 		plugin.requestInstallUnknownAppsPermission()
 
@@ -212,10 +212,10 @@ func open_manage_storage_settings():
 	if not is_android():
 		return
 
-	# Use the PackageChecker plugin to launch with the correct intent action
+	# Use the KyodaiBridge plugin to launch with the correct intent action
 	# (ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION + package: URI).
 	# OS.shell_open uses ACTION_VIEW which many OEMs don't handle for settings pages.
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin:
 		plugin.requestManageExternalStoragePermission()
 
@@ -302,8 +302,8 @@ func show_install_permission_dialog():
 # ============================================================================
 
 func _get_android_plugin() -> Variant:
-	if Engine.has_singleton("PackageChecker"):
-		return Engine.get_singleton("PackageChecker")
+	if Engine.has_singleton("KyodaiBridge"):
+		return Engine.get_singleton("KyodaiBridge")
 	return null
 
 ## Starts the Android download foreground service
@@ -312,7 +312,7 @@ func start_download_foreground_service(game_name: String = "Game") -> bool:
 		return false
 	var plugin = _get_android_plugin()
 	if plugin == null:
-		push_warning("[SystemManager.platform] PackageChecker plugin not available for download foreground service")
+		push_warning("[SystemManager.platform] KyodaiBridge plugin not available for download foreground service")
 		return false
 	plugin.startDownloadForegroundService(game_name)
 	return true
@@ -343,7 +343,7 @@ func start_sync_foreground_service(platform_name: String = "Game Library", curre
 		return false
 	var plugin = _get_android_plugin()
 	if plugin == null:
-		push_warning("[SystemManager.platform] PackageChecker plugin not available for sync foreground service")
+		push_warning("[SystemManager.platform] KyodaiBridge plugin not available for sync foreground service")
 		return false
 	plugin.startSyncForegroundService(platform_name, current, total)
 	return true

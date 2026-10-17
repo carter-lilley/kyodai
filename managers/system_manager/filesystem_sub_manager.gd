@@ -361,10 +361,10 @@ static func resolve_content_uri(path: String) -> String:
 	
 	return path
 
-## Gets the PackageChecker plugin singleton
+## Gets the KyodaiBridge plugin singleton
 static func _get_plugin():
-	if Engine.has_singleton("PackageChecker"):
-		return Engine.get_singleton("PackageChecker")
+	if Engine.has_singleton("KyodaiBridge"):
+		return Engine.get_singleton("KyodaiBridge")
 	return null
 
 ## Resolves a content:// URI to a real path if possible; otherwise imports it

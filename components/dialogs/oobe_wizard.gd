@@ -461,7 +461,7 @@ func _request_storage_permission():
 	if not SystemManager.platform.is_android():
 		return
 
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin and plugin.hasManageExternalStoragePermission():
 		return
 
@@ -484,7 +484,7 @@ func _update_permission_indicators():
 		return
 
 	var granted = OS.get_granted_permissions()
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 
 	if _perm_storage_indicator:
 		var has_manage_storage = false

@@ -614,11 +614,26 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 	
 	# On Android, use plugin to install APK with content:// URI (required for Android N+)
 	var plugin = null
-	if Engine.has_singleton("PackageChecker"):
-		plugin = Engine.get_singleton("PackageChecker")
+	if Engine.has_singleton("KyodaiBridge"):
+		plugin = Engine.get_singleton("KyodaiBridge")
 	
 	var result = Error.FAILED
 	if plugin != null:
+		# Android 8+ silently blocks APK installs until the user grants the
+		# "Install unknown apps" toggle for Kyodai. Gate here so we don't fire
+		# an intent the system will refuse and then advance the install flow
+		# past a step that never actually ran.
+		if plugin.has_method("canInstallUnknownApps") and not plugin.call("canInstallUnknownApps"):
+			print("[EmulatorManager] Install-unknown-apps permission not granted, opening settings")
+			plugin.call("requestInstallUnknownAppsPermission")
+			SystemManager.notifications.show_notification(
+				"Allow Kyodai to install apps:\nenable 'Install unknown apps' in the settings screen that just opened, then retry",
+				SystemManager.notifications.Type.WARNING,
+				null,
+				10.0
+			)
+			_emulator_install_progress[emulator_id] = "Install permission required"
+			return false
 		# Convert Godot virtual path (user://) to an absolute filesystem path
 		# so the Java plugin can create a File object from it.
 		var absolute_apk_path = FSM.resolve_path(apk_path, {"format": FSM.PathFormat.ABSOLUTE})
@@ -627,7 +642,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		if success:
 			result = Error.OK
 	else:
-		push_error("[EmulatorManager] PackageChecker plugin not available for APK install")
+		push_error("[EmulatorManager] KyodaiBridge plugin not available for APK install")
 	
 	if result != Error.OK:
 		print("[EmulatorManager] APK install failed with error: " + str(result))
@@ -1958,9 +1973,9 @@ func _get_step_display_name(step_name: String, emulator_name: String = "") -> St
 		return emulator_name + " - " + step_label
 	return step_label
 
-## Checks if an Android package is installed using the PackageChecker plugin
+## Checks if an Android package is installed using the KyodaiBridge plugin
 func _is_android_package_installed(package_name: String) -> bool:
-	var plugin = Engine.get_singleton("PackageChecker")
+	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		return false
 	

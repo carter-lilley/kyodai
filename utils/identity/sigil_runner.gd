@@ -32,9 +32,9 @@ static func _get_sigil_path() -> String:
 		# the app's private data dir. Sigil is shipped as a fake native library
 		# (libsigil.so in jniLibs) so the package manager extracts it to
 		# nativeLibraryDir, where execution is allowed.
-		var plugin = Engine.get_singleton("PackageChecker") if Engine.has_singleton("PackageChecker") else null
+		var plugin = Engine.get_singleton("KyodaiBridge") if Engine.has_singleton("KyodaiBridge") else null
 		if plugin == null:
-			push_error("[SigilRunner] PackageChecker plugin not available")
+			push_error("[SigilRunner] KyodaiBridge plugin not available")
 			return ""
 		var lib_dir: String = plugin.call("getNativeLibraryDir")
 		if lib_dir == "":

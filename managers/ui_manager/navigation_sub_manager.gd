@@ -811,10 +811,10 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 		var package_name: String = data.get("package", "")
 		if package_name.is_empty():
 			return
-		if not Engine.has_singleton("PackageChecker"):
-			push_error("[NavigationManager] PackageChecker plugin not available")
+		if not Engine.has_singleton("KyodaiBridge"):
+			push_error("[NavigationManager] KyodaiBridge plugin not available")
 			return
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		var success: bool = plugin.call("launchAppByPackageName", package_name)
 		if success and LaunchManager and LaunchManager.process:
 			LaunchManager.process.enter_background_state_android(null)

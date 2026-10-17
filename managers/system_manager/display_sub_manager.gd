@@ -185,8 +185,8 @@ func _initialize_display_detection() -> void:
 
 func _initialize_android_plugin() -> void:
 	"""Initialize Android plugin for display detection."""
-	if Engine.has_singleton("PackageChecker"):
-		_android_plugin = Engine.get_singleton("PackageChecker")
+	if Engine.has_singleton("KyodaiBridge"):
+		_android_plugin = Engine.get_singleton("KyodaiBridge")
 
 func _on_viewport_size_changed() -> void:
 	"""Raw window resize event: restart the debounce timer.

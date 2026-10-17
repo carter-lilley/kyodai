@@ -272,6 +272,13 @@ func _on_gui_focus_changed(control: Control) -> void:
 			or not control.is_visible_in_tree() or not control.has_method("m3_get_focus_geometry"):
 		_hide_ring()
 		return
+	# While the on-screen keyboard is open, key focus is shown by the keys'
+	# own focus border — the global ring renders below the keyboard's canvas
+	# layer, so hide it rather than chase keys around behind the panel.
+	if ui_manager and ui_manager.has_method("is_focus_in_onscreen_keyboard") \
+			and ui_manager.is_focus_in_onscreen_keyboard(control):
+		_hide_ring()
+		return
 	var vp := control.get_viewport()
 	if vp and vp != _attached_viewport:
 		_attach_to_viewport(vp)

@@ -53,9 +53,9 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class PackageCheckerPlugin extends GodotPlugin {
+public class KyodaiBridgePlugin extends GodotPlugin {
     
-    private static final String TAG = "PackageChecker";
+    private static final String TAG = "KyodaiBridge";
     private static final String ACTION_EXTRACTION_COMPLETE = "com.heckpoint.kyodai.EXTRACTION_COMPLETE";
     private static final String SAF_PREFS = "kyodai_saf";
     private static final String SAF_TREE_URIS_KEY = "android_data_tree_uris";
@@ -66,9 +66,9 @@ public class PackageCheckerPlugin extends GodotPlugin {
     private BroadcastReceiver extractionReceiver;
     private WindowFocusGuard windowFocusGuard;
     
-    public PackageCheckerPlugin(Godot godot) {
+    public KyodaiBridgePlugin(Godot godot) {
         super(godot);
-        Log.d(TAG, "PackageCheckerPlugin constructor called");
+        Log.d(TAG, "KyodaiBridgePlugin constructor called");
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
         if (this.activity != null) {
@@ -79,7 +79,7 @@ public class PackageCheckerPlugin extends GodotPlugin {
     
     @Override
     public String getPluginName() {
-        return "PackageChecker";
+        return "KyodaiBridge";
     }
     
     @Override
@@ -761,25 +761,57 @@ public class PackageCheckerPlugin extends GodotPlugin {
     }
     
     /**
-     * Opens the app's details page in Android Settings so the user can enable
-     * "Install unknown apps" permission. Uses ACTION_APPLICATION_DETAILS_SETTINGS
-     * with the proper package: URI instead of the unreliable ACTION_VIEW.
+     * Checks whether the user has granted the runtime "Install unknown apps"
+     * toggle for this app (Android 8+). The manifest permission
+     * REQUEST_INSTALL_PACKAGES must also be declared for installs to work.
      *
-     * @return true if the settings intent was launched successfully
+     * @return true if the app is allowed to trigger APK installs
+     */
+    @UsedByGodot
+    public boolean canInstallUnknownApps() {
+        if (activity == null) {
+            Log.e(TAG, "canInstallUnknownApps: Activity is null");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return activity.getPackageManager().canRequestPackageInstalls();
+        }
+        return true;
+    }
+
+    /**
+     * Opens the dedicated "Install unknown apps" settings screen for this app
+     * (ACTION_MANAGE_UNKNOWN_APP_SOURCES). Falls back to the app details page
+     * if the dedicated screen is unavailable on the current ROM.
+     *
+     * @return true if a settings intent was launched successfully
      */
     @UsedByGodot
     public boolean requestInstallUnknownAppsPermission() {
         Log.d(TAG, "==========================================");
         Log.d(TAG, "requestInstallUnknownAppsPermission() called");
-        
+
         if (activity == null) {
             Log.e(TAG, "ERROR: Activity is null!");
             return false;
         }
-        
+
+        Uri packageUri = Uri.parse("package:" + activity.getPackageName());
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+            intent.setData(packageUri);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+            Log.d(TAG, "Launched manage unknown app sources settings");
+            Log.d(TAG, "==========================================");
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "ACTION_MANAGE_UNKNOWN_APP_SOURCES unavailable, falling back to app details: " + e.getMessage());
+        }
+
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-            intent.setData(Uri.parse("package:" + activity.getPackageName()));
+            intent.setData(packageUri);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity.startActivity(intent);
             Log.d(TAG, "Launched application details settings for install unknown apps");
@@ -788,6 +820,63 @@ public class PackageCheckerPlugin extends GodotPlugin {
         } catch (Exception e) {
             Log.e(TAG, "ERROR opening install unknown apps settings: " + e.getMessage());
             Log.e(TAG, "Exception type: " + e.getClass().getName());
+            return false;
+        }
+    }
+
+    /**
+     * Checks whether the app is exempt from battery optimizations (doze /
+     * background restrictions). Requires the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+     * manifest permission.
+     *
+     * @return true if the app is on the battery optimization whitelist
+     */
+    @UsedByGodot
+    public boolean isIgnoringBatteryOptimizations() {
+        if (activity == null) {
+            Log.e(TAG, "isIgnoringBatteryOptimizations: Activity is null");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.os.PowerManager pm =
+                (android.os.PowerManager) activity.getSystemService(Context.POWER_SERVICE);
+            return pm != null && pm.isIgnoringBatteryOptimizations(activity.getPackageName());
+        }
+        return true;
+    }
+
+    /**
+     * Shows the system dialog asking the user to exempt this app from battery
+     * optimizations (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS). Requires the
+     * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS manifest permission, otherwise the
+     * dialog is silently suppressed.
+     *
+     * @return true if the dialog intent was launched successfully
+     */
+    @UsedByGodot
+    public boolean requestIgnoreBatteryOptimizations() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "requestIgnoreBatteryOptimizations() called");
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return false;
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        }
+
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + activity.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+            Log.d(TAG, "Launched ignore battery optimizations dialog");
+            Log.d(TAG, "==========================================");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR requesting battery optimization exemption: " + e.getMessage());
             return false;
         }
     }
@@ -2830,6 +2919,16 @@ public class PackageCheckerPlugin extends GodotPlugin {
         }
         
         try {
+            // Android 8+: without the runtime "Install unknown apps" grant the
+            // installer intent is refused by the system. Bail out explicitly so
+            // the caller can route the user to the settings screen instead of
+            // reporting a phantom success.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && !activity.getPackageManager().canRequestPackageInstalls()) {
+                Log.e(TAG, "installApk: 'Install unknown apps' not granted for this app");
+                return false;
+            }
+
             File apkFile = new File(apkPath);
             if (!apkFile.exists()) {
                 Log.e(TAG, "installApk: File does not exist: " + apkPath);

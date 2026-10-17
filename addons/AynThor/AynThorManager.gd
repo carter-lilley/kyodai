@@ -55,6 +55,14 @@ var second_size_confirmed: bool = false
 var last_touch_positions: Dictionary = {}
 var touch_down_positions: Dictionary = {}
 
+# Duplicate DOWN/UP dedup state. Some drivers report both ACTION_DOWN and
+# ACTION_POINTER_DOWN for a single tap, and every forwarded press/release
+# pair types a character on the on-screen keyboard. Windowed (not stateful)
+# so a lost UP can never wedge a pointer id.
+const DUPLICATE_TAP_MSEC := 100
+var _last_down_msec: Dictionary = {}
+var _last_up_msec: Dictionary = {}
+
 # Finger jitter on the touchscreen produces tiny MOVE events between down/up;
 # forwarded as mouse drags they turn taps into ScrollContainer scrolls and
 # break clicks. Don't forward motion until it leaves this deadzone (physical px).
@@ -238,6 +246,12 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		target_vp.handle_input_locally = true
 	
 	if action == 0 or action == 5:
+		# Swallow a duplicate DOWN for the same pointer arriving back-to-back
+		# (ACTION_DOWN + ACTION_POINTER_DOWN for one physical tap).
+		var now_msec := Time.get_ticks_msec()
+		if now_msec - _last_down_msec.get(pid, -DUPLICATE_TAP_MSEC) < DUPLICATE_TAP_MSEC:
+			return
+		_last_down_msec[pid] = now_msec
 		var vt := get_tree().get_first_node_in_group("view_transition_overlay")
 		print("[DSDebug] bottom-screen tap: target_vp=", target_vp.name, " vt(active=", ViewTransitionOverlay.is_transition_active, " animating=", vt.is_animating() if vt else "n/a", " visible=", vt.visible if vt else "n/a", ") lt_active=", LaunchTransitionOverlay.is_transition_active)
 		last_touch_positions[pid] = current_pos
@@ -251,6 +265,11 @@ func _on_second_screen_input(action: int, x: float, y: float, pid: int):
 		target_vp.push_input(mouse_event)
 
 	elif action == 1 or action == 6:
+		# Swallow the duplicate UP paired with a deduped duplicate DOWN.
+		var up_now_msec := Time.get_ticks_msec()
+		if up_now_msec - _last_up_msec.get(pid, -DUPLICATE_TAP_MSEC) < DUPLICATE_TAP_MSEC:
+			return
+		_last_up_msec[pid] = up_now_msec
 		last_touch_positions.erase(pid)
 		touch_down_positions.erase(pid)
 		var mouse_event = InputEventMouseButton.new()

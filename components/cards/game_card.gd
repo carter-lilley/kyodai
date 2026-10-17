@@ -1299,7 +1299,7 @@ func _trigger_long_press() -> void:
 	_touch_is_holding = false
 	# Haptic tick on activation (same pattern as keyboard/focus feedback).
 	if SystemManager.platform.is_android():
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		if plugin:
 			plugin.call("vibrateDevice", 50)
 	elif Input.get_connected_joypads().size() > 0:
@@ -1381,7 +1381,7 @@ func _on_focus_entered():
 		SystemManager.audio.play_sfx_modulate("click_02", 0.98, 1.02)
 
 	if SystemManager.platform.is_android():
-		var plugin = Engine.get_singleton("PackageChecker")
+		var plugin = Engine.get_singleton("KyodaiBridge")
 		if plugin:
 			plugin.call("vibrateDevice", 50)
 	else:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Rebuilds the PackageChecker Android plugin and copies the release AAR into
-# the Godot project (addons/PackageChecker). Run this after editing anything
+# Rebuilds the KyodaiBridge Android plugin and copies the release AAR into
+# the Godot project (addons/KyodaiBridge). Run this after editing anything
 # under android/plugin/src. (Bash port of build_plugin.ps1 - the PowerShell
 # version only existed because gradlew misbehaves in Windows git-bash.)
 #
@@ -15,7 +15,7 @@ echo "Building plugin release AAR..."
 (cd "$repo_root/android" && ./gradlew :plugin:assembleRelease --console=plain)
 
 built_aar="$repo_root/android/plugin/build/outputs/aar/plugin-release.aar"
-dest_aar="$repo_root/addons/PackageChecker/PackageCheckerPlugin.aar"
+dest_aar="$repo_root/addons/KyodaiBridge/KyodaiBridgePlugin.aar"
 
 [[ -f "$built_aar" ]] || { echo "Build output not found: $built_aar" >&2; exit 1; }
 

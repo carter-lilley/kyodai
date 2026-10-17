@@ -40,7 +40,7 @@ window/hdr/request_hdr_output.android=false
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/PackageChecker/plugin.cfg", "res://addons/godot-sqlite/plugin.cfg", "res://addons/icons-fonts/plugin.cfg", "res://addons/m3/plugin.cfg", "res://addons/rakugo-nodes/plugin.cfg")
+enabled=PackedStringArray("res://addons/AynThor/plugin.cfg", "res://addons/KyodaiBridge/plugin.cfg", "res://addons/godot-sqlite/plugin.cfg", "res://addons/icons-fonts/plugin.cfg", "res://addons/m3/plugin.cfg", "res://addons/rakugo-nodes/plugin.cfg")
 
 [file_customization]
 

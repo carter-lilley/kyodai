@@ -21,8 +21,8 @@ android/**/*.iml
 android/*.keystore
 
 # Keep only the addon AAR - ignore build outputs
-# The canonical AAR is in addons/PackageChecker/ and should be in version control
-android/plugin/PackageCheckerPlugin.aar
+# The canonical AAR is in addons/KyodaiBridge/ and should be in version control
+android/plugin/KyodaiBridgePlugin.aar
 android/plugins/
 
 # gdcef / CEF runtime binaries (download from gdcef releases)

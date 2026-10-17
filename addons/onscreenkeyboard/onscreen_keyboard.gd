@@ -78,6 +78,11 @@ signal layout_changed
 signal keyboard_opened(active_line_edit: LineEdit)
 signal keyboard_closed()
 
+## Debug logging for verifying the Android touch double-input fix: one tap on
+## a key must log _key_released exactly once (check logcat). Flip to false
+## once confirmed on device.
+const DEBUG_LOG: bool = true
+
 ## PREDEFINED display-icon names mapped to MaterialIcons glyphs (rendered via
 ## M3Button's icon support)
 const PREDEFINED_ICONS := {
@@ -333,11 +338,16 @@ var tween_speed = .2
 var hide_position = Vector2()
 
 func _init_keyboard():
-	if custom_layout_file == null:
-		var default_layout = preload("default_layout.gd").new()
-		_create_keyboard(default_layout.data)
-	else:
-		_create_keyboard(_load_json(custom_layout_file))
+	# _enter_tree() re-fires every time the keyboard is reparented (dual-screen
+	# mode moves it between viewports), and _create_keyboard() appends
+	# layouts/keys without clearing — rebuilding would stack a full duplicate
+	# keyboard. There must never be more than one set of keys.
+	if layouts.is_empty():
+		if custom_layout_file == null:
+			var default_layout = preload("default_layout.gd").new()
+			_create_keyboard(default_layout.data)
+		else:
+			_create_keyboard(_load_json(custom_layout_file))
 
 	# init positioning without animation
 	var tmp_anim = animate
@@ -660,20 +670,63 @@ func _switch_layout(key_data):
 	previous_layout = current_layout
 	layout_changed.emit(key_data.get("layout-name"))
 
+	# Remember where we came from so focus can land on the key that points
+	# back — hiding the outgoing layout releases focus, stranding controller
+	# navigation.
+	var from_layout_name: String = ""
+	if current_layout != null and is_instance_valid(current_layout) and current_layout.has_meta("layout_name"):
+		from_layout_name = str(current_layout.get_meta("layout_name"))
+
 	for layout in layouts:
 		_hide_layout(layout)
 
 	if key_data.get("layout-name") == "PREVIOUS-LAYOUT":
 		if prev_prev_layout != null:
 			_show_layout(prev_prev_layout)
+			_refocus_after_layout_swap(prev_prev_layout, from_layout_name)
 			return
 
 	for layout in layouts:
 		if layout.get_meta("layout_name") == key_data.get("layout-name"):
 			_show_layout(layout)
+			_refocus_after_layout_swap(layout, from_layout_name)
 			return
 
 	_set_caps_lock(false)
+
+
+func _refocus_after_layout_swap(shown_layout, from_layout_name: String) -> void:
+	# Deferred: _switch_layout runs from the key's own `released` signal, and
+	# the focus release from hide() settles within the same frame.
+	call_deferred("_grab_switch_key_focus", shown_layout, from_layout_name)
+
+
+func _grab_switch_key_focus(shown_layout, from_layout_name: String) -> void:
+	if shown_layout == null or not is_instance_valid(shown_layout):
+		return
+	if not visible or not shown_layout.visible:
+		# Keyboard hidden or another swap beat us to it
+		return
+	# Prefer the switch-layout key that points back to the layout we just left
+	# (it sits at the same grid spot as the pressed key, so focus visually
+	# stays put). Fall back to any switch-layout key, then the first key.
+	var back_key = null
+	var any_switch_key = null
+	var first_key = null
+	for key in keys:
+		if not is_instance_valid(key) or not shown_layout.is_ancestor_of(key):
+			continue
+		if first_key == null:
+			first_key = key
+		if str(key.key_data.get("type", "")) == "switch-layout":
+			if any_switch_key == null:
+				any_switch_key = key
+			if str(key.key_data.get("layout-name", "")) == from_layout_name:
+				back_key = key
+				break
+	var target = back_key if back_key != null else (any_switch_key if any_switch_key != null else first_key)
+	if target != null:
+		target.grab_focus()
 
 
 ###########################
@@ -710,6 +763,7 @@ func _trigger_uppercase(key_data):
 
 
 func _key_released(key_data):
+	if DEBUG_LOG: print("[OnscreenKeyboard] _key_released output=", key_data.get("output", "?"), " t=", Time.get_ticks_msec())
 	if key_data.has("output"):
 		var key_value = key_data.get("output")
 
