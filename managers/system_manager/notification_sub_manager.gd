@@ -40,6 +40,9 @@ class NotificationEntry:
 	var text_formatter: Callable
 	var is_pulsing: bool = false
 	var is_pinned: bool = false
+	var attach_attempts: int = 0  ## retries after add_child() was refused (blocked parent)
+
+const MAX_ATTACH_ATTEMPTS = 120  ## ~2s of frames; beyond this the entry is dropped
 
 ## Visible entries, index 0 = bottom of the stack (newest).
 var _entries: Array[NotificationEntry] = []
@@ -160,7 +163,7 @@ func _visible_count() -> int:
 			count += 1
 	return count
 
-func _show_entry(entry: NotificationEntry) -> void:
+func _show_entry(entry: NotificationEntry) -> bool:
 	var snackbar := M3Snackbar.new()
 	# Unique overlay type per snackbar: M3Overlay.show_overlay() dismisses any
 	# existing overlay of the same type, which would stomp stacked snackbars.
@@ -182,12 +185,31 @@ func _show_entry(entry: NotificationEntry) -> void:
 	# Parent via the overlay parent (MainViewport in DS mode) so the snackbar
 	# renders on the active screen instead of the root window.
 	M3Overlay.get_overlay_parent().add_child(snackbar)
+	if not snackbar.is_inside_tree():
+		# add_child() was refused: the overlay parent (root on single-screen)
+		# is blocked. This happens deterministically when called synchronously
+		# from inside a propagated engine notification (e.g.
+		# NOTIFICATION_APPLICATION_RESUMED), because
+		# Node.propagate_notification() holds data.blocked on every node it
+		# passes through for the entire propagation. Don't leave a zombie
+		# occupying a stack slot: free the unattached snackbar, requeue the
+		# entry, and retry at idle time once the propagation has finished.
+		snackbar.queue_free()
+		entry.attach_attempts += 1
+		if entry.attach_attempts > MAX_ATTACH_ATTEMPTS:
+			push_warning("[notification] Dropping notification %d: overlay parent still blocked after %d attempts" % [entry.id, entry.attach_attempts])
+			notification_dismissed.emit(entry.id)
+			return false
+		_pending.push_front(entry)
+		call_deferred("_drain_pending")
+		return false
 	snackbar.show_overlay()
 	if not entry.is_progress and not entry.is_pinned:
 		snackbar.start_timer(int(entry.min_duration * 1000))
 	entry.snackbar = snackbar
 	_entries.insert(0, entry)
 	_reposition_stack()
+	return true
 
 func _on_snackbar_dismissed(snackbar: M3Snackbar) -> void:
 	var entry := _find_entry_by_snackbar(snackbar)
@@ -201,7 +223,10 @@ func _on_snackbar_dismissed(snackbar: M3Snackbar) -> void:
 ## Moves queued notifications into newly freed visible slots.
 func _drain_pending() -> void:
 	while not _pending.is_empty() and _visible_count() < MAX_STACK_SIZE:
-		_show_entry(_pending.pop_front())
+		# Stop on attach refusal (tree blocked mid propagated notification):
+		# _show_entry already requeued the entry and scheduled a deferred retry.
+		if not _show_entry(_pending.pop_front()):
+			break
 
 func _reposition_stack() -> void:
 	# Cumulative pixel offsets: progress snackbars are taller than messages,

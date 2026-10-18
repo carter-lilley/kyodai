@@ -1077,7 +1077,11 @@ func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
 		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
 		print("[Main] Auto-upload check - emulator_id: " + emulator_id)
 		if emulator_id != "":
-			DataManager.auto_upload_saves_for_game(_game, emulator_id)
+			# Deferred: this handler runs inside NOTIFICATION_APPLICATION_RESUMED
+			# propagation, and for /Android/data save paths the discovery scan
+			# runs inline on the main thread (_run_io_task). Keep the scan - and
+			# any snackbar it produces - out of the resume-critical window.
+			DataManager.auto_upload_saves_for_game.call_deferred(_game, emulator_id)
 		else:
 			print("[Main] Auto-upload skipped: no emulator resolved")
 	else:

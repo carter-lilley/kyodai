@@ -24,6 +24,8 @@ android/*.keystore
 # The canonical AAR is in addons/KyodaiBridge/ and should be in version control
 android/plugin/KyodaiBridgePlugin.aar
 android/plugins/
+# libsigil.so is staged here by build_plugin.sh from bin/sigil/android/
+android/plugin/src/main/jniLibs/
 
 # gdcef / CEF runtime binaries (download from gdcef releases)
 cef_artifacts/

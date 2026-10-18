@@ -1580,15 +1580,29 @@ func _launch_game(entry: Dictionary) -> void:
 			else:
 				push_warning("[ShufflerSubManager] Vita3K game launched but no TitleID was extracted: " + game.title)
 
-		if emulator_id.begins_with("rpcs3"):
+		if LaunchManager.registry.get_emulator_architecture(emulator_id) == "rpcs3":
 			var ps3_title_id = game.get_active_title_id()
 			if ps3_title_id != "":
+				# Shuffler launches extract straight into emulator-managed
+				# storage, which TEMP_DIR cleanup never reaches: the managed
+				# install dir on desktop, the declared resolution anchor
+				# (app-data config root) on Android. Both candidate layouts
+				# (games/ and dev_hdd0/game/) are candidates for cleanup.
+				var ps3_cleanup_paths: Array = []
 				var ps3_install_path = LaunchManager.get_emulator_install_path(emulator_id)
 				if ps3_install_path != "":
 					# Managed emulator dir, not the exe's parent (AppImage-safe).
-					# Desktop shuffler launches extract straight into it; both
-					# candidate layouts are candidates for session cleanup.
 					var rpcs3_emu_dir = LaunchManager._get_emulator_directory(emulator_id).rstrip("/")
+					ps3_cleanup_paths.append(rpcs3_emu_dir + "/games/" + ps3_title_id)
+					ps3_cleanup_paths.append(rpcs3_emu_dir + "/dev_hdd0/game/" + ps3_title_id)
+				elif SystemManager.platform.is_android():
+					var anchor_raw := str(LaunchManager.registry.get_emulator(emulator_id).get("resolution", {}).get("anchor", ""))
+					if anchor_raw != "":
+						var anchor := FSM.resolve_emulator_path(anchor_raw, emulator_id, game.platform_slug).rstrip("/")
+						if anchor != "":
+							ps3_cleanup_paths.append(anchor + "/games/" + ps3_title_id)
+							ps3_cleanup_paths.append(anchor + "/dev_hdd0/game/" + ps3_title_id)
+				if not ps3_cleanup_paths.is_empty():
 					var already_tracked_ps3 := false
 					for tracked in _shuffler_ps3_games:
 						if tracked.get("title_id", "") == ps3_title_id:
@@ -1597,10 +1611,7 @@ func _launch_game(entry: Dictionary) -> void:
 					if not already_tracked_ps3:
 						_shuffler_ps3_games.append({
 							"title_id": ps3_title_id,
-							"paths": [
-								rpcs3_emu_dir + "/games/" + ps3_title_id,
-								rpcs3_emu_dir + "/dev_hdd0/game/" + ps3_title_id,
-							]
+							"paths": ps3_cleanup_paths,
 						})
 						if DEBUG_LOG: print("[ShufflerSubManager] Tracked RPCS3 shuffler game for cleanup: " + ps3_title_id)
 			else:
@@ -2761,10 +2772,11 @@ func _cleanup_vita3k_shuffler_apps() -> void:
 
 	_shuffler_vita_apps.clear()
 
-## PS3 counterpart of the Vita cleanup: desktop shuffler launches extract
-## straight into the RPCS3 emulator dir (games/ or dev_hdd0/game/), which
-## TEMP_DIR cleanup never reaches. Sentinel-guarded like the Vita path so a
-## pre-existing (non-shuffler) install is never deleted.
+## PS3 counterpart of the Vita cleanup: shuffler launches extract straight
+## into emulator-managed storage (desktop install dir or the Android app-data
+## anchor's games/ or dev_hdd0/game/), which TEMP_DIR cleanup never reaches.
+## Sentinel-guarded like the Vita path so a pre-existing (non-shuffler)
+## install is never deleted.
 func _cleanup_rpcs3_shuffler_games() -> void:
 	for entry in _shuffler_ps3_games:
 		for raw_path in entry.get("paths", []):

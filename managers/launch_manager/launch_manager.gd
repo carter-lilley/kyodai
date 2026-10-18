@@ -446,9 +446,11 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 			on_pid_ready.call(pid)
 		_end_launch(game.romm_id)
 	
-	# Vita3K and RPCS3 need TitleID extraction and ZIP extraction even in shuffler mode.
-	# Other emulators skip the normal preparation step.
-	var should_prepare = emulator_id.begins_with("vita3k") or emulator_id.begins_with("rpcs3")
+	# Vita3K and RPCS3-family emulators need TitleID extraction and ZIP extraction
+	# even in shuffler mode. Keyed on architecture so forks (armsx3, aps3e, ...)
+	# prep like their parent. Other emulators skip the normal preparation step.
+	var prep_arch = registry.get_emulator_architecture(emulator_id)
+	var should_prepare = prep_arch == "vita3k" or prep_arch == "rpcs3"
 	# Prep/firmware failures inside _ensure_prerequisites never reach on_ready,
 	# so report them as a failed pid or the shuffler idles out the round on a
 	# dead launch.

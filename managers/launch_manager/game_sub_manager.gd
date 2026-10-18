@@ -1056,15 +1056,15 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			# This handles cases where we can't read PARAM.SFO
 			if DEBUG_LOG: print("[GameManager] RPCS3: Could not get TitleID from PARAM.SFO, searching for ZIP...")
 			
-			# On desktop, the extracted folder might be in the emulator directory
-			# but the ZIP is in the games library. Check both.
+			# The extracted folder may live in emulator-managed storage (desktop
+			# install dir or Android app-data anchor) while the ZIP stays in the
+			# games library. Check both.
 			var search_dirs = [rom_path.get_base_dir()]
-			if not SystemManager.platform.is_android():
-				var root_folder = DataManager.get_setting("games_root_folder")
-				var root_path = root_folder.value if root_folder else "user://roms/"
-				var library_dir = FSM.join_paths(root_path, game.platform_slug)
-				if library_dir != search_dirs[0]:
-					search_dirs.append(library_dir)
+			var root_folder = DataManager.get_setting("games_root_folder")
+			var root_path = root_folder.value if root_folder else "user://roms/"
+			var library_dir = FSM.join_paths(root_path, game.platform_slug)
+			if library_dir != search_dirs[0]:
+				search_dirs.append(library_dir)
 			
 			var all_zip_files: Array[String] = []
 			for search_dir in search_dirs:
@@ -1102,18 +1102,17 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				zip_path = zip_files[0]
 				if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 			else:
-				# On desktop, the extracted folder might be in the emulator directory
-				# but the ZIP is in the games library. Check the library folder.
-				if not SystemManager.platform.is_android():
-					var root_folder = DataManager.get_setting("games_root_folder")
-					var root_path = root_folder.value if root_folder else "user://roms/"
-					var library_dir = FSM.join_paths(root_path, game.platform_slug)
-					if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
-					zip_files = _find_zip_files_in_dir(library_dir)
-					if zip_files.size() > 0:
-						zip_path = zip_files[0]
-						if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
-				
+				# The extracted folder may live in emulator-managed storage while
+				# the ZIP is in the games library. Check the library folder.
+				var root_folder = DataManager.get_setting("games_root_folder")
+				var root_path = root_folder.value if root_folder else "user://roms/"
+				var library_dir = FSM.join_paths(root_path, game.platform_slug)
+				if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
+				zip_files = _find_zip_files_in_dir(library_dir)
+				if zip_files.size() > 0:
+					zip_path = zip_files[0]
+					if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
+
 				if zip_path == "":
 					push_error("[GameManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
 					SystemManager.notifications.show_notification("Game files missing - please re-download", SystemManager.notifications.Type.ERROR)
@@ -1130,18 +1129,17 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 			zip_path = zip_files[0]
 			if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in parent dir: " + zip_path)
 		else:
-			# On desktop, the extracted folder might be in the emulator directory
-			# but the ZIP is in the games library. Check the library folder.
-			if not SystemManager.platform.is_android():
-				var root_folder = DataManager.get_setting("games_root_folder")
-				var root_path = root_folder.value if root_folder else "user://roms/"
-				var library_dir = FSM.join_paths(root_path, game.platform_slug)
-				if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
-				zip_files = _find_zip_files_in_dir(library_dir)
-				if zip_files.size() > 0:
-					zip_path = zip_files[0]
-					if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
-			
+			# The extracted folder may live in emulator-managed storage while
+			# the ZIP is in the games library. Check the library folder.
+			var root_folder = DataManager.get_setting("games_root_folder")
+			var root_path = root_folder.value if root_folder else "user://roms/"
+			var library_dir = FSM.join_paths(root_path, game.platform_slug)
+			if DEBUG_LOG: print("[GameManager] RPCS3: Checking games library: " + library_dir)
+			zip_files = _find_zip_files_in_dir(library_dir)
+			if zip_files.size() > 0:
+				zip_path = zip_files[0]
+				if DEBUG_LOG: print("[GameManager] RPCS3: Found original ZIP in library: " + zip_path)
+
 			if zip_path == "":
 				push_error("[GameManager] RPCS3: No ZIP found to re-extract in: " + parent_dir)
 				SystemManager.notifications.show_notification("Game files missing - please re-download", SystemManager.notifications.Type.ERROR)
@@ -1169,20 +1167,34 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	var title_id = game.get_active_title_id()
 	if DEBUG_LOG: print("[GameManager] RPCS3: Using TitleID: " + title_id)
 	
-	# On desktop, determine the correct RPCS3 directory
-	var rpcs3_install_dir := ""
-	var desktop_disc_path := ""
-	var desktop_digital_path := ""
+	# Determine the emulator-managed game locations, where the emulator's own
+	# library scans: desktop RPCS3 uses the managed install dir; Android
+	# rpcs3-architecture emulators (armsx3, aps3e) use the declared resolution
+	# anchor (the app-data config root), which kyodai can write with all-files
+	# access. Extracting there gives Android parity with desktop (disc games in
+	# games/, digital in dev_hdd0/game/) and satisfies prepared-install
+	# detection (firmware + a visible game) so the emulator's OOBE is skipped.
+	var emu_disc_path := ""
+	var emu_digital_path := ""
 	if not SystemManager.platform.is_android():
 		var emulator_install_path = launch_manager.registry.get_emulator_install_path(intent.emulator_id)
 		if emulator_install_path != "":
 			# Managed emulator directory, not the exe's parent: extracted
 			# AppImages nest the exe inside the update-wiped squashfs-root/.
-			rpcs3_install_dir = launch_manager.registry._get_emulator_directory(intent.emulator_id).rstrip("/")
-			desktop_disc_path = FSM.join_paths(rpcs3_install_dir, "games", title_id)
-			desktop_digital_path = FSM.join_paths(rpcs3_install_dir, "dev_hdd0", "game", title_id)
-			if DEBUG_LOG: print("[GameManager] RPCS3: Desktop disc path: " + desktop_disc_path)
-			if DEBUG_LOG: print("[GameManager] RPCS3: Desktop digital path: " + desktop_digital_path)
+			var rpcs3_install_dir = launch_manager.registry._get_emulator_directory(intent.emulator_id).rstrip("/")
+			emu_disc_path = FSM.join_paths(rpcs3_install_dir, "games", title_id)
+			emu_digital_path = FSM.join_paths(rpcs3_install_dir, "dev_hdd0", "game", title_id)
+	else:
+		var anchor_raw := str(launch_manager.registry.get_emulator(intent.emulator_id).get("resolution", {}).get("anchor", ""))
+		if anchor_raw != "":
+			var anchor := FSM.resolve_emulator_path(anchor_raw, intent.emulator_id, game.platform_slug).rstrip("/")
+			if anchor != "":
+				emu_disc_path = FSM.join_paths(anchor, "games", title_id)
+				emu_digital_path = FSM.join_paths(anchor, "dev_hdd0", "game", title_id)
+	var to_emu_dir := emu_disc_path != ""
+	if DEBUG_LOG and to_emu_dir:
+		print("[GameManager] RPCS3: Emulator disc path: " + emu_disc_path)
+		print("[GameManager] RPCS3: Emulator digital path: " + emu_digital_path)
 	
 	# Step 2: Determine final extraction path (next to the ZIP)
 	var rom_parent_dir = zip_path.get_base_dir()
@@ -1190,21 +1202,22 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if DEBUG_LOG: print("[GameManager] RPCS3: Extraction path: " + extract_path)
 	
 	# Step 3: Check if already extracted
-	# On desktop, check RPCS3 directories first
-	if not SystemManager.platform.is_android():
-		if _ps3_game_has_files(desktop_disc_path):
-			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + desktop_disc_path)
-			_unwrap_ps3_wrapper(desktop_disc_path)
-			intent.rom_path = desktop_disc_path
+	# Check the emulator-managed locations first (desktop install dir or the
+	# Android resolution anchor), then the legacy library-adjacent folder.
+	if to_emu_dir:
+		if _ps3_game_has_files(emu_disc_path):
+			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + emu_disc_path)
+			_unwrap_ps3_wrapper(emu_disc_path)
+			intent.rom_path = emu_disc_path
 			if not is_shuffler:
-				_store_file_path(game, desktop_disc_path)
+				_store_file_path(game, emu_disc_path)
 			return true
-		elif _ps3_game_has_files(desktop_digital_path):
-			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + desktop_digital_path)
-			_unwrap_ps3_wrapper(desktop_digital_path)
-			intent.rom_path = desktop_digital_path
+		elif _ps3_game_has_files(emu_digital_path):
+			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + emu_digital_path)
+			_unwrap_ps3_wrapper(emu_digital_path)
+			intent.rom_path = emu_digital_path
 			if not is_shuffler:
-				_store_file_path(game, desktop_digital_path)
+				_store_file_path(game, emu_digital_path)
 			return true
 	
 	if _ps3_game_has_files(extract_path):
@@ -1234,22 +1247,23 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	
 	# Determine extraction target
 	var extract_target: String
-	var is_desktop = not SystemManager.platform.is_android() and rpcs3_install_dir != ""
-	if is_desktop:
-		# On desktop, extract directly to RPCS3 directory.
-		# We default to disc path; if the game is digital format we'll handle it after extraction.
-		extract_target = desktop_disc_path
-		if DEBUG_LOG: print("[GameManager] RPCS3: Desktop - extracting directly to: " + extract_target)
+	if to_emu_dir:
+		# Extract directly into the emulator's games dir. We default to the
+		# disc path; if the game is digital format it's relocated after
+		# extraction.
+		extract_target = emu_disc_path
+		if DEBUG_LOG: print("[GameManager] RPCS3: Extracting directly to: " + extract_target)
 	else:
-		# On Android, extract to temp first (same drive, no permission issues)
+		# No emulator-managed location (e.g. unmanaged desktop install):
+		# extract to temp first (same drive, no permission issues)
 		extract_target = extract_path + "_tmp"
-		if DEBUG_LOG: print("[GameManager] RPCS3: Android - extracting to temp: " + extract_target)
+		if DEBUG_LOG: print("[GameManager] RPCS3: Extracting to temp: " + extract_target)
 	
 	# Remove stale/partial game folders so re-extraction starts clean and the
 	# unwrap/move steps don't collide with leftover files (e.g. a PARAM.SFO left
 	# behind after the user deleted the rest of the game).
-	if is_desktop:
-		for stale_path in [desktop_disc_path, desktop_digital_path]:
+	if to_emu_dir:
+		for stale_path in [emu_disc_path, emu_digital_path]:
 			if FSM.dir_exists(stale_path):
 				if DEBUG_LOG: print("[GameManager] RPCS3: Removing stale game folder: " + stale_path)
 				FSM.delete_dir_recursive(stale_path)
@@ -1285,19 +1299,19 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	
 	# Determine final path
 	var final_extract_path = extract_path
-	if is_desktop:
-		final_extract_path = desktop_disc_path if is_disc_format else desktop_digital_path
-		if DEBUG_LOG: print("[GameManager] RPCS3: Desktop final path: " + final_extract_path)
+	if to_emu_dir:
+		final_extract_path = emu_disc_path if is_disc_format else emu_digital_path
+		if DEBUG_LOG: print("[GameManager] RPCS3: Emulator-managed final path: " + final_extract_path)
 	
 	# Step 6: Handle wrapper folder (e.g., "Soulcalibur IV/PS3_GAME/" -> "PS3_GAME/")
 	var game_root = sfo_dir.get_base_dir() if is_disc_format else sfo_dir
-	if is_desktop and game_root != final_extract_path:
+	if to_emu_dir and game_root != final_extract_path:
 		if DEBUG_LOG: print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
 		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
 		if not _unwrap_ps3_wrapper(final_extract_path):
 			return false
-	elif not is_desktop:
-		# Android: move from temp to final
+	elif not to_emu_dir:
+		# Fallback: move from temp to final
 		if DEBUG_LOG: print("[GameManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
 		if not FSM.move_dir_contents(game_root, final_extract_path):
 			push_error("[GameManager] RPCS3: Failed to move game files to " + final_extract_path)
@@ -1308,7 +1322,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	# Remove any leftover empty wrapper shells of arbitrary depth
 	# (e.g. "Game Name/" left behind after unwrapping "Game Name/PS3_GAME/")
 	FSM.prune_empty_dirs(final_extract_path)
-	if is_desktop and extract_target != final_extract_path:
+	if to_emu_dir and extract_target != final_extract_path:
 		# Digital games stage into the disc path first; drop the empty staging shell
 		FSM.prune_empty_dirs(extract_target)
 		if FSM.dir_exists(extract_target) and FSM.list_dir(extract_target).is_empty():
@@ -1329,10 +1343,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		_store_file_path(game, final_extract_path)
 		print("[GameManager] RPCS3: Updated game.file_path to: " + final_extract_path)
 
-	# Mark shuffler-managed desktop installs so session cleanup can safely
-	# delete them — they land in the emulator dir, which TEMP_DIR cleanup
-	# never touches. Pre-existing installs get no sentinel and are kept.
-	if is_shuffler and is_desktop:
+	# Mark shuffler-managed installs so session cleanup can safely delete them —
+	# they land in emulator-managed storage (desktop install dir or the Android
+	# app-data anchor), which TEMP_DIR cleanup never touches. Pre-existing
+	# installs get no sentinel and are kept.
+	if is_shuffler and to_emu_dir:
 		var sentinel_path = final_extract_path + "/.kyodai_shuffler"
 		if not FSM.file_exists(sentinel_path):
 			if not FSM.write_file(sentinel_path, ""):

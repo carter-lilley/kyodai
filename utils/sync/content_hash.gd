@@ -9,8 +9,11 @@ static func _md5_bytes(data: PackedByteArray) -> String:
 	var ctx = HashingContext.new()
 	if ctx.start(HashingContext.HASH_MD5) != OK:
 		return ""
-	if ctx.update(data) != OK:
-		return ""
+	# HashingContext.update() rejects zero-length buffers; skipping it yields
+	# the correct MD5 of empty input (d41d8cd9...) for RomM parity.
+	if not data.is_empty():
+		if ctx.update(data) != OK:
+			return ""
 	return ctx.finish().hex_encode()
 
 ## Restricted Android paths (other apps' Android/data|obb) are invisible to
@@ -86,6 +89,11 @@ static func compute_folder_zip_hash(dir_path: String, root_name: String = "") ->
 	var lines: Array[String] = []
 	_collect_folder_hash_lines(dir_path, prefix, lines)
 	lines.sort()
+	if lines.is_empty() and _is_restricted(dir_path):
+		# On a restricted path an empty collection may mean "no read access"
+		# (AltAccess/SAF failure) rather than a genuinely empty save - make it
+		# visible instead of silently hashing nothing.
+		push_warning("[ContentHash] Restricted path collected zero files (possible read-access failure): " + dir_path)
 	return _md5_bytes("\n".join(lines).to_utf8_buffer())
 
 ## Simulates the zip hash of a multi-root archive: each component is
@@ -101,6 +109,11 @@ static func compute_components_zip_hash(components: Array) -> String:
 		var prefix = (root + "/") if root != "" else ""
 		_collect_folder_hash_lines(src, prefix, lines)
 	lines.sort()
+	if lines.is_empty():
+		for comp in components:
+			var comp_src: String = comp.get("src", "")
+			if comp_src != "" and _is_restricted(comp_src) and FSM.dir_exists(comp_src):
+				push_warning("[ContentHash] Restricted path collected zero files (possible read-access failure): " + comp_src)
 	return _md5_bytes("\n".join(lines).to_utf8_buffer())
 
 static func _collect_folder_hash_lines(dir_path: String, zip_prefix: String, lines: Array[String]) -> void:

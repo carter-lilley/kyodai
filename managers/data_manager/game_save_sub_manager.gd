@@ -1350,13 +1350,32 @@ func _eden_find_title_in_profiles(save_root: String, title_id: String) -> String
 				if child.to_upper() != title_id.to_upper():
 					continue
 				var title_path := FSM.join_paths(profile_path, child)
-				if not FSM.dir_exists(title_path):
+				if not FSM.dir_exists(title_path) or not _dir_contains_files(title_path):
 					continue
 				var mtime := _get_folder_mtime(title_path)
 				if mtime > best_time:
 					best_time = mtime
 					best_path = title_path
 	return best_path
+
+## True if the directory contains at least one file (recursive, any size).
+## Exists-but-empty dirs are not saves: eden creates the title dir under the
+## active profile on launch while real saves may still sit under the zero
+## profile (the launch-twice profile setup). Treating the empty dir as
+## "found" strands those saves and hashes/uploads nothing.
+func _dir_contains_files(dir_path: String) -> bool:
+	if not FSM.dir_exists(dir_path):
+		return false
+	for item in FSM.list_dir(dir_path):
+		if item == "." or item == "..":
+			continue
+		var full_path := FSM.join_paths(dir_path, item)
+		if FSM.dir_exists(full_path):
+			if _dir_contains_files(full_path):
+				return true
+		else:
+			return true
+	return false
 
 ## Restore/upload target for a title under a resolved save root. Device saves
 ## always land at zero/zero; everything else under the active profile.
@@ -1388,13 +1407,18 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 	for candidate in candidates:
 		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: checking " + candidate)
 		if FSM.dir_exists(candidate):
-			results.append({
-				"file_name": title_id + ".zip",
-				"file_path": candidate,
-				"modified_time": _get_folder_mtime(candidate),
-				"extension": ".zip"
-			})
-			return results
+			if _dir_contains_files(candidate):
+				results.append({
+					"file_name": title_id + ".zip",
+					"file_path": candidate,
+					"modified_time": _get_folder_mtime(candidate),
+					"extension": ".zip"
+				})
+				return results
+			# Exists-but-empty is not a save: eden creates the title dir under
+			# the active profile on launch while real saves may still sit under
+			# the zero profile. Fall through to the cross-profile scan.
+			if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: candidate exists but is empty, scanning profiles: " + candidate)
 
 	var scanned := _eden_find_title_in_profiles(directory, title_id)
 	if scanned != "":
@@ -1410,7 +1434,7 @@ func discover_local_eden_save(directory: String, title_id: String) -> Array[Dict
 	if not _eden_is_device_save(title_id):
 		var zero_path := FSM.join_paths(directory, SWITCH_ZERO_USER, SWITCH_ZERO_PROFILE, title_id.to_upper())
 		if DEBUG_LOG: print("[GameSaveSubManager] discover_local_eden_save: checking fallback " + zero_path)
-		if FSM.dir_exists(zero_path):
+		if FSM.dir_exists(zero_path) and _dir_contains_files(zero_path):
 			results.append({
 				"file_name": title_id + ".zip",
 				"file_path": zero_path,
@@ -2039,13 +2063,35 @@ func _get_save_name_for_upload(emulator_id: String, game: GameResource, local_fi
 	return _short_title_id(game.get_active_title_id())
 
 ## Creates a ZIP archive for a specific emulator's save
-## Returns true on success
+## Returns true on success. Universal guard: an archive with zero entries is
+## never a valid upload - it would clobber a good remote save with nothing
+## (seen with an exists-but-empty eden profile dir). Applies to every
+## strategy and the default path.
 func _zip_emulator_save(emulator_id: String, source_path: String, zip_path: String, game: GameResource) -> bool:
+	var zip_ok := false
 	var strategy = _get_strategy(emulator_id, "zip")
 	if strategy.is_valid():
-		return strategy.call(source_path, zip_path, game)
-	# Default: zip the directory without a root folder
-	return FSM.zip_directory(source_path, zip_path)
+		zip_ok = strategy.call(source_path, zip_path, game)
+	else:
+		# Default: zip the directory without a root folder
+		zip_ok = FSM.zip_directory(source_path, zip_path)
+	if zip_ok and not _zip_has_entries(zip_path):
+		push_error("[GameSaveSubManager] Refusing empty save zip (no entries): %s (source: %s)" % [zip_path, source_path])
+		FSM.delete_file(zip_path)
+		return false
+	return zip_ok
+
+## True if the zip contains at least one non-directory entry.
+func _zip_has_entries(zip_path: String) -> bool:
+	var zr = ZIPReader.new()
+	if zr.open(zip_path) != OK:
+		return false
+	for entry_name in zr.get_files():
+		if not entry_name.ends_with("/"):
+			zr.close()
+			return true
+	zr.close()
+	return false
 
 ## Zips all PSP save folders matching the title_id into a single archive
 ## max_file_size: maximum file size in bytes to include (-1 for no limit)

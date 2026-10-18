@@ -21,10 +21,7 @@ maybe make cores on demand?
 	- dolphin: controller inis
 	- all: optional hotkeys, x graphics settings, confirm on exit, etc?
 	
-	- installer: android - armsx2 & 3 unskippable OOBE & bios selection (no drop bios)
-	- installer: android - azahar requires unskippable OOBE to select user folder
-	- installer: android - x1box unskippable oobe
-	- resolver: android - ppsspp no editable paths in ini, go by last updated ini
+	- installer: android - armsx2 & x1box, & azahar unskippable OOBE & bios selection (no drop bios)
 	- resolver: android - melonds private path, uneditable/readable pref file
 	
 ## romm
