@@ -1,85 +1,98 @@
 {
-  "suspend_method": "tcp",
-  "meta": {
-	"id": "x1box",
-	"name": "X1Box",
-	"architecture": "xemu",
-	"platforms": [
-      "xbox"
-	],
-	"os": [
-      "android"
+	"suspend_method": "tcp",
+	"meta": {
+		"id": "x1box",
+		"name": "X1Box",
+		"architecture": "xemu",
+		"platforms": [
+			"xbox"
+		],
+		"os": [
+			"android"
+		]
+	},
+	"requires_working_dir": true,
+	"paths": {
+		"default_saves": {
+			"_default": {
+				"directories": {},
+				"extensions": [],
+				"uses_folder_saves": false
+			}
+		},
+		"default_firmware": {
+			"_default": {
+				"directories": {
+					"android": "{app_data}/x1box"
+				}
+			}
+		}
+	},
+	"resolution": {
+		"strategy": "xemu_toml",
+		"config_candidates": {
+			"android": [
+				"{app_data}/x1box/xemu.toml"
+			]
+		},
+		"enforce": {
+			"android": {
+				"sections": {
+					"sys.files": {
+						"bootrom_path": "{app_data}/x1box/mcpx.bin",
+						"flashrom_path": "{app_data}/x1box/flash.bin",
+						"eeprom_path": "{app_data}/x1box/eeprom.bin",
+						"hdd_path": "{app_data}/x1box/hdd.img"
+					}
+				},
+				"file_aliases": {
+					"mcpx.bin": [
+						"mcpx_1.0.bin"
+					],
+					"flash.bin": [
+						"Complex_4627.bin"
+					],
+					"hdd.img": [
+						"xbox_hdd.qcow2"
+					]
+				}
+			}
+		}
+	},
+	"launch": {
+		"platforms": {
+			"android": {
+				"action": "android.intent.action.VIEW",
+				"package": "com.izzy2lost.x1box",
+				"class": "com.izzy2lost.x1box.LauncherActivity",
+				"rom_delivery": "intent_data"
+			}
+		}
+	},
+	"install": [
+		{
+			"step": "download_emulator",
+			"platforms": {
+				"android": {
+					"action_type": "download_repo",
+					"github_repo": "izzy2lost/xemu",
+					"asset_pattern": "^app-release\\.apk$"
+				}
+			}
+		},
+		{
+			"step": "install_emulator",
+			"platforms": {
+				"android": {
+					"action_type": "apk_install",
+					"package_name": "com.izzy2lost.x1box",
+					"expected_file": "app-release.apk",
+					"validate": {
+						"action_type": "package_installed",
+						"package": "com.izzy2lost.x1box"
+					}
+				}
+			}
+		}
 	]
-  },
-  "requires_working_dir": true,
-  "paths": {
-	"default_saves": {
-	  "_default": {
-		"directories": {},
-		"extensions": [],
-		"uses_folder_saves": false
-	  }
-	},
-	"default_firmware": {
-	  "_default": {
-		"directories": {
-		  "android": "{emulator_dir}"
-		}
-	  }
-	}
-  },
-  "resolution": {
-	"strategy": "xemu_toml",
-	"config_candidates": {
-	  "android": ["{app_data}/x1box/xemu.toml"]
-	},
-	"enforce": {
-	  "android": {
-		"sections": {
-		  "sys.files": {
-			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
-			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
-			"eeprom_path": "{emulator_dir}/eeprom.bin",
-			"hdd_path": "{emulator_dir}/xbox_hdd.qcow2"
-		  }
-		}
-	  }
-	}
-  },
-  "launch": {
-	"platforms": {
-	  "android": {
-		"action": "android.intent.action.VIEW",
-		"package": "com.izzy2lost.x1box",
-		"class": "com.izzy2lost.x1box.LauncherActivity",
-		"rom_delivery": "intent_data"
-	  }
-	}
-  },
-  "install": [
-	{
-	  "step": "download_emulator",
-	  "platforms": {
-		"android": {
-		  "action_type": "download_repo",
-		  "github_repo": "izzy2lost/xemu",
-		  "asset_pattern": "^app-release\\.apk$"
-		}
-	  }
-	},
-	{
-	  "step": "install_emulator",
-	  "platforms": {
-		"android": {
-		  "action_type": "apk_install",
-		  "package_name": "com.izzy2lost.x1box",
-		  "expected_file": "app-release.apk",
-		  "validate": {
-			"action_type": "package_installed",
-			"package": "com.izzy2lost.x1box"
-		  }
-		}
-	  }
-	}
-  ]
 }

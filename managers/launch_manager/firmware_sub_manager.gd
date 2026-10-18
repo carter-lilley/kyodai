@@ -185,6 +185,46 @@ func _find_file_recursive(dir: String, filename: String) -> bool:
 	
 	return false
 
+## Renames known firmware filename variants to their canonical names, per the
+## platform's firmware "rename" map (variant basename -> canonical basename).
+## Each entry no-ops when the variant is absent or the canonical file already
+## exists, so mixed or already-canonical payloads pass through untouched.
+func _apply_firmware_renames(firmware_dir: String, platform_slug: String) -> void:
+	var platform_config: Dictionary = launch_manager.registry._platforms_data.get(platform_slug, {})
+	var rename_map: Dictionary = platform_config.get("firmware", {}).get("rename", {})
+	if rename_map.is_empty():
+		return
+	for source_name in rename_map:
+		var target_name := str(rename_map[source_name])
+		var target_path := FSM.join_paths(firmware_dir, target_name)
+		if FSM.file_exists(target_path):
+			continue
+		var source_path := _find_file_path_recursive(firmware_dir, str(source_name))
+		if source_path == "":
+			continue
+		if FSM.move(source_path, target_path):
+			print("[FirmwareManager] Canonicalized firmware name: " + source_path + " -> " + target_path)
+		else:
+			push_warning("[FirmwareManager] Failed to rename " + source_path + " to " + target_path)
+
+## Recursive search returning the full path of the first match, or "".
+## Basename comparison is case-insensitive; servers and filesystems vary.
+func _find_file_path_recursive(dir: String, filename: String) -> String:
+	if not FSM.dir_exists(dir):
+		return ""
+	var entries = FSM.list_dir(dir)
+	for entry in entries:
+		if entry == "." or entry == "..":
+			continue
+		var full_path = FSM.join_paths(dir, entry)
+		if entry.to_lower() == filename.to_lower() and FSM.file_exists(full_path):
+			return full_path
+		if FSM.dir_exists(full_path):
+			var found := _find_file_path_recursive(full_path, filename)
+			if found != "":
+				return found
+	return ""
+
 func _on_firmware_download_complete(success: bool, download_error: String, _notification_id: int, temp_path: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable, _last_progress_mb: Array):
 	SystemManager.notifications.dismiss_notification(_notification_id)
 	
@@ -230,6 +270,11 @@ func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware
 		var norm: Dictionary = FSM.normalize_extraction_root(firmware_dir, expected)
 		if norm.get("moved", false):
 			print("[FirmwareManager] Hoisted firmware payload " + str(norm.get("depth", 0)) + " level(s) up to " + firmware_dir)
+
+	# Canonicalize known filename variants (e.g. xemu's mcpx_1.0.bin ->
+	# mcpx.bin) so every install lands on one naming convention regardless of
+	# what the firmware server called the files.
+	_apply_firmware_renames(firmware_dir, platform_slug)
 
 	if _is_force_pull_firmware(platform_slug):
 		var marker := {

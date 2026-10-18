@@ -42,6 +42,27 @@ static func _globalize_path(path: String) -> String:
 		return ProjectSettings.globalize_path(path)
 	return path
 
+## If `path`'s basename has known variants (file_aliases: canonical basename ->
+## list of variant basenames) and the canonical file is absent while a variant
+## exists in the same directory, returns the variant's path. Otherwise returns
+## `path` unchanged. Only absolute file paths are eligible; literals and
+## non-file values pass through.
+static func _apply_file_alias(path: String, file_aliases: Dictionary) -> String:
+	if path == "" or not path.is_absolute_path():
+		return path
+	var filename := path.get_file()
+	if not file_aliases.has(filename):
+		return path
+	if FSM.file_exists(path):
+		return path
+	var dir := path.get_base_dir()
+	for variant in file_aliases[filename]:
+		var variant_path: String = dir + "/" + str(variant)
+		if FSM.file_exists(variant_path):
+			print("[ResolutionManager] Using filename variant " + variant_path + " for " + path)
+			return variant_path
+	return path
+
 ## Resolution cache: cache key -> {mtime, result}. Entries are only stored
 ## when a config file was actually read; a missing config is re-probed.
 ## Access is mutex-guarded: firmware precompute resolves on the DB worker
@@ -132,6 +153,16 @@ static func enforce_paths(emulator_id: String, platform_slug: String = "", core_
 				resolved = FSM.resolve_emulator_path(value_template, emulator_id, platform_slug)
 			# External emulators need OS-native paths, not Godot virtual paths.
 			sections[section_name][key] = _globalize_path(resolved)
+
+	# Filename variants: when an enforced path's canonical file is absent but a
+	# known variant exists alongside it, point at the variant instead (e.g.
+	# xemu's mcpx.bin vs mcpx_1.0.bin). Runs before the already-enforced check
+	# so the substituted value stays stable across launches.
+	var file_aliases: Dictionary = platform_enforce.get("file_aliases", {})
+	if not file_aliases.is_empty():
+		for section_name in sections:
+			for key in sections[section_name]:
+				sections[section_name][key] = _apply_file_alias(str(sections[section_name][key]), file_aliases)
 
 	var context := {
 		"emulator_id": emulator_id,

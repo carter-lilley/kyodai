@@ -440,7 +440,12 @@
 				"mcpx_1.0.bin",
 				"flash.bin",
 				"mcpx.bin"
-			]
+			],
+			"rename": {
+				"mcpx_1.0.bin": "mcpx.bin",
+				"Complex_4627.bin": "flash.bin",
+				"xbox_hdd.qcow2": "hdd.img"
+			}
 		}
 	},
 	"xbox360": {

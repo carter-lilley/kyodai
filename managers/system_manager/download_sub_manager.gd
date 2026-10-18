@@ -652,11 +652,13 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	for item in _queue:
 		if item.url == url:
 			push_warning("[SystemManager.download] queue_download rejected duplicate queued URL: " + url)
+			_notify_duplicate_request(item_name, "queued", suppress_notification, suppress_sound)
 			return ""
 
 	for active_id in _active_items:
 		if _active_items[active_id].url == url:
 			push_warning("[SystemManager.download] queue_download rejected duplicate active URL: " + url)
+			_notify_duplicate_request(item_name, "downloading", suppress_notification, suppress_sound)
 			return ""
 
 	if _active_items.has(item_id):
@@ -714,7 +716,37 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 	queue_changed.emit()
 	_process_queue()
 
+	# If the item didn't start (all concurrent slots busy), confirm to the user
+	# that it was queued - otherwise the tap looks like it was ignored.
+	if _queue.has(item):
+		_notify_queued_behind_capacity(item)
+
 	return item_id
+
+## User-facing feedback for a download request that was rejected because the
+## same URL is already queued or downloading. Silent for suppressed batch items.
+func _notify_duplicate_request(item_name: String, state: String, suppress_notification: bool, suppress_sound: bool) -> void:
+	if suppress_notification:
+		return
+	var display := item_name if item_name != "" else "This download"
+	SystemManager.notifications.show_notification(
+		display + " is already " + state,
+		SystemManager.notifications.Type.WARNING
+	)
+	if not suppress_sound and SystemManager.audio:
+		SystemManager.audio.play_sfx("error")
+
+## User-facing feedback for an item that was accepted but has to wait for a
+## free download slot. Silent for suppressed/grouped batch items.
+func _notify_queued_behind_capacity(item: QueueItem) -> void:
+	if item.suppress_notification or item.group_id != "":
+		return
+	SystemManager.notifications.show_notification(
+		item.name + " queued - will download after current downloads finish",
+		SystemManager.notifications.Type.WARNING
+	)
+	if not item.suppress_sound and SystemManager.audio:
+		SystemManager.audio.play_sfx("error")
 
 ## Queues downloads for a game. Multi-disc games on m3u-capable platforms queue
 ## every missing disc so an m3u playlist can be generated once the set is

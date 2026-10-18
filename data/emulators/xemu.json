@@ -41,11 +41,16 @@
 			"show_welcome": "false"
 		  },
 		  "sys.files": {
-			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
-			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
+			"bootrom_path": "{emulator_dir}/mcpx.bin",
+			"flashrom_path": "{emulator_dir}/flash.bin",
 			"eeprom_path": "{emulator_dir}/eeprom.bin",
-			"hdd_path": "{emulator_dir}/xbox_hdd.raw"
+			"hdd_path": "{emulator_dir}/hdd.img"
 		  }
+		},
+		"file_aliases": {
+		  "mcpx.bin": ["mcpx_1.0.bin"],
+		  "flash.bin": ["Complex_4627.bin"],
+		  "hdd.img": ["xbox_hdd.qcow2", "xbox_hdd.raw"]
 		}
 	  },
 	  "linux": {
@@ -54,11 +59,16 @@
 			"show_welcome": "false"
 		  },
 		  "sys.files": {
-			"bootrom_path": "{emulator_dir}/mcpx_1.0.bin",
-			"flashrom_path": "{emulator_dir}/Complex_4627.bin",
+			"bootrom_path": "{emulator_dir}/mcpx.bin",
+			"flashrom_path": "{emulator_dir}/flash.bin",
 			"eeprom_path": "{emulator_dir}/eeprom.bin",
-			"hdd_path": "{emulator_dir}/xbox_hdd.qcow2"
+			"hdd_path": "{emulator_dir}/hdd.img"
 		  }
+		},
+		"file_aliases": {
+		  "mcpx.bin": ["mcpx_1.0.bin"],
+		  "flash.bin": ["Complex_4627.bin"],
+		  "hdd.img": ["xbox_hdd.qcow2", "xbox_hdd.raw"]
 		}
 	  }
 	}
