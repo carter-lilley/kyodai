@@ -1417,6 +1417,10 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	if not RSM.enforce_paths(intent.emulator_id, intent.platform_slug, intent.core_name):
 		push_warning("[ProcessManager] Could not enforce config paths for Android emulator %s" % intent.emulator_id)
 
+	# On handhelds with a vendor root daemon, seed emulator-private prefs
+	# (OOBE skip, e.g. x1box) before the intent goes out. No-op elsewhere.
+	launch_manager.emulator.provision_via_root(intent.emulator_id)
+
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		push_error("[ProcessManager] KyodaiBridge plugin not available for Android launch")

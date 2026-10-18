@@ -1988,15 +1988,174 @@ func _is_android_package_installed(package_name: String) -> bool:
 	# For RetroArch, check common variants
 	if package_name == "com.retroarch":
 		var variants = ["com.retroarch.aarch64", "com.retroarch.ra32"]
-		
+
 		for i in range(variants.size()):
 			var variant = variants[i]
 			result = plugin.isPackageInstalled(variant)
-			
+
 			if result:
 				return true
-	
+
 	return false
+
+## Seeds an Android emulator's private SharedPreferences through the vendor root
+## daemon (AYN/Retroid PServerBinder, Ayaneo xsu) when the emulator JSON declares
+## a "provision" block with method "root_shared_prefs". Used to pre-complete
+## emulator OOBE setup on handhelds (e.g. x1box's setup_complete + file paths).
+## Returns true when there is nothing to do (no provision block, no root route,
+## or prefs already hold the requested values). Failures are logged, never fatal.
+func provision_via_root(emulator_id: String) -> bool:
+	print("[Provisioner] enter: " + emulator_id)
+	var emulator: Dictionary = launch_manager.registry.get_emulator(emulator_id)
+	if emulator.is_empty():
+		print("[Provisioner] no emulator entry for " + emulator_id)
+		return true
+	var provision: Dictionary = emulator.get("provision", {}).get("android", {})
+	print("[Provisioner] provision block method=" + str(provision.get("method", "<none>")))
+	if provision.get("method", "") != "root_shared_prefs":
+		return true
+
+	if not Engine.has_singleton("KyodaiBridge"):
+		print("[Provisioner] KyodaiBridge singleton missing")
+		return true
+	var plugin = Engine.get_singleton("KyodaiBridge")
+	# has_method() reports false for GodotPlugin-exposed Java methods (they
+	# dispatch dynamically via JNI, not ClassDB), so call directly; a stale AAR
+	# without the method yields null, treated as unavailable.
+	var root_available = plugin.call("rootAvailable")
+	if root_available == null:
+		root_available = false
+	print("[Provisioner] rootAvailable=" + str(root_available))
+	if not root_available:
+		return true
+
+	var package: String = provision.get("package", "")
+	if package == "":
+		package = emulator.get("launch", {}).get("platforms", {}).get("android", {}).get("package", "")
+	var prefs_file: String = provision.get("file", "")
+	var entries: Dictionary = provision.get("entries", {})
+	if package == "" or prefs_file == "" or entries.is_empty():
+		push_warning("[EmulatorManager] Incomplete provision block for " + emulator_id)
+		return true
+
+	# Resolve placeholders to the absolute storage paths the target app itself
+	# will validate (File(path).isFile from that app's process).
+	var resolved := {}
+	for key in entries:
+		var entry: Dictionary = entries[key]
+		var value := str(entry.get("value", ""))
+		if value.contains("{") and value.contains("}"):
+			value = FSM.resolve_emulator_path(value, emulator_id, "")
+		resolved[key] = {"type": str(entry.get("type", "string")), "value": value}
+
+	var prefs_path := "/data/data/" + package + "/shared_prefs/" + prefs_file + ".xml"
+
+	# Satisfied-check first: when every requested value is already present there
+	# is nothing to write and no force-stop is needed.
+	var current := _root_read_prefs(plugin, prefs_path)
+	print("[Provisioner] existing prefs length=" + str(current.length()) + " for " + package)
+	if current != "" and _prefs_satisfied(current, resolved):
+		print("[Provisioner] Prefs already provisioned for " + package)
+		return true
+
+	var xml := _merge_prefs_xml(current, resolved)
+	print("[Provisioner] writing prefs to " + prefs_path)
+	var result: Dictionary = _root_run(plugin, _build_prefs_write_script(package, prefs_path, xml))
+	var exit_code = result.get("exit")
+	if exit_code == null or int(exit_code) != 0:
+		push_warning("[Provisioner] Root provisioning failed for " + package + ": exit=" + str(exit_code) + " output=" + str(result.get("output", "")))
+		return false
+
+	print("[Provisioner] Provisioned private prefs for " + package + " via vendor root")
+	return true
+
+## Runs a script through the plugin's vendor-root bridge; {} when unavailable.
+func _root_run(plugin: Object, script: String) -> Dictionary:
+	var raw: String = plugin.call("rootRunScript", script)
+	if raw == "":
+		return {}
+	var parsed = JSON.parse_string(raw)
+	return parsed if parsed is Dictionary else {}
+
+## Reads a private prefs file as root; "" when absent or unreadable.
+func _root_read_prefs(plugin: Object, prefs_path: String) -> String:
+	var result := _root_run(plugin, "cat " + prefs_path + " 2>/dev/null")
+	var exit_code = result.get("exit")
+	if exit_code == null or int(exit_code) != 0:
+		return ""
+	return str(result.get("output", ""))
+
+## True when the prefs XML already holds every requested entry verbatim.
+func _prefs_satisfied(xml: String, entries: Dictionary) -> bool:
+	for key in entries:
+		if not xml.contains(_pref_entry_fragment(key, entries[key])):
+			return false
+	return true
+
+## Merges requested entries into existing prefs XML line-wise (preserving keys
+## the app wrote itself), or builds a fresh document when none exists.
+func _merge_prefs_xml(existing: String, entries: Dictionary) -> String:
+	if not existing.contains("</map>"):
+		var body := ""
+		for key in entries:
+			body += _pref_entry_xml_line(key, entries[key]) + "\n"
+		return "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n" + body + "</map>\n"
+
+	var merged := ""
+	var handled := {}
+	for line in existing.split("\n"):
+		var claimed := false
+		for key in entries:
+			if line.contains("name=\"" + key + "\""):
+				claimed = true
+				if not handled.has(key):
+					merged += _pref_entry_xml_line(key, entries[key]) + "\n"
+					handled[key] = true
+				break
+		if claimed:
+			continue
+		if line.contains("</map>"):
+			for key in entries:
+				if not handled.has(key):
+					merged += _pref_entry_xml_line(key, entries[key]) + "\n"
+		merged += line + "\n"
+	return merged
+
+func _pref_entry_xml_line(key: String, entry: Dictionary) -> String:
+	match str(entry.get("type", "string")):
+		"boolean", "int":
+			return "    <" + str(entry.type) + " name=\"" + key + "\" value=\"" + str(entry.value) + "\" />"
+		_:
+			return "    <string name=\"" + key + "\">" + _xml_escape(str(entry.value)) + "</string>"
+
+## The fragment _prefs_satisfied looks for: exact attribute/value pair or
+## element body, matching how the app itself serializes these keys.
+func _pref_entry_fragment(key: String, entry: Dictionary) -> String:
+	match str(entry.get("type", "string")):
+		"boolean", "int":
+			return "name=\"" + key + "\" value=\"" + str(entry.value) + "\""
+		_:
+			return "<string name=\"" + key + "\">" + _xml_escape(str(entry.value)) + "</string>"
+
+## Root-side write: stop the app (it caches prefs in memory and would clobber
+## the file on exit), write via base64 to dodge quoting, then fix ownership,
+## mode, and SELinux label so the app can read its own prefs.
+func _build_prefs_write_script(package: String, prefs_path: String, xml: String) -> String:
+	var b64 := Marshalls.utf8_to_base64(xml)
+	var dir := prefs_path.get_base_dir()
+	var lines: Array = []
+	lines.append("am force-stop " + package)
+	lines.append("mkdir -p " + dir)
+	lines.append("echo '" + b64 + "' | base64 -d > " + prefs_path)
+	lines.append("OWN=$(stat -c '%u:%g' /data/data/" + package + ")")
+	lines.append("chown $OWN " + dir + " " + prefs_path)
+	lines.append("chmod 771 " + dir)
+	lines.append("chmod 660 " + prefs_path)
+	lines.append("restorecon -R " + dir + " 2>/dev/null || true")
+	return "\n".join(lines) + "\n"
+
+func _xml_escape(value: String) -> String:
+	return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
 ## Validates a specific install step to check if it's complete
 ## Returns true if the step validation passes (step is complete)

@@ -11,6 +11,7 @@ self updater
 SRA
 editor warnings
 maybe make cores on demand?
+close during shaderprewarm crash
 ## configs
 	- user/identity profile resolver for emulator installs and saves
 		- 3ds, xenia, eden, vita, (cemu & ps2?)

@@ -3123,4 +3123,45 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return false;
         }
     }
+
+    // ========================================================================
+    // Vendor root daemon (AYN/Retroid PServerBinder, Ayaneo xsu)
+    // Used to provision emulator-private prefs (OOBE skips) on handhelds.
+    // ========================================================================
+
+    @UsedByGodot
+    public boolean rootAvailable() {
+        boolean available = activity != null && RootShell.isAvailable();
+        Log.d(TAG, "rootAvailable: " + available);
+        return available;
+    }
+
+    /**
+     * Runs a shell script as root via the vendor daemon. Returns a JSON string
+     * {"exit": <int|null>, "output": "<full output>"} or "" when no root route
+     * exists. Callers must build scripts from fixed strings only.
+     */
+    @UsedByGodot
+    public String rootRunScript(String script) {
+        if (activity == null || script == null || script.isEmpty()) {
+            return "";
+        }
+        RootShell.Result result = RootShell.run(activity, script);
+        if (result == null) {
+            return "";
+        }
+        try {
+            org.json.JSONObject json = new org.json.JSONObject();
+            if (result.exitCode != null) {
+                json.put("exit", result.exitCode.intValue());
+            } else {
+                json.put("exit", org.json.JSONObject.NULL);
+            }
+            json.put("output", result.output);
+            return json.toString();
+        } catch (org.json.JSONException e) {
+            Log.w(TAG, "rootRunScript JSON build failed: " + e.getMessage());
+            return "";
+        }
+    }
 }

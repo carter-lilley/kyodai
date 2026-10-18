@@ -69,6 +69,30 @@
 			}
 		}
 	},
+	"provision": {
+		"android": {
+			"method": "root_shared_prefs",
+			"file": "x1box_prefs",
+			"entries": {
+				"setup_complete": {
+					"type": "boolean",
+					"value": "true"
+				},
+				"mcpxPath": {
+					"type": "string",
+					"value": "{app_data}/x1box/mcpx.bin"
+				},
+				"flashPath": {
+					"type": "string",
+					"value": "{app_data}/x1box/flash.bin"
+				},
+				"hddPath": {
+					"type": "string",
+					"value": "{app_data}/x1box/hdd.img"
+				}
+			}
+		}
+	},
 	"install": [
 		{
 			"step": "download_emulator",
