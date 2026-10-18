@@ -426,7 +426,13 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			if callback.is_valid():
 				callback.call(false, "Invalid firmware data")
 			return
-		
+
+		if FSM.sanitize_server_filename(file_name) == "":
+			push_error("[FirmwareManager] Rejected unsafe firmware file name from server: '" + file_name + "'")
+			if callback.is_valid():
+				callback.call(false, "Unsafe firmware file name")
+			return
+
 		# Download to temp location first
 		var temp_path = "user://temp/firmware/" + file_name
 		FSM.make_dir_recursive("user://temp/firmware")

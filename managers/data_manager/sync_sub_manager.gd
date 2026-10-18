@@ -2253,7 +2253,10 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 	game.romm_id = data.get("id", 0)
 	game.title = str(data.get("name", ""))
 	game.platform = str(data.get("platform_display_name", ""))
-	game.platform_slug = platform_slug if platform_slug != "" else str(data.get("platform_slug", ""))
+	var raw_slug := platform_slug if platform_slug != "" else str(data.get("platform_slug", ""))
+	game.platform_slug = FSM.sanitize_server_filename(raw_slug)
+	if game.platform_slug != raw_slug:
+		push_error("[SyncManager] Rejected unsafe platform slug from server: '" + raw_slug + "' for game " + game.title)
 	# Always use RomM-proxied cover media (path_cover_large), never the external
 	# scraper URL (url_cover) - the proxy works with the app's RomM credentials
 	# and avoids scraper rate limits/logins. Mirrors argosy-launcher.
@@ -2272,7 +2275,9 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 				continue
 			screenshots.append(SystemManager.network.build_media_url(shot_path))
 	game.screenshot_urls = screenshots
-	game.file_name = str(data.get("fs_name", ""))
+	game.file_name = FSM.sanitize_server_filename(str(data.get("fs_name", "")))
+	if game.file_name == "" and str(data.get("fs_name", "")) != "":
+		push_error("[SyncManager] Rejected unsafe file name from server for game " + game.title + ": '" + str(data.get("fs_name", "")) + "'")
 	game.file_path = str(data.get("full_path", ""))
 	game.file_size = data.get("fs_size_bytes", 0)
 	game.has_local_copy = false

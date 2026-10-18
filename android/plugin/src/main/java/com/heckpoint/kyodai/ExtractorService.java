@@ -291,10 +291,12 @@ public class ExtractorService extends Service {
                 String entryName = entry.getName();
                 File outputFile = new File(destDir, entryName);
 
-                // Security check
+                // Security check: entry must equal the destination dir itself or
+                // live strictly beneath it (separator boundary, so a sibling
+                // like /a/tmp2 doesn't pass a startsWith("/a/tmp") test).
                 String canonicalDest = destDir.getCanonicalPath();
                 String canonicalOutput = outputFile.getCanonicalPath();
-                if (!canonicalOutput.startsWith(canonicalDest)) {
+                if (!canonicalOutput.equals(canonicalDest) && !canonicalOutput.startsWith(canonicalDest + File.separator)) {
                     Log.e(TAG, "ZIP entry tried to escape destination: " + entryName);
                     continue;
                 }

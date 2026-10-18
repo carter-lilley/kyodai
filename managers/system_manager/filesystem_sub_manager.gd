@@ -141,14 +141,41 @@ static func _join_paths_2(a: String, b: String) -> String:
 		return b
 	if b.is_empty():
 		return a
-	
+
 	var result = a
 	if not result.ends_with("/") and not result.ends_with("\\"):
 		result += "/"
 	if b.begins_with("/") or b.begins_with("\\"):
 		b = b.substr(1)
-	
+
 	return result + b
+
+## Validates a filename supplied by an external party (RomM server responses,
+## archive listings). Returns "" when the name could escape its destination
+## directory; callers must treat "" as fatal for the item and surface an
+## error - never silently rewrite, so hostile server data stays visible.
+static func sanitize_server_filename(file_name: String) -> String:
+	if file_name.is_empty():
+		return ""
+	# No path separators or drive/namespace syntax: the name must stay a
+	# single path segment on every supported OS.
+	if file_name.contains("/") or file_name.contains("\\") or file_name.contains(":"):
+		return ""
+	if file_name == "." or file_name == "..":
+		return ""
+	# validate_filename strips chars the host OS forbids; if it would change
+	# the name we can't round-trip it against the server library, so reject.
+	return file_name if file_name.validate_filename() == file_name else ""
+
+## True when path (after separator normalization and resolution of "." / ".."
+## segments) stays inside root. Use before writing or deleting any path that
+## incorporates externally supplied names.
+static func is_path_contained(path: String, root: String) -> bool:
+	if path.is_empty() or root.is_empty():
+		return false
+	var norm_path := path.replace("\\", "/").simplify_path()
+	var norm_root := root.replace("\\", "/").simplify_path().rstrip("/")
+	return norm_path == norm_root or norm_path.begins_with(norm_root + "/")
 
 ## Universal path resolver - handles all path formats and transformations
 ##
@@ -1809,6 +1836,13 @@ static func _normalize_backslash_paths(root_dir: String) -> void:
 		
 		var new_full: String = join_paths(root_dir, new_rel)
 		if new_full == old_full:
+			continue
+
+		# Archive members can hide traversal behind backslashes (e.g. a file
+		# literally named "..\..\evil" extracts inside root_dir, but renaming
+		# it would move it outside). Never normalize past the extraction root.
+		if not is_path_contained(new_full, root_dir):
+			push_warning("[SystemManager.filesystem] Skipping backslash normalization that escapes extraction root: " + entry["rel"])
 			continue
 		
 		if is_dir:

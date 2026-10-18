@@ -665,6 +665,12 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 		push_warning("[SystemManager.download] queue_download rejected colliding item id: " + item_id)
 		return ""
 
+	# Defense in depth: never write to a destination containing traversal
+	# segments, regardless of how the caller built it (KYD-01).
+	if destination.replace("\\", "/").split("/").has(".."):
+		push_error("[SystemManager.download] Refusing destination with '..' segment: " + destination)
+		return ""
+
 	# Create item
 	var item = QueueItem.new()
 	item.id = item_id
@@ -760,6 +766,12 @@ func queue_game_download(game: GameResource, on_all_complete: Callable = Callabl
 			on_all_complete.call(false)
 		return
 	var platform_dir: String = root_folder.value + "/" + game.platform_slug
+	if not FSM.is_path_contained(platform_dir, root_folder.value):
+		push_error("[SystemManager.download] Platform slug escapes games folder, refusing download: '" + game.platform_slug + "'")
+		SystemManager.notifications.show_notification("Error: unsafe platform folder name from server", SystemManager.notifications.Type.ERROR)
+		if on_all_complete.is_valid():
+			on_all_complete.call(false)
+		return
 
 	if M3USubManager.supports_m3u(game.platform_slug) and game.is_multi_disc():
 		var missing: Array[Dictionary] = []
@@ -827,7 +839,14 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 			if on_done.is_valid():
 				on_done.call(false)
 			return
-		var full_file_name := str(data.get("fs_name", ""))
+		var full_file_name := FSM.sanitize_server_filename(str(data.get("fs_name", "")))
+		if full_file_name == "":
+			push_error("[SystemManager.download] Rejected unsafe file name from server for disc " + str(disc_id) + ": '" + str(data.get("fs_name", "")) + "'")
+			SystemManager.notifications.show_notification("Failed to download disc: unsafe file name from server", SystemManager.notifications.Type.ERROR)
+			_settle_group_disc(group_id, disc_id, false, file_name)
+			if on_done.is_valid():
+				on_done.call(false)
+			return
 		var file_size := int(data.get("fs_size_bytes", 0))
 		# Persist the resolved name/size so m3u resolution and future downloads use it
 		for i in range(game.siblings.size()):
@@ -841,8 +860,16 @@ func _queue_disc_entry(game: GameResource, entry: Dictionary, dest_dir: String, 
 	)
 
 func _do_queue_disc(game: GameResource, disc_id: int, file_name: String, file_size: int, dest_dir: String, update_game_resource: bool, suppress_notification: bool, on_done: Callable, suppress_sound: bool = false, group_id: String = "") -> void:
-	var download_url = SystemManager.network.get_romm_download_url(disc_id, file_name)
-	var destination_path = dest_dir + "/" + file_name
+	var safe_file_name := FSM.sanitize_server_filename(file_name)
+	if safe_file_name == "":
+		push_error("[SystemManager.download] Rejected unsafe file name for disc " + str(disc_id) + ": '" + file_name + "'")
+		SystemManager.notifications.show_notification("Failed to download " + game.get_display_name() + ": unsafe file name from server", SystemManager.notifications.Type.ERROR)
+		_settle_group_disc(group_id, disc_id, false, file_name)
+		if on_done.is_valid():
+			on_done.call(false)
+		return
+	var download_url = SystemManager.network.get_romm_download_url(disc_id, safe_file_name)
+	var destination_path = dest_dir + "/" + safe_file_name
 	# Never blindly redownload: a complete archive already on disk only needs its
 	# DB state restored. A leftover state file marks an incomplete download, in
 	# which case fall through and let the chunked downloader resume it.
@@ -1337,9 +1364,10 @@ func _start_download(item: QueueItem):
 
 	# Make HTTP request through SystemManager.network
 	# Always include User-Agent to prevent blocking (archive.org requires this)
+	# Credentials attach ONLY when the URL is exactly the configured RomM
+	# origin - never leak auth to redirects or off-host URLs (KYD-10).
 	var headers = ["User-Agent: Kyodai-Launcher/1.0"]
-	if item.type == "game":
-		headers.append("Authorization: " + SystemManager.network.get_auth_header())
+	headers.append_array(SystemManager.network.get_auth_headers_for_url(item.url))
 
 	# Check if this is a large file that should use chunked downloading
 	# NOTE: Emulator downloads excluded from chunking because GitHub redirects (302)

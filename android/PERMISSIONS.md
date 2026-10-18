@@ -39,6 +39,19 @@ declaration.
 - `READ_MEDIA_*` — redundant with `MANAGE_EXTERNAL_STORAGE`.
 - `SYSTEM_ALERT_WINDOW`, Bluetooth perms — no overlay/BT-stack features.
 
+## Network security (cleartext HTTP)
+
+`android:usesCleartextTraffic="true"` is declared **deliberately** in the
+plugin manifest (`android/plugin/src/main/AndroidManifest.xml`). RomM servers
+are self-hosted and commonly run plain `http://` on LANs (no certs for LAN
+IPs), and Android's per-domain `networkSecurityConfig` cannot express hosts
+the user supplies at runtime — blocking cleartext would break the primary use
+case. The mitigation is in the UI: `RommConnectionPanel` shows a warning and
+requires an explicit "I understand the risk" acknowledgment before an
+`http://` URL can be tested or saved (KYD-07). Recommend HTTPS (reverse proxy
+with Let's Encrypt, or Tailscale) in user-facing docs for any server reachable
+outside a trusted LAN.
+
 ## Rebuilding after changes
 
 1. Edit `android/plugin/src/main/AndroidManifest.xml` and/or

@@ -1502,7 +1502,10 @@ func _fetch_sibling_details(sibling_id: int, dropdown_index: int) -> void:
 		if not is_instance_valid(self):
 			return
 		if error == "" and data.has("fs_name"):
-			var full_file_name = str(data.get("fs_name", ""))
+			var full_file_name = FSM.sanitize_server_filename(str(data.get("fs_name", "")))
+			if full_file_name == "":
+				push_error("[GameDetailsSheet] Rejected unsafe sibling file name from server: '" + str(data.get("fs_name", "")) + "'")
+				return
 
 			# Update the sibling data in _current_game
 			for i in range(_current_game.siblings.size()):

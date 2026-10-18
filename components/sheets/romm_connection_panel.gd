@@ -18,6 +18,8 @@ var _description_label: M3Label = null
 var _url_field: M3TextField = null
 var _username_field: M3TextField = null
 var _password_field: M3TextField = null
+var _http_warning_label: M3Label = null
+var _http_ack_checkbox: M3Checkbox = null
 var _indicator: Indicator = null
 var _test_button: M3Button = null
 
@@ -25,6 +27,20 @@ func _ready() -> void:
 	_build_ui()
 	load_from_settings()
 	refresh_indicator()
+	_update_http_warning()
+
+## Plain http:// sends the Basic-auth credentials (and all traffic) in
+## cleartext. Legitimate on a trusted LAN, so we warn instead of banning -
+## but the user must explicitly acknowledge before connecting (KYD-07).
+func _is_insecure_http(url: String) -> bool:
+	return url.strip_edges().to_lower().begins_with("http://")
+
+func _update_http_warning() -> void:
+	var insecure := _is_insecure_http(_url_field.text) if _url_field else false
+	if _http_warning_label:
+		_http_warning_label.visible = insecure
+	if _http_ack_checkbox:
+		_http_ack_checkbox.visible = insecure
 
 func _build_ui() -> void:
 	if show_description and not description_text.is_empty():
@@ -38,6 +54,7 @@ func _build_ui() -> void:
 	_url_field = M3TextField.new()
 	_url_field.label_text = "RomM URL"
 	_url_field.placeholder_text = "https://your-romm-server.com"
+	_url_field.text_changed.connect(func(_new_text: String): _update_http_warning())
 	add_child(_url_field)
 
 	_username_field = M3TextField.new()
@@ -50,6 +67,17 @@ func _build_ui() -> void:
 	_password_field.placeholder_text = "password"
 	_password_field.secret = true
 	add_child(_password_field)
+
+	_http_warning_label = M3Label.new()
+	_http_warning_label.text = "Warning: http:// sends your username, password, and all downloads unencrypted. Only use it on trusted local networks - use HTTPS if this server is reachable from the internet."
+	_http_warning_label.label_style = M3Label.Style.BODY_SMALL
+	_http_warning_label.visible = false
+	add_child(_http_warning_label)
+
+	_http_ack_checkbox = M3Checkbox.new()
+	_http_ack_checkbox.text = "I understand the risk - allow insecure http://"
+	_http_ack_checkbox.visible = false
+	add_child(_http_ack_checkbox)
 
 	var test_row := HBoxContainer.new()
 	test_row.custom_minimum_size = Vector2(0, M3Units.dp(40))
@@ -85,6 +113,13 @@ func save_to_settings(only_if_complete: bool = false) -> void:
 	if only_if_complete and (url.is_empty() or username.is_empty() or password.is_empty()):
 		return
 
+	# Never persist an insecure http:// configuration the user hasn't
+	# explicitly acknowledged - the OOBE wizard saves without testing (KYD-07).
+	if _is_insecure_http(url) and _http_ack_checkbox and not _http_ack_checkbox.button_pressed:
+		if _indicator:
+			_indicator.set_status(Indicator.Status.ERROR, "Insecure http:// connection - tick the acknowledgment to save")
+		return
+
 	var url_setting = DataManager.get_setting("romm_url")
 	var user_setting = DataManager.get_setting("romm_username")
 	var pass_setting = DataManager.get_setting("romm_password")
@@ -103,6 +138,12 @@ func test_connection() -> void:
 
 	if url.is_empty() or username.is_empty() or password.is_empty():
 		_indicator.set_status(Indicator.Status.ERROR, "Fill in all fields")
+		connection_tested.emit(false)
+		connection_failed.emit()
+		return
+
+	if _is_insecure_http(url) and _http_ack_checkbox and not _http_ack_checkbox.button_pressed:
+		_indicator.set_status(Indicator.Status.ERROR, "Insecure http:// connection - tick the acknowledgment below to continue")
 		connection_tested.emit(false)
 		connection_failed.emit()
 		return

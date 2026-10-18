@@ -2997,10 +2997,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 String entryName = entry.getName();
                 File outputFile = new File(destDir, entryName);
                 
-                // Security check: ensure the output file is within the destination directory
+                // Security check: ensure the output file is within the destination directory.
+                // Compare against canonicalDest + separator so a sibling directory
+                // sharing the name prefix (e.g. /a/tmp2 vs /a/tmp) cannot pass.
                 String canonicalDest = destDir.getCanonicalPath();
                 String canonicalOutput = outputFile.getCanonicalPath();
-                if (!canonicalOutput.startsWith(canonicalDest)) {
+                if (!canonicalOutput.equals(canonicalDest) && !canonicalOutput.startsWith(canonicalDest + File.separator)) {
                     Log.e(TAG, "extractZipStreaming: ZIP entry tried to escape destination: " + entryName);
                     continue;
                 }

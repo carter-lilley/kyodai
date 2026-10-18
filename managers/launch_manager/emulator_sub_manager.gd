@@ -623,7 +623,10 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		# "Install unknown apps" toggle for Kyodai. Gate here so we don't fire
 		# an intent the system will refuse and then advance the install flow
 		# past a step that never actually ran.
-		if plugin.has_method("canInstallUnknownApps") and not plugin.call("canInstallUnknownApps"):
+		# NB: has_method() reports false for GodotPlugin-exposed Java methods
+		# (JNI dispatch, not ClassDB) — call directly; null (stale AAR) fails open.
+		var can_install_unknown = plugin.call("canInstallUnknownApps")
+		if can_install_unknown != null and not can_install_unknown:
 			print("[EmulatorManager] Install-unknown-apps permission not granted, opening settings")
 			plugin.call("requestInstallUnknownAppsPermission")
 			SystemManager.notifications.show_notification(
@@ -2005,18 +2008,14 @@ func _is_android_package_installed(package_name: String) -> bool:
 ## Returns true when there is nothing to do (no provision block, no root route,
 ## or prefs already hold the requested values). Failures are logged, never fatal.
 func provision_via_root(emulator_id: String) -> bool:
-	print("[Provisioner] enter: " + emulator_id)
 	var emulator: Dictionary = launch_manager.registry.get_emulator(emulator_id)
 	if emulator.is_empty():
-		print("[Provisioner] no emulator entry for " + emulator_id)
 		return true
 	var provision: Dictionary = emulator.get("provision", {}).get("android", {})
-	print("[Provisioner] provision block method=" + str(provision.get("method", "<none>")))
 	if provision.get("method", "") != "root_shared_prefs":
 		return true
 
 	if not Engine.has_singleton("KyodaiBridge"):
-		print("[Provisioner] KyodaiBridge singleton missing")
 		return true
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	# has_method() reports false for GodotPlugin-exposed Java methods (they
@@ -2025,8 +2024,8 @@ func provision_via_root(emulator_id: String) -> bool:
 	var root_available = plugin.call("rootAvailable")
 	if root_available == null:
 		root_available = false
-	print("[Provisioner] rootAvailable=" + str(root_available))
 	if not root_available:
+		if DEBUG_LOG: print("[EmulatorManager] No vendor root route; skipping provisioning for " + emulator_id)
 		return true
 
 	var package: String = provision.get("package", "")
@@ -2036,6 +2035,12 @@ func provision_via_root(emulator_id: String) -> bool:
 	var entries: Dictionary = provision.get("entries", {})
 	if package == "" or prefs_file == "" or entries.is_empty():
 		push_warning("[EmulatorManager] Incomplete provision block for " + emulator_id)
+		return true
+
+	# These values are interpolated into a script executed as root; refuse
+	# anything that isn't a plain package / prefs file name.
+	if not _is_valid_android_package(package) or not _is_valid_prefs_file_name(prefs_file):
+		push_warning("[EmulatorManager] Unsafe provision package/file for " + emulator_id + " ('" + package + "', '" + prefs_file + "'); refusing root provisioning")
 		return true
 
 	# Resolve placeholders to the absolute storage paths the target app itself
@@ -2053,20 +2058,18 @@ func provision_via_root(emulator_id: String) -> bool:
 	# Satisfied-check first: when every requested value is already present there
 	# is nothing to write and no force-stop is needed.
 	var current := _root_read_prefs(plugin, prefs_path)
-	print("[Provisioner] existing prefs length=" + str(current.length()) + " for " + package)
 	if current != "" and _prefs_satisfied(current, resolved):
-		print("[Provisioner] Prefs already provisioned for " + package)
+		if DEBUG_LOG: print("[EmulatorManager] Prefs already provisioned for " + package)
 		return true
 
 	var xml := _merge_prefs_xml(current, resolved)
-	print("[Provisioner] writing prefs to " + prefs_path)
 	var result: Dictionary = _root_run(plugin, _build_prefs_write_script(package, prefs_path, xml))
 	var exit_code = result.get("exit")
 	if exit_code == null or int(exit_code) != 0:
-		push_warning("[Provisioner] Root provisioning failed for " + package + ": exit=" + str(exit_code) + " output=" + str(result.get("output", "")))
+		push_warning("[EmulatorManager] Root provisioning failed for " + package + ": exit=" + str(exit_code) + " output=" + str(result.get("output", "")))
 		return false
 
-	print("[Provisioner] Provisioned private prefs for " + package + " via vendor root")
+	print("[EmulatorManager] Provisioned private prefs for " + package + " via vendor root")
 	return true
 
 ## Runs a script through the plugin's vendor-root bridge; {} when unavailable.
@@ -2079,7 +2082,7 @@ func _root_run(plugin: Object, script: String) -> Dictionary:
 
 ## Reads a private prefs file as root; "" when absent or unreadable.
 func _root_read_prefs(plugin: Object, prefs_path: String) -> String:
-	var result := _root_run(plugin, "cat " + prefs_path + " 2>/dev/null")
+	var result := _root_run(plugin, "cat " + FSM._shell_quote(prefs_path) + " 2>/dev/null")
 	var exit_code = result.get("exit")
 	if exit_code == null or int(exit_code) != 0:
 		return ""
@@ -2140,19 +2143,39 @@ func _pref_entry_fragment(key: String, entry: Dictionary) -> String:
 ## Root-side write: stop the app (it caches prefs in memory and would clobber
 ## the file on exit), write via base64 to dodge quoting, then fix ownership,
 ## mode, and SELinux label so the app can read its own prefs.
+## package/prefs_path come from registry JSON (including user overrides), so
+## every interpolation into this root-executed script must be shell-quoted.
 func _build_prefs_write_script(package: String, prefs_path: String, xml: String) -> String:
 	var b64 := Marshalls.utf8_to_base64(xml)
 	var dir := prefs_path.get_base_dir()
+	var q_package := FSM._shell_quote(package)
+	var q_path := FSM._shell_quote(prefs_path)
+	var q_dir := FSM._shell_quote(dir)
 	var lines: Array = []
-	lines.append("am force-stop " + package)
-	lines.append("mkdir -p " + dir)
-	lines.append("echo '" + b64 + "' | base64 -d > " + prefs_path)
-	lines.append("OWN=$(stat -c '%u:%g' /data/data/" + package + ")")
-	lines.append("chown $OWN " + dir + " " + prefs_path)
-	lines.append("chmod 771 " + dir)
-	lines.append("chmod 660 " + prefs_path)
-	lines.append("restorecon -R " + dir + " 2>/dev/null || true")
+	lines.append("am force-stop " + q_package)
+	lines.append("mkdir -p " + q_dir)
+	lines.append("echo '" + b64 + "' | base64 -d > " + q_path)
+	lines.append("OWN=$(stat -c '%u:%g' /data/data/" + q_package + ")")
+	lines.append("chown $OWN " + q_dir + " " + q_path)
+	lines.append("chmod 771 " + q_dir)
+	lines.append("chmod 660 " + q_path)
+	lines.append("restorecon -R " + q_dir + " 2>/dev/null || true")
 	return "\n".join(lines) + "\n"
+
+## Registry-supplied values end up inside scripts executed as root via vendor
+## daemons. Validate strictly so a malicious or malformed registry entry
+## cannot smuggle shell syntax into a root context (KYD-08).
+static func _is_valid_android_package(package: String) -> bool:
+	var re := RegEx.new()
+	if re.compile("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$") != OK:
+		return false
+	return re.search(package) != null
+
+static func _is_valid_prefs_file_name(prefs_file: String) -> bool:
+	var re := RegEx.new()
+	if re.compile("^[A-Za-z0-9_\\-]+(\\.[A-Za-z0-9_\\-]+)*$") != OK:
+		return false
+	return re.search(prefs_file) != null
 
 func _xml_escape(value: String) -> String:
 	return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")

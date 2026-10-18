@@ -453,6 +453,12 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 	var any_failed := false
 	for del_file_name in delete_file_names:
 		var abs_path = root_path + "/" + game.platform_slug + "/" + del_file_name
+		# File names and platform slugs originate from the RomM server; never
+		# delete anything outside the configured games folder.
+		if not FSM.is_path_contained(abs_path, root_path):
+			push_error("[DataManager] Refusing to delete path outside games folder: " + abs_path)
+			any_failed = true
+			continue
 		if not FSM.file_exists(abs_path):
 			continue
 		any_existed = true

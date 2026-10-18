@@ -8,8 +8,6 @@ retroarch unknown ver.?
 to test: ps3 psn games
 shadps4
 self updater
-SRA
-editor warnings
 maybe make cores on demand?
 close during shaderprewarm crash
 ## configs

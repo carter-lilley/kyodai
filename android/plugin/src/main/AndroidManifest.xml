@@ -31,7 +31,15 @@
 	</queries>
 	
 	<application
-		android:largeHeap="true">
+		android:largeHeap="true"
+		android:usesCleartextTraffic="true">
+		<!-- usesCleartextTraffic=true is a DELIBERATE choice (KYD-07): RomM
+		     servers are self-hosted and very commonly plain http:// on LANs
+		     (no certs for LAN IPs), and Android's per-domain cleartext config
+		     cannot express runtime user-supplied hosts. Blocking cleartext
+		     would break the primary use case. The mitigation lives in the UI:
+		     RommConnectionPanel warns and requires explicit acknowledgment
+		     before saving or testing an http:// configuration. -->
 		<!-- FileProvider for serving ROM files to emulators via content:// URIs -->
 		<!-- Uses a unique authority to avoid conflict with Godot's built-in FileProvider -->
 		<provider

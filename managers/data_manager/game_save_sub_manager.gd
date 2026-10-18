@@ -2333,7 +2333,15 @@ func _unpack_3ds_save(zip_path: String, record_path: String) -> bool:
 				valid = false
 				break
 		var sub := rel.substr(root.length() + 1)
-		ops.append({"entry": entry, "dest": base if sub == "" else base + "/" + sub, "is_dir": is_dir})
+		var dest := base if sub == "" else base + "/" + sub
+		# Entries like "data/../../../../etc/x" (or backslash variants that
+		# become traversal on Windows) must never write outside their routed
+		# base directory.
+		if not FSM.is_path_contained(dest, base):
+			push_error("[GameSaveSubManager] 3DS save zip entry escapes target directory: '" + entry + "' in " + zip_path)
+			valid = false
+			break
+		ops.append({"entry": entry, "dest": dest, "is_dir": is_dir})
 	if not valid:
 		zr.close()
 		return false
@@ -2885,7 +2893,11 @@ func _handle_upload_409(game: GameResource, emulator_id: String, upload: Diction
 ## zip-packaged file saves), and record the gavel bookkeeping boundary.
 func _execute_save_download(game: GameResource, emulator_id: String, remote: Dictionary, local, device_id: String, current_timestamp: String, on_done: Callable) -> void:
 	var save_id = remote.get("id", 0)
-	var file_name = remote.get("file_name", "save")
+	var file_name = FSM.sanitize_server_filename(str(remote.get("file_name", "save")))
+	if file_name == "":
+		push_error("[GameSaveSubManager] Rejected unsafe save file name from server (save id " + str(save_id) + "): '" + str(remote.get("file_name", "")) + "'")
+		on_done.call(false)
+		return
 	var local_path = ""
 	var record_path = ""
 	var boundary_path = ""

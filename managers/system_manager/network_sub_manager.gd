@@ -199,21 +199,42 @@ func get_base_url() -> String:
 	return _base_url
 
 ## Builds a fully-qualified media URL from a RomM-provided path.
-## Absolute URLs are returned as-is; server-relative paths are prefixed with
-## the configured RomM base URL. Mirrors argosy-launcher's buildMediaUrl().
+## Server-relative paths are prefixed with the configured RomM base URL.
+## Absolute URLs pointing at a DIFFERENT origin are refused (return ""):
+## media URLs are server-controlled data, and fetching an attacker-chosen
+## host would leak our Authorization header there (KYD-10).
 ## Spaces are percent-encoded: RomM appends cache-busters like ?ts=2026-02-19 22:28:09
 ## which otherwise produce malformed request lines (HTTP 400).
 func build_media_url(path: String) -> String:
+	if path.strip_edges() == "":
+		return ""
 	var url := path
 	if not url.begins_with("http"):
 		url = get_base_url().rstrip("/") + path
+	elif not _is_same_origin(url, get_base_url()):
+		push_warning("[SystemManager.network] Refusing off-origin media URL from server: " + path)
+		return ""
 	return url.replace(" ", "%20")
 
-## Returns Authorization headers for URLs hosted on the configured RomM server,
-## or an empty array for external hosts.
+## True when url points at exactly the same origin (scheme, host, port) as
+## base_url. A string-prefix check is NOT sufficient: hosts like
+## "romm.example.com.evil.net" or "romm.example.com@evil.net" share a prefix
+## with the configured server but are different origins (KYD-10).
+func _is_same_origin(url: String, base_url: String) -> bool:
+	if base_url.strip_edges() == "":
+		return false
+	var base := parse_url(base_url)
+	var target := parse_url(url)
+	if base.host == "" or target.host == "":
+		return false
+	return base.protocol == target.protocol \
+		and base.host.to_lower() == target.host.to_lower() \
+		and base.port == target.port
+
+## Returns Authorization headers for URLs hosted on the configured RomM
+## server (exact origin match), or an empty array for anything else.
 func get_auth_headers_for_url(url: String) -> Array:
-	var base := get_base_url().rstrip("/")
-	if base != "" and url.begins_with(base):
+	if _is_same_origin(url, get_base_url()):
 		return ["Authorization: " + _get_auth_header()]
 	return []
 
@@ -499,6 +520,8 @@ func _http_get_bytes_sync(url: String, headers: Array = []) -> Dictionary:
 
 ## Parses a URL into its components.
 ## Returns: {"protocol": String, "host": String, "port": int, "path": String, "query": String}
+## Any userinfo ("user:pass@host") is stripped from the authority: only the
+## host:port after the final '@' identifies the real origin (KYD-10).
 func parse_url(url: String) -> Dictionary:
 	var result = {"protocol": "http", "host": "", "port": 80, "path": "/", "query": ""}
 
@@ -511,10 +534,56 @@ func parse_url(url: String) -> Dictionary:
 		result.port = 443
 
 	var path_start = url.find("/")
-	if path_start == -1:
-		result.host = url
+	var authority := url if path_start == -1 else url.substr(0, path_start)
+
+	# userinfo trick: "http://romm.local:8080@evil.net/x" really targets
+	# evil.net - anything before the last '@' is userinfo, not host.
+	var at_pos := authority.rfind("@")
+	if at_pos != -1:
+		authority = authority.substr(at_pos + 1)
+
+	var port_str := ""
+	var host_part := authority
+	if authority.begins_with("["):
+		# Bracketed IPv6 literal: [::1]:8080
+		var bracket_end := authority.find("]")
+		if bracket_end == -1:
+			result.host = ""
+			result.port = 0
+			return result
+		host_part = authority.substr(0, bracket_end + 1)
+		var rest := authority.substr(bracket_end + 1)
+		if rest.begins_with(":"):
+			port_str = rest.substr(1)
+		elif rest != "":
+			result.host = ""
+			result.port = 0
+			return result
 	else:
-		result.host = url.substr(0, path_start)
+		var port_start := authority.find(":")
+		if port_start != -1:
+			host_part = authority.substr(0, port_start)
+			port_str = authority.substr(port_start + 1)
+
+	if port_str != "":
+		# The port must be strictly numeric. Authorities like
+		# "romm.local:8080.evil.net" would otherwise parse as host
+		# "romm.local" (to_int stops at '.') while real HTTP stacks resolve
+		# the full "romm.local:8080.evil.net" as a hostname - fail closed so
+		# origin checks and connections can never disagree (KYD-10).
+		if not port_str.is_valid_int():
+			result.host = ""
+			result.port = 0
+			return result
+		var parsed_port := port_str.to_int()
+		if parsed_port < 0 or parsed_port > 65535:
+			result.host = ""
+			result.port = 0
+			return result
+		result.port = parsed_port
+	result.host = host_part
+
+	if path_start != -1:
 		var remainder = url.substr(path_start)
 		var query_start = remainder.find("?")
 		if query_start == -1:
@@ -522,11 +591,6 @@ func parse_url(url: String) -> Dictionary:
 		else:
 			result.path = remainder.substr(0, query_start)
 			result.query = remainder.substr(query_start)
-
-	var port_start = result.host.find(":")
-	if port_start != -1:
-		result.port = result.host.substr(port_start + 1).to_int()
-		result.host = result.host.substr(0, port_start)
 
 	return result
 
@@ -743,6 +807,15 @@ func http_download_file(url: String, destination_path: String, headers: Array = 
 
 	# Normalize path separators for the platform
 	var normalized_path = destination_path.replace("\\", "/")
+
+	# Defense in depth: never write outside the intended directory via
+	# traversal segments, however the caller built the path (KYD-01).
+	if normalized_path.split("/").has(".."):
+		push_error("[SystemManager.network] Refusing download destination with '..' segment: " + destination_path)
+		if callback.is_valid():
+			callback.call(false, 0, "Unsafe destination path")
+		http.queue_free()
+		return {}
 
 	# Verify directory exists before starting download
 	var dest_dir = normalized_path.get_base_dir()

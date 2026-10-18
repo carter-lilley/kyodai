@@ -267,7 +267,7 @@
 		},
 		"firmware": {
 			"expected_files": [
-				"dev_flash/vsh/etc/index.dat"
+				"dev_flash/vsh/module/vsh.self"
 			]
 		}
 	},
