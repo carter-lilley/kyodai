@@ -220,7 +220,7 @@ func _refresh_maximize_icon() -> void:
 	_max_button.icon_name = "window-restore" if maximized else "window-maximize"
 
 
-func _on_window_chrome_changed(_active: bool) -> void:
+func _on_window_chrome_changed(_chrome_active: bool) -> void:
 	_refresh_state()
 
 

@@ -23,6 +23,9 @@ var _compressed_data_size: int = 0
 var _offset_records := PackedByteArray()
 var _name_table := PackedByteArray()
 var _file_tree := PackedByteArray()
+# Only accessed through an instance inside static open(), which the analyzer
+# doesn't count as a use; it is read by the "Opened ZArchive" log line.
+@warning_ignore("unused_private_class_variable")
 var _block_count: int = 0
 var _block_cache := {}
 var _block_cache_order: Array[int] = []
@@ -124,7 +127,7 @@ static func open(path: String) -> ZarReader:
 		file.close()
 		return null
 
-	reader._block_count = (records_size / _OFFSET_RECORD_SIZE) * _ENTRIES_PER_OFFSET_RECORD
+	reader._block_count = int(records_size / float(_OFFSET_RECORD_SIZE)) * _ENTRIES_PER_OFFSET_RECORD
 
 	# First entry must be the unnamed root directory
 	if reader._is_file_entry(0) or reader._get_name(reader._get_name_offset(0)) != "":
@@ -132,7 +135,7 @@ static func open(path: String) -> ZarReader:
 		file.close()
 		return null
 
-	print("[ZarReader] Opened ZArchive: " + path + " (blocks=" + str(reader._block_count) + ", tree entries=" + str(tree_size / _FILE_TREE_ENTRY_SIZE) + ")")
+	print("[ZarReader] Opened ZArchive: " + path + " (blocks=" + str(reader._block_count) + ", tree entries=" + str(int(tree_size / float(_FILE_TREE_ENTRY_SIZE))) + ")")
 	return reader
 
 func close() -> void:
@@ -190,7 +193,7 @@ func _read_at(global_offset: int, length: int) -> PackedByteArray:
 	var remaining = length
 	var cursor = global_offset
 	while remaining > 0:
-		var block_index = cursor / _BLOCK_SIZE
+		var block_index := int(cursor / float(_BLOCK_SIZE))
 		var block_offset = cursor % _BLOCK_SIZE
 		var block = _get_block(block_index)
 		if block.is_empty():
@@ -206,7 +209,7 @@ func _get_block(block_index: int) -> PackedByteArray:
 	if _block_cache.has(block_index):
 		return _block_cache[block_index]
 
-	var record_index = block_index / _ENTRIES_PER_OFFSET_RECORD
+	var record_index := int(block_index / float(_ENTRIES_PER_OFFSET_RECORD))
 	var sub_index = block_index % _ENTRIES_PER_OFFSET_RECORD
 	var record_base = record_index * _OFFSET_RECORD_SIZE
 	if record_base + _OFFSET_RECORD_SIZE > _offset_records.size():

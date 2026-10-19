@@ -105,7 +105,10 @@ static func _make_number(uniform: Dictionary, source: String, entry: Dictionary,
 	var kind := "int" if type == SettingsVar.SettingType.INT else "float"
 	var default_val = _default_for(uniform, source, entry, kind)
 	if default_val == null:
-		default_val = 0 if type == SettingsVar.SettingType.INT else 0.0
+		if type == SettingsVar.SettingType.INT:
+			default_val = 0
+		else:
+			default_val = 0.0
 	var sv = SettingsVar.new(type, default_val, State.ENABLED, "", "", 0.0, 1.0, 0.01 if type == SettingsVar.SettingType.FLOAT else 1.0)
 	sv.min_value = float(entry.get("min", sv.min_value))
 	sv.max_value = float(entry.get("max", sv.max_value))

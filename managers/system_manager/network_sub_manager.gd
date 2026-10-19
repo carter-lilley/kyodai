@@ -659,11 +659,11 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 		OS.delay_usec(1000)
 		var now_ms = Time.get_ticks_msec()
 		if now_ms - last_heartbeat_ms > SYNC_HEARTBEAT_MS:
-			print("[SystemManager.network] Still waiting for server response... (%ds)" % ((now_ms - header_wait_start) / 1000))
+			print("[SystemManager.network] Still waiting for server response... (%ds)" % int((now_ms - header_wait_start) / 1000.0))
 			last_heartbeat_ms = now_ms
 		if now_ms - header_wait_start > SYNC_RESPONSE_TIMEOUT_MS:
 			http.close()
-			return {"success": false, "body": PackedByteArray(), "error": "Response timeout: no headers for %ds" % (SYNC_RESPONSE_TIMEOUT_MS / 1000)}
+			return {"success": false, "body": PackedByteArray(), "error": "Response timeout: no headers for %ds" % int(SYNC_RESPONSE_TIMEOUT_MS / 1000.0)}
 
 	var response_code = http.get_response_code()
 
@@ -687,11 +687,11 @@ func _http_request_sync(url: String, headers: Array = []) -> Dictionary:
 			OS.delay_usec(1000)
 			var now_ms = Time.get_ticks_msec()
 			if now_ms - body_heartbeat_ms > SYNC_HEARTBEAT_MS:
-				print("[SystemManager.network] Response stalled, still waiting... (%ds without data)" % ((now_ms - last_progress_ms) / 1000))
+				print("[SystemManager.network] Response stalled, still waiting... (%ds without data)" % int((now_ms - last_progress_ms) / 1000.0))
 				body_heartbeat_ms = now_ms
 			if now_ms - last_progress_ms > SYNC_STALL_TIMEOUT_MS:
 				http.close()
-				return {"success": false, "body": PackedByteArray(), "error": "Response stalled: no data for %ds" % (SYNC_STALL_TIMEOUT_MS / 1000)}
+				return {"success": false, "body": PackedByteArray(), "error": "Response stalled: no data for %ds" % int(SYNC_STALL_TIMEOUT_MS / 1000.0)}
 
 	return {"success": true, "body": body, "error": ""}
 
@@ -1018,7 +1018,8 @@ func test_connection(callback: Callable = Callable()):
 ## Supports GitHub, Gitea, Forgejo, and other platforms with GitHub-compatible API
 ## @param repo: Repository path (e.g., "owner/repo")
 ## @param asset_pattern: Regex pattern to match the desired asset filename
-## @param callback: Called with (download_url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String)
+## @param callback: Called with (download_url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String, asset_sha256: String)
+##   asset_sha256 is the API-attested asset digest ("" when the host publishes none)
 ## @param release_tag: Specific tag to fetch (empty or "latest" for latest release)
 ## @param api_base_url: API base URL (default: "https://api.github.com", e.g., "https://git.example.com/api/v1")
 func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
@@ -1045,7 +1046,16 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				var download_url = asset.get("browser_download_url", "")
 				var asset_size = asset.get("size", 0)
 				var asset_updated_at = asset.get("updated_at", "")
-				callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at)
+				# GitHub-compatible APIs attest each asset's SHA-256 in the
+				# release listing ("digest": "sha256:<hex>"). Captured so the
+				# downloaded bytes can be verified against it (KYD-09).
+				# Empty when the host publishes no digest (e.g. Gitea/Forgejo).
+				var asset_sha256 := str(asset.get("digest", ""))
+				if asset_sha256.begins_with("sha256:"):
+					asset_sha256 = asset_sha256.substr(7).to_lower()
+				else:
+					asset_sha256 = ""
+				callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at, asset_sha256)
 				return true
 		return false
 
@@ -1056,7 +1066,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 	var error = http.request(url, headers)
 
 	if error != OK:
-		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
+		callback.call("", "", "Failed to start request: " + str(error), 0, "", "", "")
 		_finish_pooled_request(http)
 		return
 
@@ -1064,10 +1074,10 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			_finish_pooled_request(http)
 
 			if result == HTTPRequest.RESULT_TIMEOUT:
-				callback.call("", "", "Request timed out", 0, "", "")
+				callback.call("", "", "Request timed out", 0, "", "", "")
 				return
 			if result != HTTPRequest.RESULT_SUCCESS:
-				callback.call("", "", "Request failed: " + str(result), 0, "", "")
+				callback.call("", "", "Request failed: " + str(result), 0, "", "", "")
 				return
 
 			if response_code == 404 and url.ends_with("/releases/latest"):
@@ -1078,7 +1088,7 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				return
 
 			if response_code != 200:
-				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
+				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "", "")
 				return
 
 			var body_text = body.get_string_from_utf8()
@@ -1086,16 +1096,16 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 			var parse_result = json.parse(body_text)
 
 			if parse_result != OK:
-				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0, "", "")
+				callback.call("", "", "Failed to parse JSON: " + json.get_error_message(), 0, "", "", "")
 				return
 
 			var data = json.data
 			if not data.has("assets"):
-				callback.call("", "", "No assets in release", 0, "", "")
+				callback.call("", "", "No assets in release", 0, "", "", "")
 				return
 
 			if not match_asset.call(data):
-				callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "", "")
+				callback.call("", "", "No asset matched pattern: " + asset_pattern, 0, "", "", "")
 			)
 
 ## Fallback for repos with no stable release (GitHub's /releases/latest 404s
@@ -1109,7 +1119,7 @@ func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Arra
 	var error = http.request(base_url + "/repos/" + repo + "/releases?per_page=10", headers)
 
 	if error != OK:
-		callback.call("", "", "Failed to start request: " + str(error), 0, "", "")
+		callback.call("", "", "Failed to start request: " + str(error), 0, "", "", "")
 		_finish_pooled_request(http)
 		return
 
@@ -1117,18 +1127,18 @@ func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Arra
 			_finish_pooled_request(http)
 
 			if result == HTTPRequest.RESULT_TIMEOUT:
-				callback.call("", "", "Request timed out", 0, "", "")
+				callback.call("", "", "Request timed out", 0, "", "", "")
 				return
 			if result != HTTPRequest.RESULT_SUCCESS:
-				callback.call("", "", "Request failed: " + str(result), 0, "", "")
+				callback.call("", "", "Request failed: " + str(result), 0, "", "", "")
 				return
 			if response_code != 200:
-				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "")
+				callback.call("", "", "HTTP error: " + str(response_code), 0, "", "", "")
 				return
 
 			var json = JSON.new()
 			if json.parse(body.get_string_from_utf8()) != OK or not json.data is Array:
-				callback.call("", "", "Failed to parse releases list", 0, "", "")
+				callback.call("", "", "Failed to parse releases list", 0, "", "", "")
 				return
 
 			for release in json.data:
@@ -1136,7 +1146,7 @@ func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Arra
 					continue
 				if match_asset.call(release):
 					return
-			callback.call("", "", "No release with a matching asset found", 0, "", "")
+			callback.call("", "", "No release with a matching asset found", 0, "", "", "")
 			)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):

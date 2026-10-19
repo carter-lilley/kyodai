@@ -68,7 +68,7 @@ func _ready() -> void:
 	_fallback_icon.icon_settings = FontIconSettings.new()
 	_fallback_icon.icon_settings.icon_font = "MaterialIcons"
 	_fallback_icon.icon_settings.icon_name = "account-circle"
-	_fallback_icon.icon_settings.icon_size = M3Units.dp(SIZE_DP)
+	_fallback_icon.icon_settings.icon_size = int(M3Units.dp(SIZE_DP))
 	_fallback_icon.icon_settings.icon_color = M3Theme.get_on_surface_variant()
 	_fallback_icon.icon_settings.outline_color = Color.TRANSPARENT
 	_fallback_icon.icon_settings.shadow_color = Color.TRANSPARENT
@@ -139,4 +139,4 @@ func _center_crop(image: Image) -> Image:
 	var ch := int(h * CENTER_CROP)
 	if cw <= 0 or ch <= 0 or (cw == w and ch == h):
 		return image
-	return image.get_region(Rect2i((w - cw) / 2, (h - ch) / 2, cw, ch))
+	return image.get_region(Rect2i(int((w - cw) / 2.0), int((h - ch) / 2.0), cw, ch))

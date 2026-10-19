@@ -469,7 +469,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 ## exists, so setups without real dumps keep the built-in path working.
 ## Desktop only: the Android port keeps its settings in SharedPreferences.
 ## Idempotent; never blocks the launch.
-func _prepare_melonds_game(game: GameResource, intent: LaunchIntent) -> bool:
+func _prepare_melonds_game(_game: GameResource, _intent: LaunchIntent) -> bool:
 	if SystemManager.platform.is_android():
 		return true
 	var toml_path = FSM.resolve_emulator_path("{emulator_dir}/melonDS.toml", "melonds")
@@ -1476,7 +1476,8 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 
 
 ## Prepares a PS4 game for launch by extracting the TitleID and extracting game files
-## PS4 games are ZIP files containing a CUSAxxxxx directory at the root
+## PS4 games are ZIP or ZAR files containing a CUSAxxxxx directory at the root
+## ZAR archives are loaded by shadPS4 directly, so they skip extraction
 ## Returns true if preparation succeeded, false on error
 func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if game.get_active_title_id() != "":
@@ -1493,7 +1494,11 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if rom_path == "":
 		push_error("[GameManager] shadPS4: No ROM path for game: " + game.get_display_name())
 		return false
-	
+
+	# ZAR: shadPS4 reads ZArchive files directly, so only the TitleID is needed
+	if rom_path.get_extension().to_lower() == "zar":
+		return _prepare_shadps4_zar(game, rom_path)
+
 	# Step 1: Extract TitleID from ZIP
 	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_ps4_title_id(rom_path)
@@ -1560,7 +1565,32 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		return false
 	
 	print("[GameManager] shadPS4: Extraction complete")
-	
+
+	return true
+
+
+## Handles PS4 .zar archives: shadPS4 loads them directly, so only TitleID
+## extraction (for saves/metadata) is needed — no extraction step
+func _prepare_shadps4_zar(game: GameResource, rom_path: String) -> bool:
+	if DEBUG_LOG: print("[GameManager] shadPS4: Preparing ZAR game from ROM path: " + rom_path)
+
+	var title_id = TitleIDParser.extract_ps4_title_id(rom_path)
+	if title_id == "":
+		push_error("[GameManager] shadPS4: Failed to extract TitleID from: " + rom_path)
+		SystemManager.notifications.show_notification("Failed to extract PS4 game TitleID", SystemManager.notifications.Type.ERROR)
+		return false
+
+	if DEBUG_LOG: print("[GameManager] shadPS4: TitleID from ZAR: " + title_id)
+
+	var active_title_id = game.get_active_title_id()
+	if active_title_id != "" and active_title_id != title_id:
+		print("[GameManager] shadPS4: WARNING - Stored TitleID " + active_title_id + " doesn't match ZAR TitleID " + title_id)
+		print("[GameManager] shadPS4: Updating to correct TitleID from ZAR")
+
+	if active_title_id != title_id:
+		_store_title_id(game, title_id)
+		print("[GameManager] shadPS4: Updated database with TitleID: " + title_id)
+
 	return true
 
 

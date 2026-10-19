@@ -148,7 +148,7 @@ static func prewarm(tree: SceneTree) -> void:
 		# Real-cost pacing: a long render frame means this compile backed up
 		# the render queue — let frames breathe before compiling the next one.
 		if render_us > SLOW_RENDER_US:
-			var backoff := clampi(render_us / BACKOFF_DIVISOR_US, 1, MAX_BACKOFF_FRAMES)
+			var backoff := clampi(int(render_us / float(BACKOFF_DIVISOR_US)), 1, MAX_BACKOFF_FRAMES)
 			for i in backoff:
 				await tree.process_frame
 

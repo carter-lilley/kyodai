@@ -256,7 +256,7 @@ func _report_cache_eviction(deleted_count: int, freed_bytes: int, deleted_names:
 	for file_name in deleted_names:
 		_lru_dirty = _lru_map.erase(file_name) or _lru_dirty
 	if deleted_count > 0:
-		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, freed_bytes / (1024 * 1024)])
+		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, int(freed_bytes / (1024.0 * 1024.0))])
 		# More covers were written while the pass ran and we're still over:
 		# go again. Passes that deleted nothing don't retrigger - the overage
 		# is all grace-window files, which become evictable on the next write.

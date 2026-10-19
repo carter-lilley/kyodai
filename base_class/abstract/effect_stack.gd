@@ -216,8 +216,8 @@ func _update_effect_settings_only() -> void:
 
 ## Scan effect configs and apply border/glass insets to a MediaContainer.
 ## Owned here so GameCard and EffectStack share one implementation.
-static func apply_insets_from_configs(media_container: MediaContainer, configs: Array) -> void:
-	if not media_container:
+static func apply_insets_from_configs(container: MediaContainer, configs: Array) -> void:
+	if not container:
 		return
 	var border_inset: float = 0.0
 	var glass_inset: float = 0.0
@@ -231,8 +231,8 @@ static func apply_insets_from_configs(media_container: MediaContainer, configs: 
 				border_inset = settings.get("border_size", 0.0)
 			"glass":
 				glass_inset = settings.get("additional_inset_ratio", 0.0)
-	media_container.border_inset_ratio = border_inset
-	media_container.glass_inset_ratio = glass_inset
+	container.border_inset_ratio = border_inset
+	container.glass_inset_ratio = glass_inset
 
 func update_draw_rects() -> void:
 	_update_effect_draw_rects()

@@ -118,7 +118,9 @@ static func read_key(config_path: String, key: String) -> Variant:
 	if key != "mlc_path" or not FSM.file_exists(config_path):
 		return null
 	var value := _extract_mlc_path(FSM.read_file(config_path))
-	return value if value != "" else null
+	if value == "":
+		return null
+	return value
 
 ## Enforces Cemu's <mlc_path> element in settings.xml.
 static func enforce_paths(context: Dictionary, sections: Dictionary) -> bool:

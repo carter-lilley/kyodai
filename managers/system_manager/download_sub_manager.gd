@@ -698,8 +698,8 @@ func queue_download(url: String, destination: String, type: String = "file", ite
 		var required_bytes := int(item.expected_file_size * 1.1)
 		var space_left := FSM.get_space_left(destination.get_base_dir())
 		if space_left >= 0 and space_left < required_bytes:
-			var needed_mb := required_bytes / (1024 * 1024)
-			var free_mb := space_left / (1024 * 1024)
+			var needed_mb := int(required_bytes / (1024.0 * 1024.0))
+			var free_mb := int(space_left / (1024.0 * 1024.0))
 			push_error("[SystemManager.download] Insufficient disk space for " + item.name + ": need ~" + str(needed_mb) + " MB, have " + str(free_mb) + " MB")
 			SystemManager.notifications.show_notification(
 				"Not enough disk space for " + item.name + " (need ~" + str(needed_mb) + " MB, " + str(free_mb) + " MB free)",

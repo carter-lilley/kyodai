@@ -528,18 +528,18 @@ func _perimeter_point(rect: Rect2, radius: float, t: float) -> Vector2:
 		d -= segs[idx]
 		idx += 1
 	var tl := rect.position
-	var tr := Vector2(rect.end.x, rect.position.y)
+	var top_right := Vector2(rect.end.x, rect.position.y)
 	var br := rect.end
 	var bl := Vector2(rect.position.x, rect.end.y)
 	match idx:
 		0:
 			return Vector2(tl.x + r + d, tl.y)
 		1:
-			var c := tr + Vector2(-r, r)
+			var c := top_right + Vector2(-r, r)
 			var a := -PI * 0.5 + d / r
 			return c + Vector2(cos(a), sin(a)) * r
 		2:
-			return Vector2(tr.x, tr.y + r + d)
+			return Vector2(top_right.x, top_right.y + r + d)
 		3:
 			var c := br + Vector2(-r, -r)
 			var a := d / r

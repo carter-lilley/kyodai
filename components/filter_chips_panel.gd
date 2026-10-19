@@ -137,7 +137,7 @@ func _selected_only_display_text(kind: String, value: String) -> String:
 	if kind == "release_week":
 		var epoch_ms := int(value)
 		if epoch_ms > 0:
-			var dict := Time.get_datetime_dict_from_unix_time(epoch_ms / 1000)
+			var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000.0))
 			return "%s %d, %d" % [MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)], dict.day, dict.year]
 	return value
 

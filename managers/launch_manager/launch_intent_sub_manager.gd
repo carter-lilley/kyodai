@@ -296,9 +296,13 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 				push_error("[LaunchIntentManager] Xenia: No launchable file in folder: " + intent.rom_path)
 
 		# shadPS4 special handling for desktop - replace ROM path with TitleID
-		# shadPS4 searches configured installDirs for matching TitleID folder
+		# shadPS4 searches configured installDirs for matching TitleID folder.
+		# .zar games keep the direct file path instead: the TitleID lookup only
+		# matches archives named exactly CUSAxxxxx.zar, while a direct path
+		# works for any filename (shadPS4 loads ZArchive files natively)
 		var shadps4_title_id = intent.game.get_active_title_id() if intent.game else ""
-		if intent.emulator_id == "shadps4" and shadps4_title_id != "":
+		var shadps4_is_zar = intent.rom_path.get_extension().to_lower() == "zar"
+		if intent.emulator_id == "shadps4" and shadps4_title_id != "" and not shadps4_is_zar:
 			print("[LaunchIntentManager] shadPS4: Using TitleID: " + shadps4_title_id)
 			
 			# Replace the ROM path (ZIP) with just the TitleID

@@ -138,11 +138,11 @@ func _apply_scale() -> void:
 		_background.content_margin_left = h_padding
 		_background.content_margin_right = h_padding
 	if _hbox:
-		_hbox.add_theme_constant_override("separation", M3Units.dp(6))
+		_hbox.add_theme_constant_override("separation", int(M3Units.dp(6)))
 	if _battery_icon and _battery_icon.icon_settings:
-		_battery_icon.icon_settings.icon_size = M3Units.dp(BATTERY_ICON_SIZE_DP)
+		_battery_icon.icon_settings.icon_size = int(M3Units.dp(BATTERY_ICON_SIZE_DP))
 	if _wifi_icon and _wifi_icon.icon_settings:
-		_wifi_icon.icon_settings.icon_size = M3Units.dp(BATTERY_ICON_SIZE_DP)
+		_wifi_icon.icon_settings.icon_size = int(M3Units.dp(BATTERY_ICON_SIZE_DP))
 
 
 func _notification(what: int) -> void:
@@ -264,7 +264,6 @@ func _query_wifi_linux() -> void:
 
 	var wireless_iface := ""
 	var wired_iface := ""
-	var wired_up := false
 
 	var dir := DirAccess.open(LINUX_NET_IFACES_PATH)
 	if dir:
@@ -529,7 +528,7 @@ func _apply_colors() -> void:
 		_clock_font = _create_clock_font()
 	if _clock_label:
 		_clock_label.add_theme_font_override("font", _clock_font)
-		_clock_label.add_theme_font_size_override("font_size", M3Units.dp(14))
+		_clock_label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
 		_clock_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
 	if not _battery_icon:
 		return
@@ -539,7 +538,7 @@ func _apply_colors() -> void:
 	_battery_icon.icon_settings.icon_color = color
 	if _battery_label:
 		_battery_label.add_theme_font_override("font", _clock_font)
-		_battery_label.add_theme_font_size_override("font_size", M3Units.dp(14))
+		_battery_label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
 		_battery_label.add_theme_color_override("font_color", color)
 	if _wifi_icon:
 		_wifi_icon.icon_settings.icon_color = M3Theme.get_on_surface_variant()

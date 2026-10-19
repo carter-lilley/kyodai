@@ -1,8 +1,7 @@
 extends Control
 
 const DEBUG_LOG: bool = false
-const ShaderPrewarmer := preload("res://utils/perf/shader_prewarmer.gd")
-const StartupBenchmark := preload("res://utils/perf/startup_benchmark.gd")
+# ShaderPrewarmer and StartupBenchmark are global classes; no preload consts.
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var tab_container: TabContainer

@@ -243,18 +243,18 @@ func _on_frame_post_draw_audit() -> void:
 		if not lt_v is Transform2D:
 			continue
 		var stamp: Vector2 = lt_v.origin
-		var exp: Vector2 = _grid._visual_sync.compute_offset(card)
+		var expected: Vector2 = _grid._visual_sync.compute_offset(card)
 		var cs_v = card.get("content_scale")
 		var cs: Vector2 = cs_v if cs_v is Vector2 else Vector2.ONE
 		if not cs.is_equal_approx(Vector2.ONE):
 			var pivot: Vector2 = card._get_content_scale_pivot() if card.has_method("_get_content_scale_pivot") else card.size * 0.5
-			exp += pivot - cs * pivot
-		var d := stamp.distance_to(exp)
+			expected += pivot - cs * pivot
+		var d := stamp.distance_to(expected)
 		if d > worst:
 			worst = d
 			worst_idx = card.get_meta("virtual_index", -1)
 			worst_stamp = stamp
-			worst_exp = exp
+			worst_exp = expected
 	if worst > 2.0:
 		# De-spam: report a card only when its delta changes materially; a static
 		# layout-vs-model constant is printed once, oscillation prints per change.

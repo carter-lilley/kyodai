@@ -1,3 +1,4 @@
+@tool
 class_name SettingsDialog
 extends M3Dialog
 
@@ -200,14 +201,14 @@ func _build_categories() -> void:
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
 		_add_category_button(id, subgroup_name, icon)
 
-		var cat_start_us := Time.get_ticks_usec()
+		var build_start_us := Time.get_ticks_usec()
 		if subgroup_name == "Library Appearance":
 			# Library Appearance has complex custom UI — build it directly.
 			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
 			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars, icon)
-		print("[SettingsDialog] category '", id, "' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
+		print("[SettingsDialog] category '", id, "' build elapsed_us=", Time.get_ticks_usec() - build_start_us)
 
 		# The dialog is pre-created at startup; spread category builds over
 		# frames so the whole dialog doesn't land in one synchronous burst.
@@ -299,10 +300,10 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array, i
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.set_meta("category_margin", true)
-	margin.add_theme_constant_override("margin_left", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_top", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_right", M3Units.dp(20))
-	margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+	margin.add_theme_constant_override("margin_left", int(M3Units.dp(20)))
+	margin.add_theme_constant_override("margin_top", int(M3Units.dp(20)))
+	margin.add_theme_constant_override("margin_right", int(M3Units.dp(20)))
+	margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(20)))
 
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -379,12 +380,12 @@ func _dump_layout_metrics(id: String) -> void:
 		["right_scroll", _right_scroll],
 		["right_content", _right_content],
 	]
-	for layer in layers:
-		var c: Control = layer[1]
+	for layer_info in layers:
+		var c: Control = layer_info[1]
 		if not is_instance_valid(c):
-			print("  %s: <invalid>" % layer[0])
+			print("  %s: <invalid>" % layer_info[0])
 			continue
-		print("  %s: size.y=%.1f min_size.y=%.1f" % [layer[0], c.size.y, c.get_combined_minimum_size().y])
+		print("  %s: size.y=%.1f min_size.y=%.1f" % [layer_info[0], c.size.y, c.get_combined_minimum_size().y])
 	if is_instance_valid(_right_content) and _right_content.get_child_count() > 0:
 		var inner = _right_content.get_child(0)
 		if inner is Control:
@@ -525,7 +526,7 @@ func _input(event: InputEvent) -> void:
 	if DEBUG_FOCUS_GUARD and is_dir:
 		var focused := get_viewport().gui_get_focus_owner()
 		print("[SettingsDialogFocus] RAW ", "down" if event.is_action_pressed("ui_down") else "up",
-			" focused=", focused.name if focused else "<null>",
+			" focused=", str(focused.name) if focused else "<null>",
 			" inside_content=", focused != null and _right_content.is_ancestor_of(focused),
 			" handled_already=", get_viewport().is_input_handled())
 	if is_dir:
@@ -551,8 +552,8 @@ func _handle_settings_focus_direction(focused: Control, dir: int, active_scroll:
 		var max_scroll := int(v_scroll_bar.max_value - v_scroll_bar.page) if v_scroll_bar else 0
 		print("[SettingsDialogFocus] dir=%d focused=%s candidate=%s inside_scroll=%s idx=%d boundary=%d at_boundary=%s scroll=%d/%d page=%d" % [
 			dir,
-			focused.name if focused else "<null>",
-			candidate.name if candidate else "<null>",
+			str(focused.name) if focused else "<null>",
+			str(candidate.name) if candidate else "<null>",
 			candidate != null and active_scroll.is_ancestor_of(candidate),
 			idx,
 			boundary_idx,

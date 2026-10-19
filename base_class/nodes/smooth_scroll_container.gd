@@ -608,10 +608,11 @@ func _start_smooth_scroll(duration_multiplier: float = 1.0, fixed_duration: floa
 		_is_smooth_scrolling = false
 		_page_scroll_in_flight = false
 		var sb_land = _get_scrollbar()
+		var land_target: float = target_value
 		if sb_land:
-			target_value = clampf(target_value, sb_land.min_value, maxf(sb_land.min_value, sb_land.max_value - sb_land.page))
-		_set_current_scroll_terminal(target_value)
-		SmoothScrollContainer._strace("tween-done target=" + str(target_value) + " actual=" + str(_get_current_scroll()))
+			land_target = clampf(land_target, sb_land.min_value, maxf(sb_land.min_value, sb_land.max_value - sb_land.page))
+		_set_current_scroll_terminal(land_target)
+		SmoothScrollContainer._strace("tween-done target=" + str(land_target) + " actual=" + str(_get_current_scroll()))
 		scroll_completed.emit()
 	)
 
@@ -639,15 +640,15 @@ func snap_to_page() -> void:
 	if not scrollbar:
 		return
 	var current = _get_current_scroll()
-	var snapped = round((current - page_snap_offset) / page_snap_period) * page_snap_period + page_snap_offset
+	var snap_target = round((current - page_snap_offset) / page_snap_period) * page_snap_period + page_snap_offset
 	var max_target = maxf(scrollbar.min_value, scrollbar.max_value - scrollbar.page)
 	if page_snap_max_target >= 0.0:
 		max_target = minf(max_target, page_snap_max_target)
-	snapped = clampf(snapped, scrollbar.min_value, max_target)
-	if is_equal_approx(snapped, current):
+	snap_target = clampf(snap_target, scrollbar.min_value, max_target)
+	if is_equal_approx(snap_target, current):
 		return
-	_target_scroll = snapped
-	_wheel_target = snapped
+	_target_scroll = snap_target
+	_wheel_target = snap_target
 	_start_smooth_scroll()
 
 func _on_native_scroll_ended() -> void:

@@ -423,7 +423,7 @@ func _render_platform_cards_from_data(data: Array, on_complete: Callable = Calla
 	# the DB thread so the main thread stays free while the registry/filesystem
 	# lookups run. Runs in parallel with loading-card creation below.
 	var data_copy: Array = data.duplicate(true)
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func(): return _precompute_card_data(data_copy),
 		func(precomputed):
 			# null when the queue dropped the task (overflow): bail with the
@@ -665,7 +665,7 @@ func _warm_firmware_caches_async(emulator_cache: Dictionary, default_core_cache:
 	the lookups are all cached. Recursive directory walks never touch the main
 	thread; cards use cache-only indicator lookups in the meantime."""
 	var generation := _render_generation
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			for slug in emulator_cache.keys():
 				var default_core_id: String = default_core_cache.get(slug, "")
@@ -1079,7 +1079,7 @@ func _on_firmware_download_completed(platform_slug: String, _success: bool):
 	# cache-only, so the recursive filesystem walk must not run on this thread.
 	var effective_emulator: String = card.selected_emulator if card.selected_emulator != "" else card.registry_default_emulator
 	var core_id: String = card.selected_core_id if card.selected_emulator == "retroarch" else ""
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			if effective_emulator != "":
 				LaunchManager.is_platform_firmware_ready(platform_slug, effective_emulator, core_id)

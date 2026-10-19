@@ -756,7 +756,7 @@ func _check_repo_update(emulator_id: String, _emulator_name: String, installed_v
 	SystemManager.network.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(_url: String, tag: String, error: String, _file_size: int, published_at: String, asset_updated_at: String):
+		func(_url: String, tag: String, error: String, _file_size: int, published_at: String, asset_updated_at: String, _asset_sha256: String):
 			if error != "" or tag == "":
 				results.failed.append(emulator_id)
 				results.failed_details[emulator_id] = error if error != "" else "No matching release asset found"

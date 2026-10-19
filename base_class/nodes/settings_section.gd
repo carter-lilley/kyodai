@@ -122,15 +122,15 @@ func get_card() -> PanelContainer:
 
 ## Show/hide a row along with its preceding separator rule, so conditional
 ## settings don't leave doubled separators behind.
-func set_row_visible(row: Control, visible: bool) -> void:
+func set_row_visible(row: Control, is_visible: bool) -> void:
 	if not row or not is_instance_valid(row):
 		return
-	row.visible = visible
+	row.visible = is_visible
 	var idx = row.get_index()
 	if idx > 0:
 		var sibling = _rows.get_child(idx - 1)
 		if sibling is HSeparator:
-			sibling.visible = visible
+			sibling.visible = is_visible
 
 func refresh_theme() -> void:
 	var card_style := _card.get_theme_stylebox("panel") as StyleBoxFlat

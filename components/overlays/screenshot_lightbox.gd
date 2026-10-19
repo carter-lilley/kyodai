@@ -109,10 +109,10 @@ func _apply_margins() -> void:
 	# Top margin additionally clears the window-chrome strip (custom title
 	# bar), which renders above this overlay.
 	var chrome := M3Overlay.get_chrome_top_inset()
-	_margin.add_theme_constant_override("margin_left", m)
+	_margin.add_theme_constant_override("margin_left", int(m))
 	_margin.add_theme_constant_override("margin_top", int(m + chrome))
-	_margin.add_theme_constant_override("margin_right", m)
-	_margin.add_theme_constant_override("margin_bottom", m)
+	_margin.add_theme_constant_override("margin_right", int(m))
+	_margin.add_theme_constant_override("margin_bottom", int(m))
 
 func _update_close_geometry() -> void:
 	if not is_instance_valid(_close_button):

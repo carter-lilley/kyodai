@@ -32,9 +32,6 @@ var _sv_zoom_list: SettingsVar = null
 var _sv_layout_mode: SettingsVar = null
 var _sv_grid_vertical: SettingsVar = null
 
-# Focus restoration on app resume (Android)
-var _last_focused_index: int = -1
-
 func initialize(
 	main_content_vbox: VBoxContainer,
 	content_wrapper: Control
@@ -280,7 +277,10 @@ func _on_zoom_changed(value: float):
 	UIManager.apply_to_all_grids(func(grid: VirtualScrollGridContainer):
 		var grid_view = UIManager.get_view_for_grid(grid)
 		var visible: bool = grid_view != null and grid_view.is_visible_in_tree()
-		var result: bool = grid.set_zoom_level(level) if visible else grid.stamp_zoom_level(level)
+		if visible:
+			grid.set_zoom_level(level)
+		else:
+			grid.stamp_zoom_level(level)
 	)
 
 func _sync_stops_from_current_view() -> void:
@@ -474,8 +474,8 @@ func _on_view_mode_changed(selected_indices: Array[int]) -> void:
 	# (in which case no level was ever persisted).
 	if new_mode != VirtualScrollGridContainer.ViewMode.GRID and UIManager and UIManager.card_settings_state:
 		if UIManager.card_settings_state.card_zoom_level < 0:
-			var current_view = UIManager.get_current_view()
-			var current_grid = UIManager.get_view_grid(current_view) if current_view else null
+			var snapshot_view = UIManager.get_current_view()
+			var current_grid = UIManager.get_view_grid(snapshot_view) if snapshot_view else null
 			if current_grid:
 				var snapshot: int = current_grid.get_zoom_level()
 				if snapshot >= 0:

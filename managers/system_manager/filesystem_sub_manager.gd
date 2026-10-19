@@ -154,18 +154,29 @@ static func _join_paths_2(a: String, b: String) -> String:
 ## archive listings). Returns "" when the name could escape its destination
 ## directory; callers must treat "" as fatal for the item and surface an
 ## error - never silently rewrite, so hostile server data stays visible.
+##
+## Deliberately does NOT use String.validate_filename(): that also strips
+## '%', '?', '*', quotes etc., which are legal on Linux/NTFS and common in
+## ROM scene naming (e.g. "[T+Eng30%_patch].gbc") and pose no traversal
+## risk. The only requirement here is that the name stays a single path
+## segment that cannot escape its destination; names the host OS genuinely
+## can't store fail at write time with a visible error instead.
 static func sanitize_server_filename(file_name: String) -> String:
 	if file_name.is_empty():
 		return ""
-	# No path separators or drive/namespace syntax: the name must stay a
-	# single path segment on every supported OS.
-	if file_name.contains("/") or file_name.contains("\\") or file_name.contains(":"):
+	# Path separators: the name must be a single segment on every OS.
+	if file_name.contains("/") or file_name.contains("\\"):
 		return ""
+	# Drive letters / NTFS alternate data streams ("file.zip:payload").
+	if file_name.contains(":"):
+		return ""
+	# Traversal segments and current/parent dir aliases.
 	if file_name == "." or file_name == "..":
 		return ""
-	# validate_filename strips chars the host OS forbids; if it would change
-	# the name we can't round-trip it against the server library, so reject.
-	return file_name if file_name.validate_filename() == file_name else ""
+	# Embedded NUL can truncate paths at the C layer.
+	if file_name.contains("\u0000"):
+		return ""
+	return file_name
 
 ## True when path (after separator normalization and resolution of "." / ".."
 ## segments) stays inside root. Use before writing or deleting any path that
@@ -176,6 +187,24 @@ static func is_path_contained(path: String, root: String) -> bool:
 	var norm_path := path.replace("\\", "/").simplify_path()
 	var norm_root := root.replace("\\", "/").simplify_path().rstrip("/")
 	return norm_path == norm_root or norm_path.begins_with(norm_root + "/")
+
+## Computes the SHA-256 hex digest of a file, streaming in 1 MiB chunks.
+## Returns "" on error. Used to verify downloads against API-attested digests.
+static func sha256_file(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		push_error("[SystemManager.filesystem] Cannot open for hashing: " + path)
+		return ""
+	var ctx := HashingContext.new()
+	if ctx.start(HashingContext.HASH_SHA256) != OK:
+		f.close()
+		return ""
+	var length := f.get_length()
+	while f.get_position() < length:
+		var remaining: int = length - f.get_position()
+		ctx.update(f.get_buffer(mini(1024 * 1024, remaining)))
+	f.close()
+	return ctx.finish().hex_encode()
 
 ## Universal path resolver - handles all path formats and transformations
 ##
@@ -1782,8 +1811,8 @@ static func normalize_extraction_root(target_dir: String, expected_names: Array,
 ## Returns true when any expected name (file, dir, or subpath) exists directly
 ## under dir.
 static func _contains_any_expected(dir: String, expected_names: Array) -> bool:
-	for name in expected_names:
-		var n := str(name).strip_edges()
+	for expected_name in expected_names:
+		var n := str(expected_name).strip_edges()
 		if n == "":
 			continue
 		var full := join_paths(dir, n)
@@ -1826,12 +1855,12 @@ static func _normalize_backslash_paths(root_dir: String) -> void:
 	for entry in entries:
 		var old_full: String = entry["full"]
 		var new_rel: String = entry["rel"].replace("\\", "/")
-		var is_dir := entry["is_dir"] as bool
-		
+		var entry_is_dir := entry["is_dir"] as bool
+
 		# Directory entries from Windows-style ZIPs often have trailing
 		# backslashes in their names. Strip that from the target path so we
 		# rename to the real directory instead of moving into it.
-		if is_dir and new_rel.ends_with("/"):
+		if entry_is_dir and new_rel.ends_with("/"):
 			new_rel = new_rel.substr(0, new_rel.length() - 1)
 		
 		var new_full: String = join_paths(root_dir, new_rel)
@@ -1845,7 +1874,7 @@ static func _normalize_backslash_paths(root_dir: String) -> void:
 			push_warning("[SystemManager.filesystem] Skipping backslash normalization that escapes extraction root: " + entry["rel"])
 			continue
 		
-		if is_dir:
+		if entry_is_dir:
 			if dir_exists(new_full):
 				# Target directory already exists (created while moving a file
 				# or subdirectory into it). Remove the old empty fake directory.

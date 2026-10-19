@@ -380,7 +380,7 @@ static func _resolve(kind: String, emulator_id: String, platform_slug: String, c
 		return result
 
 	var strategy: String = block.get("strategy", "")
-	var platform_name: String = SystemManager.platform.get_platform_name().to_lower()
+	var _platform_name: String = SystemManager.platform.get_platform_name().to_lower()
 
 	# First existing config candidate wins; candidates may carry wildcards,
 	# including {save_root}/{system_root} (composed config-first via the

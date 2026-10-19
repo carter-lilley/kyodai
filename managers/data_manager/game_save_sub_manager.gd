@@ -11,7 +11,7 @@ const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 const _ContentHash = preload("res://utils/sync/content_hash.gd")
-const Gavel = preload("res://utils/sync/gavel.gd")
+# Gavel is a global class (utils/sync/gavel.gd); no preload const needed.
 const SLOT_DEFAULT := ""
 const MAX_FILE_SIZE := 100 * 1024 * 1024
 
@@ -2832,7 +2832,7 @@ func _on_upload_response(game: GameResource, emulator_id: String, upload: Dictio
 ## head, re-decide from hashes alone (gavel L1/L2/L3), then download or
 ## surface the conflict. Never retries the POST unchanged, never escalates
 ## to overwrite=true on its own.
-func _handle_upload_409(game: GameResource, emulator_id: String, upload: Dictionary, device_id: String, current_timestamp: String, on_done: Callable) -> void:
+func _handle_upload_409(game: GameResource, emulator_id: String, upload: Dictionary, _device_id: String, current_timestamp: String, on_done: Callable) -> void:
 	var local_save = upload.local
 	_fetch_saves_with_device_retry(game, func(remote_saves: Array, fetch_error: String, resolved_device_id: String):
 		if fetch_error != "":
@@ -2900,7 +2900,10 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 		return
 	var local_path = ""
 	var record_path = ""
-	var boundary_path = ""
+	# Dictionary holder so the download/extract lambdas share the boundary by
+	# reference (plain String captures by value; the pcsx2 extract-dest
+	# correction below must be visible to post_extraction).
+	var boundary_path := {"path": ""}
 	var zip_path = ""
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
@@ -2944,7 +2947,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 
 	_ensure_save_directory_exists(emulator_id)
 
-	boundary_path = record_path
+	boundary_path.path = record_path
 	print("[GameSaveSubManager] Downloading remote save '" + file_name + "' (id " + str(save_id) + ") -> '" + local_path + "' (record path: '" + record_path + "')")
 
 	SystemManager.network.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
@@ -2963,7 +2966,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 					return
 				if LaunchManager.registry.get_emulator_architecture(emulator_id) == "pcsx2":
 					ensure_pcsx2_superblock(save_dir)
-				_record_sync_boundary(game, emulator_id, file_name, boundary_path, current_timestamp, save_id, remote.get("content_hash", ""))
+				_record_sync_boundary(game, emulator_id, file_name, boundary_path.path, current_timestamp, save_id, remote.get("content_hash", ""))
 				# Small delay to let the filesystem settle before emulator launch
 				await get_tree().create_timer(0.1).timeout
 				on_done.call(true)
@@ -2988,7 +2991,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 				# is a child of record_path, the save actually lands there and
 				# the boundary must hash that folder, not the parent.
 				if record_path != "" and extract_dest != "" and extract_dest.get_base_dir().rstrip("/") == record_path.rstrip("/"):
-					boundary_path = extract_dest
+					boundary_path.path = extract_dest
 				FSM.extract_archive_async(zip_path, extract_dest, "Save data", true,
 					func(_info: Dictionary): pass,
 					func(extract_success: bool, _error):
@@ -3199,7 +3202,7 @@ func _auto_upload_after_scan(game: GameResource, emulator_id: String, local_save
 					else:
 						var headless_dl_state = {"pending": headless_downloads.size()}
 						for pair in headless_downloads:
-							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, headless_timestamp, func(_success: bool):
+							_execute_save_download(game, emulator_id, pair.remote, pair.local, resolved_device_id, headless_timestamp, func(_dl_success: bool):
 								headless_dl_state.pending -= 1
 								if headless_dl_state.pending <= 0:
 									_perform_auto_upload(game, emulator_id, upload_ops, resolved_device_id)

@@ -402,7 +402,7 @@ func ensure_schema_alignment() -> bool:
 	if not repaired.is_empty():
 		push_warning("[DatabaseManager] Schema drift repaired - added missing columns: " + ", ".join(repaired))
 		# May run on the DB worker thread; marshal the notification to the main thread.
-		SystemManager.memory.queue_main_thread_callback(func():
+		MemorySubManager.queue_main_thread_callback(func():
 			if SystemManager and SystemManager.notifications:
 				SystemManager.notifications.show_notification("Database schema updated (" + str(repaired.size()) + " missing columns added)", SystemManager.notifications.Type.WARNING)
 		)

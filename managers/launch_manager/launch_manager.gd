@@ -150,8 +150,8 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 		return false
 
 	if SystemManager.platform.is_android():
-		var emulator = get_emulator(emulator_id)
-		var android_cfg: Dictionary = emulator.get("launch", {}).get("platforms", {}).get("android", {})
+		var emu_cfg = get_emulator(emulator_id)
+		var android_cfg: Dictionary = emu_cfg.get("launch", {}).get("platforms", {}).get("android", {})
 		var package_name: String = android_cfg.get("package", "")
 		if package_name == "":
 			push_error("[LaunchManager] No Android package configured for emulator: " + emulator_id)

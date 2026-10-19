@@ -113,18 +113,18 @@ func _build_view():
 
 func _apply_scale() -> void:
 	if is_instance_valid(_margin):
-		_margin.add_theme_constant_override("margin_left", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_top", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_right", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_left", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_top", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_right", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(20)))
 	if is_instance_valid(_vbox):
-		_vbox.add_theme_constant_override("separation", M3Units.dp(16))
+		_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	if is_instance_valid(_add_row):
-		_add_row.add_theme_constant_override("separation", M3Units.dp(10))
+		_add_row.add_theme_constant_override("separation", int(M3Units.dp(10)))
 	if is_instance_valid(_app_id_input):
 		_app_id_input.custom_minimum_size = Vector2(M3Units.dp(200), 0)
 	if is_instance_valid(_games_container):
-		_games_container.add_theme_constant_override("separation", M3Units.dp(10))
+		_games_container.add_theme_constant_override("separation", int(M3Units.dp(10)))
 	if is_instance_valid(_bottom_buffer):
 		_bottom_buffer.custom_minimum_size = Vector2(0, M3Units.dp(60))
 
@@ -203,7 +203,7 @@ func _refresh_games_list():
 		var game_name = game_data.get("name", "Unknown")
 		
 		var row = HBoxContainer.new()
-		row.add_theme_constant_override("separation", M3Units.dp(10))
+		row.add_theme_constant_override("separation", int(M3Units.dp(10)))
 		_games_container.add_child(row)
 		
 		# Cover image (placeholder, loaded async)
@@ -258,7 +258,7 @@ func _load_cover_async(url: String, texture_rect: TextureRect) -> void:
 					return null,
 				func(img: Image):
 					if is_instance_valid(texture_rect) and img and not img.is_empty():
-						var texture = SystemManager.memory.create_texture_from_image(img)
+						var texture = MemorySubManager.create_texture_from_image(img)
 						if texture:
 							texture_rect.texture = texture
 			)

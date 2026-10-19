@@ -57,9 +57,9 @@ static func _parse_iso_to_epoch(value):
 	})
 	var tz = m.get_string(7)
 	if tz != "" and tz != "Z":
-		var sign = -1 if tz.begins_with("-") else 1
+		var tz_sign = -1 if tz.begins_with("-") else 1
 		var digits = tz.substr(1).replace(":", "")
-		epoch -= sign * (int(digits.substr(0, 2)) * 3600 + int(digits.substr(2, 2)) * 60)
+		epoch -= tz_sign * (int(digits.substr(0, 2)) * 3600 + int(digits.substr(2, 2)) * 60)
 	return epoch
 
 ## A 0-byte file is never a plausible edit; below half the recorded baseline
@@ -144,10 +144,10 @@ static func compute_sync_action(local_file, server_saves_in_slot: Array, files_s
 
 	var head: Dictionary = server_saves_in_slot[0]
 	var head_epoch = _parse_iso_to_epoch(head.get("updated_at"))
-	var head_key = head_epoch if head_epoch != null else 0.0
+	var head_key := float(head_epoch) if head_epoch != null else 0.0
 	for save in server_saves_in_slot:
 		var epoch = _parse_iso_to_epoch(save.get("updated_at"))
-		var key = epoch if epoch != null else 0.0
+		var key := float(epoch) if epoch != null else 0.0
 		if key > head_key:
 			head = save
 			head_key = key

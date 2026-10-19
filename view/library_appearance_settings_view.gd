@@ -68,10 +68,10 @@ func _setup_ui() -> void:
 
 func _apply_scale() -> void:
 	if is_instance_valid(_margin):
-		_margin.add_theme_constant_override("margin_left", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_top", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_right", M3Units.dp(20))
-		_margin.add_theme_constant_override("margin_bottom", M3Units.dp(20))
+		_margin.add_theme_constant_override("margin_left", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_top", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_right", int(M3Units.dp(20)))
+		_margin.add_theme_constant_override("margin_bottom", int(M3Units.dp(20)))
 	if is_instance_valid(_vbox):
 		_vbox.add_theme_constant_override("separation", int(M3Units.dp(16)))
 	if is_instance_valid(_bottom_buffer):

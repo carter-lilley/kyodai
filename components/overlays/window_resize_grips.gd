@@ -102,17 +102,17 @@ func _notification(what: int) -> void:
 
 func _make_grip(
 	gname: String,
-	anchor_left: float, anchor_top: float, anchor_right: float, anchor_bottom: float,
+	left: float, top: float, right: float, bottom: float,
 	edge: DisplayServer.WindowResizeEdge, cursor: Control.CursorShape
 ) -> Control:
 	var grip := Control.new()
 	grip.name = gname
 	grip.mouse_filter = Control.MOUSE_FILTER_STOP
 	grip.mouse_default_cursor_shape = cursor
-	grip.anchor_left = anchor_left
-	grip.anchor_top = anchor_top
-	grip.anchor_right = anchor_right
-	grip.anchor_bottom = anchor_bottom
+	grip.anchor_left = left
+	grip.anchor_top = top
+	grip.anchor_right = right
+	grip.anchor_bottom = bottom
 	# Offsets are sized in _apply_grip_geometry(); the anchors keep each strip
 	# glued to its window edge across resizes.
 	grip.gui_input.connect(_on_grip_input.bind(edge))
@@ -202,7 +202,7 @@ func _refresh_state() -> void:
 	visible = active
 
 
-func _on_window_chrome_changed(_active: bool) -> void:
+func _on_window_chrome_changed(_chrome_active: bool) -> void:
 	_refresh_state()
 
 

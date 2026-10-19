@@ -18,7 +18,11 @@ const SMALL_LIBRARY_THRESHOLD: int = 50
 # Single-request batch cap lives in GridDataCache.MAX_REQUEST_ITEMS.
 
 signal items_requested(offset, limit)
+# Emitted from GridWindowManager (via this instance) and connected by views;
+# not referenced inside this class itself.
+@warning_ignore("unused_signal")
 signal visible_range_changed(start, end, total)
+@warning_ignore("unused_signal")
 signal item_created(item, index)
 ## Emitted at the end of set_total_count. The startup settle in main.gd waits
 ## on this (same-frame wakeup) instead of polling per frame while the
@@ -265,6 +269,8 @@ var _zoom_model := GridZoomModel.new()
 var _grid_items_per_line: int:
 	get:
 		return _zoom_model._n_grid
+# Read by zoom drive tests; writes go through the zoom model.
+@warning_ignore("unused_private_class_variable")
 var _scroll_axis_lines: int:
 	get:
 		return _zoom_model._k_lines
@@ -1486,14 +1492,14 @@ func _update_page_snap_state() -> void:
 	if debug_mode:
 		if DEBUG_LOG: print("[Grid] _update_page_snap_state: period=", _get_page_period(), " max_target=", _scroll_container.page_snap_max_target, " pages=", _get_page_count(), " lpp=", get_lines_per_page(), " stride=", _get_normal_stride(), " axis=", (_get_available_size().y if vertical else _get_available_size().x))
 	var current := _get_current_scroll_pos()
-	var snapped := _clamp_scroll_to_range(_snap_to_page_target(current))
-	if not is_equal_approx(snapped, current):
+	var snap_target := _clamp_scroll_to_range(_snap_to_page_target(current))
+	if not is_equal_approx(snap_target, current):
 		# A page snap supersedes any pending guarded recalc write: without
 		# clearing the guard, the snap's signal can be echo-skipped (buffer
 		# never rebuilds at the snap) or the guard's deferred corrective can
 		# yank the view back off the page target.
 		_reset_transient_scroll_state("page_snap")
-		_scroll_container.scroll_to(int(snapped), false)
+		_scroll_container.scroll_to(int(snap_target), false)
 	# Re-apply the snap after the ScrollContainer's end-of-frame sort, whose
 	# clamp can otherwise undo it and leave the view between pages. The
 	# generation guard coalesces zoom drags so only the last recalc applies.
@@ -1508,10 +1514,10 @@ func _deferred_page_snap(generation: int) -> void:
 	if not _scroll_container or not _is_pagination_active():
 		return
 	var current := _get_current_scroll_pos()
-	var snapped := _clamp_scroll_to_range(_snap_to_page_target(current))
-	if not is_equal_approx(snapped, current):
+	var snap_target := _clamp_scroll_to_range(_snap_to_page_target(current))
+	if not is_equal_approx(snap_target, current):
 		_reset_transient_scroll_state("page_snap_deferred")
-		_scroll_container.scroll_to(int(snapped), false)
+		_scroll_container.scroll_to(int(snap_target), false)
 
 ## Wheel page-step target, resolved through the same target math as
 ## keyboard/controller navigation (single source of truth for page targets).
@@ -2325,7 +2331,7 @@ func _pad_total_items(count: int) -> int:
 		unit = items_per_line * get_lines_per_page()
 		if _is_staggered_active():
 			# Pages start on even rows (lpp is even), so a page holds lpp/2 pairs.
-			unit = (2 * items_per_line - 1) * maxi(1, get_lines_per_page() / 2)
+			unit = (2 * items_per_line - 1) * maxi(1, int(get_lines_per_page() / 2.0))
 	var padded = int(ceil(float(count) / unit) * unit)
 	if debug_mode and padded != count:
 		if DEBUG_LOG: print("[Grid] _pad_total_items: source=", count, " ipl=", items_per_line, " lpp=", get_lines_per_page(), " unit=", unit, " padded=", padded)
@@ -3197,7 +3203,7 @@ func _clamp_scroll_to_range(offset: float) -> float:
 	# targets through — the instant scroll path then extends the range to fit,
 	# corrupting every subsequent window computation.
 	if not _has_valid_available_size() or _total_items <= 0:
-		var fallback_sb: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+		var fallback_sb: ScrollBar = (_scroll_container.get_v_scroll_bar() as ScrollBar) if vertical else _scroll_container.get_h_scroll_bar()
 		if not fallback_sb:
 			return offset
 		return clampf(offset, fallback_sb.min_value, maxf(fallback_sb.min_value, fallback_sb.max_value - fallback_sb.page))
@@ -3216,7 +3222,7 @@ func _get_current_scroll_pos() -> float:
 func _write_scroll_during_recalc(pos: float) -> void:
 	if not _scroll_container:
 		return
-	var scrollbar: ScrollBar = _scroll_container.get_v_scroll_bar() if vertical else _scroll_container.get_h_scroll_bar()
+	var scrollbar: ScrollBar = (_scroll_container.get_v_scroll_bar() as ScrollBar) if vertical else _scroll_container.get_h_scroll_bar()
 	var viewport_axis: float = _get_available_size().y if vertical else _get_available_size().x
 	# scrollbar.page is 0 before the first sort; fall back to the viewport.
 	var page: float = maxf(scrollbar.page if scrollbar else 0.0, viewport_axis)

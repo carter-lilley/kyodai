@@ -5,11 +5,14 @@ ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 retroarch unknown ver.?
 - universal extraction normalizer (walk down for expected files...saves & games)
+
 to test: ps3 psn games
 shadps4
+
 self updater
 maybe make cores on demand?
 close during shaderprewarm crash
+
 ## configs
 	- user/identity profile resolver for emulator installs and saves
 		- 3ds, xenia, eden, vita, (cemu & ps2?)

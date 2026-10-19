@@ -784,7 +784,7 @@ func _populate_metadata_chips(game: GameResource) -> void:
 	var platform_name: String = game.platform if game.platform else "Unknown Platform"
 	_add_metadata_chip(platform_name, "gamepad-variant", true, true, "platform", game.platform_slug, "", platform_name)
 	if game.release_date > 0:
-		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000)).year)
+		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000.0)).year)
 		if year > 1971:
 			var date_text := _format_release_date(game.release_date)
 			_add_metadata_chip(date_text, "calendar", false, false, "release_week", str(game.release_date), "WEEK", date_text)
@@ -1282,7 +1282,7 @@ func _populate_related_games(game: GameResource) -> void:
 
 	# Resolve which related games are owned on the DB thread, then badge and
 	# link their cards. Exact igdb_id match first, title fallback after.
-	SystemManager.memory.queue_db_task(
+	MemorySubManager.queue_db_task(
 		func():
 			var by_igdb: Dictionary = DataManager.get_games_by_igdb_ids(igdb_ids)
 			var unmatched: Array = []
@@ -1358,7 +1358,7 @@ func _on_related_card_pressed(romm_id: int) -> void:
 	UIManager.show_game_details(romm_id)
 
 func _format_release_date(epoch_ms: int) -> String:
-	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000))
+	var dict := Time.get_datetime_dict_from_unix_time(int(epoch_ms / 1000.0))
 	var month: String = MONTH_NAMES[clampi(int(dict.month) - 1, 0, 11)]
 	return "%s %d, %d" % [month, dict.day, dict.year]
 
@@ -1592,7 +1592,10 @@ func _on_status_item_selected(index: int) -> void:
 				continue
 			if status_dropdown.is_selected(i):
 				status_dropdown.deselect_option(i)
-		props["status"] = key if selected else null
+		if selected:
+			props["status"] = key
+		else:
+			props["status"] = null
 
 	DataManager.set_game_user_props(_current_game, props)
 

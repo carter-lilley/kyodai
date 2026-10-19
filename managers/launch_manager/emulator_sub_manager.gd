@@ -1216,7 +1216,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	SystemManager.network.fetch_repo_release(
 		github_repo,
 		asset_pattern,
-		func(url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String):
+		func(url: String, tag: String, error: String, file_size: int, published_at: String, asset_updated_at: String, asset_sha256: String):
 			if error != "":
 				push_error("[EmulatorManager] Failed to fetch release: " + error)
 				_emulator_install_progress[emulator_id] = emulator_name + " - Failed to fetch release"
@@ -1239,7 +1239,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 				# or extraction from leaving a falsely "up to date" stored version.
 				_pending_emulator_version[emulator_id] = version_to_save
 				print("[EmulatorManager] Resolved emulator version for " + emulator_id + ": " + version_to_save)
-			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size),
+			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size, asset_sha256),
 		release_tag,
 		api_base_url
 	)
@@ -2313,7 +2313,7 @@ func scan_emulator_install_state(emulator_id: String):
 ## Queues a direct emulator download for install steps that provide an
 ## explicit URL. Used by download_url, download_repo, and download_scrape
 ## handlers once they have resolved the final URL and display name.
-func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}, file_size: int = 0):
+func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_display_name: String, download_url: String, step_index: int, step_config: Dictionary = {}, file_size: int = 0, expected_sha256: String = ""):
 	# Use explicit filename from config if provided, otherwise extract from URL
 	var filename = step_config.get("filename", "")
 	if filename == "":
@@ -2363,6 +2363,10 @@ func _queue_emulator_download(emulator_id: String, _emulator_name: String, step_
 		"step_index": step_index,
 		"step_config": step_config,
 		"filename": filename,
+		"destination_path": destination_path,
+		# API-attested SHA-256 from the release listing ("" = host publishes
+		# none, verification skipped). Verified before any extract/install.
+		"expected_sha256": expected_sha256,
 		"callback": func(success: bool, message: String):
 			if not success:
 				_emulator_install_progress[emulator_id] = message if message != "" else "Download failed"
@@ -2414,7 +2418,31 @@ func _on_unified_download_completed(item_id: String, success: bool, message: Str
 			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 			task_info.callback.call(false, message)
 			return
-		
+
+		# Verify the download against the SHA-256 digest attested by the
+		# release API at listing time (KYD-09). Skipped when the host
+		# publishes no digest. A mismatch means the bytes on disk are NOT
+		# what the release API advertised - delete and abort, never install.
+		var expected_sha256: String = task_info.get("expected_sha256", "")
+		if expected_sha256 != "":
+			var dest_path: String = task_info.get("destination_path", "")
+			_emulator_install_progress[emulator_id] = "Verifying download..."
+			var actual_sha256 := FSM.sha256_file(dest_path)
+			if actual_sha256 == "" or actual_sha256.to_lower() != expected_sha256.to_lower():
+				push_error("[EmulatorManager] SHA-256 mismatch for %s: expected %s, got %s - deleting download" % [emulator_id, expected_sha256, actual_sha256])
+				FSM.delete_file(dest_path)
+				_emulator_install_progress[emulator_id] = "Download verification failed"
+				_pending_emulator_version.erase(emulator_id)
+				_end_force_install(emulator_id)
+				SystemManager.notifications.show_notification(
+					"Verification failed for " + emulator_id + " - the download does not match the publisher's checksum and was deleted",
+					SystemManager.notifications.Type.ERROR
+				)
+				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
+				task_info.callback.call(false, "Checksum verification failed")
+				return
+			print("[EmulatorManager] SHA-256 verified for " + emulator_id + " download")
+
 		# Validate download if validation config exists
 		var validate_config = step_config.get("validate", {})
 		if not _validate_step(emulator_id, validate_config):

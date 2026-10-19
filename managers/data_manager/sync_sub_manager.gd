@@ -754,13 +754,13 @@ func _compute_cover_download_budget(cap_bytes: int) -> int:
 					file_count += 1
 			file_name = dir.get_next()
 		dir.list_dir_end()
-	var avg_size: int = int(total_bytes / file_count) if file_count > 0 else CoverSubManager.ESTIMATED_COVER_BYTES
+	var avg_size: int = int(total_bytes / float(file_count)) if file_count > 0 else CoverSubManager.ESTIMATED_COVER_BYTES
 	if avg_size <= 0:
 		avg_size = CoverSubManager.ESTIMATED_COVER_BYTES
 	# Prefetch gets half the free space; the rest stays as headroom for covers
 	# the user browses to during/after the sync, so prefetch can't fill the
 	# cache and immediately start evicting what the user is looking at.
-	return maxi(0, int((cap_bytes - total_bytes) / 2 / avg_size))
+	return maxi(0, int((cap_bytes - total_bytes) / 2.0 / avg_size))
 
 
 func _queue_backfill_covers() -> void:

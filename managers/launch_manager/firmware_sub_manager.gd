@@ -445,8 +445,8 @@ func setup_platform_firmware(platform_slug: String, emulator_id: String, callbac
 			var required_bytes := int(firmware_size * 1.1)
 			var space_left := FSM.get_space_left("user://temp/firmware")
 			if space_left >= 0 and space_left < required_bytes:
-				var needed_mb := required_bytes / (1024 * 1024)
-				var free_mb := space_left / (1024 * 1024)
+				var needed_mb := int(required_bytes / (1024.0 * 1024.0))
+				var free_mb := int(space_left / (1024.0 * 1024.0))
 				push_error("[FirmwareManager] Insufficient disk space for firmware: need ~" + str(needed_mb) + " MB, have " + str(free_mb) + " MB")
 				SystemManager.notifications.show_notification(
 					"Not enough disk space to download firmware for " + platform_slug + " (need ~" + str(needed_mb) + " MB, " + str(free_mb) + " MB free)",

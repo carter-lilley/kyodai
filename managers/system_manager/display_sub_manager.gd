@@ -710,7 +710,7 @@ func is_hdr_active() -> bool:
 func is_vrr_enabled() -> bool:
 	return _vrr_enabled
 
-func _on_dual_screen_mode_changed_for_hdr(_enabled: bool, _second_screen_index: int) -> void:
+func _on_dual_screen_mode_changed_for_hdr(_enabled: bool, _second_screen_idx: int) -> void:
 	if SystemManager.platform.is_android():
 		return
 	if UIManager and UIManager.dual_screen:

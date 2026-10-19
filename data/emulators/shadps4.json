@@ -46,6 +46,7 @@
 			"linux": {
 				"type": "command",
 				"executable": "squashfs-root/AppRun",
+				"working_directory": "{emulator_dir}",
 				"template": [
 					"{exe}",
 					"{rom}",

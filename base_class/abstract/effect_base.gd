@@ -58,10 +58,10 @@ static func get_shared_gradient_texture(gradient: Gradient) -> ImageTexture:
 		return null
 	var key := gradient_content_hash(gradient)
 	if _gradient_texture_cache.has(key):
-		var tex = _gradient_texture_cache[key]
+		var cached_tex = _gradient_texture_cache[key]
 		_gradient_texture_cache.erase(key)
-		_gradient_texture_cache[key] = tex
-		return tex
+		_gradient_texture_cache[key] = cached_tex
+		return cached_tex
 	var image = Image.create(256, 1, false, Image.FORMAT_RGBA8)
 	for i in range(256):
 		image.set_pixel(i, 0, gradient.sample(i / 255.0))

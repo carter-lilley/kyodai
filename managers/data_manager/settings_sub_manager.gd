@@ -202,7 +202,10 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 		elif default_var.type == SettingsVar.SettingType.INT or default_var.type == SettingsVar.SettingType.FLOAT:
 			# 0 is the stored sentinel for a slider's "Unlimited" tick; keep it.
 			if default_var.metadata.get("unlimited_tick", false) and (old_value is int or old_value is float) and old_value == 0:
-				saved_var.value = 0 if default_var.type == SettingsVar.SettingType.INT else 0.0
+				if default_var.type == SettingsVar.SettingType.INT:
+					saved_var.value = 0
+				else:
+					saved_var.value = 0.0
 			else:
 				saved_var.value = clamp(old_value, default_var.min_value, default_var.max_value)
 		elif default_var.type == SettingsVar.SettingType.VECTOR2I:

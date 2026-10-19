@@ -52,6 +52,10 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")
 @export var romm_username := SettingsVar.new(Type.STRING, "", State.ENABLED, "Username")
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
+# Internal: the http:// origin the user acknowledged as insecure-but-accepted
+# (KYD-07). Pre-ticks the connection panel's acknowledgment checkbox when the
+# current URL matches; a different http origin must be re-acknowledged.
+@export var romm_insecure_http_ack := SettingsVar.new(Type.STRING, "", State.INTERNAL, "Insecure HTTP Acknowledged Origin")
 @export var fold_duplicate_covers := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Fold duplicate covers into siblings", "During sync, games with identical cover art will be grouped together like RomM siblings")
 @export var hide_games_without_covers := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Hide games without cover art", "Games without cover art will be hidden from the library view")
 @export var fold_romm_siblings := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Fold RomM siblings", "RomM-designated regional variants (siblings) will be grouped under a single library entry")

@@ -31,6 +31,8 @@ signal scan_for_downloaded_games_completed(found_count: int)
 # Emitted (main thread) when a full sync finds more server-side deletions for
 # a platform than the auto-delete threshold. The batch is held until
 # confirm_server_deletions() or decline_server_deletions() is called.
+# Emitted from SyncSubManager via this instance; connected in main.gd.
+@warning_ignore("unused_signal")
 signal server_deletions_detected(platform_slug: String, count: int)
 
 # Settings facade signals

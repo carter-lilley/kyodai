@@ -433,10 +433,10 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 	# Subtract the toolbar/controlbar height.
 	var toolbar_effective_h: float = 0.0
 	if _main_content_vbox:
-		var toolbar = _main_content_vbox.get_node_or_null("controlbar_background")
-		if toolbar:
-			var toolbar_min_h = toolbar.get_combined_minimum_size().y
-			var toolbar_size_h = toolbar.size.y
+		var controlbar_bg = _main_content_vbox.get_node_or_null("controlbar_background")
+		if controlbar_bg:
+			var toolbar_min_h = controlbar_bg.get_combined_minimum_size().y
+			var toolbar_size_h = controlbar_bg.size.y
 			toolbar_effective_h = maxf(toolbar_min_h, toolbar_size_h)
 			available_height -= toolbar_effective_h
 
@@ -664,9 +664,9 @@ func handle_directional_input(event: InputEvent) -> bool:
 ## Capture the current focus owner as a WeakRef.
 ## If focus is inside the on-screen keyboard, resolves to the active LineEdit.
 func capture_focus() -> WeakRef:
-	var focus := get_current_focus_owner()
-	if focus != null and is_instance_valid(focus):
-		return weakref(focus)
+	var focus_owner := get_current_focus_owner()
+	if focus_owner != null and is_instance_valid(focus_owner):
+		return weakref(focus_owner)
 	return null
 
 ## Restore focus from a captured WeakRef. If the captured control is no longer
@@ -675,11 +675,11 @@ func restore_focus(saved_focus: WeakRef, fallback: Callable = Callable()) -> voi
 	if saved_focus == null:
 		_run_focus_fallback(fallback)
 		return
-	var focus: Control = saved_focus.get_ref()
-	if not is_instance_valid(focus) or not focus.is_visible_in_tree():
+	var focus_owner: Control = saved_focus.get_ref()
+	if not is_instance_valid(focus_owner) or not focus_owner.is_visible_in_tree():
 		_run_focus_fallback(fallback)
 		return
-	grab_focus_silent(focus)
+	grab_focus_silent(focus_owner)
 
 ## Deferred, sound-suppressed grab_focus.
 func grab_focus_silent(control: Control) -> void:
@@ -701,12 +701,12 @@ func get_current_focus_owner() -> Control:
 	var viewport := get_active_viewport()
 	if not viewport:
 		return null
-	var focus := viewport.gui_get_focus_owner()
-	if not is_instance_valid(focus):
+	var focus_owner := viewport.gui_get_focus_owner()
+	if not is_instance_valid(focus_owner):
 		return null
 	# If focus is inside the on-screen keyboard, resolve to the active LineEdit
 	# (or the previous focus object if the keyboard is mid-dismissal).
-	if is_focus_in_onscreen_keyboard(focus):
+	if is_focus_in_onscreen_keyboard(focus_owner):
 		var keyboard := get_onscreen_keyboard()
 		if keyboard != null and is_instance_valid(keyboard):
 			var active_edit: LineEdit = keyboard.get_active_line_edit()
@@ -715,7 +715,7 @@ func get_current_focus_owner() -> Control:
 			var previous: Control = keyboard.get_previous_focus_object()
 			if previous != null and is_instance_valid(previous):
 				return previous
-	return focus
+	return focus_owner
 
 ## Returns a callable that restores focus to the Home button.
 func get_focus_restore_fallback_to_home() -> Callable:
@@ -907,7 +907,7 @@ func _on_apply_preset_end() -> void:
 	"""Flush batched card settings and let each subsystem react."""
 	var mask := CardSettingsState.ChangeMask.NONE
 	if card_settings_state:
-		mask = card_settings_state.end_batch()
+		mask = card_settings_state.end_batch() as CardSettingsState.ChangeMask
 	# Effect changes need a full view rebuild; layout/display/media shape/theme
 	# changes are applied live by the grid and other setting_changed handlers.
 	if mask & CardSettingsState.ChangeMask.EFFECTS:

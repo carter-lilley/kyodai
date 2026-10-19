@@ -226,29 +226,29 @@ func compute_target_index(current_idx: int, row_delta: int, col_delta: int) -> i
 		return clamp(target, 0, source_total - 1)
 
 	if _grid._is_staggered_active():
-		var line := _grid._get_stagger_line_for_index(current_idx)
-		var col := current_idx - _grid._get_stagger_first_index_for_line(line)
-		var total_lines := _grid._get_stagger_line_for_index(source_total - 1) + 1
+		var st_line := _grid._get_stagger_line_for_index(current_idx)
+		var st_col := current_idx - _grid._get_stagger_first_index_for_line(st_line)
+		var st_total_lines := _grid._get_stagger_line_for_index(source_total - 1) + 1
 		# Horizontal moves stay on the current row, bounded by its capacity.
 		if row_delta == 0 and col_delta != 0:
-			var target_col_h := col + col_delta
-			if target_col_h < 0 or target_col_h >= _grid._get_stagger_line_capacity(line):
+			var target_col_h := st_col + col_delta
+			if target_col_h < 0 or target_col_h >= _grid._get_stagger_line_capacity(st_line):
 				return -1
-			var target_idx_h := _grid._get_stagger_first_index_for_line(line) + target_col_h
+			var target_idx_h := _grid._get_stagger_first_index_for_line(st_line) + target_col_h
 			if target_idx_h >= source_total:
 				return -1
 			return target_idx_h
-		var target_line := line + row_delta
-		if target_line < 0 or target_line >= total_lines:
+		var st_target_line := st_line + row_delta
+		if st_target_line < 0 or st_target_line >= st_total_lines:
 			return -1
 		# Vertical moves keep the column index, clamped to the target row's
 		# capacity (offset rows hold one fewer card).
-		var target_col := mini(col, _grid._get_stagger_line_capacity(target_line) - 1)
-		var target_idx := _grid._get_stagger_first_index_for_line(target_line) + target_col
+		var st_target_col := mini(st_col, _grid._get_stagger_line_capacity(st_target_line) - 1)
+		var st_target_idx := _grid._get_stagger_first_index_for_line(st_target_line) + st_target_col
 		# Placeholder slots (idx >= source count) are not navigation targets.
-		if target_idx >= source_total:
+		if st_target_idx >= source_total:
 			return -1
-		return target_idx
+		return st_target_idx
 
 	var line := int(current_idx / float(items_per_line))
 	var col := current_idx % items_per_line

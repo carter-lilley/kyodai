@@ -270,12 +270,12 @@ func _update_visibility() -> void:
 		if entry == null:
 			continue
 		var controlling = get_control_value(rule["property"])
-		var visible = false
+		var row_visible = false
 		for allowed in rule["values"]:
 			if str(controlling) == str(allowed):
-				visible = true
+				row_visible = true
 				break
-		entry["section"].set_row_visible(entry["row"], visible)
+		entry["section"].set_row_visible(entry["row"], row_visible)
 
 func _apply_metadata(control: Control, metadata: Dictionary) -> void:
 	"""Apply M3 component-specific properties from SettingsVar metadata."""

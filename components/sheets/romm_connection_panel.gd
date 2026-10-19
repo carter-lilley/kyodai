@@ -20,6 +20,7 @@ var _username_field: M3TextField = null
 var _password_field: M3TextField = null
 var _http_warning_label: M3Label = null
 var _http_ack_checkbox: M3Checkbox = null
+var _last_eval_origin: String = ""
 var _indicator: Indicator = null
 var _test_button: M3Button = null
 
@@ -35,12 +36,33 @@ func _ready() -> void:
 func _is_insecure_http(url: String) -> bool:
 	return url.strip_edges().to_lower().begins_with("http://")
 
+## Normalized "http://host:port" for an insecure URL ("" otherwise), matched
+## against the persisted one-time acknowledgment.
+func _http_origin(url: String) -> String:
+	if not _is_insecure_http(url):
+		return ""
+	var parts: Dictionary = SystemManager.network.parse_url(url.strip_edges())
+	if parts.host == "":
+		return ""
+	return parts.protocol.to_lower() + "://" + parts.host.to_lower() + ":" + str(parts.port)
+
 func _update_http_warning() -> void:
 	var insecure := _is_insecure_http(_url_field.text) if _url_field else false
 	if _http_warning_label:
 		_http_warning_label.visible = insecure
 	if _http_ack_checkbox:
 		_http_ack_checkbox.visible = insecure
+		var origin := _http_origin(_url_field.text) if insecure else ""
+		if origin == _last_eval_origin:
+			return  # keep the user's manual tick stable while typing
+		_last_eval_origin = origin
+		# Pre-tick when this exact origin was acknowledged in a previous
+		# session; a new or different http origin must be re-acknowledged.
+		var ack := ""
+		var ack_setting = DataManager.get_setting("romm_insecure_http_ack")
+		if ack_setting:
+			ack = str(ack_setting.value)
+		_http_ack_checkbox.set_pressed_no_signal(origin != "" and origin == ack)
 
 func _build_ui() -> void:
 	if show_description and not description_text.is_empty():
@@ -71,6 +93,7 @@ func _build_ui() -> void:
 	_http_warning_label = M3Label.new()
 	_http_warning_label.text = "Warning: http:// sends your username, password, and all downloads unencrypted. Only use it on trusted local networks - use HTTPS if this server is reachable from the internet."
 	_http_warning_label.label_style = M3Label.Style.BODY_SMALL
+	_http_warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_http_warning_label.visible = false
 	add_child(_http_warning_label)
 
@@ -119,6 +142,13 @@ func save_to_settings(only_if_complete: bool = false) -> void:
 		if _indicator:
 			_indicator.set_status(Indicator.Status.ERROR, "Insecure http:// connection - tick the acknowledgment to save")
 		return
+
+	# Persist the acknowledgment for this origin so it survives restarts;
+	# switching to https leaves any stored ack untouched (it may be needed
+	# again if the user switches back to the same http origin).
+	var ack_setting = DataManager.get_setting("romm_insecure_http_ack")
+	if ack_setting and _is_insecure_http(url):
+		DataManager.set_setting(_http_origin(url), ack_setting)
 
 	var url_setting = DataManager.get_setting("romm_url")
 	var user_setting = DataManager.get_setting("romm_username")

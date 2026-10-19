@@ -247,8 +247,8 @@ static func _oklch_to_srgb(l: float, chroma: float, hue: float) -> Vector3:
 	var hi := chroma
 	for i in GAMUT_SEARCH_STEPS:
 		var c := (lo + hi) * 0.5
-		var lab := Vector3(l, c * cos(hue), c * sin(hue))
-		var rgb := _oklab_to_linear_rgb(lab)
+		var probe := Vector3(l, c * cos(hue), c * sin(hue))
+		var rgb := _oklab_to_linear_rgb(probe)
 		if rgb.x >= -0.001 and rgb.x <= 1.001 and rgb.y >= -0.001 and rgb.y <= 1.001 and rgb.z >= -0.001 and rgb.z <= 1.001:
 			lo = c
 		else:

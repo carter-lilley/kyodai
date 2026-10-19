@@ -10,7 +10,7 @@ const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Resolves one placement from the context RSM built.
 ## melonDS saves are intentionally left as next-to-ROM defaults; this resolver
 ## does not override the save location via config.
-static func resolve(kind: String, context: Dictionary) -> Dictionary:
+static func resolve(_kind: String, _context: Dictionary) -> Dictionary:
 	return {
 		"path": "",
 		"source": "default",

@@ -56,7 +56,7 @@ func stagger_pair_count() -> int:
 
 func stagger_line_for_index(idx: int) -> int:
 	var pair := stagger_pair_count()
-	var unit := int(idx / pair)
+	var unit := int(idx / float(pair))
 	var rem: int = idx - unit * pair
 	return unit * 2 + (0 if rem < items_per_line else 1)
 
@@ -66,7 +66,7 @@ func stagger_line_capacity(line: int) -> int:
 
 func stagger_first_index_for_line(line: int) -> int:
 	var pair := stagger_pair_count()
-	var unit := int(line / 2)
+	var unit := int(line / 2.0)
 	return unit * pair + (items_per_line if line % 2 == 1 else 0)
 
 ## Line an item sits on (uniform mapping unless staggered).
@@ -117,7 +117,7 @@ func page_count() -> int:
 	var tl := total_lines()
 	if lpp <= 0 or tl <= 0:
 		return 1
-	return int((tl - 1) / lpp) + 1
+	return int((tl - 1) / float(lpp)) + 1
 
 ## Leading blank pad before slot 0: equals the center offset so page 0's
 ## centered target lands exactly at scroll 0 instead of clamping flush-left.
@@ -134,7 +134,7 @@ func page_trailing_pad() -> float:
 	var tl := total_lines()
 	if stride <= 0.0 or lpp <= 0 or tl <= 0:
 		return 0.0
-	var last_page := int((tl - 1) / lpp)
+	var last_page := int((tl - 1) / float(lpp))
 	var lines_in_last: int = tl - last_page * lpp
 	var last_content := lines_in_last * stride - separation
 	return (page_content_size() - last_content) + page_center_offset()
@@ -172,7 +172,7 @@ func slot_position(idx: int, ipl: int = -1, p_stride: float = -1.0) -> float:
 	if paginated:
 		# Page groups are separated by a spacer gap in the scroll direction;
 		# the leading pad lets page 0 sit centered at scroll 0.
-		pos += page_leading_pad() + int(line / lines_per_page()) * page_gap()
+		pos += page_leading_pad() + int(line / float(lines_per_page())) * page_gap()
 	return pos
 
 ## Inverse of the (page-gapped) slot position transform.
