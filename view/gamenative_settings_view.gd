@@ -5,6 +5,7 @@ var _games_container: VBoxContainer
 var _app_id_input: M3TextField
 var _add_button: M3Button
 var _status_label: M3Label
+var _backend_option: M3OptionButton
 var _scroll_container: ScrollContainer
 var _margin: MarginContainer
 var _vbox: VBoxContainer
@@ -55,19 +56,53 @@ func _build_view():
 	vbox.add_child(add_section)
 
 	var desc = M3Label.new()
-	desc.text = "Add Steam games installed via GameNative to show in your library."
+	desc.text = "Add Steam games installed via GameNative or DroidDeck to show in your library."
 	desc.label_style = M3Label.Style.BODY_MEDIUM
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_section.add_content(desc, false)
 
-	# Check GameNative status
-	if not LaunchManager.gamenative_is_installed():
-		var warning = M3Label.new()
-		warning.text = "GameNative app is not installed. Games cannot be launched."
-		warning.label_style = M3Label.Style.BODY_MEDIUM
-		warning.use_on_surface_variant = true
-		warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		add_section.add_content(warning)
+	# Launch backend status + preference
+	var backend_section := SettingsSection.new("Launch Backend", "controller")
+	vbox.add_child(backend_section)
+	vbox.move_child(backend_section, 1)
+
+	var backend_row = HBoxContainer.new()
+	backend_row.add_theme_constant_override("separation", int(M3Units.dp(10)))
+	backend_section.add_content(backend_row, false)
+
+	_backend_option = M3OptionButton.new()
+	_backend_option.label_text = ""
+	_backend_option.fit_to_longest_item = false
+	_backend_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_backend_option.add_item("Auto (detect)", 0)
+	_backend_option.add_item("GameNative", 1)
+	_backend_option.add_item("DroidDeck", 2)
+	match LaunchManager.gamenative_get_preferred_backend():
+		"gamenative":
+			_backend_option.selected = 1
+		"droiddeck":
+			_backend_option.selected = 2
+		_:
+			_backend_option.selected = 0
+	_backend_option.item_selected.connect(_on_backend_selected)
+	backend_row.add_child(_backend_option)
+
+	var status := M3Label.new()
+	var gn_installed := LaunchManager.gamenative_is_backend_installed("gamenative")
+	var dd_installed := LaunchManager.gamenative_is_backend_installed("droiddeck")
+	if gn_installed and dd_installed:
+		status.text = "GameNative and DroidDeck are installed."
+	elif gn_installed:
+		status.text = "GameNative is installed."
+	elif dd_installed:
+		status.text = "DroidDeck is installed."
+	else:
+		status.text = "Neither GameNative nor DroidDeck is installed. Games cannot be launched."
+		status.modulate = M3Theme.get_error()
+	status.label_style = M3Label.Style.BODY_MEDIUM
+	status.use_on_surface_variant = gn_installed or dd_installed
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	backend_section.add_content(status, false)
 
 	var add_row = HBoxContainer.new()
 	add_section.add_content(add_row)
@@ -180,6 +215,15 @@ func _on_add_pressed():
 func _on_add_submitted(_text: String):
 	_on_add_pressed()
 
+func _on_backend_selected(index: int):
+	match index:
+		1:
+			LaunchManager.gamenative_set_preferred_backend("gamenative")
+		2:
+			LaunchManager.gamenative_set_preferred_backend("droiddeck")
+		_:
+			LaunchManager.gamenative_set_preferred_backend("")
+
 func _on_games_updated():
 	_refresh_games_list()
 
@@ -213,8 +257,10 @@ func _refresh_games_list():
 		cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		row.add_child(cover)
 		
-		# Load cover image
-		var cover_url = "https://cdn.cloudflare.steamstatic.com/steam/apps/%d/header.jpg" % app_id
+		# Load cover image (persisted canonical URL; legacy CDN pattern fallback)
+		var cover_url = game_data.get("cover_url", "")
+		if cover_url == "":
+			cover_url = "https://cdn.cloudflare.steamstatic.com/steam/apps/%d/header.jpg" % app_id
 		_load_cover_async(cover_url, cover)
 		
 		# Game info

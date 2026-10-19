@@ -1495,8 +1495,16 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		push_error("[GameManager] shadPS4: No ROM path for game: " + game.get_display_name())
 		return false
 
-	# ZAR: shadPS4 reads ZArchive files directly, so only the TitleID is needed
+	var is_bachatas4 = intent.emulator_id == "bachatas4"
+
+	# ZAR: shadPS4 reads ZArchive files directly, so only the TitleID is needed.
+	# Bachata S4's library only registers extracted folders or PKGs, so zar
+	# games can't be launched there.
 	if rom_path.get_extension().to_lower() == "zar":
+		if is_bachatas4:
+			push_error("[GameManager] shadPS4: Bachata S4 does not support .zar games: " + rom_path)
+			SystemManager.notifications.show_notification("Bachata S4 doesn't support .zar games - use a ZIP or extracted folder", SystemManager.notifications.Type.ERROR)
+			return false
 		return _prepare_shadps4_zar(game, rom_path)
 
 	# Step 1: Extract TitleID from ZIP
@@ -1552,8 +1560,12 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		true  # pinned
 	)
 	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting ZIP to: " + extract_path)
-	
-	var extract_success := await _extract_shadps4_zip(rom_path, extract_path)
+
+	# Bachata S4's library scans a shared SAF games folder for CUSAxxxxx
+	# directories, so extract flat into the roms folder (the ZIP already
+	# contains the CUSAxxxxx root) instead of nesting under <TitleID>/
+	var extract_target = rom_parent_dir if is_bachatas4 else extract_path
+	var extract_success := await _extract_shadps4_zip(rom_path, extract_target)
 	
 	# Dismiss the extraction notification
 	SystemManager.notifications.dismiss_notification(shadps4_notify_id)

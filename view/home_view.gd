@@ -715,6 +715,19 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			UIManager.show_settings_dialog_with_category("card_designer")
 		"delete":
 			var game = DataManager.get_game_by_id(romm_id)
+			if game == null and romm_id < 0:
+				# GameNative/DroidDeck Steam game (no DB row; romm_id = -app_id):
+				# remove from the manager's list, which also deletes the .steam
+				# export file. The gamenative_games_updated signal refreshes the grid.
+				var gn_data: Dictionary = LaunchManager.gamenative_get_game_data(-romm_id)
+				if not gn_data.is_empty():
+					var gn_title: String = gn_data.get("name", "Steam Game %d" % -romm_id)
+					UIManager.show_confirm("Delete Game", "Remove " + gn_title + " from the library? This also deletes its .steam export file - it will reappear if the game is still installed in GameNative/DroidDeck.",
+						func():
+							LaunchManager.gamenative_remove_game(-romm_id)
+							SystemManager.notifications.show_notification(gn_title + " removed from library", SystemManager.notifications.Type.SUCCESS)
+					, Callable(), Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
+				return
 			if game:
 				# Show deleting notification
 				SystemManager.notifications.show_notification("Deleting " + game.title + "...", SystemManager.notifications.Type.INFO)

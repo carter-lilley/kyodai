@@ -7,12 +7,54 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 const STEAM_CDN_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
 
+## Steam launch backends. Both accept an explicit-component LAUNCH_GAME intent
+## with an int "app_id" extra on their main activity; DroidDeck additionally
+## accepts GameNative's own action when retargeted to its component.
+## "packages" lists every known applicationId, canonical first: DroidDeck ships
+## benchmark-spoof variants (tools/release/variants.txt) so OEM game modes
+## boost clocks, and dev builds use the .xr applicationIdSuffix.
+const BACKEND_GAMENATIVE := "gamenative"
+const BACKEND_DROIDDECK := "droiddeck"
+const BACKENDS := {
+	BACKEND_GAMENATIVE: {
+		"label": "GameNative",
+		"packages": ["app.gamenative"],
+		"activity": "app.gamenative.MainActivity",
+		"action": "app.gamenative.LAUNCH_GAME",
+	},
+	BACKEND_DROIDDECK: {
+		"label": "DroidDeck",
+		"packages": [
+			"com.droiddeck.launcher",
+			"com.droiddeck.launcher.xr",      # dev/preview builds
+			"com.antutu.benchmark.full",      # antutu spoof variant
+			"com.tencent.ig",                 # pubg spoof variant
+			"com.ludashi.benchmark",          # ludashi spoof variant
+		],
+		"activity": "com.droiddeck.launcher.MainActivity",
+		"action": "com.droiddeck.launcher.LAUNCH_GAME",
+	},
+}
+
+## Inventory file DroidDeck writes into its game-files sync folder. GameNative
+## writes no marker, so its presence identifies a DroidDeck-managed folder.
+const DROIDDECK_SYNC_MARKER := ".droiddeck-sync.json"
+
 ## Signal emitted when games list changes
 signal games_updated()
+
+## Minimum interval between resume-triggered folder rescans. RESUMED can fire
+## in bursts (permission dialogs, quick app switches); the scan itself is cheap
+## but re-reads every .steam file.
+const RESCAN_DEBOUNCE_MS := 5000
 
 var _games_data: Array[Dictionary] = []
 var _http_request: HTTPRequest
 var _pending_scan_app_ids: Array[int] = []
+## Backend recorded per scanned app_id (from the folder marker), keyed by app_id.
+var _pending_scan_backend: Dictionary = {}
+var _scan_in_progress: bool = false
+var _last_scan_msec: int = 0
 
 func _ready():
 	_http_request = HTTPRequest.new()
@@ -23,18 +65,41 @@ func _ready():
 	# add them as permanent GameNative entries just like manually-added games.
 	call_deferred("_scan_steam_folder")
 
+## Re-scan the .steam export folder on app resume (games installed/uninstalled
+## in GameNative/DroidDeck while backgrounded). Debounced; the in-flight guard
+## lives in _scan_steam_folder itself so the startup scan is covered too.
+func rescan() -> void:
+	if not SystemManager.platform.is_android():
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_scan_msec < RESCAN_DEBOUNCE_MS:
+		return
+	_last_scan_msec = now
+	_scan_steam_folder()
+
 func _scan_steam_folder() -> void:
 	if not SystemManager.platform.is_android():
 		return
-	
+	# Skip while a scan or manual add is in flight; re-entering would
+	# double-queue app ids before the first add completes.
+	if _scan_in_progress or _is_validating or not _pending_scan_app_ids.is_empty():
+		return
+
 	var root_setting = DataManager.get_setting("games_root_folder")
 	if not root_setting or root_setting.value == "":
 		return
-	
+
 	var steam_folder := FSM.join_paths(root_setting.value, "steam")
 	if not FSM.dir_exists(steam_folder):
 		return
-	
+
+	# Folder heuristic: DroidDeck-managed sync folders carry an inventory file.
+	# Record it so imported games prefer the backend that exported them.
+	var folder_backend := detect_folder_backend(steam_folder)
+
+	# Every valid app id currently in the folder (drives removal reconcile).
+	var found_ids: Array[int] = []
+
 	for filename in FSM.get_files(steam_folder):
 		if not filename.ends_with(".steam"):
 			continue
@@ -42,7 +107,7 @@ func _scan_steam_folder() -> void:
 		var content := FSM.read_file(file_path)
 		if content == "":
 			continue
-		
+
 		# The .steam file should contain only the Steam App ID.
 		var app_id_str := content.strip_edges().get_slice("\n", 0).strip_edges()
 		if not app_id_str.is_valid_int():
@@ -50,7 +115,9 @@ func _scan_steam_folder() -> void:
 		var app_id := int(app_id_str)
 		if app_id <= 0:
 			continue
-		
+
+		found_ids.append(app_id)
+
 		# Skip IDs already in the persisted GameNative list.
 		var already_exists := false
 		for game in _games_data:
@@ -58,11 +125,66 @@ func _scan_steam_folder() -> void:
 				already_exists = true
 				break
 		if already_exists:
+			_backfill_origin(app_id, folder_backend)
 			continue
-		
+
 		_pending_scan_app_ids.append(app_id)
-	
-	_process_scan_queue()
+		if folder_backend != "":
+			_pending_scan_backend[app_id] = folder_backend
+
+	if _provenance_dirty:
+		_provenance_dirty = false
+		_save_games(false)
+
+	# Mirror the backend: entries imported from a file whose file vanished
+	# (uninstalled in the backend) are removed. Manual adds (no origin flag)
+	# are never auto-removed.
+	var removed := _reconcile_removed_files(found_ids)
+
+	if _pending_scan_app_ids.is_empty():
+		if removed:
+			games_updated.emit()
+	else:
+		_scan_in_progress = true
+		_process_scan_queue()
+
+## Remove file-origin games whose .steam file no longer exists. Silent save:
+## the caller owns the single games_updated emit for the whole scan.
+func _reconcile_removed_files(found_ids: Array[int]) -> bool:
+	var removed := false
+	for i in range(_games_data.size() - 1, -1, -1):
+		var game := _games_data[i]
+		if game.get("origin", "") != "file":
+			continue
+		if not found_ids.has(game.get("app_id", 0)):
+			_games_data.remove_at(i)
+			removed = true
+	if removed:
+		_save_games(false)
+	return removed
+
+var _provenance_dirty: bool = false
+
+## Entries scanned in before origin tracking get the flag when their file is
+## still present, so the reconcile pass covers them too. Silent: origin is
+## not user-visible, so no games_updated emit.
+func _backfill_origin(app_id: int, folder_backend: String) -> void:
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			if game.get("origin", "") == "":
+				game["origin"] = "file"
+				if folder_backend != "" and game.get("backend", "") == "":
+					game["backend"] = folder_backend
+				_provenance_dirty = true
+			return
+
+## Detect which backend manages a .steam export folder. Only DroidDeck leaves
+## a marker (its sync inventory); anything else is assumed GameNative/origin-
+## unknown and returns "".
+func detect_folder_backend(steam_folder: String) -> String:
+	if FSM.file_exists(FSM.join_paths(steam_folder, DROIDDECK_SYNC_MARKER)):
+		return BACKEND_DROIDDECK
+	return ""
 
 func _process_scan_queue() -> void:
 	if _pending_scan_app_ids.is_empty():
@@ -72,13 +194,32 @@ func _process_scan_queue() -> void:
 	var app_id: int = _pending_scan_app_ids.pop_front()
 	# Suppress per-add games_updated emits during the scan; emit once when the
 	# queue drains so the grid rebuilds a single time instead of N times.
-	add_game(app_id, func(_success: bool, _message: String):
+	add_game(app_id, func(success: bool, _message: String):
+		if success:
+			# File-sourced entries get an origin flag so the reconcile pass can
+			# auto-remove them when the backend deletes their .steam file.
+			var fields := { "origin": "file" }
+			if _pending_scan_backend.has(app_id):
+				fields["backend"] = _pending_scan_backend[app_id]
+			_set_game_fields(app_id, fields)
+		_pending_scan_backend.erase(app_id)
 		if _pending_scan_app_ids.is_empty():
+			_scan_in_progress = false
 			games_updated.emit()
 		else:
 			# Continue to the next .steam file once this one finishes.
 			call_deferred("_process_scan_queue")
 	, false)
+
+func _set_game_fields(app_id: int, fields: Dictionary) -> void:
+	"""Record scan provenance on a game entry (origin, exporting backend).
+	Silent save: the scan emits games_updated once when the queue drains."""
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			for key in fields:
+				game[key] = fields[key]
+			_save_games(false)
+			return
 
 func _load_games() -> void:
 	"""Load GameNative games from Settings."""
@@ -155,15 +296,20 @@ func _on_http_request_completed(_result: int, response_code: int, _headers: Pack
 	_fetch_game_name(_validation_app_id, _validation_callback, _validation_notify)
 
 func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> void:
-	"""Fetch game name from Steam Store API."""
+	"""Fetch game name and cover URL from Steam Store API."""
 	# Steam Store API endpoint for app details
 	var api_url = "https://store.steampowered.com/api/appdetails?appids=%d&filters=basic" % app_id
-	
+
 	var http = HTTPRequest.new()
 	add_child(http)
 	http.request_completed.connect(func(_result, response_code, _headers, body):
 		var game_name = "Steam Game %d" % app_id
-		
+		# Newer store pages only serve artwork from the hashed
+		# store_item_assets path (the legacy /steam/apps/{id}/header.jpg
+		# pattern 404s for them), so prefer the canonical header_image URL
+		# the API returns and fall back to the legacy pattern.
+		var cover_url := STEAM_CDN_URL.format({"appid": app_id})
+
 		if response_code == 200:
 			var json = JSON.new()
 			var parse_error = json.parse(body.get_string_from_utf8())
@@ -177,11 +323,14 @@ func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> v
 							var steam_name = game_data.get("name", "")
 							if steam_name != "":
 								game_name = steam_name
-		
-		# Download cover image before saving
-		var cover_url = STEAM_CDN_URL.format({"appid": app_id})
+							var header_image = game_data.get("header_image", "")
+							if header_image is String and header_image.begins_with("http"):
+								# Strip the ?t= asset-version query so Steam's
+								# cache-busting bumps don't duplicate cache entries.
+								cover_url = header_image.split("?")[0]
+
 		var cover_path = DataManager.get_cached_image_path(cover_url)
-		
+
 		# Download the cover image
 		# Bulk (true): sync prefetch is background batch work and must survive
 		# grid-teleport pruning of user-facing queue entries.
@@ -189,22 +338,23 @@ func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> v
 			var cover_path_ref = [cover_path]
 			if result != DownloadSubManager.ImageResult.OK:
 				cover_path_ref[0] = ""  # Will fall back to placeholder
-			
+
 			# Add game to list with cover path
 			_games_data.append({
 				"app_id": app_id,
 				"name": game_name,
 				"source": "STEAM",
 				"added_at": Time.get_datetime_string_from_system(),
+				"cover_url": cover_url,
 				"cover_path": cover_path_ref[0],
 				"last_played": "1970-01-01T00:00:00"
 			})
 			_save_games(notify)
-			
+
 			if callback.is_valid():
 				callback.call(true, game_name)
 		, false, true)
-		
+
 		http.queue_free()
 	)
 	
@@ -215,16 +365,53 @@ func _fetch_game_name(app_id: int, callback: Callable, notify: bool = true) -> v
 			callback.call(false, "Failed to fetch game name")
 
 func remove_game(app_id: int) -> void:
-	"""Remove a game by Steam App ID."""
+	"""Remove a game by Steam App ID. Also deletes the matching .steam export
+	file so the startup scan doesn't re-import it on next launch. The backend
+	(GameNative/DroidDeck) will recreate the file on its next sync while the
+	game is still installed there, which then re-imports it here - the
+	backend's library remains the source of truth."""
 	for i in range(_games_data.size()):
 		if _games_data[i].get("app_id", 0) == app_id:
 			_games_data.remove_at(i)
 			_save_games()
+			_delete_steam_file(app_id)
 			return
+
+func _delete_steam_file(app_id: int) -> void:
+	"""Delete any {games_root_folder}/steam/*.steam file whose content is this
+	app id. Mirrors the scan's parsing exactly."""
+	if not SystemManager.platform.is_android():
+		return
+
+	var root_setting = DataManager.get_setting("games_root_folder")
+	if not root_setting or root_setting.value == "":
+		return
+
+	var steam_folder := FSM.join_paths(root_setting.value, "steam")
+	if not FSM.dir_exists(steam_folder):
+		return
+
+	for filename in FSM.get_files(steam_folder):
+		if not filename.ends_with(".steam"):
+			continue
+		var file_path := FSM.join_paths(steam_folder, filename)
+		var content := FSM.read_file(file_path)
+		if content == "":
+			continue
+		var app_id_str := content.strip_edges().get_slice("\n", 0).strip_edges()
+		if app_id_str.is_valid_int() and int(app_id_str) == app_id:
+			FSM.delete_file(file_path)
 
 func get_games() -> Array[Dictionary]:
 	"""Get list of all GameNative games."""
 	return _games_data.duplicate()
+
+func get_game_data(app_id: int) -> Dictionary:
+	"""Persisted data for one game, or {} when not in the list."""
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			return game
+	return {}
 
 func create_game_resources() -> Array[GameResource]:
 	"""Create GameResource objects for all GameNative games.
@@ -237,14 +424,19 @@ func create_game_resources() -> Array[GameResource]:
 		var app_id = game_data.get("app_id", 0)
 		var game_title = game_data.get("name", "Steam Game %d" % app_id)
 		var cover_path = game_data.get("cover_path", "")
-		
+		# Entries added before header_image persistence only have the legacy
+		# CDN pattern; keep it as the fallback.
+		var cover_url = game_data.get("cover_url", "")
+		if cover_url == "":
+			cover_url = STEAM_CDN_URL.format({"appid": app_id})
+
 		var game = GameResource.new()
 		game.id = "gamenative_%d" % app_id
 		game.romm_id = -app_id  # Negative to avoid conflicts with RomM IDs
 		game.title = game_title
 		game.platform = "Steam (GameNative)"
 		game.platform_slug = "gamenative"
-		game.cover_url = STEAM_CDN_URL.format({"appid": app_id})
+		game.cover_url = cover_url
 		game.cover_path = cover_path  # Use cached cover path
 		game.file_name = ""
 		game.file_path = ""
@@ -290,26 +482,178 @@ func has_games() -> bool:
 	"""Check if any GameNative games are configured."""
 	return _games_data.size() > 0
 
-func is_game_native_installed() -> bool:
-	"""Check if GameNative app is installed on Android."""
+func get_installed_package(backend: String) -> String:
+	"""First package from the backend's known applicationIds that is installed
+	on this device, or "" when none is."""
 	if not SystemManager.platform.is_android():
-		return false
-	
+		return ""
+	if not BACKENDS.has(backend):
+		return ""
+
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
-		return false
-	
-	return plugin.call("isPackageInstalled", "app.gamenative")
+		return ""
+
+	for package in BACKENDS[backend]["packages"]:
+		if plugin.call("isPackageInstalled", package):
+			return package
+	return ""
+
+func is_backend_installed(backend: String) -> bool:
+	"""Check if a Steam launch backend app is installed on Android."""
+	return get_installed_package(backend) != ""
+
+func is_game_native_installed() -> bool:
+	"""Check if GameNative app is installed on Android."""
+	return is_backend_installed(BACKEND_GAMENATIVE)
+
+func get_installed_backends() -> Array[String]:
+	"""All Steam launch backends currently installed, in registry order."""
+	var installed: Array[String] = []
+	for backend in BACKENDS:
+		if is_backend_installed(backend):
+			installed.append(backend)
+	return installed
+
+func get_backend_label(backend: String) -> String:
+	return BACKENDS.get(backend, {}).get("label", backend)
+
+func get_preferred_backend() -> String:
+	"""User's saved backend preference: a backend id, or "" for auto."""
+	var setting = DataManager.get_setting("steam_backend")
+	if setting and setting.value is String and BACKENDS.has(setting.value):
+		return setting.value
+	return ""
+
+func set_preferred_backend(backend: String) -> void:
+	"""Persist the backend preference ("" resets to auto)."""
+	var setting = DataManager.get_setting("steam_backend")
+	if not setting:
+		return
+	DataManager.set_setting(backend if backend != "" else "auto", setting)
+	DataManager.save_settings()
+
+func _get_game_backend(app_id: int) -> String:
+	for game in _games_data:
+		if game.get("app_id", 0) == app_id:
+			return game.get("backend", "")
+	return ""
+
+## Resolve which backend should launch a game. Returns a backend id, or "" when
+## no unambiguous choice exists (none installed, or both installed with no
+## per-game/folder/user preference). Precedence: per-game recorded backend ->
+## saved user preference -> folder marker -> the single installed backend.
+func resolve_backend(app_id: int) -> String:
+	var installed := get_installed_backends()
+	if installed.is_empty():
+		return ""
+
+	var game_backend := _get_game_backend(app_id)
+	if game_backend != "" and installed.has(game_backend):
+		return game_backend
+
+	var preferred := get_preferred_backend()
+	if preferred != "" and installed.has(preferred):
+		return preferred
+
+	var root_setting = DataManager.get_setting("games_root_folder")
+	if root_setting and root_setting.value != "":
+		var folder_backend := detect_folder_backend(FSM.join_paths(root_setting.value, "steam"))
+		if folder_backend != "" and installed.has(folder_backend):
+			return folder_backend
+
+	if installed.size() == 1:
+		return installed[0]
+
+	return ""
 
 func launch_game(app_id: int) -> bool:
-	"""Launch a GameNative game by Steam App ID."""
-	if not SystemManager.platform.is_android():
-		push_error("[GameNativeSubManager] Cannot launch GameNative game on non-Android platform")
+	"""Launch via the resolved backend. Returns false when no backend can be
+	resolved without asking the user or none is installed; use
+	launch_game_async to get the interactive flow."""
+	var backend := resolve_backend(app_id)
+	if backend == "":
 		return false
-	
+	return _do_launch(backend, app_id)
+
+## Launch a Steam game, resolving the backend interactively when needed.
+## on_result receives (success: bool, message: String); an empty message with
+## success == false means the user cancelled the backend picker.
+func launch_game_async(app_id: int, on_result: Callable) -> void:
+	if not SystemManager.platform.is_android():
+		push_error("[GameNativeSubManager] Cannot launch Steam game on non-Android platform")
+		if on_result.is_valid():
+			on_result.call(false, "Steam games only available on Android")
+		return
+
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		push_error("[GameNativeSubManager] KyodaiBridge plugin not available")
+		if on_result.is_valid():
+			on_result.call(false, "Android bridge unavailable")
+		return
+
+	var backend := resolve_backend(app_id)
+	if backend != "":
+		var success := _do_launch(backend, app_id)
+		if on_result.is_valid():
+			on_result.call(success, "" if success else "Failed to launch %s. Is the app installed?" % get_backend_label(backend))
+		return
+
+	var installed := get_installed_backends()
+	if installed.is_empty():
+		if on_result.is_valid():
+			on_result.call(false, "No Steam launcher installed. Install GameNative or DroidDeck.")
+		return
+
+	# Both backends installed and nothing disambiguates them: ask once, then
+	# remember the choice so future launches go straight to it.
+	_show_backend_picker(app_id, installed, on_result)
+
+func _show_backend_picker(app_id: int, installed: Array[String], on_result: Callable) -> void:
+	var dialog = M3Dialog.new()
+	dialog.title_text = "Launch Steam Game"
+	dialog.body_text = "Both GameNative and DroidDeck are installed. Choose which app to launch Steam games with - you can change this later in the GameNative settings."
+
+	var chosen := { "picked": false }
+	for backend in installed:
+		var label: String = get_backend_label(backend)
+		dialog.add_action(label, func():
+			chosen["picked"] = true
+			set_preferred_backend(backend)
+			dialog.dismiss()
+			var success := _do_launch(backend, app_id)
+			if on_result.is_valid():
+				on_result.call(success, "" if success else "Failed to launch %s." % label)
+		, backend == installed[0])
+
+	# Dismissal without a choice (scrim tap / close button / back) cancels
+	# silently; after a choice the action callback already reported.
+	dialog.dismissed.connect(func():
+		if not chosen["picked"] and on_result.is_valid():
+			on_result.call(false, "")
+	)
+
+	M3Dialog.show_dialog(dialog)
+
+func _do_launch(backend: String, app_id: int) -> bool:
+	var plugin = Engine.get_singleton("KyodaiBridge")
+	if plugin == null:
 		return false
-	
-	return plugin.call("launchGameNativeGame", app_id)
+	var info: Dictionary = BACKENDS[backend]
+	var package := get_installed_package(backend)
+	if package == "":
+		return false
+	# has_method() doesn't work on Android plugin singletons, so staleness is
+	# detected by calling: a missing plugin method logs an error and returns
+	# null, while the real methods return the Java boolean (which crosses the
+	# JNI bridge as int 0/1 on some engine versions). Fall back to the legacy
+	# method for GameNative (the only backend it can target).
+	var result = plugin.call("launchSteamGame", package, info["activity"], info["action"], app_id)
+	if result == null:
+		push_error("[GameNativeSubManager] KyodaiBridge plugin is outdated (missing launchSteamGame). Rebuild the Android plugin and re-export the app.")
+		if backend == BACKEND_GAMENATIVE:
+			result = plugin.call("launchGameNativeGame", app_id)
+	if result is bool:
+		return result
+	return result is int and result != 0

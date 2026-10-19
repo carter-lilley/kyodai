@@ -813,6 +813,9 @@ func _notification(what: int) -> void:
 		if LaunchManager:
 			LaunchManager.clear_validation_cache()
 			LaunchManager.clear_stale_pending_launches()
+			# Re-scan the .steam export folder: games installed/uninstalled in
+			# GameNative/DroidDeck while backgrounded appear/disappear here.
+			LaunchManager.gamenative_rescan()
 			if LaunchManager.update:
 				LaunchManager.update.on_app_resumed()
 		var platforms_view = UIManager.get_settings_dialog_platforms_view()

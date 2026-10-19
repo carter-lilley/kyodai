@@ -545,7 +545,12 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 
 	# Add delete option only if game is downloaded and show_delete is true
 	var game = DataManager.get_game_by_id(romm_id)
-	if show_delete and game and game.is_active_variant_downloaded():
+	# GameNative/DroidDeck Steam games have no DB row (romm_id = -app_id);
+	# offer Delete from the manager's own list instead.
+	var is_gamenative := false
+	if game == null and romm_id < 0:
+		is_gamenative = not LaunchManager.gamenative_get_game_data(-romm_id).is_empty()
+	if show_delete and ((game and game.is_active_variant_downloaded()) or is_gamenative):
 		items.append({"id": "delete", "text": "Delete", "icon": "trash-can"})
 
 	# Add "Add to Steam" option if game is downloaded (desktop only)

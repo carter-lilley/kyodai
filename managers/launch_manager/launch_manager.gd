@@ -623,26 +623,28 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
 	_launch_with_emulator_check(game)
 
-## Launch a GameNative game via intent
+## Launch a GameNative/DroidDeck Steam game via intent
 func _launch_gamenative_game(game: GameResource) -> void:
 	if not SystemManager.platform.is_android():
-		push_error("[LaunchManager] Cannot launch GameNative game on non-Android platform")
-		SystemManager.notifications.show_notification("GameNative games only available on Android", SystemManager.notifications.Type.ERROR)
+		push_error("[LaunchManager] Cannot launch Steam game on non-Android platform")
+		SystemManager.notifications.show_notification("Steam games only available on Android", SystemManager.notifications.Type.ERROR)
 		_end_launch(game.romm_id)
 		return
 
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
 
-	var success = gamenative.launch_game(game.steam_app_id)
-	if success:
-		_update_last_played(game)
-	else:
-		push_error("[LaunchManager] Failed to launch GameNative game")
-		SystemManager.notifications.show_notification("Failed to launch GameNative. Is the app installed?", SystemManager.notifications.Type.ERROR)
-		if launch_failed_hook.is_valid():
-			launch_failed_hook.call()
-	_end_launch(game.romm_id)
+	gamenative.launch_game_async(game.steam_app_id, func(success: bool, message: String):
+		if success:
+			_update_last_played(game)
+		elif message != "":
+			# Empty message = user cancelled the backend picker; stay silent.
+			push_error("[LaunchManager] Failed to launch Steam game: " + message)
+			SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+			if launch_failed_hook.is_valid():
+				launch_failed_hook.call()
+		_end_launch(game.romm_id)
+	)
 
 ## If game is not downloaded, queue the download first then proceed.
 ## Multi-disc games on m3u-capable platforms queue every missing disc.
@@ -1028,8 +1030,17 @@ func stop_shuffler_session() -> void:
 # GameNative facade
 # ============================================================================
 
-func gamenative_launch_game(steam_app_id: int) -> bool:
-	return gamenative.launch_game(steam_app_id)
+func gamenative_launch_game(steam_app_id: int, on_result: Callable = Callable()) -> void:
+	gamenative.launch_game_async(steam_app_id, on_result)
+
+func gamenative_get_preferred_backend() -> String:
+	return gamenative.get_preferred_backend()
+
+func gamenative_set_preferred_backend(backend: String) -> void:
+	gamenative.set_preferred_backend(backend)
+
+func gamenative_is_backend_installed(backend: String) -> bool:
+	return gamenative.is_backend_installed(backend)
 
 func gamenative_update_last_played(steam_app_id: int, timestamp: String) -> void:
 	gamenative.update_last_played(steam_app_id, timestamp)
@@ -1051,6 +1062,12 @@ func gamenative_add_game(app_id: int, callback: Callable = Callable()) -> void:
 
 func gamenative_get_games() -> Array[Dictionary]:
 	return gamenative.get_games()
+
+func gamenative_get_game_data(app_id: int) -> Dictionary:
+	return gamenative.get_game_data(app_id)
+
+func gamenative_rescan() -> void:
+	gamenative.rescan()
 
 func gamenative_remove_game(app_id: int) -> void:
 	gamenative.remove_game(app_id)

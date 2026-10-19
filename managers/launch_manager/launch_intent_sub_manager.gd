@@ -179,7 +179,22 @@ func _build_launch_args(intent: LaunchIntent, emulator: Dictionary):
 				print("[LaunchIntentManager] Vita3K launch: Added AppStartParameters extra with TitleID: " + vita_title_id)
 			else:
 				print("[LaunchIntentManager] Vita3K launch: WARNING - No TitleID available for launch intent!")
-		
+
+		# Bachata S4 special handling - DirectLaunchActivity takes the game's
+		# CUSA ID as a "game_id" string extra (its library registers games by
+		# TitleID via SAF games folder autosync)
+		if intent.emulator_id == "bachatas4":
+			var bachata_title_id = intent.game.get_active_title_id() if intent.game else ""
+			if bachata_title_id != "":
+				intent.android_extras.append({
+					"key": "game_id",
+					"value": bachata_title_id,
+					"type": "string"
+				})
+				print("[LaunchIntentManager] Bachata S4 launch: Added game_id extra with TitleID: " + bachata_title_id)
+			else:
+				push_error("[LaunchIntentManager] Bachata S4 launch: No TitleID available for game_id extra!")
+
 		# No emulator-specific extra handling needed - all defined in JSON
 		
 	else:

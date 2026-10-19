@@ -70,6 +70,10 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Internal GameNative games list (not displayed in settings menu)
 @export var gamenative_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "GameNative Games")
 
+# Internal Steam launch backend preference: "auto" (detect/ask), "gamenative"
+# or "droiddeck". Set from the GameNative settings view or the launch dialog.
+@export var steam_backend := SettingsVar.new(Type.STRING, "auto", State.INTERNAL, "Steam Launch Backend")
+
 # Internal platform sync settings (not displayed in auto-generated menu)
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 

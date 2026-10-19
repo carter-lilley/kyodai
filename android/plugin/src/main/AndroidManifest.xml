@@ -28,6 +28,14 @@
 		<package android:name="com.retroarch.aarch64" />
 		<package android:name="com.retroarch.ra32" />
 		<package android:name="io.github.lime3ds.android" />
+		<!-- Steam launch backends (isPackageInstalled). DroidDeck ships
+		     benchmark-spoof variants with different applicationIds. -->
+		<package android:name="app.gamenative" />
+		<package android:name="com.droiddeck.launcher" />
+		<package android:name="com.droiddeck.launcher.xr" />
+		<package android:name="com.antutu.benchmark.full" />
+		<package android:name="com.tencent.ig" />
+		<package android:name="com.ludashi.benchmark" />
 	</queries>
 	
 	<application

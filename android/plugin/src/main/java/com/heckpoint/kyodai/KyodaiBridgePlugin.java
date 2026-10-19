@@ -277,44 +277,63 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     
     /**
      * Launch a Steam game via GameNative app.
-     * 
+     *
      * @param appId The Steam App ID to launch
      * @return true if intent was launched successfully
      */
     @UsedByGodot
     public boolean launchGameNativeGame(int appId) {
+        return launchSteamGame("app.gamenative", "app.gamenative.MainActivity",
+                "app.gamenative.LAUNCH_GAME", appId);
+    }
+
+    /**
+     * Launch a Steam game via an explicit-component LAUNCH_GAME intent.
+     * Works with GameNative (app.gamenative) and DroidDeck
+     * (com.droiddeck.launcher) - both accept the LAUNCH_GAME action with an
+     * int "app_id" extra on their MainActivity. DroidDeck additionally accepts
+     * GameNative's own action when the component targets it explicitly.
+     *
+     * @param packageName  Target app package (e.g. "app.gamenative")
+     * @param activityName Target activity class (e.g. "app.gamenative.MainActivity")
+     * @param action       Intent action (e.g. "app.gamenative.LAUNCH_GAME")
+     * @param appId        The Steam App ID to launch
+     * @return true if intent was launched successfully
+     */
+    @UsedByGodot
+    public boolean launchSteamGame(String packageName, String activityName, String action, int appId) {
         Log.d(TAG, "==========================================");
-        Log.d(TAG, "launchGameNativeGame() called");
+        Log.d(TAG, "launchSteamGame() called");
+        Log.d(TAG, "Target: " + packageName + "/" + activityName);
         Log.d(TAG, "App ID: " + appId);
-        
+
         if (activity == null) {
             Log.e(TAG, "ERROR: Activity is null!");
             return false;
         }
-        
+
         try {
-            // Create intent for GameNative
             Intent intent = new Intent();
-            intent.setComponent(new ComponentName("app.gamenative", "app.gamenative.MainActivity"));
-            intent.setAction("app.gamenative.LAUNCH_GAME");
+            intent.setComponent(new ComponentName(packageName, activityName));
+            intent.setAction(action);
             intent.addCategory(Intent.CATEGORY_DEFAULT);
             intent.putExtra("app_id", appId);
-            
+            intent.putExtra("game_source", "STEAM");
+
             // Add flags for launching from another app
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            
-            Log.d(TAG, "Launching GameNative with App ID: " + appId);
+
             Log.d(TAG, "Intent action: " + intent.getAction());
             Log.d(TAG, "Intent component: " + intent.getComponent());
-            
+
             activity.startActivity(intent);
-            
-            Log.d(TAG, "SUCCESS: GameNative launch intent sent");
+
+            Log.d(TAG, "SUCCESS: Steam game launch intent sent");
             Log.d(TAG, "==========================================");
             return true;
-            
+
         } catch (Exception e) {
-            Log.e(TAG, "ERROR launching GameNative game: " + e.getMessage());
+            Log.e(TAG, "ERROR launching Steam game: " + e.getMessage());
             Log.e(TAG, "Exception type: " + e.getClass().getName());
             Log.e(TAG, "Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {

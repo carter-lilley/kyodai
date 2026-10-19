@@ -1,0 +1,66 @@
+{
+	"suspend_method": "suspend",
+	"meta": {
+		"id": "bachatas4",
+		"name": "Bachata S4",
+		"architecture": "shadps4",
+		"platforms": [
+			"ps4"
+		],
+		"os": [
+			"android"
+		]
+	},
+	"paths": {
+		"default_saves": {
+			"_default": {
+				"directories": {},
+				"extensions": [
+					"*"
+				],
+				"uses_folder_saves": true
+			}
+		},
+		"default_firmware": {
+			"_default": {
+				"directories": {}
+			}
+		}
+	},
+	"launch": {
+		"platforms": {
+			"android": {
+				"action": "com.bachatas4.android.action.LAUNCH_GAME",
+				"package": "com.bachatas4.android.github",
+				"class": "com.bachatas4.android.DirectLaunchActivity",
+				"rom_delivery": "none"
+			}
+		}
+	},
+	"install": [
+		{
+			"step": "download_emulator",
+			"platforms": {
+				"android": {
+					"action_type": "download_repo",
+					"github_repo": "JICA98/Bachata-S4",
+					"asset_pattern": "bachatas4-.*-release\\.apk"
+				}
+			}
+		},
+		{
+			"step": "install_emulator",
+			"platforms": {
+				"android": {
+					"action_type": "apk_install",
+					"package_name": "com.bachatas4.android.github",
+					"expected_file": "bachatas4-*-release.apk",
+					"validate": {
+						"action_type": "package_installed",
+						"package": "com.bachatas4.android.github"
+					}
+				}
+			}
+		}
+	]
+}
