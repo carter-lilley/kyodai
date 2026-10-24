@@ -166,6 +166,22 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         Log.d(TAG, "Registered extraction completion receiver");
     }
+
+    @Override
+    public void onMainDestroy() {
+        // The receiver is registered against the Activity context; without an
+        // unregister the Activity leaks it on recreation (IntentReceiverLeaked)
+        // and the destroy stalls long enough to race resume-time restore work.
+        if (extractionReceiver != null && activity != null) {
+            try {
+                activity.unregisterReceiver(extractionReceiver);
+            } catch (IllegalArgumentException e) {
+                // Never registered or already unregistered - nothing to do
+            }
+            extractionReceiver = null;
+        }
+        super.onMainDestroy();
+    }
     
     @UsedByGodot
     public boolean isPackageInstalled(String packageName) {

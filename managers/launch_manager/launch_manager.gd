@@ -160,9 +160,9 @@ func launch_emulator_standalone(emulator_id: String) -> bool:
 			push_error("[LaunchManager] KyodaiBridge plugin not available")
 			return false
 		var plugin = Engine.get_singleton("KyodaiBridge")
+		# Standalone emulator launch (no game): nothing to sync or track, so no
+		# background state - same rationale as pinned app shortcuts.
 		var success: bool = plugin.call("launchAppByPackageName", package_name)
-		if success and process:
-			process.enter_background_state_android(null)
 		return success
 
 	# Desktop: launch the executable directly with no ROM arguments.

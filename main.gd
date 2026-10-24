@@ -842,6 +842,18 @@ func _notification(what: int) -> void:
 			print("[Main] In background state on resume, exiting to trigger save upload")
 			LaunchManager.force_exit_background_state()
 
+		# Defensive: the renderer must never stay disabled while the app is
+		# foregrounded outside a game. Lifecycle races (e.g. an activity
+		# recreation landing mid-resume) can strand the viewport with updates
+		# disabled - a black, unresponsive screen that survives everything
+		# short of process death. Both restores are no-ops when nothing is wrong.
+		if not LaunchManager or not LaunchManager.is_in_background_state():
+			_resume_rendering()
+			var root_rid := get_tree().root.get_viewport_rid()
+			if RenderingServer.viewport_get_update_mode(root_rid) == RenderingServer.VIEWPORT_UPDATE_DISABLED:
+				push_warning("[Main] Viewport was left disabled on resume; force re-enabling")
+				RenderingServer.viewport_set_update_mode(root_rid, RenderingServer.VIEWPORT_UPDATE_ALWAYS)
+
 		# Restore focus when app returns to foreground (Android)
 		if _last_focused_index >= 0:
 			if DEBUG_LOG: print("[Main] Calling _restore_focus_to_card deferred")

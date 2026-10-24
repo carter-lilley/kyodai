@@ -815,9 +815,10 @@ func _launch_pinned_shortcut(dest: Dictionary) -> void:
 			push_error("[NavigationManager] KyodaiBridge plugin not available")
 			return
 		var plugin = Engine.get_singleton("KyodaiBridge")
-		var success: bool = plugin.call("launchAppByPackageName", package_name)
-		if success and LaunchManager and LaunchManager.process:
-			LaunchManager.process.enter_background_state_android(null)
+		# Pinned shortcuts are plain app launches: no game is running, no saves
+		# need syncing, nothing to track — so deliberately NO background state
+		# (which hibernates the UI and gates input until resume).
+		plugin.call("launchAppByPackageName", package_name)
 		return
 
 func _launch_linux_program(path: String) -> void:
