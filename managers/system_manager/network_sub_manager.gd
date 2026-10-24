@@ -1022,7 +1022,9 @@ func test_connection(callback: Callable = Callable()):
 ##   asset_sha256 is the API-attested asset digest ("" when the host publishes none)
 ## @param release_tag: Specific tag to fetch (empty or "latest" for latest release)
 ## @param api_base_url: API base URL (default: "https://api.github.com", e.g., "https://git.example.com/api/v1")
-func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = ""):
+## @param include_prereleases: When true (and no specific tag requested), query the
+## full releases list instead of /releases/latest so prereleases are eligible
+func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable, release_tag: String = "", api_base_url: String = "", include_prereleases: bool = false):
 	# Use GitHub as default if no api_base_url provided
 	var base_url = api_base_url if api_base_url != "" else "https://api.github.com"
 
@@ -1058,6 +1060,12 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 				callback.call(download_url, tag_name, "", asset_size, published_at, asset_updated_at, asset_sha256)
 				return true
 		return false
+
+	# Experimental-channel consumers want the newest release overall, not the
+	# newest stable: /releases/latest never returns prereleases, so skip it.
+	if include_prereleases and (release_tag == "" or release_tag == "latest"):
+		_fetch_repo_release_from_list(base_url, repo, headers, match_asset, callback)
+		return
 
 	var http = _create_http_request()
 	http.timeout = 15.0

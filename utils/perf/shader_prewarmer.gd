@@ -28,6 +28,24 @@ const LOG_SHADER_US := 8000
 # guard makes whichever runs second a no-op.
 static var _started := false
 
+# Shutdown cancellation. prewarm() is a STATIC coroutine: unlike node-bound
+# coroutines it is not aborted when an instance dies, so a frame-suspended
+# prewarm can resume during tree teardown with stale viewport/rect references
+# (close during prewarm = use-after-free, possibly inside the RenderingServer).
+# Main's pre-shutdown cleanup calls cancel(); the coroutine bails at its next
+# resume point before touching any node.
+static var _cancelled := false
+static var _viewport: SubViewport = null
+
+## Called from Main's pre-shutdown cleanup so a suspended prewarm coroutine
+## never touches nodes mid-teardown. Frees the hidden viewport up front so a
+## resume can't force an UPDATE_ONCE draw while the RenderingServer finalizes.
+static func cancel() -> void:
+	_cancelled = true
+	if is_instance_valid(_viewport):
+		_viewport.queue_free()
+	_viewport = null
+
 ## Baked shader list. The bundled set is static, so exported builds skip the
 ## res:// directory scan entirely; editor builds scan and validate against this
 ## list so adding/removing a shader is caught during development.
@@ -95,7 +113,7 @@ static func _collect_dir(dir_path: String, out: Array[String]) -> void:
 	dir.list_dir_end()
 
 static func prewarm(tree: SceneTree) -> void:
-	if _started:
+	if _started or _cancelled:
 		return
 	_started = true
 	var start_us := Time.get_ticks_usec()
@@ -113,6 +131,7 @@ static func prewarm(tree: SceneTree) -> void:
 	viewport.gui_disable_input = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	tree.root.add_child(viewport)
+	_viewport = viewport
 
 	var compiled := 0
 	for path in plan:
@@ -120,8 +139,12 @@ static func prewarm(tree: SceneTree) -> void:
 		# where the warmup budget is already spent so compiles never stack
 		# onto grid settle or scroll work, and skip frames with recent input
 		# so a compile spike can't hitch an in-flight interaction.
-		while not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US, "shader_prewarm") or WarmupBudget.input_idle_ms() < 100:
+		while not _cancelled and (not WarmupBudget.try_spend(WarmupBudget.COST_SHADER_PREWARM_US, "shader_prewarm") or WarmupBudget.input_idle_ms() < 100):
 			await tree.process_frame
+		# Bail before touching nodes if shutdown cancelled us or the viewport
+		# was freed out from under the coroutine (root teardown).
+		if _cancelled or MemorySubManager.is_shutting_down() or not is_instance_valid(viewport):
+			break
 		var load_start_us := Time.get_ticks_usec()
 		var shader: Shader = load(path)
 		var load_us := Time.get_ticks_usec() - load_start_us
@@ -137,6 +160,10 @@ static func prewarm(tree: SceneTree) -> void:
 		# UPDATE_ONCE renders on the next frame, then disables again.
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		await tree.process_frame
+		# Same post-await bail: the frame we just waited on may have carried
+		# the close notification and root teardown with it.
+		if _cancelled or not is_instance_valid(viewport):
+			break
 		var render_us := Time.get_ticks_usec() - render_start_us
 		# With threaded rendering the compile stalls the render thread and
 		# surfaces a frame late; tag the render frame too so spikes attribute.
@@ -150,11 +177,19 @@ static func prewarm(tree: SceneTree) -> void:
 		if render_us > SLOW_RENDER_US:
 			var backoff := clampi(int(render_us / float(BACKOFF_DIVISOR_US)), 1, MAX_BACKOFF_FRAMES)
 			for i in backoff:
+				if _cancelled:
+					break
 				await tree.process_frame
 
-	viewport.queue_free()
-	print("[ShaderPrewarmer] compiled %d shader pipelines (skipped %d inactive backgrounds), elapsed_us=%d" % [
-		compiled, paths.size() - plan.size(), Time.get_ticks_usec() - start_us])
+	if _viewport != null and is_instance_valid(_viewport):
+		_viewport.queue_free()
+	_viewport = null
+	if _cancelled:
+		print("[ShaderPrewarmer] cancelled during shutdown after %d shader pipelines, elapsed_us=%d" % [
+			compiled, Time.get_ticks_usec() - start_us])
+	else:
+		print("[ShaderPrewarmer] compiled %d shader pipelines (skipped %d inactive backgrounds), elapsed_us=%d" % [
+			compiled, paths.size() - plan.size(), Time.get_ticks_usec() - start_us])
 
 ## Startup set: active background shader(s) + everything that isn't a
 ## background shader. Sorted scan order puts addons/m3 first, then the active

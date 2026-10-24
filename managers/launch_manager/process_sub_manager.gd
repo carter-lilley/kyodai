@@ -1545,10 +1545,17 @@ func _show_android_permissions_reminder(emulator_id: String) -> void:
 
 	launch_manager._open_install_reminders[emulator_id] = true
 
+	# Emulators with a discover block carry their own setup instructions (e.g.
+	# azahar: finish the wizard, kyodai adopts whatever folder is picked).
+	var message: String = "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games."
+	var setup_prompt: String = emulator.get("discover", {}).get("android", {}).get("setup_prompt", "")
+	if setup_prompt != "":
+		message = setup_prompt
+
 	# Create M3Dialog reminder as a distinct overlay type so it stacks above the settings dialog.
 	# "Got it" routes through LaunchManager so a mid-game-launch pending launch can
 	# resume (or abort) once the user acknowledges the reminder.
-	UIManager.show_alert("Installation Reminder", "Please open " + emulator_name + " from your app drawer and grant any requested permissions (especially storage access) before launching games.",
+	UIManager.show_alert("Installation Reminder", message,
 		launch_manager.on_install_reminder_dismissed.bind(emulator_id),
 		Callable(),
 		{"ok_text": "Got it", "overlay_type": "alert", "overlay_layer": OverlayLayers.MENU, "dismissible": false}

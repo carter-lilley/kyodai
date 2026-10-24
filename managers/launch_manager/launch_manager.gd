@@ -631,16 +631,38 @@ func _launch_gamenative_game(game: GameResource) -> void:
 		_end_launch(game.romm_id)
 		return
 
+	# Wait for launch transition overlay phase 1 before trimming, mirroring
+	# _launch_game_internal: the trim frees the cover textures the overlay is
+	# still sampling mid-animation, so trimming early renders it black.
+	if LaunchTransitionOverlay.is_transition_active:
+		var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+		if overlay_nodes.size() > 0:
+			var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+			if overlay:
+				if not overlay.is_phase1_complete():
+					await overlay.phase1_completed
+		else:
+			# Fallback: wait for the expected duration
+			await get_tree().create_timer(0.5).timeout
+
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
 
 	gamenative.launch_game_async(game.steam_app_id, func(success: bool, message: String):
 		if success:
 			_update_last_played(game)
-		elif message != "":
-			# Empty message = user cancelled the backend picker; stay silent.
-			push_error("[LaunchManager] Failed to launch Steam game: " + message)
-			SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+			# Enter background state like every other external launch: on resume
+			# the normal exit path hides the launch overlay AND restores the
+			# trimmed UI. Without this, RESUMED leaves the app in its trimmed
+			# (black, unresponsive) state.
+			process.enter_background_state_android(game)
+		else:
+			if message != "":
+				# Empty message = user cancelled the backend picker; stay silent.
+				push_error("[LaunchManager] Failed to launch Steam game: " + message)
+				SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+			# Every non-success (including silent picker cancels) must restore
+			# the trimmed UI; launch_failed_hook is _restore_after_launch.
 			if launch_failed_hook.is_valid():
 				launch_failed_hook.call()
 		_end_launch(game.romm_id)
@@ -736,6 +758,12 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	var core_id_for_firmware = ""
 	if emulator_id == "retroarch":
 		core_id_for_firmware = intent_manager.resolve_core_for_game(game)
+
+	# Adopt externally-discovered data dirs (azahar's SAF-picked user folder,
+	# read from its private prefs via vendor root) BEFORE any path resolution
+	# below, so firmware/save checks target the emulator's real location.
+	if SystemManager.platform.is_android():
+		emulator.discover_external_dir_via_root(emulator_id)
 
 	# Enforce kyodai-managed config paths BEFORE any firmware/save resolution:
 	# on a fresh install the config has no stated keys yet, so resolution would

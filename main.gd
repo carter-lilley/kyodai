@@ -280,6 +280,10 @@ func _post_ready_startup() -> void:
 		AndroidBinaryExtractor.extract_all_binaries()
 		if DEBUG_LOG: print("[Main] binary extraction elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
+	# Self-update check: fire-and-forget GitHub release lookup on the user's
+	# configured channel; shows a dialog only when a newer release exists.
+	AppUpdateChecker.check_for_updates()
+
 	# Pre-create the settings dialog in the background so opening it later
 	# (especially the RomM platform cards screen) is instant.
 	var first_run_setting = DataManager.get_setting("first_run_completed")
@@ -839,6 +843,11 @@ func _pre_shutdown_cleanup() -> void:
 	"""
 	var cleanup_start_us := Time.get_ticks_usec()
 	print("[Main] Pre-shutdown cleanup starting")
+
+	# Cancel the shader prewarm first: it's a static coroutine awaiting frames,
+	# so without an explicit cancel it can resume mid-teardown and touch the
+	# freed prewarm viewport / finalizing RenderingServer.
+	ShaderPrewarmer.cancel()
 
 	# Stop any pending debounced settings save.
 	if UIManager and UIManager.toolbar:

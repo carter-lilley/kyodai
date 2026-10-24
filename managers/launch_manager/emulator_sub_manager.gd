@@ -2072,6 +2072,122 @@ func provision_via_root(emulator_id: String) -> bool:
 	print("[EmulatorManager] Provisioned private prefs for " + package + " via vendor root")
 	return true
 
+## Reads an Android emulator's SAF-picked user directory from its private
+## SharedPreferences via vendor root when the emulator JSON declares a
+## "discover" block with method "root_read_pref" (azahar's CITRA_DIRECTORY).
+## The decoded path is adopted as the emulator's {emulator_dir} override so
+## firmware/save/config resolution follows the app's real location. Runs on
+## every launch prep so a folder change inside the app self-heals.
+## Returns the discovered POSIX path, or "" when unavailable.
+func discover_external_dir_via_root(emulator_id: String) -> String:
+	var emulator: Dictionary = launch_manager.registry.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return ""
+	var discover: Dictionary = emulator.get("discover", {}).get("android", {})
+	if discover.get("method", "") != "root_read_pref":
+		return ""
+	if discover.get("format", "saf_tree_uri") != "saf_tree_uri":
+		push_warning("[EmulatorManager] Unsupported discover format for " + emulator_id)
+		return ""
+
+	if not Engine.has_singleton("KyodaiBridge"):
+		return ""
+	var plugin = Engine.get_singleton("KyodaiBridge")
+	# Same JNI dispatch caveat as provision_via_root: has_method() lies for
+	# GodotPlugin Java methods, so call directly; null means unavailable and
+	# Java booleans arrive as int, hence truthiness.
+	var root_available = plugin.call("rootAvailable")
+	if root_available == null or not root_available:
+		return ""
+
+	var package: String = discover.get("package", "")
+	if package == "":
+		package = emulator.get("launch", {}).get("platforms", {}).get("android", {}).get("package", "")
+	var prefs_file: String = discover.get("file", "")
+	var keys: Array = discover.get("keys", [])
+	if package == "" or prefs_file == "" or keys.is_empty():
+		push_warning("[EmulatorManager] Incomplete discover block for " + emulator_id)
+		return ""
+	# Same KYD-08 rule as provisioning: these values land in a root shell
+	# script, so refuse anything that isn't a plain package / prefs file name.
+	if not _is_valid_android_package(package) or not _is_valid_prefs_file_name(prefs_file):
+		push_warning("[EmulatorManager] Unsafe discover package/file for " + emulator_id + " ('" + package + "', '" + prefs_file + "'); refusing root read")
+		return ""
+
+	var prefs_path := "/data/data/" + package + "/shared_prefs/" + prefs_file + ".xml"
+	var xml := _root_read_prefs(plugin, prefs_path)
+	if xml == "":
+		return ""
+
+	for key in keys:
+		var posix := _saf_tree_uri_to_posix(_extract_pref_string(xml, str(key)))
+		if posix == "":
+			continue
+		_adopt_discovered_emulator_dir(emulator_id, posix)
+		return posix
+	return ""
+
+## Extracts a <string name="key">value</string> entry from a SharedPreferences
+## XML dump; "" when absent.
+func _extract_pref_string(xml: String, key: String) -> String:
+	# The key is interpolated into a regex; restrict it to plain identifiers.
+	var key_re := RegEx.new()
+	if key_re.compile("^[A-Za-z0-9_]+$") != OK or key_re.search(key) == null:
+		return ""
+	var re := RegEx.new()
+	if re.compile("<string name=\"" + key + "\">(.*?)</string>") != OK:
+		return ""
+	var m := re.search(xml)
+	if m == null:
+		return ""
+	return _xml_unescape(m.get_string(1))
+
+## Decodes an ExternalStorageProvider tree URI
+## (content://com.android.externalstorage.documents/tree/primary%3A...) to its
+## POSIX path. "primary" maps to /storage/emulated/0; other volume IDs map to
+## /storage/<id>. Returns "" for anything unrecognized or unsafe.
+func _saf_tree_uri_to_posix(uri: String) -> String:
+	if not uri.begins_with("content://"):
+		return ""
+	var decoded := uri.uri_decode()
+	var marker := "/tree/"
+	var idx := decoded.find(marker)
+	if idx < 0:
+		return ""
+	var doc_id := decoded.substr(idx + marker.length())
+	var sep := doc_id.find(":")
+	if sep <= 0:
+		return ""
+	var volume := doc_id.substr(0, sep)
+	var rel := doc_id.substr(sep + 1).trim_prefix("/")
+	# The volume ID lands in a filesystem path; refuse traversal and anything
+	# that isn't a plain storage volume name.
+	var vol_re := RegEx.new()
+	if vol_re.compile("^[A-Za-z0-9_\\-]+$") != OK or vol_re.search(volume) == null:
+		return ""
+	if rel == "" or rel.contains("..") or rel.contains(":"):
+		return ""
+	var base := "/storage/emulated/0" if volume == "primary" else "/storage/" + volume
+	return base + "/" + rel
+
+## Persists a discovered external dir, which redirects {emulator_dir} for the
+## emulator (registry consults the setting first). No-op when unchanged.
+func _adopt_discovered_emulator_dir(emulator_id: String, path: String) -> void:
+	if not DataManager:
+		return
+	var setting = DataManager.get_setting("external_emulator_dirs")
+	if setting == null or not setting.value is Dictionary:
+		return
+	var dirs: Dictionary = setting.value
+	if str(dirs.get(emulator_id, "")) == path:
+		return
+	dirs[emulator_id] = path
+	# In-place dictionary mutation never trips set_setting's change detection,
+	# so force it and persist immediately: this anchors firmware/save paths.
+	DataManager.set_setting(dirs, setting, true)
+	DataManager.save_settings()
+	print("[EmulatorManager] Adopted discovered " + emulator_id + " user dir: " + path)
+
 ## Runs a script through the plugin's vendor-root bridge; {} when unavailable.
 func _root_run(plugin: Object, script: String) -> Dictionary:
 	var raw: String = plugin.call("rootRunScript", script)
@@ -2179,6 +2295,10 @@ static func _is_valid_prefs_file_name(prefs_file: String) -> bool:
 
 func _xml_escape(value: String) -> String:
 	return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+func _xml_unescape(value: String) -> String:
+	# &amp; must be replaced last so "&amp;lt;" decodes to "&lt;", not "<".
+	return value.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 
 ## Validates a specific install step to check if it's complete
 ## Returns true if the step validation passes (step is complete)

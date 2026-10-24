@@ -38,6 +38,16 @@ func get_emulators_directory() -> String:
 ## Gets the full path to an emulator's directory
 ## Handles path separators correctly for all platforms
 func _get_emulator_directory(emulator_id: String) -> String:
+	# Externally-discovered data dirs (Android only, e.g. azahar's SAF-picked
+	# user folder read from its private prefs via vendor root) redirect
+	# {emulator_dir} so firmware/save/config resolution follows the emulator's
+	# real location instead of kyodai's default scratch dir.
+	if DataManager:
+		var dirs_setting = DataManager.get_setting("external_emulator_dirs")
+		if dirs_setting and dirs_setting.value is Dictionary:
+			var discovered = dirs_setting.value.get(emulator_id, "")
+			if discovered is String and discovered != "":
+				return discovered
 	var base_dir = get_emulators_directory()
 	return FSM.join_paths(base_dir, emulator_id)
 

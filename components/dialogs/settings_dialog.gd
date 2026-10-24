@@ -11,6 +11,7 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 	"Save Sync": "sync",
 	"Storage": "harddisk",
 	"Library Appearance": "palette",
+	"Updates": "update",
 }
 
 var _left_pane: VBoxContainer

@@ -97,6 +97,19 @@
 			}
 		}
 	},
+	"discover": {
+		"android": {
+			"method": "root_read_pref",
+			"package": "org.azahar_emu.azahar",
+			"file": "org.azahar_emu.azahar_preferences",
+			"keys": [
+				"CITRA_DIRECTORY",
+				"LIME3DS_DIRECTORY"
+			],
+			"format": "saf_tree_uri",
+			"setup_prompt": "Open Azahar once and finish its setup wizard. Pick any folder you like - kyodai will detect your choice and manage firmware and saves there."
+		}
+	},
 	"install": [
 		{
 			"step": "download_emulator",

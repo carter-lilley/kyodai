@@ -77,6 +77,12 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Internal platform sync settings (not displayed in auto-generated menu)
 @export var enabled_platforms := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "Enabled Platforms")
 
+# Internal per-emulator external data dirs discovered out-of-band on Android
+# (e.g. azahar's SAF-picked user folder, read from its private prefs via vendor
+# root). Redirects {emulator_dir} so firmware/save/config resolution follows
+# the emulator's real location. {emulator_id: absolute_path}
+@export var external_emulator_dirs := SettingsVar.new(Type.DICTIONARY, {}, State.INTERNAL, "External Emulator Dirs")
+
 # Internal shuffler preferences (set from the shuffler config dialog)
 @export var shuffler_platform_balance := SettingsVar.new(Type.INT, 50, State.INTERNAL, "Shuffler: Platform Balance", "How evenly platforms are represented in the shuffle bag: 0% is proportional to library size, 100% is equal shares", 0.0, 100.0, 5.0)
 
@@ -158,3 +164,9 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 
 # Internal pinned navigation shortcuts (managed by NavigationSubManager)
 @export var nav_pinned_shortcuts := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "Pinned Navigation Shortcuts")
+
+@export_subgroup("Updates")
+@export var update_check_on_startup := SettingsVar.new(Type.BOOL, true, State.ENABLED, "Check for Updates on Startup", "Check GitHub for a newer Kyodai release when the app starts")
+# Default Experimental while the app is in alpha: every release is currently a
+# prerelease, so Stable would never notify. Flip the default to 0 at 1.0.
+@export var release_channel := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Release Channel", "Stable only notifies about full releases; Experimental also includes alpha/beta prereleases", 0.0, 1.0, 1.0, ["Stable", "Experimental"])
