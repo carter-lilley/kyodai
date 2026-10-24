@@ -1,7 +1,9 @@
 extends Manager
-class_name GameNativeSubManager
+class_name SteamSubManager
 
-## Manager for GameNative integration - handles loading/saving game list and fetching Steam metadata
+## Manager for Steam support on Android - scans exported .steam shortcut files,
+## fetches Steam metadata, and launches via installed Steam frontend apps
+## (GameNative, DroidDeck).
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
@@ -61,8 +63,8 @@ func _ready():
 	add_child(_http_request)
 	_http_request.request_completed.connect(_on_http_request_completed)
 	_load_games()
-	# On Android, discover any .steam files placed in {games_root_folder}/steam and
-	# add them as permanent GameNative entries just like manually-added games.
+	# On Android, discover any .steam files placed in {games_root_folder}/steam
+	# and import them as Steam entries.
 	call_deferred("_scan_steam_folder")
 
 ## Re-scan the .steam export folder on app resume (games installed/uninstalled
@@ -118,7 +120,7 @@ func _scan_steam_folder() -> void:
 
 		found_ids.append(app_id)
 
-		# Skip IDs already in the persisted GameNative list.
+		# Skip IDs already in the persisted Steam list.
 		var already_exists := false
 		for game in _games_data:
 			if game.get("app_id", 0) == app_id:
@@ -137,8 +139,8 @@ func _scan_steam_folder() -> void:
 		_save_games(false)
 
 	# Mirror the backend: entries imported from a file whose file vanished
-	# (uninstalled in the backend) are removed. Manual adds (no origin flag)
-	# are never auto-removed.
+	# (uninstalled in the backend) are removed. Entries without an origin flag
+	# (added before origin tracking) are never auto-removed.
 	var removed := _reconcile_removed_files(found_ids)
 
 	if _pending_scan_app_ids.is_empty():
@@ -222,8 +224,8 @@ func _set_game_fields(app_id: int, fields: Dictionary) -> void:
 			return
 
 func _load_games() -> void:
-	"""Load GameNative games from Settings."""
-	var setting = DataManager.get_setting("gamenative_games")
+	"""Load Steam games from Settings."""
+	var setting = DataManager.get_setting("steam_games")
 	
 	if setting and setting.value is Array:
 		# Convert to typed array of dictionaries
@@ -235,13 +237,13 @@ func _load_games() -> void:
 		_games_data = []
 
 func _save_games(notify: bool = true) -> void:
-	"""Save GameNative games to Settings."""
+	"""Save Steam games to Settings."""
 	# Create a deep copy of the array to ensure it gets saved properly
 	var games_array: Array = []
 	for game in _games_data:
 		games_array.append(game.duplicate())
 
-	var setting = DataManager.get_setting("gamenative_games")
+	var setting = DataManager.get_setting("steam_games")
 	if setting:
 		# Use set_setting so the dirty flag is set and save_settings actually persists.
 		DataManager.set_setting(games_array, setting)
@@ -251,8 +253,8 @@ func _save_games(notify: bool = true) -> void:
 		games_updated.emit()
 
 func add_game(app_id: int, callback: Callable = Callable(), notify: bool = true) -> void:
-	"""Add a new GameNative game by Steam App ID.
-	
+	"""Add a new Steam game by App ID.
+
 	Validates the App ID by checking Steam store, fetches game name from Steam API.
 	"""
 	# Check if already exists
@@ -403,7 +405,7 @@ func _delete_steam_file(app_id: int) -> void:
 			FSM.delete_file(file_path)
 
 func get_games() -> Array[Dictionary]:
-	"""Get list of all GameNative games."""
+	"""Get list of all Steam games."""
 	return _games_data.duplicate()
 
 func get_game_data(app_id: int) -> Dictionary:
@@ -414,8 +416,8 @@ func get_game_data(app_id: int) -> Dictionary:
 	return {}
 
 func create_game_resources() -> Array[GameResource]:
-	"""Create GameResource objects for all GameNative games.
-	
+	"""Create GameResource objects for all Steam games.
+
 	These are temporary objects not stored in the database.
 	"""
 	var games: Array[GameResource] = []
@@ -431,19 +433,19 @@ func create_game_resources() -> Array[GameResource]:
 			cover_url = STEAM_CDN_URL.format({"appid": app_id})
 
 		var game = GameResource.new()
-		game.id = "gamenative_%d" % app_id
+		game.id = "steam_%d" % app_id
 		game.romm_id = -app_id  # Negative to avoid conflicts with RomM IDs
 		game.title = game_title
-		game.platform = "Steam (GameNative)"
-		game.platform_slug = "gamenative"
+		game.platform = "Steam"
+		game.platform_slug = "steam"
 		game.cover_url = cover_url
 		game.cover_path = cover_path  # Use cached cover path
 		game.file_name = ""
 		game.file_path = ""
-		game.has_local_copy = true  # Always playable if GameNative is installed
+		game.has_local_copy = true  # Always playable if a Steam frontend is installed
 		game.has_cover_art = true
 		game.is_master_entry = true
-		game.source = "gamenative"
+		game.source = "steam"
 		game.steam_app_id = app_id
 		# Use persisted last_played so the recent order survives app restarts.
 		game.last_played = game_data.get("last_played", "1970-01-01T00:00:00")
@@ -454,7 +456,7 @@ func create_game_resources() -> Array[GameResource]:
 	return games
 
 func update_last_played(app_id: int, timestamp: String) -> void:
-	"""Persist the last_played timestamp for a GameNative game.
+	"""Persist the last_played timestamp for a Steam game.
 	Silent save: HomeView._on_game_launched already re-sorts and reloads the
 	grid on game_launched, so the games_updated emit would cause a redundant
 	second full grid reload per launch."""
@@ -465,7 +467,7 @@ func update_last_played(app_id: int, timestamp: String) -> void:
 			return
 
 func update_unwrapped(app_id: int, unwrapped: bool) -> void:
-	"""Persist the present-wrap unwrapped flag for a GameNative game.
+	"""Persist the present-wrap unwrapped flag for a Steam game.
 	Silent save: the flag doesn't affect grid order/contents, so skip the
 	games_updated emit (it triggers a full grid reload mid-unwrap-animation)."""
 	for game in _games_data:
@@ -475,11 +477,11 @@ func update_unwrapped(app_id: int, unwrapped: bool) -> void:
 			return
 
 func get_game_count() -> int:
-	"""Get number of GameNative games."""
+	"""Get number of Steam games."""
 	return _games_data.size()
 
 func has_games() -> bool:
-	"""Check if any GameNative games are configured."""
+	"""Check if any Steam games are configured."""
 	return _games_data.size() > 0
 
 func get_installed_package(backend: String) -> String:
@@ -502,10 +504,6 @@ func get_installed_package(backend: String) -> String:
 func is_backend_installed(backend: String) -> bool:
 	"""Check if a Steam launch backend app is installed on Android."""
 	return get_installed_package(backend) != ""
-
-func is_game_native_installed() -> bool:
-	"""Check if GameNative app is installed on Android."""
-	return is_backend_installed(BACKEND_GAMENATIVE)
 
 func get_installed_backends() -> Array[String]:
 	"""All Steam launch backends currently installed, in registry order."""
@@ -567,15 +565,6 @@ func resolve_backend(app_id: int) -> String:
 
 	return ""
 
-func launch_game(app_id: int) -> bool:
-	"""Launch via the resolved backend. Returns false when no backend can be
-	resolved without asking the user or none is installed; use
-	launch_game_async to get the interactive flow."""
-	var backend := resolve_backend(app_id)
-	if backend == "":
-		return false
-	return _do_launch(backend, app_id)
-
 ## Resolve which backend should launch a game, asking the user when both
 ## backends are installed and nothing disambiguates them. on_result receives
 ## (backend: String, message: String); backend == "" means do not launch
@@ -588,7 +577,7 @@ func resolve_backend_interactive(app_id: int, on_result: Callable) -> void:
 
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
-		push_error("[GameNativeSubManager] KyodaiBridge plugin not available")
+		push_error("[SteamSubManager] KyodaiBridge plugin not available")
 		if on_result.is_valid():
 			on_result.call("", "Android bridge unavailable")
 		return
@@ -615,24 +604,10 @@ func launch_with_backend(backend: String, app_id: int) -> bool:
 		return false
 	return _do_launch(backend, app_id)
 
-## Combined resolve + launch for callers that don't interleave UI.
-## on_result receives (success: bool, message: String); an empty message with
-## success == false means the user cancelled the backend picker.
-func launch_game_async(app_id: int, on_result: Callable) -> void:
-	resolve_backend_interactive(app_id, func(backend: String, message: String):
-		if backend == "":
-			if on_result.is_valid():
-				on_result.call(false, message)
-			return
-		var success := launch_with_backend(backend, app_id)
-		if on_result.is_valid():
-			on_result.call(success, "" if success else "Failed to launch %s. Is the app installed?" % get_backend_label(backend))
-	)
-
 func _show_backend_picker(installed: Array[String], on_result: Callable) -> void:
 	var dialog = M3Dialog.new()
 	dialog.title_text = "Launch Steam Game"
-	dialog.body_text = "Both GameNative and DroidDeck are installed. Choose which app to launch Steam games with - you can change this later in the GameNative settings."
+	dialog.body_text = "Both GameNative and DroidDeck are installed. Choose which app to launch Steam games with - your choice is remembered for future launches."
 
 	var chosen := { "picked": false }
 	for backend in installed:
@@ -669,7 +644,7 @@ func _do_launch(backend: String, app_id: int) -> bool:
 	# method for GameNative (the only backend it can target).
 	var result = plugin.call("launchSteamGame", package, info["activity"], info["action"], app_id)
 	if result == null:
-		push_error("[GameNativeSubManager] KyodaiBridge plugin is outdated (missing launchSteamGame). Rebuild the Android plugin and re-export the app.")
+		push_error("[SteamSubManager] KyodaiBridge plugin is outdated (missing launchSteamGame). Rebuild the Android plugin and re-export the app.")
 		if backend == BACKEND_GAMENATIVE:
 			result = plugin.call("launchGameNativeGame", app_id)
 	if result is bool:

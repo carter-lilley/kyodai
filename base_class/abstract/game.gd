@@ -100,13 +100,13 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 @export var cover_group_id: String = ""  # Empty if no duplicate covers, otherwise hash of cover_url
 @export var cover_group_master: bool = true  # Is this the master of its cover group?
 
-## Game source type: "romm" (default), "gamenative", etc.
+## Game source type: "romm" (default), "steam", etc.
 @export var source: String = "romm"
 
 ## Path to the generated .m3u playlist for multi-disc games (empty if none)
 @export var m3u_path: String = ""
 
-## Steam App ID for GameNative games
+## Steam App ID for Steam games (source == "steam")
 @export var steam_app_id: int = 0
 
 # Transient fields for sync tracking (not persisted)

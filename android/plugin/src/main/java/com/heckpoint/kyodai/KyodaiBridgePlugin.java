@@ -72,7 +72,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
         if (this.activity != null) {
-            this.windowFocusGuard = new WindowFocusGuard(activity, () -> emitSignal("window_focus_stuck"));
+            this.windowFocusGuard = new WindowFocusGuard(activity);
+            // Arms the screen-off savers from persisted state and restores
+            // anything a previous process left disabled while asleep.
+            SleepSaver.init(activity.getApplicationContext());
         }
         registerExtractionReceiver();
     }
@@ -90,30 +93,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
         signals.add(new SignalInfo("chunk_flush_complete", String.class, Boolean.class, String.class));
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
-        signals.add(new SignalInfo("window_focus_stuck"));
         return signals;
-    }
-    
-    @Override
-    public void onMainResume() {
-        if (windowFocusGuard != null) {
-            windowFocusGuard.onResumeOrNewIntent();
-        }
-    }
-    
-    @Override
-    public void onMainPause() {
-        if (windowFocusGuard != null) {
-            windowFocusGuard.onPause();
-        }
-    }
-    
-    // No @Override: onNewIntent is missing from the Godot 4.2 compile-time
-    // stub, but the 4.7 runtime dispatches to it via virtual dispatch.
-    public void onNewIntent(Intent intent) {
-        if (windowFocusGuard != null) {
-            windowFocusGuard.onResumeOrNewIntent();
-        }
     }
     
     /// Hides the native IME and re-hardens the window against soft-input takeover.
@@ -128,6 +108,37 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     @UsedByGodot
     public boolean hasWindowFocus() {
         return windowFocusGuard != null && windowFocusGuard.hasWindowFocus();
+    }
+
+    // ------------------------------------------------------------------
+    // Sleep savers (screen-off Wi-Fi / CPU governor, via vendor root daemons)
+    // ------------------------------------------------------------------
+
+    /// True when a vendor root daemon exists (AYN/Retroid PServer, Ayaneo xsu),
+    /// which the sleep savers need for svc/cpufreq writes.
+    @UsedByGodot
+    public boolean isSleepSaverSupported() {
+        return SleepSaver.isSupported();
+    }
+
+    /// Arm/disarm the screen-off Wi-Fi saver (30 s delay, restores on wake).
+    @UsedByGodot
+    public void setSleepWifiSaverEnabled(boolean enabled) {
+        SleepSaver.setWifiSaverEnabled(activity, enabled);
+    }
+
+    /// Arm/disarm the screen-off CPU governor saver (drops to powersave,
+    /// restores the previous governor on wake).
+    @UsedByGodot
+    public void setSleepGovernorSaverEnabled(boolean enabled) {
+        SleepSaver.setGovernorSaverEnabled(activity, enabled);
+    }
+
+    /// True while the display is on/interactive. Used by GDScript to tell
+    /// "screen off" apart from "another app took focus" (e.g. game launch).
+    @UsedByGodot
+    public boolean isDisplayInteractive() {
+        return SleepSaver.isDisplayInteractive(activity);
     }
     
     private void registerExtractionReceiver() {

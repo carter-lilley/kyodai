@@ -80,7 +80,7 @@ jobs:
         curl -L -o "$HOME/.local/bin/linuxdeploy-plugin-appimage" "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
         chmod +x "$HOME/.local/bin/linuxdeploy" "$HOME/.local/bin/linuxdeploy-plugin-appimage"
         export PATH="$HOME/.local/bin:$PATH"
-        rsvg-convert -w 256 -h 256 icon.svg -o kyodai.png
+        rsvg-convert -w 256 -h 256 kyodai_icon.svg -o kyodai.png
         mkdir -p AppDir/usr/bin
         # embed_pck=false: binary + pck must both ship in the AppDir
         cp build/linux/Kyodai.x86_64 build/linux/Kyodai.pck AppDir/usr/bin/

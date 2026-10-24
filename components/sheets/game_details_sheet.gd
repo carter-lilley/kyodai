@@ -1540,7 +1540,7 @@ func _setup_status_dropdown(game: GameResource) -> void:
 	if not status_dropdown:
 		return
 
-	# Status/favorites are RomM features; hide for other sources (e.g. gamenative)
+	# Status/favorites are RomM features; hide for other sources (e.g. steam)
 	var is_romm_game := game.source == "romm"
 	status_dropdown.visible = is_romm_game
 	if favorite_button:
@@ -1830,8 +1830,8 @@ func _on_action_button_pressed() -> void:
 	if not _current_game:
 		return
 
-	# Skip file check for GameNative games - they don't have physical files
-	if _current_game.source == "gamenative":
+	# Skip file check for Steam games - they don't have physical files
+	if _current_game.source == "steam":
 		_setup_launch_transition_source()
 		LaunchManager.launch_game(_current_game)
 		return

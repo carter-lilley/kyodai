@@ -7,7 +7,7 @@ const DEBUG_LOG: bool = false
 
 var _total_games: int = 0
 var _db_games_count: int = 0
-var _gamenative_games_count: int = 0
+var _steam_games_count: int = 0
 var _is_loading: bool = false
 var _is_scanning: bool = false
 
@@ -23,15 +23,15 @@ var _last_logged_total_games: int = -1
 # database_ready signal can both fire for the same view.
 var _database_ready_handled: bool = false
 
-# GameNative games storage - kept separate but merged by last_played
-var _gamenative_games: Array[GameResource] = []
-var _gamenative_loaded: bool = false
+# Steam games storage - kept separate but merged by last_played
+var _steam_games: Array[GameResource] = []
+var _steam_loaded: bool = false
 
-# Track which indices in the grid are GameNative games
-# This maps virtual index -> true if it's a GameNative game
-var _gamenative_indices: Dictionary = {}
+# Track which indices in the grid are Steam games
+# This maps virtual index -> true if it's a Steam game
+var _steam_indices: Dictionary = {}
 
-# Cached merged list of DB + GameNative games (rebuilt when dirty)
+# Cached merged list of DB + Steam games (rebuilt when dirty)
 var _merged_games_cache: Array[GameResource] = []
 var _merged_cache_dirty: bool = true
 var _merged_cache_start: int = 0
@@ -114,8 +114,8 @@ func _connect_signals() -> void:
 	if SystemManager and SystemManager.download and not SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.connect(_on_download_completed)
 	if LaunchManager:
-		if not LaunchManager.gamenative_games_updated.is_connected(_on_gamenative_games_updated):
-			LaunchManager.gamenative_games_updated.connect(_on_gamenative_games_updated)
+		if not LaunchManager.steam_games_updated.is_connected(_on_steam_games_updated):
+			LaunchManager.steam_games_updated.connect(_on_steam_games_updated)
 		if not LaunchManager.game_launched.is_connected(_on_game_launched):
 			LaunchManager.game_launched.connect(_on_game_launched)
 		if LaunchManager.update and not LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
@@ -142,8 +142,8 @@ func _exit_tree() -> void:
 		if DataManager.sync_completed.is_connected(_on_sync_completed):
 			DataManager.sync_completed.disconnect(_on_sync_completed)
 	if is_instance_valid(LaunchManager):
-		if LaunchManager.gamenative_games_updated.is_connected(_on_gamenative_games_updated):
-			LaunchManager.gamenative_games_updated.disconnect(_on_gamenative_games_updated)
+		if LaunchManager.steam_games_updated.is_connected(_on_steam_games_updated):
+			LaunchManager.steam_games_updated.disconnect(_on_steam_games_updated)
 		if LaunchManager.game_launched.is_connected(_on_game_launched):
 			LaunchManager.game_launched.disconnect(_on_game_launched)
 		if LaunchManager.update and LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
@@ -153,22 +153,22 @@ func _exit_tree() -> void:
 	if is_instance_valid(UIManager) and UIManager.modal_item_selected.is_connected(_on_modal_item_selected):
 		UIManager.modal_item_selected.disconnect(_on_modal_item_selected)
 
-func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true, on_complete: Callable = Callable(), reload_gamenative: bool = true):
+func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool = true, on_complete: Callable = Callable(), reload_steam: bool = true):
 	var load_start_us := Time.get_ticks_usec()
 
 	_is_loading = true
 	_total_count_load_pending = true
 	_update_status("Loading recent games...")
 
-	# Load GameNative games first (they're small and cached). When preserving the
-	# cache and GameNative games are already loaded, skip this so we don't mark
+	# Load Steam games first (they're small and cached). When preserving the
+	# cache and Steam games are already loaded, skip this so we don't mark
 	# the merged DB cache dirty and defeat the prefetch warm-up.
-	var should_reload_gamenative = reload_gamenative and (not _gamenative_loaded or not preserve_cache)
-	if DEBUG_LOG: print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _gamenative_loaded=", _gamenative_loaded, " should_reload_gamenative=", should_reload_gamenative, " _merged_cache_dirty=", _merged_cache_dirty)
-	if should_reload_gamenative:
+	var should_reload_steam = reload_steam and (not _steam_loaded or not preserve_cache)
+	if DEBUG_LOG: print("[DEBUG] _load_total_count: preserve_cache=", preserve_cache, " _steam_loaded=", _steam_loaded, " should_reload_steam=", should_reload_steam, " _merged_cache_dirty=", _merged_cache_dirty)
+	if should_reload_steam:
 		var phase_start_us := Time.get_ticks_usec()
-		_load_gamenative_games()
-		if DEBUG_LOG: print("[HomeView] _load_gamenative_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		_load_steam_games()
+		if DEBUG_LOG: print("[HomeView] _load_steam_games elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# If the database is already ready AND the count cache is warm, set the count
 	# synchronously so the grid can settle with the correct total on the first
@@ -186,12 +186,12 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			return
 
 		_db_games_count = count
-		_gamenative_games_count = _gamenative_games.size()
-		_total_games = _db_games_count + _gamenative_games_count
+		_steam_games_count = _steam_games.size()
+		_total_games = _db_games_count + _steam_games_count
 
 		# Clear the index tracking when total changes significantly
 		if not preserve_cache:
-			_gamenative_indices.clear()
+			_steam_indices.clear()
 			_merged_games_cache.clear()
 			_merged_cache_start = 0
 			_merged_cache_end = 0
@@ -205,7 +205,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		# Only log when the count actually changes to avoid startup noise.
 		if _total_games != _last_logged_total_games:
 			_last_logged_total_games = _total_games
-			if DEBUG_LOG: print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+			if DEBUG_LOG: print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _steam_games_count=%d" % [_total_games, _db_games_count, _steam_games_count])
 
 		if _db_games_count == 0:
 			_update_status("No downloaded games found")
@@ -238,12 +238,12 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 				return
 
 			_db_games_count = count
-			_gamenative_games_count = _gamenative_games.size()
-			_total_games = _db_games_count + _gamenative_games_count
+			_steam_games_count = _steam_games.size()
+			_total_games = _db_games_count + _steam_games_count
 
 			# Clear the index tracking when total changes significantly
 			if not preserve_cache:
-				_gamenative_indices.clear()
+				_steam_indices.clear()
 				_merged_games_cache.clear()
 				_merged_cache_start = 0
 				_merged_cache_end = 0
@@ -254,7 +254,7 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			# Only log when the count actually changes to avoid startup noise.
 			if _total_games != _last_logged_total_games:
 				_last_logged_total_games = _total_games
-				if DEBUG_LOG: print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _gamenative_games_count=%d" % [_total_games, _db_games_count, _gamenative_games_count])
+				if DEBUG_LOG: print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _steam_games_count=%d" % [_total_games, _db_games_count, _steam_games_count])
 
 			if _db_games_count == 0:
 				_update_status("No downloaded games found")
@@ -272,17 +272,17 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 	)
 	if DEBUG_LOG: print("[HomeView] _load_total_count async queued elapsed_us=", Time.get_ticks_usec() - load_start_us)
 
-func _load_gamenative_games() -> void:
-	"""Load and cache GameNative games for proper merging."""
-	if LaunchManager.gamenative_has_games():
-		_gamenative_games = LaunchManager.gamenative_create_game_resources()
+func _load_steam_games() -> void:
+	"""Load and cache Steam games for proper merging."""
+	if LaunchManager.steam_has_games():
+		_steam_games = LaunchManager.steam_create_game_resources()
 		# Sort by last_played descending (same as DB query)
-		_gamenative_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
+		_steam_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
 			return a.last_played > b.last_played
 		)
 	else:
-		_gamenative_games.clear()
-	_gamenative_loaded = true
+		_steam_games.clear()
+	_steam_loaded = true
 	_merged_cache_dirty = true
 
 func _prefetch_first_page() -> void:
@@ -305,7 +305,7 @@ func _prefetch_first_page() -> void:
 				var fetch_offset = max(0, offset - buffer)
 				var fetch_limit = max(limit + buffer * 2, 50)
 				var db_games = DataManager.get_downloaded_games_paginated(fetch_offset, fetch_limit)
-				_merged_games_cache = _merge_all_games_by_last_played(db_games, _gamenative_games)
+				_merged_games_cache = _merge_all_games_by_last_played(db_games, _steam_games)
 				_merged_cache_start = fetch_offset
 				_merged_cache_end = fetch_offset + _merged_games_cache.size()
 				_merged_cache_dirty = false
@@ -364,7 +364,7 @@ func _on_sync_completed(success: bool, _message: String):
 func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 	"""Handle database query requests from VirtualScrollGridContainer.
 	
-	Merges DB games with GameNative games, sorted by last_played.
+	Merges DB games with Steam games, sorted by last_played.
 	Uses a cached merged list to avoid O(n²) DB over-fetching.
 	Fetches only the requested window plus a small buffer to avoid loading
 	the entire library into memory.
@@ -376,7 +376,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				return {
 					"games": [] as Array[GameResource],
 					"offset": offset,
-					"gamenative_indices": {}
+					"steam_indices": {}
 				}
 			var db_start_us := Time.get_ticks_usec()
 			var request_end = offset + limit
@@ -400,7 +400,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				# batches don't create an undersized cache that immediately misses.
 				var fetch_limit = max(limit + buffer * 2, 50)
 				var db_games = DataManager.get_downloaded_games_paginated(fetch_offset, fetch_limit)
-				_merged_games_cache = _merge_all_games_by_last_played(db_games, _gamenative_games)
+				_merged_games_cache = _merge_all_games_by_last_played(db_games, _steam_games)
 				_merged_cache_start = fetch_offset
 				_merged_cache_end = fetch_offset + _merged_games_cache.size()
 				_merged_cache_dirty = false
@@ -409,7 +409,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			
 			# Slice the cached merged list using virtual-index offsets.
 			var result: Array[GameResource] = []
-			var result_gamenative_indices: Dictionary = {}
+			var result_steam_indices: Dictionary = {}
 			
 			for i in range(limit):
 				var virtual_idx = offset + i
@@ -417,14 +417,14 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				if cache_idx >= 0 and cache_idx < _merged_games_cache.size():
 					var game = _merged_games_cache[cache_idx]
 					result.append(game)
-					if game.source == "gamenative":
-						result_gamenative_indices[i] = true
+					if game.source == "steam":
+						result_steam_indices[i] = true
 			
 			if DEBUG_LOG: print("[HomeView] DB task: offset=", offset, " limit=", limit, " cache_hit=", cache_hit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 			return {
 				"games": result,
 				"offset": offset,
-				"gamenative_indices": result_gamenative_indices
+				"steam_indices": result_steam_indices
 			},
 		func(result):
 			if not is_instance_valid(games_grid):
@@ -439,17 +439,17 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			var callback_start_us := Time.get_ticks_usec()
 			var games = result["games"] as Array[GameResource]
 			var response_offset = result["offset"] as int
-			var gamenative_indices = result["gamenative_indices"] as Dictionary
+			var steam_indices = result["steam_indices"] as Dictionary
 			
-			for idx in gamenative_indices.keys():
-				_gamenative_indices[response_offset + idx] = true
+			for idx in steam_indices.keys():
+				_steam_indices[response_offset + idx] = true
 			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
 			if DEBUG_LOG: print("[HomeView] on_items_loaded callback: offset=", response_offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 	)
 
-func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_games: Array[GameResource]) -> Array[GameResource]:
-	"""Merge DB games with GameNative games, sorted by last_played descending.
+func _merge_all_games_by_last_played(db_games: Array[GameResource], steam_games: Array[GameResource]) -> Array[GameResource]:
+	"""Merge DB games with Steam games, sorted by last_played descending.
 	
 	This creates a unified list where both types of games are interleaved
 	based on their last_played timestamp.
@@ -458,26 +458,26 @@ func _merge_all_games_by_last_played(db_games: Array[GameResource], gamenative_g
 	
 	# Create working copies of both lists
 	var db_idx = 0
-	var gn_idx = 0
+	var steam_idx = 0
 	
 	# Merge sort style: compare heads and take the larger last_played
-	while db_idx < db_games.size() or gn_idx < gamenative_games.size():
+	while db_idx < db_games.size() or steam_idx < steam_games.size():
 		if db_idx >= db_games.size():
-			# Only GameNative games left
-			merged.append(gamenative_games[gn_idx])
-			gn_idx += 1
-		elif gn_idx >= gamenative_games.size():
+			# Only Steam games left
+			merged.append(steam_games[steam_idx])
+			steam_idx += 1
+		elif steam_idx >= steam_games.size():
 			# Only DB games left
 			merged.append(db_games[db_idx])
 			db_idx += 1
 		else:
 			# Compare timestamps and take the larger one (more recent)
 			var db_game = db_games[db_idx]
-			var gn_game = gamenative_games[gn_idx]
+			var steam_game = steam_games[steam_idx]
 			
-			if gn_game.last_played > db_game.last_played:
-				merged.append(gn_game)
-				gn_idx += 1
+			if steam_game.last_played > db_game.last_played:
+				merged.append(steam_game)
+				steam_idx += 1
 			else:
 				merged.append(db_game)
 				db_idx += 1
@@ -547,7 +547,7 @@ func _on_download_completed(_item_id: String, success: bool, _message: String):
 		return
 	# Refresh when a download completes (game may now show in home view).
 	# preserve_cache=false: a download changes the data model, so the merged
-	# DB+GameNative cache must be rebuilt or the new game never materializes.
+	# DB+Steam cache must be rebuilt or the new game never materializes.
 	if success:
 		_load_total_count(false, false)
 
@@ -586,30 +586,30 @@ func _on_database_failed(_error: String):
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""
-	# Check if this is a GameNative game
-	if game.source == "gamenative":
-		# Update the cached GameNative game's last_played
+	# Check if this is a Steam game
+	if game.source == "steam":
+		# Update the cached Steam game's last_played
 		var game_found = false
-		for gn_game in _gamenative_games:
-			if gn_game.romm_id == game.romm_id:
-				gn_game.last_played = game.last_played
+		for steam_game in _steam_games:
+			if steam_game.romm_id == game.romm_id:
+				steam_game.last_played = game.last_played
 				game_found = true
 				break
 		
 		if game_found:
-			# Re-sort GameNative games by last_played descending
-			_gamenative_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
+			# Re-sort Steam games by last_played descending
+			_steam_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
 				return a.last_played > b.last_played
 			)
-			# Clear GameNative indices since the order changed
-			_gamenative_indices.clear()
-	
+			# Clear Steam indices since the order changed
+			_steam_indices.clear()
+
 	# Reload data to get new sort order (don't preserve cache)
-	# Don't reload GameNative games - we just updated the cache with new timestamps
+	# Don't reload Steam games - we just updated the cache with new timestamps
 	_load_total_count(false, false, Callable(), false)
 
-func _on_gamenative_games_updated():
-	"""Called when GameNative games are added or removed - refresh grid."""
+func _on_steam_games_updated():
+	"""Called when Steam games are imported or removed - refresh grid."""
 	# Reload total count and refresh grid (don't preserve cache)
 	_load_total_count(false)
 
@@ -619,7 +619,7 @@ func _on_game_home_visibility_changed(_game: GameResource):
 	when this view isn't current — on_view_show catches up on return."""
 	if not UIManager.is_current_view(view_name):
 		return
-	_gamenative_indices.clear()
+	_steam_indices.clear()
 	_merged_games_cache.clear()
 	_merged_cache_start = 0
 	_merged_cache_end = 0
@@ -672,10 +672,10 @@ func _validate_cached_data() -> bool:
 	
 	Returns true if cache is valid, false if it needs to be refreshed.
 	"""
-	# Quick validation: check if GameNative count matches
-	var current_gamenative_count = LaunchManager.gamenative_get_game_count()
-	if current_gamenative_count != _gamenative_games_count:
-		push_warning("[HomeView] GameNative count mismatch: cached=%d, current=%d" % [_gamenative_games_count, current_gamenative_count])
+	# Quick validation: check if Steam count matches
+	var current_steam_count = LaunchManager.steam_get_game_count()
+	if current_steam_count != _steam_games_count:
+		push_warning("[HomeView] Steam count mismatch: cached=%d, current=%d" % [_steam_games_count, current_steam_count])
 		return false
 	
 	# Check if we have the expected number of games cached. Compare against the
@@ -716,16 +716,17 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 		"delete":
 			var game = DataManager.get_game_by_id(romm_id)
 			if game == null and romm_id < 0:
-				# GameNative/DroidDeck Steam game (no DB row; romm_id = -app_id):
-				# remove from the manager's list, which also deletes the .steam
-				# export file. The gamenative_games_updated signal refreshes the grid.
-				var gn_data: Dictionary = LaunchManager.gamenative_get_game_data(-romm_id)
-				if not gn_data.is_empty():
-					var gn_title: String = gn_data.get("name", "Steam Game %d" % -romm_id)
-					UIManager.show_confirm("Delete Game", "Remove " + gn_title + " from the library? This also deletes its .steam export file - it will reappear if the game is still installed in GameNative/DroidDeck.",
+				# Steam game from an exported .steam shortcut (no DB row;
+				# romm_id = -app_id): remove from the manager's list, which also
+				# deletes the .steam export file. The steam_games_updated signal
+				# refreshes the grid.
+				var steam_data: Dictionary = LaunchManager.steam_get_game_data(-romm_id)
+				if not steam_data.is_empty():
+					var steam_title: String = steam_data.get("name", "Steam Game %d" % -romm_id)
+					UIManager.show_confirm("Delete Game", "Remove " + steam_title + " from the library? This also deletes its .steam export file - it will reappear if the exporting app still has the game installed.",
 						func():
-							LaunchManager.gamenative_remove_game(-romm_id)
-							SystemManager.notifications.show_notification(gn_title + " removed from library", SystemManager.notifications.Type.SUCCESS)
+							LaunchManager.steam_remove_game(-romm_id)
+							SystemManager.notifications.show_notification(steam_title + " removed from library", SystemManager.notifications.Type.SUCCESS)
 					, Callable(), Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				return
 			if game:
@@ -738,20 +739,20 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				
 				# Helper function to refresh grid after successful delete
 				var _refresh_after_delete = func():
-					# Remove from GameNative cache if it's a GameNative game
-					if game.source == "gamenative":
-						var gn_idx = -1
-						for i in range(_gamenative_games.size()):
-							if _gamenative_games[i].romm_id == romm_id:
-								gn_idx = i
+					# Remove from Steam cache if it's a Steam game
+					if game.source == "steam":
+						var steam_idx = -1
+						for i in range(_steam_games.size()):
+							if _steam_games[i].romm_id == romm_id:
+								steam_idx = i
 								break
-						if gn_idx >= 0:
-							_gamenative_games.remove_at(gn_idx)
-							_gamenative_games_count = _gamenative_games.size()
-							_total_games = _db_games_count + _gamenative_games_count
+						if steam_idx >= 0:
+							_steam_games.remove_at(steam_idx)
+							_steam_games_count = _steam_games.size()
+							_total_games = _db_games_count + _steam_games_count
 					
 					# Clear cache and refresh completely
-					_gamenative_indices.clear()
+					_steam_indices.clear()
 					
 					# Force refresh the grid (don't preserve cache to remove the deleted game)
 					_load_total_count(false, false, func():
@@ -798,12 +799,12 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				)
 		"hide":
 			var game = DataManager.get_game_by_id(romm_id)
-			if game and game.source != "gamenative" and not game.hidden_from_home:
+			if game and game.source != "steam" and not game.hidden_from_home:
 				game.hidden_from_home = true
 				DataManager.update_game_hidden_from_home(romm_id, true)
 				SystemManager.notifications.show_notification("Hidden from Home - find it in Library to unhide", SystemManager.notifications.Type.INFO)
 				# Drop cached windows holding the hidden game, then reload.
-				_gamenative_indices.clear()
+				_steam_indices.clear()
 				_merged_games_cache.clear()
 				_merged_cache_start = 0
 				_merged_cache_end = 0

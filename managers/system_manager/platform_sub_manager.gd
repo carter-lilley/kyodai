@@ -18,15 +18,47 @@ func _setup_platform_specific_behavior():
 	if is_android():
 		# Disable native Android virtual keyboard - we use our own onscreen keyboard
 		get_tree().node_added.connect(_on_node_added_android)
-		# Watch for the "set as HOME while running" failure mode where the
-		# activity resumes but its window never gains input focus
-		var plugin = _get_android_plugin()
-		if plugin and plugin.has_signal("window_focus_stuck"):
-			plugin.connect("window_focus_stuck", _on_window_focus_stuck)
 		# Check and request permissions on Android (skip during first-run OOBE)
 		var first_run_completed = DataManager.get_setting("first_run_completed")
 		if first_run_completed and first_run_completed.value:
 			_request_android_permissions()
+		# Defer: SystemManager autoloads before DataManager, so settings reads
+		# must wait a frame.
+		call_deferred("_setup_sleep_savers")
+
+# ============================================================================
+# SLEEP SAVERS (screen-off Wi-Fi / CPU governor — vendor root daemon required)
+# ============================================================================
+
+## True when the sleep savers can work: Android + vendor root daemon.
+func is_sleep_saver_supported() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	return plugin != null and plugin.has_method("isSleepSaverSupported") \
+			and bool(plugin.isSleepSaverSupported())
+
+func _setup_sleep_savers() -> void:
+	if not is_sleep_saver_supported():
+		return
+	if not DataManager.setting_changed.is_connected(_on_sleep_saver_setting_changed):
+		DataManager.setting_changed.connect(_on_sleep_saver_setting_changed)
+	_apply_sleep_saver_settings()
+
+func _apply_sleep_saver_settings() -> void:
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return
+	var wifi_setting = DataManager.get_setting("sleep_wifi_off")
+	if wifi_setting and plugin.has_method("setSleepWifiSaverEnabled"):
+		plugin.setSleepWifiSaverEnabled(bool(wifi_setting.value))
+	var cpu_setting = DataManager.get_setting("sleep_powersave_cpu")
+	if cpu_setting and plugin.has_method("setSleepGovernorSaverEnabled"):
+		plugin.setSleepGovernorSaverEnabled(bool(cpu_setting.value))
+
+func _on_sleep_saver_setting_changed(_value: Variant, setting: SettingsVar) -> void:
+	if setting.property_name in ["sleep_wifi_off", "sleep_powersave_cpu"]:
+		_apply_sleep_saver_settings()
 
 func _notification(what: int) -> void:
 	if not is_android():
@@ -48,25 +80,6 @@ func _on_android_window_focus_in() -> void:
 	var focus_owner := get_viewport().gui_get_focus_owner()
 	if focus_owner is LineEdit or focus_owner is TextEdit:
 		focus_owner.release_focus()
-
-var _window_focus_stuck_dialog_shown := false
-
-func _on_window_focus_stuck() -> void:
-	# Only reachable when the activity is resumed but its window never gains
-	# input focus (system input dispatcher desync). Automatic recovery already
-	# failed, so the only known fix is a device reboot.
-	if _window_focus_stuck_dialog_shown:
-		return
-	_window_focus_stuck_dialog_shown = true
-	push_error("[SystemManager.platform] Window focus never gained; controller input will not work until reboot")
-	if UIManager:
-		UIManager.show_alert(
-			"Input Not Responding",
-			"The system stopped delivering controller input to Kyodai. A device restart fixes this.",
-			func(): _window_focus_stuck_dialog_shown = false
-		)
-	else:
-		_window_focus_stuck_dialog_shown = false
 
 func _on_node_added_android(node: Node):
 	# When a LineEdit/TextEdit is added on Android, disable the native virtual keyboard

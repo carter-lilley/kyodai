@@ -115,6 +115,7 @@ public class DownloadForegroundService extends Service {
         try {
             startForeground(NOTIFICATION_ID, notification);
             isRunning = true;
+            SleepSaver.jobStarted();
             Log.d(TAG, "Foreground service started successfully");
         } catch (Exception e) {
             Log.e(TAG, "Failed to start foreground service: " + e.getMessage());
@@ -159,7 +160,10 @@ public class DownloadForegroundService extends Service {
     
     private void stopForegroundService() {
         Log.d(TAG, "Stopping foreground service");
-        isRunning = false;
+        if (isRunning) {
+            isRunning = false;
+            SleepSaver.jobFinished();
+        }
         
         try {
             stopForeground(true);
@@ -181,7 +185,10 @@ public class DownloadForegroundService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.d(TAG, "DownloadForegroundService destroyed");
-        isRunning = false;
+        if (isRunning) {
+            isRunning = false;
+            SleepSaver.jobFinished();
+        }
     }
     
     public boolean isServiceRunning() {

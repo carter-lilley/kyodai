@@ -142,12 +142,18 @@ func get_setting(_name:String) -> SettingsVar:
 
 func load_settings() -> void:
 	if FSM.file_exists(SAVE_PATH):
+		# Renamed keys must be pulled from the raw file before loading: the
+		# .tres loader silently drops serialized properties that no longer
+		# exist on the Settings class.
+		var legacy_steam_games: Variant = _read_legacy_setting("gamenative_games")
 		settings = ResourceLoader.load(SAVE_PATH) as Settings
 		if settings == null:
 			# Corrupt or wrong-type file: preserve a copy for inspection, start fresh
 			push_error("[SettingsManager] Failed to load settings from %s - resetting to defaults (backup saved)" % SAVE_PATH)
 			if FSM.copy_file(SAVE_PATH, SAVE_PATH + ".corrupt.bak"):
 				FSM.delete_file(SAVE_PATH)
+		elif legacy_steam_games != null:
+			_migrate_legacy_setting("steam_games", legacy_steam_games)
 	if settings:
 		_refresh_setting_metadata(settings)
 		store_property_names(settings)
@@ -156,6 +162,28 @@ func load_settings() -> void:
 	# fallback if load failed
 	settings = Settings.new()
 	store_property_names(settings)
+
+## Reads a top-level property from the raw settings .tres text (single-line
+## Variant). Used for one-time key migrations; returns null when absent.
+func _read_legacy_setting(key: String) -> Variant:
+	var raw := FSM.read_file(SAVE_PATH)
+	if raw.is_empty():
+		return null
+	for line in raw.split("\n"):
+		var stripped := line.strip_edges()
+		if stripped.begins_with(key + " = "):
+			return str_to_var(stripped.substr((key + " = ").length()))
+	return null
+
+## One-time migration for a renamed settings key: carry the legacy value over
+## only when the new key still holds its (empty) default.
+func _migrate_legacy_setting(new_key: String, legacy_value: Variant) -> void:
+	if not (legacy_value is Array) or legacy_value.is_empty():
+		return
+	var new_setting := get_setting(new_key)
+	if new_setting and new_setting.value is Array and new_setting.value.is_empty():
+		new_setting.value = legacy_value
+		_is_dirty = true
 
 ## Syncs metadata (options, ranges, names, etc.) from fresh defaults onto loaded settings.
 ## Preserves the user's saved values.
@@ -192,7 +220,7 @@ func _refresh_setting_metadata(_settings: Settings) -> void:
 		# Clamp value to new valid range/options if needed
 		if default_var.type == SettingsVar.SettingType.ARRAY:
 			if old_value is Array:
-				# ARRAY type can store actual arrays (e.g., gamenative_games)
+				# ARRAY type can store actual arrays (e.g., steam_games)
 				# not just int indices for dropdown options
 				saved_var.value = old_value
 			elif old_value is int and old_value >= 0 and old_value < default_var.options.size():

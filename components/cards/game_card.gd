@@ -92,7 +92,7 @@ var _present_wrap: PresentWrapEffect = null
 var _present_tween: Tween = null
 const PRESENT_UNWRAP_DURATION: float = 0.6
 const PRESENT_WRAP_DRAW_INDEX: int = 40
-const GAMENATIVE_NEVER_PLAYED: String = "1970-01-01T00:00:00"
+const STEAM_NEVER_PLAYED: String = "1970-01-01T00:00:00"
 
 func _remove_focus_tween(tween: Tween) -> void:
 	_focus_effect_tweens.erase(tween)
@@ -806,7 +806,7 @@ func _is_present_wrapped() -> bool:
 	if game.unwrapped or not game.is_active_variant_downloaded():
 		return false
 	var lp: String = game.last_played
-	return lp.is_empty() or lp == GAMENATIVE_NEVER_PLAYED
+	return lp.is_empty() or lp == STEAM_NEVER_PLAYED
 
 func _update_present_wrap() -> void:
 	_ensure_present_wrap()
@@ -850,9 +850,9 @@ func _try_unwrap_present() -> void:
 	)
 
 func _persist_unwrapped() -> void:
-	if game.source == "gamenative":
-		if LaunchManager and LaunchManager.gamenative:
-			LaunchManager.gamenative.update_unwrapped(game.steam_app_id, true)
+	if game.source == "steam":
+		if LaunchManager and LaunchManager.steam:
+			LaunchManager.steam.update_unwrapped(game.steam_app_id, true)
 	elif DataManager:
 		DataManager.update_game_unwrapped(game.romm_id, true)
 
@@ -1094,7 +1094,7 @@ func _on_card_pressed():
 
 	var focus_index = self.get_meta("virtual_index", -1)
 
-	if game.source == "gamenative":
+	if game.source == "steam":
 		if LaunchManager:
 			LaunchManager.launch_game(game, focus_index)
 		return

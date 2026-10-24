@@ -12,6 +12,7 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 	"Storage": "harddisk",
 	"Library Appearance": "palette",
 	"Updates": "update",
+	"Power": "power-sleep",
 }
 
 var _left_pane: VBoxContainer
@@ -200,6 +201,11 @@ func _build_categories() -> void:
 		elif subgroup_name == "Display":
 			if SystemManager.platform.is_android():
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
+		elif subgroup_name == "Power":
+			# Sleep savers need Android + a vendor root daemon (AYN/Retroid/
+			# Ayaneo); hide the whole category everywhere else.
+			if not SystemManager.platform.is_sleep_saver_supported():
+				continue
 		_add_category_button(id, subgroup_name, icon)
 
 		var build_start_us := Time.get_ticks_usec()
@@ -245,12 +251,6 @@ func _build_categories() -> void:
 	print("[SettingsDialog] category 'background_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
 	await _await_build_budget()
-
-	# GameNative (Android only)
-	if SystemManager.platform.is_android():
-		_add_category_button("gamenative", "GameNative", "android")
-		var gamenative = preload("res://view/gamenative_settings_view.gd").new()
-		_category_contents["gamenative"] = gamenative
 
 	# Exit — closes the app via the shared shutdown path in main.gd. Added as
 	# the last item of the scrollable category list (not a pinned slot) so

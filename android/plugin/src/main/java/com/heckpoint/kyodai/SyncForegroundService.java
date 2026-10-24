@@ -126,6 +126,7 @@ public class SyncForegroundService extends Service {
         try {
             startForeground(NOTIFICATION_ID, notification);
             isRunning = true;
+            SleepSaver.jobStarted();
             Log.d(TAG, "Sync foreground service started successfully");
         } catch (Exception e) {
             Log.e(TAG, "Failed to start sync foreground service: " + e.getMessage());
@@ -185,7 +186,10 @@ public class SyncForegroundService extends Service {
     
     private void stopForegroundService() {
         Log.d(TAG, "Stopping sync foreground service");
-        isRunning = false;
+        if (isRunning) {
+            isRunning = false;
+            SleepSaver.jobFinished();
+        }
         
         try {
             stopForeground(true);
@@ -200,7 +204,10 @@ public class SyncForegroundService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.d(TAG, "SyncForegroundService destroyed");
-        isRunning = false;
+        if (isRunning) {
+            isRunning = false;
+            SleepSaver.jobFinished();
+        }
     }
     
     public boolean isServiceRunning() {

@@ -16,7 +16,7 @@ declaration.
 |---|---|---|---|
 | `INTERNET` | Downloads, RomM sync | Export preset checkbox | none |
 | `ACCESS_NETWORK_STATE` | Network status checks | Export preset checkbox | none |
-| `ACCESS_WIFI_STATE` | Wifi status | Export preset checkbox | none |
+| `ACCESS_WIFI_STATE` | Wifi status; sleep saver checks Wi-Fi state before toggling it via root | Export preset checkbox | none |
 | `WAKE_LOCK` | Keep CPU alive during downloads/play | Export preset checkbox (`permissions/wake_lock`) | none |
 | `MANAGE_EXTERNAL_STORAGE` | All-files access: `/storage/emulated/0`, USB/OTG SSD mounts, emulator dirs | Plugin manifest + preset checkbox | Settings intent via `requestManageExternalStoragePermission()` |
 | `READ/WRITE_EXTERNAL_STORAGE` | Legacy storage (API ≤ 29) | Export preset checkboxes | runtime prompt on old APIs |
@@ -32,12 +32,31 @@ declaration.
 ## Deliberately NOT declared
 
 - `SCHEDULE_EXACT_ALARM` / `SET_ALARM` — no alarm features planned.
-- `CHANGE_WIFI_STATE`, `ACCESS_FINE_LOCATION` — no wifi toggling/SSID scanning.
+- `CHANGE_WIFI_STATE` — Wi-Fi is toggled by the sleep saver via root
+  (`svc wifi disable/enable` through the vendor daemon in `RootShell`), not
+  via `WifiManager.setWifiEnabled()` (a no-op for third-party apps since
+  Android 10), so this permission would grant nothing. See `SleepSaver.java`.
+- `ACCESS_FINE_LOCATION` — no SSID scanning.
 - `RECEIVE_BOOT_COMPLETED` — no boot autostart.
 - `BATTERY_STATS` — signature-level, never granted to sideloaded apps; battery
   level is read from `/sys/class/power_supply/` which needs no permission.
 - `READ_MEDIA_*` — redundant with `MANAGE_EXTERNAL_STORAGE`.
 - `SYSTEM_ALERT_WINDOW`, Bluetooth perms — no overlay/BT-stack features.
+
+## Sleep savers (root, no permissions)
+
+`SleepSaver.java` implements the optional screen-off battery savers (Settings
+→ Power): Wi-Fi off and CPU-governor drop, both 30 s after screen-off and
+restored on wake. Both run as root through the vendor daemons in
+`RootShell.java` (`svc wifi …`, `echo … > cpufreq/policy*/scaling_governor`),
+so they need **no manifest permissions** — only the pre-existing
+`ACCESS_WIFI_STATE` to read Wi-Fi state. The screen on/off receiver is
+registered dynamically (these broadcasts cannot be manifest-registered).
+State disabled by the saver is persisted in SharedPreferences
+(`kyodai_sleep_saver`) so a process death while asleep cannot leave Wi-Fi off
+or governors stuck at powersave; the plugin constructor's `SleepSaver.init()`
+restores on next launch. The Wi-Fi saver is skipped while a download/sync/
+extraction foreground service is active (`SleepSaver.jobStarted/Finished`).
 
 ## Network security (cleartext HTTP)
 

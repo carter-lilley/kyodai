@@ -67,11 +67,12 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export var download_speed_profile := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Download Speed", "Higher settings use more network connections per file and more simultaneous downloads", 0.0, 3.0, 1.0, ["Conservative", "Balanced", "Fast", "Unrestricted"])
 @export var cover_cache_max_mb := SettingsVar.new(Type.INT, 2048, State.ENABLED, "Cover Cache Limit", "Maximum disk space used for cached cover art; the least recently used covers are evicted when the limit is exceeded. Set to Unlimited to never evict", 64.0, 4096.0, 64.0, [], false, {"display_unit": " MB", "unlimited_tick": true})
 
-# Internal GameNative games list (not displayed in settings menu)
-@export var gamenative_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "GameNative Games")
+# Internal Steam games list imported from exported .steam shortcut files
+# (not displayed in settings menu)
+@export var steam_games := SettingsVar.new(Type.ARRAY, [], State.INTERNAL, "Steam Games")
 
 # Internal Steam launch backend preference: "auto" (detect/ask), "gamenative"
-# or "droiddeck". Set from the GameNative settings view or the launch dialog.
+# or "droiddeck". Set from the launch-time backend picker dialog.
 @export var steam_backend := SettingsVar.new(Type.STRING, "auto", State.INTERNAL, "Steam Launch Backend")
 
 # Internal platform sync settings (not displayed in auto-generated menu)
@@ -173,3 +174,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Default Experimental while the app is in alpha: every release is currently a
 # prerelease, so Stable would never notify. Flip the default to 0 at 1.0.
 @export var release_channel := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Release Channel", "Stable only notifies about full releases; Experimental also includes alpha/beta prereleases", 0.0, 1.0, 1.0, ["Stable", "Experimental"])
+
+@export_subgroup("Power")
+@export var sleep_wifi_off := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Wi-Fi off when screen sleeps", "Turn Wi-Fi off 30 seconds after the screen turns off and back on when it wakes. Paused during downloads/syncs. Requires handheld vendor root access (AYN, Retroid, Ayaneo)")
+@export var sleep_powersave_cpu := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Lower CPU speed when screen sleeps", "Drop the CPU governor to powersave while the screen is off and restore it on wake. Requires handheld vendor root access (AYN, Retroid, Ayaneo)")

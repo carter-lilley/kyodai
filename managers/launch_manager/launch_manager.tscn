@@ -9,7 +9,7 @@
 [ext_resource type="Script" path="res://managers/launch_manager/process_sub_manager.gd" id="7_1v5yz"]
 [ext_resource type="Script" path="res://managers/launch_manager/core_sub_manager.gd" id="8_core"]
 [ext_resource type="Script" path="res://managers/launch_manager/shuffler_sub_manager.gd" id="9_shuffler"]
-[ext_resource type="Script" path="res://managers/launch_manager/gamenative_sub_manager.gd" id="10_gamenative"]
+[ext_resource type="Script" path="res://managers/launch_manager/steam_sub_manager.gd" id="10_steam"]
 [ext_resource type="Script" path="res://managers/launch_manager/m3u_sub_manager.gd" id="11_m3u"]
 [ext_resource type="Script" path="res://managers/launch_manager/update_sub_manager.gd" id="12_update"]
 
@@ -40,8 +40,8 @@ script = ExtResource("8_core")
 [node name="ShufflerSubManager" type="Node" parent="."]
 script = ExtResource("9_shuffler")
 
-[node name="GameNativeSubManager" type="Node" parent="."]
-script = ExtResource("10_gamenative")
+[node name="SteamSubManager" type="Node" parent="."]
+script = ExtResource("10_steam")
 
 [node name="M3USubManager" type="Node" parent="."]
 script = ExtResource("11_m3u")

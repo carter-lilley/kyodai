@@ -17,7 +17,7 @@ config/quit_on_go_back=false
 config/features=PackedStringArray("4.7", "Forward Plus")
 run/low_processor_mode=true
 run/low_processor_mode_sleep_usec=8000
-config/icon="res://icon.svg"
+config/icon="res://kyodai_icon.svg"
 addons/icon_finder/preview_size=24
 
 [autoload]

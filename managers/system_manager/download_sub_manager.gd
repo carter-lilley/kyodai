@@ -635,10 +635,11 @@ func _stop_foreground_service():
 		print("[SystemManager.download] Stopping foreground service")
 		if SystemManager.platform.stop_download_foreground_service():
 			_foreground_service_active = false
-		# Restore normal CPU mode on Android
-		if SystemManager.platform.is_android():
-			OS.set_low_processor_usage_mode(false)
-			print("[SystemManager.download] Disabled low processor mode")
+		# Restore the configured frame pacing on Android (VRR/warmup state owns
+		# it — setting the flag directly would stomp steady-state low-power mode).
+		if SystemManager.platform.is_android() and SystemManager.display:
+			SystemManager.display.reapply_power_mode()
+			print("[SystemManager.download] Re-applied power mode after downloads")
 
 ## Queues a download with optional auto-extraction
 ## delete_after_extract: If true, deletes the archive after successful extraction (default: true for emulator_core type)

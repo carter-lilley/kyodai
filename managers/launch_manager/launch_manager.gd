@@ -12,7 +12,7 @@ const LaunchIntentManager := preload("res://managers/launch_manager/launch_inten
 const ProcessManager := preload("res://managers/launch_manager/process_sub_manager.gd")
 const CoreManager := preload("res://managers/launch_manager/core_sub_manager.gd")
 const ShufflerManager := preload("res://managers/launch_manager/shuffler_sub_manager.gd")
-const GameNativeManager := preload("res://managers/launch_manager/gamenative_sub_manager.gd")
+const SteamManager := preload("res://managers/launch_manager/steam_sub_manager.gd")
 const M3UManager := preload("res://managers/launch_manager/m3u_sub_manager.gd")
 const UpdateManager := preload("res://managers/launch_manager/update_sub_manager.gd")
 
@@ -64,7 +64,7 @@ signal emulator_extraction_completed(emulator_id: String, success: bool)
 @warning_ignore("unused_signal")
 signal firmware_download_completed(platform_slug: String, success: bool)
 signal core_download_completed(platform_slug: String, core_id: String, success: bool)
-signal gamenative_games_updated()
+signal steam_games_updated()
 
 @onready var registry: RegistryManager = $RegistrySubManager
 @onready var emulator: EmulatorManager = $EmulatorSubManager
@@ -76,7 +76,7 @@ signal gamenative_games_updated()
 @onready var m3u: M3UManager = $M3USubManager
 @onready var update: UpdateManager = $UpdateSubManager
 var shuffler: ShufflerManager
-var gamenative: GameNativeManager
+var steam: SteamManager
 
 # Shuffler uses different default emulators than the standard launcher for these platforms.
 const SHUFFLER_DEFAULT_EMULATORS: Dictionary = {
@@ -89,7 +89,7 @@ const SHUFFLER_DEFAULT_EMULATORS: Dictionary = {
 
 func _enter_tree() -> void:
 	shuffler = $ShufflerSubManager
-	gamenative = $GameNativeSubManager
+	steam = $SteamSubManager
 
 func _ready():
 	registry._load_registry()
@@ -102,8 +102,8 @@ func _ready():
 	# Forward CoreManager signal so UI only needs to listen to LaunchManager.
 	core.core_download_completed.connect(_on_core_download_completed)
 	
-	# Forward GameNativeManager games list signal.
-	gamenative.games_updated.connect(gamenative_games_updated.emit)
+	# Forward SteamManager games list signal.
+	steam.games_updated.connect(steam_games_updated.emit)
 	
 	# Scan existing installations to detect partial installs
 	# Wait a frame to ensure everything is initialized
@@ -579,7 +579,7 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	# games would just re-attach to the in-flight download and appear broken.
 	# Tell the user instead. Placed before game_launch_initiated so a blocked
 	# launch produces no overlay, sound, or focus changes.
-	if game.source != "gamenative" and SystemManager.download.is_game_download_in_progress(game):
+	if game.source != "steam" and SystemManager.download.is_game_download_in_progress(game):
 		var summary: Dictionary = SystemManager.download.get_game_download_summary(game)
 		var msg := game.get_display_name() + " is still downloading"
 		if int(summary.get("discs_total", 0)) > 1:
@@ -595,11 +595,11 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 		_end_launch(game.romm_id)
 		return
 
-	# Check if this is a GameNative game. Branched BEFORE the transition signal:
+	# Check if this is a Steam game. Branched BEFORE the transition signal:
 	# the backend picker (shown when both launchers are installed) must appear
 	# before the overlay, which otherwise covers it with a black screen.
-	if game.source == "gamenative":
-		_launch_gamenative_game(game, focus_index)
+	if game.source == "steam":
+		_launch_steam_game(game, focus_index)
 		return
 
 	# Emit signal immediately so focus can be saved before any suspension happens
@@ -625,8 +625,8 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	# Single ordered flow: emulator -> firmware -> prep -> saves -> launch
 	_launch_with_emulator_check(game)
 
-## Launch a GameNative/DroidDeck Steam game via intent
-func _launch_gamenative_game(game: GameResource, focus_index: int = -1) -> void:
+## Launch a Steam game via intent through an installed frontend (GameNative/DroidDeck)
+func _launch_steam_game(game: GameResource, focus_index: int = -1) -> void:
 	if not SystemManager.platform.is_android():
 		push_error("[LaunchManager] Cannot launch Steam game on non-Android platform")
 		SystemManager.notifications.show_notification("Steam games only available on Android", SystemManager.notifications.Type.ERROR)
@@ -636,19 +636,19 @@ func _launch_gamenative_game(game: GameResource, focus_index: int = -1) -> void:
 	# Resolve the backend first: the picker dialog must be fully answered
 	# before the transition overlay and trim start. Nothing is torn down yet,
 	# so cancel/failure here needs no restore.
-	gamenative.resolve_backend_interactive(game.steam_app_id, func(backend: String, message: String):
+	steam.resolve_backend_interactive(game.steam_app_id, func(backend: String, message: String):
 		if backend == "":
 			if message != "":
 				push_error("[LaunchManager] Failed to launch Steam game: " + message)
 				SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
 			_end_launch(game.romm_id)
 			return
-		_launch_gamenative_with_backend(game, backend, focus_index)
+		_launch_steam_with_backend(game, backend, focus_index)
 	)
 
 ## Backend resolved: transition overlay -> trim -> intent -> background state,
 ## mirroring the emulator launch sequence.
-func _launch_gamenative_with_backend(game: GameResource, backend: String, focus_index: int) -> void:
+func _launch_steam_with_backend(game: GameResource, backend: String, focus_index: int) -> void:
 	# Emit signal immediately so focus can be saved before any suspension happens
 	game_launch_initiated.emit(game, focus_index)
 
@@ -672,7 +672,7 @@ func _launch_gamenative_with_backend(game: GameResource, backend: String, focus_
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
 
-	var success := gamenative.launch_with_backend(backend, game.steam_app_id)
+	var success := steam.launch_with_backend(backend, game.steam_app_id)
 	if success:
 		_update_last_played(game)
 		# Enter background state like every other external launch: on resume the
@@ -681,7 +681,7 @@ func _launch_gamenative_with_backend(game: GameResource, backend: String, focus_
 		# unresponsive) state.
 		process.enter_background_state_android(game)
 	else:
-		var message := "Failed to launch %s. Is the app installed?" % gamenative.get_backend_label(backend)
+		var message := "Failed to launch %s. Is the app installed?" % steam.get_backend_label(backend)
 		push_error("[LaunchManager] " + message)
 		SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
 		# launch_failed_hook is _restore_after_launch: undo the trim.
@@ -1034,9 +1034,9 @@ func _update_last_played(game: GameResource) -> void:
 	var timestamp = Time.get_datetime_string_from_system(false, true)  # UTC format
 	game.last_played = timestamp
 	
-	# GameNative games are not stored in the database, so persist in settings instead.
-	if game.source == "gamenative":
-		gamenative.update_last_played(game.steam_app_id, timestamp)
+	# Steam games are not stored in the database, so persist in settings instead.
+	if game.source == "steam":
+		steam.update_last_played(game.steam_app_id, timestamp)
 		game_launched.emit(game)
 		return
 	
@@ -1076,47 +1076,23 @@ func stop_shuffler_session() -> void:
 
 
 # ============================================================================
-# GameNative facade
+# Steam facade
 # ============================================================================
 
-func gamenative_launch_game(steam_app_id: int, on_result: Callable = Callable()) -> void:
-	gamenative.launch_game_async(steam_app_id, on_result)
+func steam_has_games() -> bool:
+	return steam.has_games()
 
-func gamenative_get_preferred_backend() -> String:
-	return gamenative.get_preferred_backend()
+func steam_create_game_resources() -> Array[GameResource]:
+	return steam.create_game_resources()
 
-func gamenative_set_preferred_backend(backend: String) -> void:
-	gamenative.set_preferred_backend(backend)
+func steam_get_game_count() -> int:
+	return steam.get_game_count()
 
-func gamenative_is_backend_installed(backend: String) -> bool:
-	return gamenative.is_backend_installed(backend)
+func steam_get_game_data(app_id: int) -> Dictionary:
+	return steam.get_game_data(app_id)
 
-func gamenative_update_last_played(steam_app_id: int, timestamp: String) -> void:
-	gamenative.update_last_played(steam_app_id, timestamp)
+func steam_rescan() -> void:
+	steam.rescan()
 
-func gamenative_has_games() -> bool:
-	return gamenative.has_games()
-
-func gamenative_create_game_resources() -> Array[GameResource]:
-	return gamenative.create_game_resources()
-
-func gamenative_get_game_count() -> int:
-	return gamenative.get_game_count()
-
-func gamenative_is_installed() -> bool:
-	return gamenative.is_game_native_installed()
-
-func gamenative_add_game(app_id: int, callback: Callable = Callable()) -> void:
-	gamenative.add_game(app_id, callback)
-
-func gamenative_get_games() -> Array[Dictionary]:
-	return gamenative.get_games()
-
-func gamenative_get_game_data(app_id: int) -> Dictionary:
-	return gamenative.get_game_data(app_id)
-
-func gamenative_rescan() -> void:
-	gamenative.rescan()
-
-func gamenative_remove_game(app_id: int) -> void:
-	gamenative.remove_game(app_id)
+func steam_remove_game(app_id: int) -> void:
+	steam.remove_game(app_id)

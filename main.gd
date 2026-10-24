@@ -713,6 +713,43 @@ func _forward_input_to_second_viewport(event: InputEvent) -> bool:
 			return true
 	return false
 
+func _on_window_focus_out() -> void:
+	# NB: OS.has_feature, not SystemManager.platform — focus-out can arrive
+	# during shutdown, when the autoload is already freed (nil base access).
+	if OS.has_feature("android"):
+		_on_android_window_focus_out()
+	else:
+		_suspend_rendering_if_hidden()
+
+func _on_android_window_focus_out() -> void:
+	"""Android focus loss splits two ways: another app taking focus (game
+	launch, notification shade) keeps rendering — dual-screen hero art must
+	stay live — while the display turning off means nothing is visible, so
+	rendering is suspended and the engine drops to low-power CPU pacing."""
+	var display_off := false
+	if Engine.has_singleton("KyodaiBridge"):
+		var plugin = Engine.get_singleton("KyodaiBridge")
+		if plugin and plugin.has_method("isDisplayInteractive"):
+			display_off = not bool(plugin.isDisplayInteractive())
+	if not display_off:
+		return
+	_suspend_rendering()
+	OS.low_processor_usage_mode = true
+	print("[Main] Display off: rendering suspended, low-processor mode on")
+
+func _restore_power_mode_after_focus_in() -> void:
+	if not OS.has_feature("android"):
+		return
+	# Focus-in can arrive during shutdown; the managers may already be gone.
+	if not is_instance_valid(SystemManager):
+		return
+	# An active download owns low-processor mode (heat management); otherwise
+	# restore the configured VRR/warmup pacing.
+	if SystemManager.download and not SystemManager.download.get_active().is_empty():
+		OS.low_processor_usage_mode = true
+	elif SystemManager.display:
+		SystemManager.display.reapply_power_mode()
+
 func _suspend_rendering_if_hidden() -> void:
 	"""Only suspend when the window is actually minimized/hidden — plain
 	alt-tab keeps rendering so the app stays live when visible again."""
@@ -721,12 +758,11 @@ func _suspend_rendering_if_hidden() -> void:
 		_suspend_rendering()
 
 func _suspend_rendering() -> void:
-	"""Stop issuing frames while the desktop window is minimized/hidden. The
-	SceneTree keeps processing (downloads, poll timers, sync all keep running);
-	only the renderer and the perpetual focus-ring idle animation are halted."""
+	"""Stop issuing frames while the window is invisible (desktop: minimized/
+	hidden; Android: display off). The SceneTree keeps processing (downloads,
+	poll timers, sync all keep running); only the renderer and the perpetual
+	focus-ring idle animation are halted."""
 	if _rendering_suspended:
-		return
-	if SystemManager and SystemManager.platform and SystemManager.platform.is_android():
 		return
 	_rendering_suspended = true
 	_prev_viewport_update_mode = RenderingServer.viewport_get_update_mode(get_tree().root.get_viewport_rid())
@@ -750,11 +786,12 @@ func _notification(what: int) -> void:
 	"""Handle application lifecycle notifications."""
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		# Defer one frame so the window manager state (minimize/hide) has settled
-		call_deferred("_suspend_rendering_if_hidden")
+		call_deferred("_on_window_focus_out")
 		return
 
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
 		_resume_rendering()
+		_restore_power_mode_after_focus_in()
 		return
 
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -818,8 +855,9 @@ func _notification(what: int) -> void:
 			LaunchManager.clear_validation_cache()
 			LaunchManager.clear_stale_pending_launches()
 			# Re-scan the .steam export folder: games installed/uninstalled in
-			# GameNative/DroidDeck while backgrounded appear/disappear here.
-			LaunchManager.gamenative_rescan()
+			# Steam frontends (GameNative/DroidDeck) while backgrounded
+			# appear/disappear here.
+			LaunchManager.steam_rescan()
 			if LaunchManager.update:
 				LaunchManager.update.on_app_resumed()
 		var platforms_view = UIManager.get_settings_dialog_platforms_view()

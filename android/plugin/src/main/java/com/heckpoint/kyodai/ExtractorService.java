@@ -48,6 +48,8 @@ public class ExtractorService extends Service {
     private static final int NOTIFICATION_ID = 2001;
     private static final String ACTION_EXTRACTION_COMPLETE = "com.heckpoint.kyodai.EXTRACTION_COMPLETE";
     private static final String DOCS_AUTHORITY = "com.android.externalstorage.documents";
+
+    private boolean jobTracked = false;
     
     @Override
     public void onCreate() {
@@ -117,6 +119,8 @@ public class ExtractorService extends Service {
         Notification notification = buildNotification(gameName, 0);
         try {
             startForeground(NOTIFICATION_ID, notification);
+            jobTracked = true;
+            SleepSaver.jobStarted();
             Log.d(TAG, "Started foreground extraction for: " + gameName);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start foreground: " + e.getMessage());
@@ -149,11 +153,25 @@ public class ExtractorService extends Service {
             sendBroadcast(broadcast);
             
             // Stop service
+            releaseJob();
             stopForeground(true);
             stopSelf();
         }).start();
     }
     
+    private void releaseJob() {
+        if (jobTracked) {
+            jobTracked = false;
+            SleepSaver.jobFinished();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        releaseJob();
+        super.onDestroy();
+    }
+
     /**
      * Derives a unique marker base name from the ZIP filename. This ensures that
      * concurrent extractions into the same output directory (e.g. RetroArch cores)

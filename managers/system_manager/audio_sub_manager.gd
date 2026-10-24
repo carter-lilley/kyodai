@@ -34,6 +34,10 @@ var _persisting_bgm_path := false
 var _is_muted := false
 var _sfx_volume := 1.0
 var _music_volume := 1.0
+## Set when BGM was paused by an app focus loss (Android screen off / app
+## switch), so focus return only resumes what it paused. Game-launch pauses
+## (LaunchManager.background_state_entered) are owned by LaunchManager.
+var _paused_for_focus := false
 
 func _ready() -> void:
 	_setup_audio_buses()
@@ -349,6 +353,48 @@ func _on_game_background_exited(_game: GameResource, _exit_code: int) -> void:
 	if LaunchManager.is_session_active():
 		return
 	resume_background_music()
+
+# ==================== APP FOCUS (Android screen-off / app switch) ====================
+
+func _notification(what: int) -> void:
+	# Android-only: screen-off/app-switch must not keep playing audio (battery).
+	# Desktop keeps music playing when unfocused, matching existing behavior.
+	# NB: do not route this through SystemManager — focus-out can arrive during
+	# shutdown, when the autoload is already freed (nil base access).
+	if not OS.has_feature("android"):
+		return
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_on_app_focus_out()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		_on_app_focus_in()
+
+func _on_app_focus_out() -> void:
+	"""Pause playback while the app is unfocused (screen off or another app
+	visible). BGM paused by a game launch is already paused and stays owned by
+	LaunchManager; loading/sync loops pause via stream_paused and continue
+	when focus returns."""
+	# Focus-out can arrive during shutdown, after the players are freed.
+	if not is_instance_valid(_bgm_player) or not is_instance_valid(_loop_player):
+		return
+	if _bgm_player.playing and not _bgm_player.stream_paused:
+		_paused_for_focus = true
+		pause_background_music(0.2)
+	if _loop_player.playing and not _loop_player.stream_paused:
+		_loop_player.stream_paused = true
+
+func _on_app_focus_in() -> void:
+	if not is_instance_valid(_bgm_player) or not is_instance_valid(_loop_player):
+		return
+	# While a game runs (background state) LaunchManager owns the BGM pause —
+	# do not resume over it.
+	if LaunchManager and (LaunchManager.is_in_background_state() or LaunchManager.is_session_active()):
+		_paused_for_focus = false
+		return
+	if _paused_for_focus:
+		_paused_for_focus = false
+		resume_background_music(0.3)
+	if _loop_player.playing and _loop_player.stream_paused:
+		_loop_player.stream_paused = false
 
 func _play_startup_sound() -> void:
 	play_sfx("affirm_01")

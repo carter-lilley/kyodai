@@ -577,12 +577,12 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 
 	# Add delete option only if game is downloaded and show_delete is true
 	var game = DataManager.get_game_by_id(romm_id)
-	# GameNative/DroidDeck Steam games have no DB row (romm_id = -app_id);
-	# offer Delete from the manager's own list instead.
-	var is_gamenative := false
+	# Steam games from exported .steam shortcuts have no DB row
+	# (romm_id = -app_id); offer Delete from the manager's own list instead.
+	var is_steam := false
 	if game == null and romm_id < 0:
-		is_gamenative = not LaunchManager.gamenative_get_game_data(-romm_id).is_empty()
-	if show_delete and ((game and game.is_active_variant_downloaded()) or is_gamenative):
+		is_steam = not LaunchManager.steam_get_game_data(-romm_id).is_empty()
+	if show_delete and ((game and game.is_active_variant_downloaded()) or is_steam):
 		items.append({"id": "delete", "text": "Delete", "icon": "trash-can"})
 
 	# Add "Add to Steam" option if game is downloaded (desktop only)
@@ -596,8 +596,8 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	items.append({"id": "card_designer", "text": "Card Designer", "icon": "cards-outline"})
 	# Home view only: hiding removes the game from the Home grid (local-only
 	# flag; the game stays visible in Library, search, and all other modes).
-	# GameNative games have no DB row, so hiding doesn't apply to them.
-	if show_hide and game and game.source != "gamenative":
+	# Steam games have no DB row, so hiding doesn't apply to them.
+	if show_hide and game and game.source != "steam":
 		items.append({"id": "hide", "text": "Hide", "icon": "eye-off"})
 
 	# Start preloading heavy details while the menu is open.

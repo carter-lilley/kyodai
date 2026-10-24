@@ -3130,9 +3130,9 @@ func _refresh_buffer(preserve_scroll: bool = false):
 			# above); the live scrollbar range is stale mid-frame.
 			_scroll_container.write_immediate(_clamp_scroll_to_range(saved_scroll_offset))
 	elif focus_was_in_grid and M3Overlay._get_topmost_overlay() == null:
-		# Non-preserve rebuilds (e.g. GameNative adds, post-sync reload) recycle
-		# the focused card; restore focus to it so controller users aren't
-		# stranded. Scroll position still resets as before.
+		# Non-preserve rebuilds (e.g. Steam import changes, post-sync reload)
+		# recycle the focused card; restore focus to it so controller users
+		# aren't stranded. Scroll position still resets as before.
 		call_deferred("scroll_to_index_and_focus", saved_focus_index, false)
 
 func get_target_scroll() -> float:
