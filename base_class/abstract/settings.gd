@@ -85,6 +85,9 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 
 # Internal shuffler preferences (set from the shuffler config dialog)
 @export var shuffler_platform_balance := SettingsVar.new(Type.INT, 50, State.INTERNAL, "Shuffler: Platform Balance", "How evenly platforms are represented in the shuffle bag: 0% is proportional to library size, 100% is equal shares", 0.0, 100.0, 5.0)
+# Set by the "Don't show this again" checkbox on the shuffler's
+# experimental-feature warning (persisted only when confirmed).
+@export var shuffler_warning_dismissed := SettingsVar.new(Type.BOOL, false, State.INTERNAL, "Shuffler: Experimental Warning Dismissed")
 
 # Internal card effect configuration (managed by Card Designer)
 @export var card_effect_config := _preset(SettingsVar.new(Type.DICTIONARY, {

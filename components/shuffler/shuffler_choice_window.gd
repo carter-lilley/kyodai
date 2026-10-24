@@ -39,15 +39,16 @@ var _input_locked_until_msec: int = -1
 func _ready() -> void:
 	# Same OS-window initialization pattern as ShufflerControlsWindow: a real
 	# OS window is required so this viewport receives controller input.
-	transparent = true
-	transparent_bg = true
+	# Borderless fullscreen on every platform; the LibraryBackground below
+	# provides the backdrop, so no transparency contract with the compositor
+	# (gamescope doesn't honor one).
 	theme = Theme.new()
-	size = DisplayServer.screen_get_size()
-	always_on_top = false
-	popup()
-	transient = false
-	always_on_top = true
-	position = DisplayServer.screen_get_position()
+	borderless = true
+	# Cover the screen the main window (and therefore the game) is on.
+	var screen := DisplayServer.window_get_current_screen()
+	size = DisplayServer.screen_get_size(screen)
+	position = DisplayServer.screen_get_position(screen)
+	always_on_top = not SystemManager.platform.is_gamemode()
 	move_to_foreground()
 
 	# Cards use FOCUS_ALL via clickable; give them wrap-around left/right

@@ -440,11 +440,43 @@ func _apply_dialog_options(dialog: M3Dialog, options: Dictionary) -> void:
 		dialog.set_focus_restore_fallback(options["focus_restore_fallback"])
 
 func show_shuffler_dialog() -> void:
-	"""Show the shuffler configuration dialog."""
+	"""Gate for the shuffler configuration: an experimental-feature warning
+	must be confirmed first (unless the user opted out via its checkbox)."""
 	if LaunchManager.is_session_active():
 		SystemManager.notifications.show_notification("A shuffler session is already active", SystemManager.notifications.Type.INFO)
 		return
 
+	var warning_setting := DataManager.get_setting("shuffler_warning_dismissed")
+	if warning_setting and warning_setting.value == true:
+		_show_shuffler_config_dialog()
+		return
+
+	var dont_show_again := {"checked": false}
+	show_custom_dialog(func(dialog: M3Dialog):
+		dialog.title_text = "Experimental Feature"
+		dialog.hero_icon_name = "warning"
+		dialog.body_text = "The shuffler is experimental — switching between emulators can be finicky on some platforms.\n\nDuring a session, hold Left Trigger + Select (Back) to summon the control panel, where you can skip, restart, reroll, or stop the shuffler."
+		dialog.disable_default_action = true
+
+		var checkbox := M3Checkbox.new()
+		checkbox.text = "Don't show this again"
+		checkbox.toggled.connect(func(pressed: bool): dont_show_again.checked = pressed)
+		dialog.content_slot.add_child(checkbox)
+
+		dialog.add_action("I Understand", func():
+			# Persist the opt-out only on confirm: checking the box and then
+			# cancelling must not silence future warnings.
+			if dont_show_again.checked and warning_setting:
+				DataManager.set_setting(true, warning_setting)
+				DataManager.save_settings()
+			dialog.dismiss()
+			_show_shuffler_config_dialog()
+		, true)
+		dialog.add_action("Cancel", dialog.dismiss)
+	)
+
+func _show_shuffler_config_dialog() -> void:
+	"""Show the shuffler configuration dialog."""
 	if not _shuffler_dialog or not is_instance_valid(_shuffler_dialog):
 		var scene = load("res://components/shuffler/shuffler_config_dialog.tscn")
 		if scene:

@@ -17,8 +17,8 @@ android/**/.idea/
 android/**/local.properties
 android/**/*.iml
 
-# Android debug keystore (contains sensitive signing key)
-android/*.keystore
+# Android signing keys - never commit anywhere in the repo (CI reads from repo secrets)
+*.keystore
 
 # Keep only the addon AAR - ignore build outputs
 # The canonical AAR is in addons/KyodaiBridge/ and should be in version control

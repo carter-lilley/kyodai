@@ -16,9 +16,11 @@ const AndroidBinaryExtractor = preload("res://utils/launch/android_binary_extrac
 # (re-summon chord, auto-dismiss, cleanup) is a no-op.
 var _dismissing := false
 
-# GameMode (gamescope) layout: the palette is a plain top-level fullscreen
-# menu window (gamescope presents one focused app window at a time), while on
-# desktop it is a compact always-on-top overlay sized to the button column.
+# Unified layout: a borderless fullscreen menu window with a drawn scrim on
+# every platform. Only the compositor interaction branches: gamescope presents
+# one focused app window at a time and ignores always-on-top/transparency, so
+# there the palette steals focus; on desktop it is an always-on-top overlay
+# stacked above the fullscreen game window.
 var _gamemode := false
 var _column_size := Vector2.ZERO
 # XID (hex string) of the current game's window, set by the manager before
@@ -51,13 +53,13 @@ func set_reroll_enabled(enabled: bool) -> void:
 		_shuffle_btn.disabled = not enabled
 
 func _ready():
-	# Ensure the OS window is fully transparent and doesn't inherit any theme
-	# background styleboxes from the main UI.
-	transparent = true
-	transparent_bg = true
+	# Opaque borderless window on every platform: the drawn scrim provides the
+	# background, so there's no transparency contract with the compositor
+	# (which gamescope doesn't honor anyway) and no window chrome on desktop.
 	theme = Theme.new()
+	borderless = true
 
-	# Size the window to fit the connected button column exactly.
+	# Measure the connected button column so it can be centered on screen.
 	var count := _button_group.get_child_count()
 	if count > 0:
 		var btn := _button_group.get_child(0) as Control
@@ -66,44 +68,35 @@ func _ready():
 
 	_gamemode = SystemManager.platform.is_gamemode()
 	print("[ShufflerControlsWindow] gamemode=", _gamemode)
-	var screen_size := DisplayServer.screen_get_size()
-	size = screen_size if _gamemode else Vector2i(_column_size)
+	# Cover the screen the main window (and therefore the game) is on.
+	var screen := DisplayServer.window_get_current_screen()
+	var screen_size := DisplayServer.screen_get_size(screen)
+	size = screen_size
+	position = DisplayServer.screen_get_position(screen)
+
+	# The scene anchors the button group full-rect; this is a menu screen, so
+	# re-anchor the group as a fixed column centered on the screen, over a
+	# drawn scrim giving the menu an intentional background.
+	_button_group.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_button_group.size = _column_size
+	_button_group.position = (Vector2(screen_size) - _column_size) / 2.0
+	var scrim := ColorRect.new()
+	scrim.color = Color(0.02, 0.02, 0.04, 0.92)
+	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(scrim)
+	move_child(scrim, 0)
 
 	if _gamemode:
-		# In gamescope the palette is simply a new top-level fullscreen window:
-		# gamescope presents one focused app window at a time and does not
-		# alpha-blend between windows, so transparency and always-on-top are
-		# meaningless there — opaque window, grab focus, done.
-		transparent = false
-		transparent_bg = false
+		# Gamescope presents one focused app window at a time and ignores
+		# always-on-top; the focus assertion below handles presentation.
 		always_on_top = false
 		# Distinctive title so x11_windowctl can target this exact window (our
 		# other windows share the same PID) via pid+hint matching.
 		title = "kyodai-controls"
-		position = DisplayServer.screen_get_position()
-		# The scene anchors the button group full-rect (correct for the compact
-		# desktop window, where window == column). Here it is a menu screen, so
-		# re-anchor the group as a fixed column centered on the screen.
-		_button_group.set_anchors_preset(Control.PRESET_TOP_LEFT)
-		_button_group.size = _column_size
-		_button_group.position = (Vector2(screen_size) - _column_size) / 2.0
-		# Draw our own scrim so the menu screen has an intentional background.
-		var scrim := ColorRect.new()
-		scrim.color = Color(0.02, 0.02, 0.04, 0.92)
-		scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
-		scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(scrim)
-		move_child(scrim, 0)
 	else:
-		# Desktop: compact always-on-top overlay window. popup() will try to
-		# make the window transient, but X11 rejects always-on-top windows
-		# becoming transient. Disable always_on_top temporarily, popup to
-		# create the OS window, clear transient, then restore always_on_top.
-		always_on_top = false
-		popup()
-		transient = false
+		# Desktop: stay stacked above the fullscreen emulator window.
 		always_on_top = true
-		position = Vector2i(16, screen_size.y - size.y - 16)
 
 	# Connect button signals via the button group and set explicit vertical
 	# focus neighbors so controller navigation reliably moves up/down.
@@ -357,7 +350,7 @@ func _warp_cursor_to_top_button() -> void:
 	# DisplayServer.warp_mouse() on a sub-Window interprets coordinates as
 	# window-relative, not screen-relative, so pass the button center in this
 	# window's canvas coordinates (global_position includes the button
-	# column's offset, which is nonzero in the fullscreen GameMode layout).
+	# column's offset, which is nonzero in the fullscreen menu layout).
 	var target := Vector2i(top_btn.get_global_position() + btn_size / 2.0)
 	DisplayServer.warp_mouse(target)
 

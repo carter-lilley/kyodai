@@ -595,18 +595,20 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 		_end_launch(game.romm_id)
 		return
 
+	# Check if this is a GameNative game. Branched BEFORE the transition signal:
+	# the backend picker (shown when both launchers are installed) must appear
+	# before the overlay, which otherwise covers it with a black screen.
+	if game.source == "gamenative":
+		_launch_gamenative_game(game, focus_index)
+		return
+
 	# Emit signal immediately so focus can be saved before any suspension happens
 	print("[LaunchManager] Emitting game_launch_initiated signal")
 	game_launch_initiated.emit(game, focus_index)
-	
+
 	# Play launch sound
 	if SystemManager.audio:
 		SystemManager.audio.play_sfx("affirm_00")
-	
-	# Check if this is a GameNative game
-	if game.source == "gamenative":
-		_launch_gamenative_game(game)
-		return
 	
 	# If game is not downloaded, queue the download first then proceed
 	if not game.is_active_variant_downloaded():
@@ -624,12 +626,34 @@ func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	_launch_with_emulator_check(game)
 
 ## Launch a GameNative/DroidDeck Steam game via intent
-func _launch_gamenative_game(game: GameResource) -> void:
+func _launch_gamenative_game(game: GameResource, focus_index: int = -1) -> void:
 	if not SystemManager.platform.is_android():
 		push_error("[LaunchManager] Cannot launch Steam game on non-Android platform")
 		SystemManager.notifications.show_notification("Steam games only available on Android", SystemManager.notifications.Type.ERROR)
 		_end_launch(game.romm_id)
 		return
+
+	# Resolve the backend first: the picker dialog must be fully answered
+	# before the transition overlay and trim start. Nothing is torn down yet,
+	# so cancel/failure here needs no restore.
+	gamenative.resolve_backend_interactive(game.steam_app_id, func(backend: String, message: String):
+		if backend == "":
+			if message != "":
+				push_error("[LaunchManager] Failed to launch Steam game: " + message)
+				SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+			_end_launch(game.romm_id)
+			return
+		_launch_gamenative_with_backend(game, backend, focus_index)
+	)
+
+## Backend resolved: transition overlay -> trim -> intent -> background state,
+## mirroring the emulator launch sequence.
+func _launch_gamenative_with_backend(game: GameResource, backend: String, focus_index: int) -> void:
+	# Emit signal immediately so focus can be saved before any suspension happens
+	game_launch_initiated.emit(game, focus_index)
+
+	if SystemManager.audio:
+		SystemManager.audio.play_sfx("affirm_00")
 
 	# Wait for launch transition overlay phase 1 before trimming, mirroring
 	# _launch_game_internal: the trim frees the cover textures the overlay is
@@ -648,25 +672,22 @@ func _launch_gamenative_game(game: GameResource) -> void:
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
 
-	gamenative.launch_game_async(game.steam_app_id, func(success: bool, message: String):
-		if success:
-			_update_last_played(game)
-			# Enter background state like every other external launch: on resume
-			# the normal exit path hides the launch overlay AND restores the
-			# trimmed UI. Without this, RESUMED leaves the app in its trimmed
-			# (black, unresponsive) state.
-			process.enter_background_state_android(game)
-		else:
-			if message != "":
-				# Empty message = user cancelled the backend picker; stay silent.
-				push_error("[LaunchManager] Failed to launch Steam game: " + message)
-				SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
-			# Every non-success (including silent picker cancels) must restore
-			# the trimmed UI; launch_failed_hook is _restore_after_launch.
-			if launch_failed_hook.is_valid():
-				launch_failed_hook.call()
-		_end_launch(game.romm_id)
-	)
+	var success := gamenative.launch_with_backend(backend, game.steam_app_id)
+	if success:
+		_update_last_played(game)
+		# Enter background state like every other external launch: on resume the
+		# normal exit path hides the launch overlay AND restores the trimmed UI.
+		# Without this, RESUMED leaves the app in its trimmed (black,
+		# unresponsive) state.
+		process.enter_background_state_android(game)
+	else:
+		var message := "Failed to launch %s. Is the app installed?" % gamenative.get_backend_label(backend)
+		push_error("[LaunchManager] " + message)
+		SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+		# launch_failed_hook is _restore_after_launch: undo the trim.
+		if launch_failed_hook.is_valid():
+			launch_failed_hook.call()
+	_end_launch(game.romm_id)
 
 ## If game is not downloaded, queue the download first then proceed.
 ## Multi-disc games on m3u-capable platforms queue every missing disc.

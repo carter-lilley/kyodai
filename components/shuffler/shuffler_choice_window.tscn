@@ -12,12 +12,10 @@
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_418yx"]
 
 [node name="ShufflerChoiceWindow" type="Window" unique_id=772988250]
-transparent_bg = true
 oversampling_override = 1.0
 unresizable = true
 borderless = true
 always_on_top = true
-transparent = true
 script = ExtResource("1_choice")
 
 [node name="Root" type="Control" parent="." unique_id=824955221]

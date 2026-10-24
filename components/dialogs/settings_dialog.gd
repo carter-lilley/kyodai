@@ -317,8 +317,45 @@ func _create_settings_menu_content(setting_name: String, settings_vars: Array, i
 	menu.setting_changed.connect(func(value, setting): DataManager.set_setting(value, setting))
 	vbox.add_child(menu)
 
+	if setting_name == "Updates":
+		vbox.add_child(_build_updates_footer())
+
 	margin.add_child(vbox)
 	return margin
+
+## Updates category footer: running version label + manual update check.
+## Not a SettingsVar — the version is read from project settings (CI-stamped
+## from the git tag on release builds) and the button is a pure action.
+func _build_updates_footer() -> Control:
+	var footer = VBoxContainer.new()
+
+	# Breathe room between the last setting row and the footer.
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, M3Units.dp(12))
+	footer.add_child(spacer)
+
+	var row = HBoxContainer.new()
+	row.add_theme_constant_override("separation", int(M3Units.dp(12)))
+	footer.add_child(row)
+
+	var version := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
+	var version_label = M3Label.new()
+	version_label.label_style = M3Label.Style.BODY_SMALL
+	version_label.use_on_surface_variant = true
+	version_label.text = "Kyodai v" + version if version != "" else "Kyodai (development build)"
+	version_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(version_label)
+
+	var check_btn = M3Button.new()
+	check_btn.text = "Check Now"
+	check_btn.icon_name = "refresh"
+	check_btn.button_variant = M3Button.Variant.OUTLINED
+	check_btn.button_size = M3Button.Size.SMALL
+	check_btn.pressed.connect(func(): AppUpdateChecker.check_for_updates(true))
+	row.add_child(check_btn)
+
+	return footer
 
 func _on_category_selected(id: String) -> void:
 	if id == "exit":

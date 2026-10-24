@@ -246,12 +246,10 @@ border_color = Color(0, 0, 0, 1)
 shadow_color = Color(1, 1, 1, 0)
 
 [node name="ShufflerControlsWindow" type="Window" unique_id=2058997992]
-transparent_bg = true
 oversampling_override = 1.0
 unresizable = true
 borderless = true
 always_on_top = true
-transparent = true
 script = ExtResource("1_ctrl")
 
 [node name="Root" type="Control" parent="." unique_id=1425514516]

@@ -4,9 +4,9 @@ extends Window
 ## Ported from the old game_shuffler's notif_intro: the incoming game's cover
 ## flies up to center screen, slides aside while fading, and a clipped banner
 ## sweeps in from the right edge revealing the title + platform/year before
-## everything fades out. Plays once per game per shuffler session, over the
-## emulator while it boots. Purely presentational: unfocusable and
-## click-through so the game keeps controller/keyboard focus and mouse input.
+## everything fades out. Plays once per game per shuffler session while the
+## emulator boots. Purely presentational: unfocusable and click-through so
+## the game keeps controller/keyboard focus and mouse input.
 
 signal intro_finished()
 
@@ -39,21 +39,20 @@ var _tweens: Array[Tween] = []
 var _present_generation := 0
 
 func _ready() -> void:
-	# Same OS-window initialization pattern as ShufflerChoiceWindow, plus
-	# unfocusable so the emulator keeps input focus.
-	transparent = true
-	transparent_bg = true
+	# Borderless fullscreen window on every platform (no transparency contract
+	# with the compositor; gamescope doesn't honor one), plus unfocusable so
+	# the emulator keeps input focus.
 	theme = Theme.new()
-	size = DisplayServer.screen_get_size()
-	always_on_top = false
-	popup()
-	transient = false
-	always_on_top = true
+	borderless = true
+	# Cover the screen the main window (and therefore the game) is on.
+	var screen := DisplayServer.window_get_current_screen()
+	size = DisplayServer.screen_get_size(screen)
+	position = DisplayServer.screen_get_position(screen)
+	always_on_top = not SystemManager.platform.is_gamemode()
 	unfocusable = true
 	# Clicks fall straight through to the game (same trick the old shuffler
 	# used with set_mouse_passthrough_polygon([])).
 	mouse_passthrough_polygon = PackedVector2Array()
-	position = DisplayServer.screen_get_position()
 	_screen = Vector2(size)
 
 	var fonts := M3Theme.load_fonts()

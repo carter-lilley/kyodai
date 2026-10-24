@@ -576,41 +576,60 @@ func launch_game(app_id: int) -> bool:
 		return false
 	return _do_launch(backend, app_id)
 
-## Launch a Steam game, resolving the backend interactively when needed.
-## on_result receives (success: bool, message: String); an empty message with
-## success == false means the user cancelled the backend picker.
-func launch_game_async(app_id: int, on_result: Callable) -> void:
+## Resolve which backend should launch a game, asking the user when both
+## backends are installed and nothing disambiguates them. on_result receives
+## (backend: String, message: String); backend == "" means do not launch
+## (silent cancel when message == "", otherwise an error to report).
+func resolve_backend_interactive(app_id: int, on_result: Callable) -> void:
 	if not SystemManager.platform.is_android():
-		push_error("[GameNativeSubManager] Cannot launch Steam game on non-Android platform")
 		if on_result.is_valid():
-			on_result.call(false, "Steam games only available on Android")
+			on_result.call("", "Steam games only available on Android")
 		return
 
 	var plugin = Engine.get_singleton("KyodaiBridge")
 	if plugin == null:
 		push_error("[GameNativeSubManager] KyodaiBridge plugin not available")
 		if on_result.is_valid():
-			on_result.call(false, "Android bridge unavailable")
+			on_result.call("", "Android bridge unavailable")
 		return
 
 	var backend := resolve_backend(app_id)
 	if backend != "":
-		var success := _do_launch(backend, app_id)
 		if on_result.is_valid():
-			on_result.call(success, "" if success else "Failed to launch %s. Is the app installed?" % get_backend_label(backend))
+			on_result.call(backend, "")
 		return
 
 	var installed := get_installed_backends()
 	if installed.is_empty():
 		if on_result.is_valid():
-			on_result.call(false, "No Steam launcher installed. Install GameNative or DroidDeck.")
+			on_result.call("", "No Steam launcher installed. Install GameNative or DroidDeck.")
 		return
 
 	# Both backends installed and nothing disambiguates them: ask once, then
 	# remember the choice so future launches go straight to it.
-	_show_backend_picker(app_id, installed, on_result)
+	_show_backend_picker(installed, on_result)
 
-func _show_backend_picker(app_id: int, installed: Array[String], on_result: Callable) -> void:
+## Launch via a previously resolved backend.
+func launch_with_backend(backend: String, app_id: int) -> bool:
+	if not BACKENDS.has(backend):
+		return false
+	return _do_launch(backend, app_id)
+
+## Combined resolve + launch for callers that don't interleave UI.
+## on_result receives (success: bool, message: String); an empty message with
+## success == false means the user cancelled the backend picker.
+func launch_game_async(app_id: int, on_result: Callable) -> void:
+	resolve_backend_interactive(app_id, func(backend: String, message: String):
+		if backend == "":
+			if on_result.is_valid():
+				on_result.call(false, message)
+			return
+		var success := launch_with_backend(backend, app_id)
+		if on_result.is_valid():
+			on_result.call(success, "" if success else "Failed to launch %s. Is the app installed?" % get_backend_label(backend))
+	)
+
+func _show_backend_picker(installed: Array[String], on_result: Callable) -> void:
 	var dialog = M3Dialog.new()
 	dialog.title_text = "Launch Steam Game"
 	dialog.body_text = "Both GameNative and DroidDeck are installed. Choose which app to launch Steam games with - you can change this later in the GameNative settings."
@@ -622,16 +641,15 @@ func _show_backend_picker(app_id: int, installed: Array[String], on_result: Call
 			chosen["picked"] = true
 			set_preferred_backend(backend)
 			dialog.dismiss()
-			var success := _do_launch(backend, app_id)
 			if on_result.is_valid():
-				on_result.call(success, "" if success else "Failed to launch %s." % label)
+				on_result.call(backend, "")
 		, backend == installed[0])
 
 	# Dismissal without a choice (scrim tap / close button / back) cancels
 	# silently; after a choice the action callback already reported.
 	dialog.dismissed.connect(func():
 		if not chosen["picked"] and on_result.is_valid():
-			on_result.call(false, "")
+			on_result.call("", "")
 	)
 
 	M3Dialog.show_dialog(dialog)

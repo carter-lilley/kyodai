@@ -126,19 +126,18 @@ jobs:
 
     - uses: ./.github/actions/godot-setup
 
-    - name: Configure Android SDK path + debug keystore
+    - name: Configure Android SDK path + signing keystore
       run: |
         # Godot reads the SDK path from editor settings, not the environment
         mkdir -p "$HOME/.config/godot"
         printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android_sdk_path = "%s"\n' "$ANDROID_HOME" > "$HOME/.config/godot/editor_settings-4.tres"
-        # Alpha builds sign with the standard debug keystore (matches Godot's
-        # default debug credentials). Switch to a proper upload key via repo
-        # secrets before any stable release - key changes force reinstalls.
+        # Persistent signing key from repo secrets (standard debug-alias
+        # credentials, so the preset needs no changes). Every release shares
+        # one signature, which is what allows APKs to install as updates over
+        # previous releases. Regenerating this key would force all existing
+        # installs to uninstall/reinstall - do not rotate casually.
         mkdir -p "$HOME/.android"
-        keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
-          -alias androiddebugkey -storepass android -keypass android \
-          -keyalg RSA -keysize 2048 -validity 10000 \
-          -dname "CN=Android Debug,O=Android,C=US"
+        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$HOME/.android/debug.keystore"
 
     - name: Export Android APK
       run: |
