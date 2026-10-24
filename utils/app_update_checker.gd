@@ -2,16 +2,27 @@
 extends RefCounted
 class_name AppUpdateChecker
 
-## Startup self-update check against Kyodai's own GitHub releases.
+## Self-update check against Kyodai's own GitHub releases.
 ##
-## Stage 1 (check + notify): compares the newest release on the user's
-## configured channel (Stable = non-prerelease only, Experimental = include
-## prereleases) against the running build's version and, when a newer one
-## exists, shows a dialog whose Download button opens the release page.
-## Nothing is downloaded or installed automatically.
+## Compares the newest release on the user's configured channel (Stable =
+## non-prerelease only, Experimental = include prereleases) against the
+## running build's version and, when a newer one exists, shows a dialog.
+##
+## Install behavior is platform-specific:
+## - Android: "Download & Install" downloads the APK in-app and hands it to
+##   the system package installer via KyodaiBridge.installApk (the same
+##   plumbing emulator installs use). The system owns the confirm/replace/
+##   relaunch; app data survives because all releases share one signature.
+## - Desktop: "Download" opens the release page in the browser (file-swap
+##   self-install is future work).
+## Dev builds (custom feature "dev", e.g. the Android Dev preset) skip the
+## check entirely - they're pushed directly from dev environments.
 
 const REPO := "carter-lilley/kyodai"
 const RELEASE_PAGE_BASE := "https://github.com/" + REPO + "/releases/tag/"
+const UPDATES_DIR := "user://updates/"
+
+const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Fire-and-forget: safe to call during startup. Automatic checks fail
 ## silently (logged only) so a flaky network can never interrupt boot;
@@ -25,6 +36,12 @@ static func check_for_updates(from_manual_trigger: bool = false) -> void:
 	if OS.has_feature("editor"):
 		if from_manual_trigger:
 			_notify("Update checks are disabled in editor builds", SystemManager.notifications.Type.INFO)
+		return
+
+	# Dev builds are deployed directly; self-updating them makes no sense.
+	if OS.has_feature("dev"):
+		if from_manual_trigger:
+			_notify("Update checks are disabled in dev builds", SystemManager.notifications.Type.INFO)
 		return
 
 	if not from_manual_trigger:
@@ -51,7 +68,7 @@ static func check_for_updates(from_manual_trigger: bool = false) -> void:
 	# (including a missing setting) stays on Stable.
 	var include_prereleases := channel != null and channel.value is int and int(channel.value) == 1
 
-	var on_release := func(_download_url: String, tag: String, error: String, _size: int, _published: String, _asset_updated: String, _sha256: String):
+	var on_release := func(download_url: String, tag: String, error: String, size: int, _published: String, _asset_updated: String, _sha256: String):
 		if error != "":
 			print("[AppUpdateChecker] Update check failed: " + error)
 			if from_manual_trigger:
@@ -71,7 +88,7 @@ static func check_for_updates(from_manual_trigger: bool = false) -> void:
 			print("[AppUpdateChecker] Update available: %s -> %s" % [current, tag])
 			# Deferred: the HTTP callback can land during early startup,
 			# before the dialog layer is ready to host an M3Dialog.
-			_show_update_dialog.call_deferred(tag, current)
+			_show_update_dialog.call_deferred(tag, current, download_url, size)
 		else:
 			print("[AppUpdateChecker] Up to date (%s, latest %s)" % [current, tag])
 			if from_manual_trigger:
@@ -96,13 +113,93 @@ static func _notify(text: String, type: int) -> void:
 	if SystemManager and SystemManager.notifications:
 		SystemManager.notifications.show_notification.call_deferred(text, type)
 
-static func _show_update_dialog(tag: String, current: String) -> void:
+static func _show_update_dialog(tag: String, current: String, download_url: String, size: int) -> void:
 	var dialog := M3Dialog.new()
 	dialog.title_text = "Update Available"
-	dialog.body_text = "Kyodai %s is available (you have %s).\n\nDownload it from the GitHub release page?" % [tag, current]
+	var on_android := SystemManager.platform.is_android() and download_url != ""
+	if on_android:
+		var size_mb := "%.0f MB" % (size / (1024.0 * 1024.0)) if size > 0 else "unknown size"
+		dialog.body_text = "Kyodai %s is available (you have %s).\n\nDownload (%s) and install now? Your library and settings carry over." % [tag, current, size_mb]
+	else:
+		dialog.body_text = "Kyodai %s is available (you have %s).\n\nDownload it from the GitHub release page?" % [tag, current]
 	dialog.add_action("Later", func(): dialog.dismiss(), false)
-	dialog.add_action("Download", func():
-		OS.shell_open(RELEASE_PAGE_BASE + tag)
-		dialog.dismiss()
-	, true)
+	if on_android:
+		dialog.add_action("Download & Install", func():
+			_download_update(tag, download_url, size)
+			dialog.dismiss()
+		, true)
+	else:
+		dialog.add_action("Download", func():
+			OS.shell_open(RELEASE_PAGE_BASE + tag)
+			dialog.dismiss()
+		, true)
 	M3Dialog.show_dialog(dialog)
+
+# ============================================================================
+# Android: download + install
+# ============================================================================
+
+static func _download_update(tag: String, download_url: String, size: int) -> void:
+	FSM.make_dir_recursive(UPDATES_DIR)
+	# Drop stale APKs from previous (cancelled or superseded) update attempts.
+	for file_name in FSM.list_dir(UPDATES_DIR):
+		if file_name.ends_with(".apk"):
+			FSM.delete_file(FSM.join_paths(UPDATES_DIR, file_name))
+
+	var destination := FSM.join_paths(UPDATES_DIR, "Kyodai-" + tag + ".apk")
+	var item_id: String = SystemManager.download.queue_download(
+		download_url,
+		destination,
+		"file",
+		"Kyodai " + tag,
+		false,  # auto_extract
+		"",     # extract_dir
+		null,   # game
+		{},     # callbacks - the download_completed signal carries both outcomes
+		0,      # romm_id
+		true,   # delete_after_extract (unused - no extraction)
+		false,  # suppress_notification: keep the progress snackbar visible
+		size    # expected_file_size: known from the release, enables progress %
+	)
+	if item_id == "":
+		_notify("Couldn't start the update download", SystemManager.notifications.Type.ERROR)
+		return
+
+	var on_completed: Callable
+	on_completed = func(completed_id: String, success: bool, message: String):
+		if completed_id != item_id:
+			return
+		SystemManager.download.download_completed.disconnect(on_completed)
+		if success:
+			print("[AppUpdateChecker] Update downloaded: " + destination)
+			_install_apk(destination)
+		else:
+			push_warning("[AppUpdateChecker] Update download failed: " + message)
+			_notify("Update download failed: " + message, SystemManager.notifications.Type.ERROR)
+	SystemManager.download.download_completed.connect(on_completed)
+
+## Hands the downloaded APK to the system package installer. Mirrors the
+## emulator-install flow in emulator_sub_manager: permission gate first,
+## then the FileProvider-backed install intent. After the user confirms,
+## Android replaces the app and relaunches it - nothing left for us to do.
+static func _install_apk(apk_path: String) -> void:
+	if not Engine.has_singleton("KyodaiBridge"):
+		push_error("[AppUpdateChecker] KyodaiBridge plugin unavailable; falling back to browser")
+		_notify("Couldn't start the installer - opening the release page instead", SystemManager.notifications.Type.WARNING)
+		return
+	var plugin = Engine.get_singleton("KyodaiBridge")
+
+	# Android 8+ silently blocks installs until the user grants "Install
+	# unknown apps" for Kyodai. NB: has_method() reports false for
+	# GodotPlugin-exposed Java methods (JNI dispatch) - call directly.
+	var can_install_unknown = plugin.call("canInstallUnknownApps")
+	if can_install_unknown != null and not can_install_unknown:
+		plugin.call("requestInstallUnknownAppsPermission")
+		_notify("Allow Kyodai to install apps:\nenable 'Install unknown apps' in the settings screen that just opened, then run the update again", SystemManager.notifications.Type.WARNING)
+		return
+
+	var absolute_path: String = FSM.resolve_path(apk_path, {"format": FSM.PathFormat.ABSOLUTE})
+	var success = plugin.call("installApk", absolute_path)
+	if not success:
+		push_error("[AppUpdateChecker] installApk failed for: " + absolute_path)
+		_notify("Couldn't start the installer - the APK is saved at:\n" + apk_path, SystemManager.notifications.Type.ERROR)
