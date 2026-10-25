@@ -61,7 +61,6 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private static final String SAF_TREE_URIS_KEY = "android_data_tree_uris";
     private static final int REQUEST_SAF_TREE = 0x5AF1;
     private static final String DOCS_AUTHORITY = "com.android.externalstorage.documents";
-    private static final String ALT_ACCESS_DIR = "KyodaiUC";
     private Activity activity;
     private BroadcastReceiver extractionReceiver;
     private WindowFocusGuard windowFocusGuard;
@@ -77,6 +76,9 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             // anything a previous process left disabled while asleep.
             SleepSaver.init(activity.getApplicationContext());
         }
+        Log.i(TAG, "[StorageTier] startup: ext_data_rw=" + StorageTier.selfHasExtDataRw()
+                + " rootDaemon=" + RootShell.isAvailable()
+                + " sdk=" + Build.VERSION.SDK_INT);
         registerExtractionReceiver();
     }
     
@@ -1227,11 +1229,15 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         new Thread(() -> {
+            if (StorageTier.tierFor(activity, destPath) == StorageTier.TIER_ROOT) {
+                copyFileAsyncRoot(sourcePath, destPath, itemName);
+                return;
+            }
             java.io.FileInputStream inputStream = null;
             java.io.OutputStream outputStream = null;
             
             try {
-                java.io.File sourceFile = directFile(sourcePath);
+                java.io.File sourceFile = new File(sourcePath);
                 if (!sourceFile.exists()) {
                     throw new Exception("Source file not found: " + sourcePath);
                 }
@@ -1242,9 +1248,9 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 
                 inputStream = new java.io.FileInputStream(sourceFile);
                 
-                // Create output stream: direct File first (AltAccess symlink for
-                // restricted paths), DocumentsContract as fallback
-                java.io.File outputFile = directFile(destPath);
+                // Create output stream: direct File first, DocumentsContract
+                // as fallback for restricted paths
+                java.io.File outputFile = new File(destPath);
                 java.io.File parentDir = outputFile.getParentFile();
                 if (parentDir != null && !parentDir.exists()) {
                     parentDir.mkdirs();
@@ -1286,9 +1292,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 outputStream = null;
                 inputStream.close();
                 inputStream = null;
-                
+
                 Log.d(TAG, "SUCCESS: Copied " + copiedBytes + " bytes to " + destPath);
                 Log.d(TAG, "==========================================");
+                postSafFixup(destPath);
                 activity.runOnUiThread(() -> emitSignal("copy_complete", itemName, true, destPath, ""));
                 
             } catch (Exception e) {
@@ -1300,7 +1307,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     if (inputStream != null) inputStream.close();
                     // Clean up partial destination file
                     if (!requiresDocumentsContract(destPath)) {
-                        java.io.File outputFile = directFile(destPath);
+                        java.io.File outputFile = new File(destPath);
                         if (outputFile.exists()) {
                             outputFile.delete();
                         }
@@ -1316,13 +1323,76 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         return true;
     }
-    
+
+    /**
+     * Root-tier copyFileAsync: streams into our own cache with the usual
+     * progress signals, then the vendor daemon moves the finished file into
+     * the restricted destination and chowns it to the target package.
+     */
+    private void copyFileAsyncRoot(String sourcePath, String destPath, String itemName) {
+        java.io.FileInputStream inputStream = null;
+        java.io.FileOutputStream outputStream = null;
+        File staging = null;
+        try {
+            File sourceFile = new File(sourcePath);
+            if (!sourceFile.exists()) {
+                throw new Exception("Source file not found: " + sourcePath);
+            }
+            long totalBytes = sourceFile.length();
+            staging = new File(activity.getCacheDir(),
+                    "root-copy-" + itemName.hashCode() + "-" + System.nanoTime());
+            inputStream = new java.io.FileInputStream(sourceFile);
+            outputStream = new java.io.FileOutputStream(staging);
+
+            byte[] buffer = new byte[16 * 1024 * 1024];
+            long copiedBytes = 0;
+            long lastProgressBytes = 0;
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+                copiedBytes += bytesRead;
+                if (copiedBytes - lastProgressBytes > 50 * 1024 * 1024) {
+                    final long progressCopied = copiedBytes;
+                    final long progressTotal = totalBytes;
+                    activity.runOnUiThread(() -> emitSignal("copy_progress", itemName, progressCopied, progressTotal));
+                    lastProgressBytes = copiedBytes;
+                }
+            }
+            outputStream.flush();
+            outputStream.close();
+            outputStream = null;
+            inputStream.close();
+            inputStream = null;
+
+            StorageTier.logOp("copy", destPath, StorageTier.TIER_ROOT);
+            if (!StorageTier.rootCopyFile(activity, staging.getAbsolutePath(), destPath)) {
+                throw new Exception("root copy failed for: " + destPath);
+            }
+
+            Log.d(TAG, "SUCCESS (root tier): Copied " + copiedBytes + " bytes to " + destPath);
+            activity.runOnUiThread(() -> emitSignal("copy_complete", itemName, true, destPath, ""));
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR copying file (root tier): " + e.getMessage());
+            final String errorMsg = e.getMessage();
+            activity.runOnUiThread(() -> emitSignal("copy_complete", itemName, false, destPath, errorMsg));
+        } finally {
+            try {
+                if (outputStream != null) outputStream.close();
+                if (inputStream != null) inputStream.close();
+            } catch (Exception ignored) {}
+            if (staging != null && staging.exists()) {
+                staging.delete();
+            }
+        }
+    }
+
     // ========================================================================
     // Chunked flush mode: chunk temp files are written directly into the
     // final destination at their byte offsets as each chunk completes, so the
     // end-of-download full-file copy disappears. Works for direct paths
-    // (RandomAccessFile), AltAccess-aliased paths, and SAF DocumentsContract
-    // paths (ParcelFileDescriptor "rw" + positioned FileChannel writes).
+    // (RandomAccessFile) and SAF DocumentsContract paths (ParcelFileDescriptor
+    // "rw" + positioned FileChannel writes). Root-tier destinations decline
+    // here; the caller falls back to temp-dir assembly + copyFileAsync.
     // ========================================================================
 
     /** Single-thread executor: sequential flushes avoid flash write thrash. */
@@ -1342,7 +1412,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return false;
         }
         try {
-            File file = directFile(destPath);
+            if (StorageTier.tierFor(activity, destPath) == StorageTier.TIER_ROOT) {
+                // No positioned writes through the daemon; caller falls back
+                // to temp-dir assembly + copyFileAsync (root tier).
+                return false;
+            }
+            File file = new File(destPath);
             File parent = file.getParentFile();
             if (parent != null && !parent.exists()) {
                 parent.mkdirs();
@@ -1466,6 +1541,9 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Streams a chunk file into the destination at a byte offset. */
     private boolean writeChunkAt(String chunkPath, String destPath, long offset) throws Exception {
+        if (StorageTier.tierFor(activity, destPath) == StorageTier.TIER_ROOT) {
+            return false;
+        }
         File chunkFile = new File(chunkPath);
         if (!chunkFile.exists()) {
             throw new Exception("Chunk file not found: " + chunkPath);
@@ -1473,7 +1551,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         byte[] buffer = new byte[8 * 1024 * 1024];
         FileInputStream in = new FileInputStream(chunkFile);
         try {
-            File file = directFile(destPath);
+            File file = new File(destPath);
             File parent = file.getParentFile();
             if (parent != null && parent.canWrite()) {
                 java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "rw");
@@ -1542,7 +1620,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         if (path == null || path.isEmpty()) {
             return -1;
         }
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists()) {
             return file.length();
         }
@@ -1649,120 +1727,29 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     // ========================================================================
-    // AltAccess: direct File I/O for restricted paths via storage-root symlinks.
-    // Mirrors argosy-launcher's AndroidDataAccessor. The FUSE daemon filters
-    // /Android/data|obb by path prefix; a symlink from an unfiltered location
-    // (e.g. <storage>/KyodaiUC/data -> /storage/emulated/0/Android/data) is
-    // served without re-checking the target, giving full direct access with
-    // only MANAGE_EXTERNAL_STORAGE. Falls through to SAF when unsupported.
+    // Storage tiers for /Android/data|obb writes: DIRECT (we hold ext_data_rw),
+    // SAF (DocumentsContract; target holds ext_data_rw), ROOT (vendor daemon
+    // writes + chown to the target uid). See StorageTier.
     // ========================================================================
 
-    private volatile Boolean altAccessSupported = null;
-
-    /** Returns the restricted-path alias for direct I/O, or the original path. */
-    private String transformPath(String path) {
-        if (path == null || !isAltAccessSupported()) return path;
-        for (String root : getAltStorageRoots()) {
-            if (path.startsWith(root + "/Android/data/")) {
-                return root + "/" + ALT_ACCESS_DIR + "/data/" + path.substring((root + "/Android/data/").length());
-            }
-            if (path.startsWith(root + "/Android/obb/")) {
-                return root + "/" + ALT_ACCESS_DIR + "/obb/" + path.substring((root + "/Android/obb/").length());
-            }
-        }
-        return path;
-    }
-
-    /** File to use for direct I/O: the symlink-aliased path when restricted. */
-    private File directFile(String path) {
-        return new File(transformPath(path));
-    }
-
     @UsedByGodot
-    public boolean isAltAccessSupported() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
-        boolean hasManageStorage = Environment.isExternalStorageManager();
-        Log.d(TAG, "[AltAccess] isExternalStorageManager=" + hasManageStorage);
-        if (hasManageStorage) {
-            Boolean cached = altAccessSupported;
-            if (cached != null) return cached;
-        }
-        synchronized (this) {
-            if (hasManageStorage) {
-                Boolean cached = altAccessSupported;
-                if (cached != null) return cached;
-            }
-            boolean anySupported = false;
-            for (String root : getAltStorageRoots()) {
-                if (setupAndVerifyAltAccess(root, hasManageStorage)) {
-                    anySupported = true;
-                }
-            }
-            Log.i(TAG, "[AltAccess] supported=" + anySupported);
-            if (hasManageStorage) {
-                altAccessSupported = anySupported;
-            }
-            return anySupported;
+    public boolean hasExtDataRwAccess() {
+        return StorageTier.selfHasExtDataRw();
+    }
+
+    /** 0=direct, 1=saf, 2=root - the write tier for a path (diagnostics). */
+    @UsedByGodot
+    public int storageTierForPath(String path) {
+        return StorageTier.tierFor(activity, path);
+    }
+
+    /** Ownership repair after SAF-tier writes; see StorageTier. */
+    private void postSafFixup(String path) {
+        if (requiresDocumentsContract(path)) {
+            StorageTier.chownToOwnerBestEffort(activity, path);
         }
     }
 
-    private List<String> getAltStorageRoots() {
-        List<String> roots = new java.util.ArrayList<>();
-        roots.add(Environment.getExternalStorageDirectory().getAbsolutePath());
-        try {
-            File[] vols = new File("/storage").listFiles();
-            if (vols != null) {
-                for (File vol : vols) {
-                    if (vol.isDirectory() && !vol.getName().equals("emulated") && !vol.getName().equals("self")) {
-                        String path = vol.getAbsolutePath();
-                        if (!roots.contains(path) && new File(vol, "Android/data").exists()) {
-                            roots.add(path);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Failed to enumerate storage volumes: " + e.getMessage());
-        }
-        return roots;
-    }
-
-    private boolean setupAndVerifyAltAccess(String storageRoot, boolean hasManageStorage) {
-        try {
-            File altDir = new File(storageRoot, ALT_ACCESS_DIR);
-            File dataLink = new File(altDir, "data");
-            if (hasManageStorage && !dataLink.exists()) {
-                setupAltAccess(storageRoot, altDir, dataLink);
-            }
-            boolean ok = altDir.exists() && dataLink.canRead();
-            Log.d(TAG, "[AltAccess] verify " + storageRoot + ": altDir.exists=" + altDir.exists()
-                    + " dataLink.exists=" + dataLink.exists() + " dataLink.canRead=" + dataLink.canRead());
-            return ok;
-        } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Path check failed for " + storageRoot + ": " + e.getMessage());
-            return false;
-        }
-    }
-
-    private void setupAltAccess(String storageRoot, File altDir, File dataLink) {
-        try {
-            if (!altDir.exists()) altDir.mkdirs();
-            if (!dataLink.exists()) {
-                android.system.Os.symlink(storageRoot + "/Android/data", dataLink.getAbsolutePath());
-            }
-            File obbLink = new File(altDir, "obb");
-            if (!obbLink.exists()) {
-                android.system.Os.symlink(storageRoot + "/Android/obb", obbLink.getAbsolutePath());
-            }
-            Log.i(TAG, "[AltAccess] Symlinks created for " + storageRoot);
-        } catch (Exception e) {
-            // Log the full stack trace: ErrnoException from Os.symlink carries the
-            // errno (EACCES/EPERM/ENOSYS...) we need to tell a hard SELinux denial
-            // apart from a transient failure on handheld firmwares (AYN/Retroid).
-            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot, e);
-        }
-    }
-    
     // ========================================================================
     // SAF tree grant for /Android/data/ and /Android/obb/
     // Mirrors argosy-launcher's ManagedStorageAccessor: a persisted document-tree
@@ -1974,7 +1961,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Opens a read stream: direct File first, then DocumentsContract. */
     private InputStream openInputFor(String path) throws Exception {
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists() && file.canRead()) {
             return new FileInputStream(file);
         }
@@ -1989,7 +1976,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Opens a write stream (truncating): direct File first, then DocumentsContract with create-if-missing. */
     private OutputStream openOutputFor(String path) throws Exception {
-        File file = directFile(path);
+        File file = new File(path);
         File parent = file.getParentFile();
         if (parent != null && !parent.exists()) {
             parent.mkdirs();
@@ -2043,7 +2030,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists()) {
             return true;
         }
@@ -2089,7 +2076,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists() && file.isDirectory()) {
             return true;
         }
@@ -2144,7 +2131,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             java.io.InputStream inputStream = null;
             
             // Try direct access first
-            File file = directFile(path);
+            File file = new File(path);
             if (file.exists() && file.canRead()) {
                 inputStream = new java.io.FileInputStream(file);
             } else if (requiresDocumentsContract(path)) {
@@ -2192,7 +2179,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             byte[] data = android.util.Base64.decode(base64Data, android.util.Base64.NO_WRAP);
             
             // Try direct access first
-            File file = directFile(path);
+            File file = new File(path);
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
@@ -2205,12 +2192,19 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 return true;
             }
             
-            // Fall back to DocumentsContract for restricted paths
+            // Restricted-path fallback: root daemon when no SAF grant covers
+            // the path, else DocumentsContract.
             if (requiresDocumentsContract(path)) {
+                int tier = StorageTier.tierFor(activity, path);
+                if (tier == StorageTier.TIER_ROOT) {
+                    StorageTier.logOp("write", path, tier);
+                    return StorageTier.rootWriteFile(activity, path, data);
+                }
                 java.io.OutputStream outputStream = openOutputFor(path);
                 if (outputStream != null) {
                     outputStream.write(data);
                     outputStream.close();
+                    postSafFixup(path);
                     return true;
                 }
             }
@@ -2236,7 +2230,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         java.util.List<String> files = new java.util.ArrayList<>();
         
         // Try direct access first
-        File dir = directFile(path);
+        File dir = new File(path);
         if (dir.exists() && dir.isDirectory() && dir.canRead()) {
             String[] children = dir.list();
             if (children != null) {
@@ -2288,7 +2282,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists()) {
             return file.lastModified();
         }
@@ -2328,7 +2322,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
 
         // Try direct access first
-        File dir = directFile(path);
+        File dir = new File(path);
         if (dir.exists() && dir.isDirectory()) {
             return true;
         }
@@ -2336,11 +2330,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return true;
         }
 
-        // DocumentsContract fallback: create under the covering SAF tree grant,
-        // walking only segments BELOW the granted tree root (segments at or
-        // above it are outside the grant's coverage and already exist).
+        // Restricted-path fallback: root daemon when no SAF grant covers the
+        // path, else DocumentsContract segment-by-segment creation.
         if (requiresDocumentsContract(path)) {
-            return createDirViaSaf(path);
+            int tier = StorageTier.tierFor(activity, path);
+            if (tier == StorageTier.TIER_ROOT) {
+                StorageTier.logOp("mkdir", path, tier);
+                return StorageTier.rootMkdirs(activity, path);
+            }
+            boolean created = createDirViaSaf(path);
+            if (created) postSafFixup(path);
+            return created;
         }
         return false;
     }
@@ -2410,12 +2410,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
 
         // Try direct access first
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists()) {
             return deleteRecursively(file);
         }
 
         if (requiresDocumentsContract(path)) {
+            int tier = StorageTier.tierFor(activity, path);
+            if (tier == StorageTier.TIER_ROOT) {
+                StorageTier.logOp("delete", path, tier);
+                return StorageTier.rootDelete(activity, path);
+            }
             Uri uri = documentUriFor(path);
             if (uri != null) {
                 try {
@@ -2451,6 +2456,21 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         if (sourcePath == null || sourcePath.isEmpty() || destPath == null || destPath.isEmpty()) {
             return false;
         }
+        // A provider stream opened on a directory EOFs immediately, which would
+        // "copy" a 0-byte file to the destination; reject directories outright.
+        if (isDirectoryPath(sourcePath)) {
+            Log.w(TAG, "androidCopyFile: source is a directory: " + sourcePath);
+            return false;
+        }
+        // Root tier: the daemon reads the source and writes the destination
+        // directly, then chowns the copy to the target package.
+        if (requiresDocumentsContract(destPath)) {
+            int tier = StorageTier.tierFor(activity, destPath);
+            if (tier == StorageTier.TIER_ROOT) {
+                StorageTier.logOp("copy", destPath, tier);
+                return StorageTier.rootCopyFile(activity, sourcePath, destPath);
+            }
+        }
         try {
             InputStream in = openInputFor(sourcePath);
             if (in == null) {
@@ -2471,6 +2491,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             out.flush();
             out.close();
             in.close();
+            postSafFixup(destPath);
             return true;
         } catch (Exception e) {
             Log.e(TAG, "androidCopyFile failed: " + e.getMessage());
@@ -2489,9 +2510,9 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return false;
         }
 
-        File src = directFile(sourcePath);
+        File src = new File(sourcePath);
         if (src.exists()) {
-            File dst = directFile(destPath);
+            File dst = new File(destPath);
             File dstParent = dst.getParentFile();
             if (dstParent != null && !dstParent.exists()) {
                 dstParent.mkdirs();
@@ -2499,6 +2520,23 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             if (src.renameTo(dst)) {
                 return true;
             }
+        }
+
+        // Root tier: one daemon call moves files and whole directory trees,
+        // then chowns the result to the target package.
+        if (requiresDocumentsContract(sourcePath) || requiresDocumentsContract(destPath)) {
+            int tier = StorageTier.tierFor(activity, destPath);
+            if (tier == StorageTier.TIER_ROOT) {
+                StorageTier.logOp("move", destPath, tier);
+                return StorageTier.rootMove(activity, sourcePath, destPath);
+            }
+        }
+
+        // Directories can't be streamed through androidCopyFile (a provider
+        // stream on a directory EOFs immediately, leaving a 0-byte file at the
+        // destination); move them recursively, entry by entry.
+        if (isDirectoryPath(sourcePath)) {
+            return moveDirectoryRecursive(sourcePath, destPath);
         }
 
         if (requiresDocumentsContract(sourcePath) || requiresDocumentsContract(destPath)) {
@@ -2512,19 +2550,97 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     try {
                         Uri renamed = DocumentsContract.renameDocument(
                                 activity.getContentResolver(), uri, newName);
-                        if (renamed != null) return true;
+                        if (renamed != null) {
+                            postSafFixup(destPath);
+                            return true;
+                        }
                     } catch (Exception e) {
                         Log.w(TAG, "androidRename renameDocument failed: " + e.getMessage());
                     }
                 }
             }
-            // Cross-directory move: copy + delete
+            // Cross-directory move: copy + delete. A file cannot overwrite a
+            // directory at the destination; clear a stale tree first.
+            if (androidDirExists(destPath) && !androidDeleteRecursive(destPath)) {
+                return false;
+            }
             if (androidCopyFile(sourcePath, destPath)) {
                 return androidDeleteRecursive(sourcePath);
             }
             return false;
         }
         return false;
+    }
+
+    /** True when the path exists and is a directory, via direct File access or
+     *  the DocumentsContract MIME type for restricted paths. */
+    private boolean isDirectoryPath(String path) {
+        File file = new File(path);
+        if (file.exists()) {
+            return file.isDirectory();
+        }
+        if (requiresDocumentsContract(path)) {
+            Uri uri = documentUriFor(path);
+            if (uri != null) {
+                try {
+                    android.database.Cursor cursor = activity.getContentResolver().query(
+                            uri,
+                            new String[]{DocumentsContract.Document.COLUMN_MIME_TYPE},
+                            null, null, null);
+                    if (cursor != null) {
+                        boolean isDir = false;
+                        if (cursor.moveToFirst()) {
+                            String mimeType = cursor.getString(0);
+                            isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType);
+                        }
+                        cursor.close();
+                        return isDir;
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "isDirectoryPath failed: " + e.getMessage());
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Recursive directory move for providers without cross-parent directory
+     *  rename: create the destination tree, move each entry through
+     *  androidRename (files copy+delete, subdirectories recurse), then delete
+     *  the emptied source. On any child failure the source is left in place. */
+    private boolean moveDirectoryRecursive(String srcDir, String dstDir) {
+        // A leftover file at the destination (e.g. from a previously failed
+        // directory copy) blocks directory creation; remove it first.
+        if (androidFileExists(dstDir) && !androidDirExists(dstDir)) {
+            if (!androidDeleteRecursive(dstDir)) {
+                return false;
+            }
+        }
+        if (!androidCreateDir(dstDir)) {
+            return false;
+        }
+        java.util.List<String> children = new java.util.ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(androidListDir(srcDir));
+            for (int i = 0; i < arr.length(); i++) {
+                children.add(arr.getString(i));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "moveDirectoryRecursive: cannot list " + srcDir + ": " + e.getMessage());
+            return false;
+        }
+        for (String child : children) {
+            if (!androidRename(srcDir + "/" + child, dstDir + "/" + child)) {
+                Log.w(TAG, "moveDirectoryRecursive: failed to move " + child + " from " + srcDir);
+                return false;
+            }
+        }
+        if (!androidDeleteRecursive(srcDir)) {
+            return false;
+        }
+        // The whole moved tree is provider-owned after SAF moves; repair once.
+        postSafFixup(dstDir);
+        return true;
     }
 
     /**
@@ -2535,7 +2651,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         if (path == null || path.isEmpty()) {
             return -1;
         }
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists()) {
             return file.length();
         }
@@ -2570,13 +2686,18 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         // Try direct access first
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists() && file.isFile()) {
             return file.delete();
         }
-        
-        // Fall back to DocumentsContract for restricted paths
+
+        // Fall back for restricted paths: root daemon, then DocumentsContract
         if (requiresDocumentsContract(path)) {
+            int tier = StorageTier.tierFor(activity, path);
+            if (tier == StorageTier.TIER_ROOT) {
+                StorageTier.logOp("deleteFile", path, tier);
+                return StorageTier.rootDelete(activity, path);
+            }
             try {
                 Uri docUri = pathToDocumentUri(path);
                 if (docUri != null) {
@@ -2603,7 +2724,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
         
         try {
-            File file = directFile(path);
+            File file = new File(path);
             if (!file.exists()) {
                 Log.w(TAG, "chmodExecutable: file does not exist: " + path);
                 return false;

@@ -8,7 +8,6 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
-import android.os.Environment;
 import android.os.IBinder;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
@@ -27,10 +26,11 @@ import java.util.Enumeration;
  * Extraction service that runs in a separate process to avoid sharing memory with Godot.
  * This prevents OOM kills during large game extractions on low-RAM devices.
  *
- * Destinations under another app's /Android/data/ (or /Android/obb/) are written
- * via DocumentsContract (persisted tree grant, or manage=true for
- * MANAGE_EXTERNAL_STORAGE holders) when direct File I/O is denied.
- * 
+ * Destinations under another app's /Android/data/ (or /Android/obb/) are
+ * tier-routed (see StorageTier): direct File I/O when we hold ext_data_rw,
+ * DocumentsContract when the target app does, or a root-daemon staging move
+ * when neither does.
+ *
  * Usage:
  * Intent intent = new Intent(context, ExtractorService.class);
  * intent.setAction("EXTRACT");
@@ -251,6 +251,17 @@ public class ExtractorService extends Service {
     private boolean extractZipStreaming(String zipPath, String extractDir, String gameName, String markerBase) {
         Log.d(TAG, "Starting streaming extraction: " + zipPath + " -> " + extractDir + " (markerBase=" + markerBase + ")");
 
+        // Root tier (neither we nor the target package hold ext_data_rw):
+        // extract into our own storage at full speed, then the vendor daemon
+        // moves the tree into place and chowns it to the target package.
+        int destTier = StorageTier.tierFor(this, extractDir);
+        StorageTier.logOp("extract", extractDir, destTier);
+        String writeDir = extractDir;
+        if (destTier == StorageTier.TIER_ROOT) {
+            writeDir = new File(getExternalFilesDir(null),
+                    ".staging_" + markerBase + "_" + System.nanoTime()).getAbsolutePath();
+        }
+
         ZipInputStream zis = null;
         InputStream fis = null;
         byte[] buffer = new byte[131072]; // 128KB buffer for better throughput
@@ -265,11 +276,11 @@ public class ExtractorService extends Service {
         long lastProgressWrite = System.currentTimeMillis();
 
         try {
-            if (!ensureDir(extractDir)) {
-                Log.e(TAG, "Could not create extraction directory: " + extractDir);
+            if (!ensureDir(writeDir)) {
+                Log.e(TAG, "Could not create extraction directory: " + writeDir);
                 return false;
             }
-            File destDir = new File(extractDir);
+            File destDir = new File(writeDir);
             
             // Count total files and uncompressed size first using ZipFile (random access, doesn't stream)
             try {
@@ -307,6 +318,13 @@ public class ExtractorService extends Service {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 String entryName = entry.getName();
+                // Windows-built archives use backslash separators, which are
+                // literal filename characters on POSIX - the tree flattens and
+                // SAF then sanitizes '\' to '_', corrupting every name.
+                // Normalize to forward slashes before any path handling.
+                if (entryName.indexOf('\\') >= 0) {
+                    entryName = entryName.replace('\\', '/');
+                }
                 File outputFile = new File(destDir, entryName);
 
                 // Security check: entry must equal the destination dir itself or
@@ -319,7 +337,7 @@ public class ExtractorService extends Service {
                     continue;
                 }
 
-                if (entry.isDirectory()) {
+                if (entry.isDirectory() || entryName.endsWith("/")) {
                     ensureDir(outputFile.getPath());
                     continue;
                 }
@@ -391,14 +409,34 @@ public class ExtractorService extends Service {
                 }
             }
             
+            // Root tier: move the staged tree into the restricted destination
+            // and chown it to the target package before anyone observes the
+            // final progress/completion markers.
+            if (destTier == StorageTier.TIER_ROOT) {
+                if (!StorageTier.rootFinalizeExtraction(ExtractorService.this, writeDir, extractDir)) {
+                    Log.e(TAG, "Root finalize failed for: " + extractDir);
+                    return false;
+                }
+            }
+
+            // SAF tier: the extracted tree is provider-owned; when the root
+            // daemon is alive, re-own it to the target package (no-op when the
+            // target holds ext_data_rw anyway, rescue when it doesn't).
+            if (destTier == StorageTier.TIER_SAF) {
+                StorageTier.chownToOwnerBestEffort(this, extractDir);
+            }
+
             // Write final progress with the actual extracted total (no longer an estimate).
             writeProgressMarker(extractDir, extractedCount, totalFiles, extractedBytes, extractedBytes, false, currentFile, markerBase);
             Log.d(TAG, "Extraction complete: " + extractedCount + "/" + totalFiles + " files, " + (extractedBytes / 1048576) + " MB");
             return true;
-            
+
         } catch (Exception e) {
             Log.e(TAG, "Extraction failed: " + e.getMessage());
             e.printStackTrace();
+            if (destTier == StorageTier.TIER_ROOT) {
+                deleteRecursively(new File(writeDir));
+            }
             return false;
         } finally {
             if (zis != null) {
@@ -438,111 +476,10 @@ public class ExtractorService extends Service {
 
     // ========================================================================
     // Restricted path support (/Android/data/, /Android/obb/ of other apps).
-    // Primary: AltAccess — direct File I/O through storage-root symlinks
-    // (KyodaiUC/data -> Android/data), which bypasses the FUSE path filter
-    // with only MANAGE_EXTERNAL_STORAGE (same trick as argosy-launcher).
-    // Fallback: DocumentsContract (persisted SAF tree grant, or manage=true
-    // honored for MANAGE_EXTERNAL_STORAGE holders on some ROMs).
+    // Tier selection lives in StorageTier: DIRECT (we hold ext_data_rw), SAF
+    // (DocumentsContract; target holds ext_data_rw), or ROOT (vendor daemon:
+    // extract to our own staging, then move + chown to the target package).
     // ========================================================================
-
-    private static final String ALT_ACCESS_DIR = "KyodaiUC";
-
-    private volatile Boolean altAccessSupported = null;
-
-    private boolean isAltAccessSupported() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
-        boolean hasManageStorage = Environment.isExternalStorageManager();
-        if (hasManageStorage) {
-            Boolean cached = altAccessSupported;
-            if (cached != null) return cached;
-        }
-        synchronized (this) {
-            if (hasManageStorage) {
-                Boolean cached = altAccessSupported;
-                if (cached != null) return cached;
-            }
-            boolean anySupported = false;
-            for (String root : getAltStorageRoots()) {
-                if (setupAndVerifyAltAccess(root, hasManageStorage)) {
-                    anySupported = true;
-                }
-            }
-            if (hasManageStorage) {
-                altAccessSupported = anySupported;
-            }
-            return anySupported;
-        }
-    }
-
-    private java.util.List<String> getAltStorageRoots() {
-        java.util.List<String> roots = new java.util.ArrayList<>();
-        roots.add(Environment.getExternalStorageDirectory().getAbsolutePath());
-        try {
-            File[] vols = new File("/storage").listFiles();
-            if (vols != null) {
-                for (File vol : vols) {
-                    if (vol.isDirectory() && !vol.getName().equals("emulated") && !vol.getName().equals("self")) {
-                        String path = vol.getAbsolutePath();
-                        if (!roots.contains(path) && new File(vol, "Android/data").exists()) {
-                            roots.add(path);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Failed to enumerate storage volumes: " + e.getMessage());
-        }
-        return roots;
-    }
-
-    private boolean setupAndVerifyAltAccess(String storageRoot, boolean hasManageStorage) {
-        try {
-            File altDir = new File(storageRoot, ALT_ACCESS_DIR);
-            File dataLink = new File(altDir, "data");
-            if (hasManageStorage && !dataLink.exists()) {
-                setupAltAccess(storageRoot, altDir, dataLink);
-            }
-            return altDir.exists() && dataLink.canRead();
-        } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Path check failed for " + storageRoot + ": " + e.getMessage());
-            return false;
-        }
-    }
-
-    private void setupAltAccess(String storageRoot, File altDir, File dataLink) {
-        try {
-            if (!altDir.exists()) altDir.mkdirs();
-            if (!dataLink.exists()) {
-                android.system.Os.symlink(storageRoot + "/Android/data", dataLink.getAbsolutePath());
-            }
-            File obbLink = new File(altDir, "obb");
-            if (!obbLink.exists()) {
-                android.system.Os.symlink(storageRoot + "/Android/obb", obbLink.getAbsolutePath());
-            }
-            Log.i(TAG, "[AltAccess] Symlinks created for " + storageRoot);
-        } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot + ": " + e.getMessage());
-        }
-    }
-
-    /** Returns the restricted-path alias for direct I/O, or the original path. */
-    private String transformPath(String path) {
-        if (path == null || !isAltAccessSupported()) return path;
-        for (String root : getAltStorageRoots()) {
-            if (path.startsWith(root + "/Android/data/")) {
-                return root + "/" + ALT_ACCESS_DIR + "/data/" + path.substring((root + "/Android/data/").length());
-            }
-            if (path.startsWith(root + "/Android/obb/")) {
-                return root + "/" + ALT_ACCESS_DIR + "/obb/" + path.substring((root + "/Android/obb/").length());
-            }
-        }
-        return path;
-    }
-
-    /** File to use for direct I/O: the symlink-aliased path when restricted. */
-    private File directFile(String path) {
-        return new File(transformPath(path));
-    }
 
     private boolean requiresDocumentsContract(String path) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
@@ -610,13 +547,16 @@ public class ExtractorService extends Service {
                 android.provider.DocumentsContract.buildDocumentUri(DOCS_AUTHORITY, docId), vp[1]);
     }
 
-    /** Creates a directory (and parents), falling back to DocumentsContract. */
+    /** Creates a directory (and parents), falling back to root/SAF tiers. */
     private boolean ensureDir(String path) {
-        File dir = directFile(path);
+        File dir = new File(path);
         if (dir.exists() && dir.isDirectory()) return true;
         if (dir.mkdirs()) return true;
 
         if (!requiresDocumentsContract(path)) return false;
+        if (StorageTier.tierFor(this, path) == StorageTier.TIER_ROOT) {
+            return StorageTier.rootMkdirs(this, path);
+        }
         return createDirViaSaf(path);
     }
 
@@ -679,10 +619,10 @@ public class ExtractorService extends Service {
         return false;
     }
 
-    /** Opens a truncating write stream: direct File first (AltAccess symlink for
-     *  restricted paths), then DocumentsContract with create-if-missing. */
+    /** Opens a truncating write stream: direct File first, then
+     *  DocumentsContract with create-if-missing. */
     private OutputStream openOutputFor(String path) throws Exception {
-        File file = directFile(path);
+        File file = new File(path);
         File parent = file.getParentFile();
         if (parent != null && parent.canWrite()) {
             return new FileOutputStream(file);
@@ -711,10 +651,9 @@ public class ExtractorService extends Service {
         return null;
     }
 
-    /** Opens a read stream: direct File first (AltAccess symlink for restricted
-     *  paths), then DocumentsContract. */
+    /** Opens a read stream: direct File first, then DocumentsContract. */
     private InputStream openInputFor(String path) throws Exception {
-        File file = directFile(path);
+        File file = new File(path);
         if (file.exists() && file.canRead()) {
             return new FileInputStream(file);
         }
@@ -728,6 +667,12 @@ public class ExtractorService extends Service {
     }
 
     private void writeTextFile(String path, String content) throws Exception {
+        if (StorageTier.tierFor(this, path) == StorageTier.TIER_ROOT) {
+            if (!StorageTier.rootWriteFile(this, path, content.getBytes("UTF-8"))) {
+                throw new java.io.IOException("root write failed: " + path);
+            }
+            return;
+        }
         OutputStream out = openOutputFor(path);
         if (out == null) {
             throw new java.io.IOException("Could not open for write: " + path);
@@ -735,6 +680,18 @@ public class ExtractorService extends Service {
         out.write(content.getBytes("UTF-8"));
         out.flush();
         out.close();
+    }
+
+    private void deleteRecursively(File f) {
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        f.delete();
     }
     
     private void writeCompletionMarkers(String extractDir, boolean success, String markerBase) {

@@ -137,8 +137,17 @@ public final class RootShell {
     static final class PServer {
         private static IBinder binder;
         private static boolean probed = false;
+        private static Boolean callWorks = null;
 
         static synchronized boolean isAvailable() {
+            // A registered binder whose host process died stays listed by
+            // ServiceManager; treat dead binders as unavailable and re-resolve,
+            // so a restarted host is picked up.
+            if (binder != null && !binder.isBinderAlive()) {
+                binder = null;
+                probed = false;
+                callWorks = null;
+            }
             if (!probed) {
                 probed = true;
                 try {
@@ -150,7 +159,27 @@ public final class RootShell {
                     binder = null;
                 }
             }
-            return binder != null;
+            if (binder == null || !binder.isBinderAlive()) {
+                return false;
+            }
+            // A live binder is not enough: stock AYN Android 13 SELinux
+            // hard-denies untrusted_app -> pservice binder calls (the
+            // ServiceManager lookup alone is permissive). Probe with a real
+            // transaction once per process.
+            if (callWorks == null) {
+                boolean ok = false;
+                try {
+                    String out = transact("id");
+                    ok = out != null && out.contains("uid=0");
+                } catch (Throwable t) {
+                    ok = false;
+                }
+                callWorks = ok;
+                if (!ok) {
+                    Log.i(TAG, "PServerBinder present but calls are denied (SELinux); root daemon unusable");
+                }
+            }
+            return callWorks;
         }
 
         /** The daemon returns only the first line of command output. */
@@ -158,6 +187,10 @@ public final class RootShell {
             if (!isAvailable()) {
                 throw new IllegalStateException("PServerBinder not available");
             }
+            return transact(cmd);
+        }
+
+        private static String transact(String cmd) throws Exception {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
