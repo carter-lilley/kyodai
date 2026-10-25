@@ -741,13 +741,18 @@ public class ExtractorService extends Service {
         try {
             ensureDir(extractDir);
 
-            // Write completion marker
-            writeTextFile(extractDir + "/.extraction_complete_" + markerBase, "complete");
-            Log.d(TAG, "Wrote completion marker: " + extractDir + "/.extraction_complete_" + markerBase);
-
-            // Write success/failure marker
+            // Write success/failure marker FIRST. The completion marker must be
+            // last: the Godot poller treats it as "everything is final" and reads
+            // the success marker immediately. Under SAF/DocsProvider writes the
+            // inter-marker gap is wide enough that the poller could observe
+            // completion while the success marker was still missing/empty and
+            // misreport a successful extraction as failed.
             writeTextFile(extractDir + "/.extraction_success_" + markerBase, success ? "true" : "false");
             Log.d(TAG, "Wrote success marker: " + extractDir + "/.extraction_success_" + markerBase + " = " + success);
+
+            // Write completion marker (always last)
+            writeTextFile(extractDir + "/.extraction_complete_" + markerBase, "complete");
+            Log.d(TAG, "Wrote completion marker: " + extractDir + "/.extraction_complete_" + markerBase);
         } catch (Exception e) {
             Log.e(TAG, "Failed to write completion markers", e);
         }

@@ -38,6 +38,13 @@ var _rendering_suspended: bool = false
 var _prev_viewport_update_mode: int = -1
 var _m3_theme: Theme = null
 
+## Min interval between heavy NOTIFICATION_APPLICATION_RESUMED runs. Godot
+## delivers RESUMED in pairs on Android (activity + render view), and activity
+## churn (e.g. an intent bouncing back) can produce storms; the refresh work
+## gated by this is idempotent, so it only needs to run once per burst.
+const RESUME_HEAVY_DEBOUNCE_MS: int = 1000
+var _last_resume_heavy_ms: int = -1
+
 
 func _enter_tree():
 	# Set the global startup suppression flag as early as possible so that every
@@ -853,6 +860,14 @@ func _notification(what: int) -> void:
 			if RenderingServer.viewport_get_update_mode(root_rid) == RenderingServer.VIEWPORT_UPDATE_DISABLED:
 				push_warning("[Main] Viewport was left disabled on resume; force re-enabling")
 				RenderingServer.viewport_set_update_mode(root_rid, RenderingServer.VIEWPORT_UPDATE_ALWAYS)
+
+		# The heavy refresh work below is idempotent, so skip burst duplicates
+		# (RESUMED arrives in pairs on Android, and activity churn can produce
+		# storms). The safety restores above run on every notification.
+		var resume_now_ms := Time.get_ticks_msec()
+		if _last_resume_heavy_ms >= 0 and resume_now_ms - _last_resume_heavy_ms < RESUME_HEAVY_DEBOUNCE_MS:
+			return
+		_last_resume_heavy_ms = resume_now_ms
 
 		# Restore focus when app returns to foreground (Android)
 		if _last_focused_index >= 0:

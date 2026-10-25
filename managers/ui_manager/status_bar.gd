@@ -11,8 +11,9 @@ extends PanelContainer
 ## /sys/class/power_supply/battery) on a worker thread.
 ## The icon is hidden on platforms without a backend.
 
-const BAR_HEIGHT_DP: int = 28
-const BATTERY_ICON_SIZE_DP: int = 18
+const BAR_HEIGHT_DP: int = 22
+const BATTERY_ICON_SIZE_DP: int = 16
+const LABEL_FONT_SIZE_DP: int = 13
 const BATTERY_LOW_PERCENT: int = 20
 const POLL_INTERVAL_S: float = 8.0
 const BATTERY_POLLS_PER_INTERVAL: int = 1
@@ -528,7 +529,7 @@ func _apply_colors() -> void:
 		_clock_font = _create_clock_font()
 	if _clock_label:
 		_clock_label.add_theme_font_override("font", _clock_font)
-		_clock_label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
+		_clock_label.add_theme_font_size_override("font_size", int(M3Units.dp(LABEL_FONT_SIZE_DP)))
 		_clock_label.add_theme_color_override("font_color", M3Theme.get_on_surface_variant())
 	if not _battery_icon:
 		return
@@ -538,7 +539,7 @@ func _apply_colors() -> void:
 	_battery_icon.icon_settings.icon_color = color
 	if _battery_label:
 		_battery_label.add_theme_font_override("font", _clock_font)
-		_battery_label.add_theme_font_size_override("font_size", int(M3Units.dp(14)))
+		_battery_label.add_theme_font_size_override("font_size", int(M3Units.dp(LABEL_FONT_SIZE_DP)))
 		_battery_label.add_theme_color_override("font_color", color)
 	if _wifi_icon:
 		_wifi_icon.icon_settings.icon_color = M3Theme.get_on_surface_variant()

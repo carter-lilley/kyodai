@@ -555,6 +555,7 @@ func _abort_pending_launches(emulator_id: String, reason: String) -> void:
 		var pending_game: GameResource = pending.game
 		SystemManager.notifications.show_notification(reason + " - launch cancelled for " + pending_game.get_display_name(), SystemManager.notifications.Type.WARNING)
 		_end_launch(pending_game.romm_id)
+	_abort_launch_overlay()
 
 
 ## Replays the launch transition overlay for a game whose launch was interrupted
@@ -565,6 +566,18 @@ func _restart_launch_overlay(game: GameResource) -> void:
 		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
 		if overlay:
 			overlay.restart(game)
+
+
+## Hides the launch transition overlay after a failed launch. Any failure after
+## game_launch_initiated leaves the fullscreen black overlay stuck: no
+## background state is entered and no Android RESUMED arrives to dismiss it, so
+## the app would sit black and unresponsive until the next real pause/resume.
+func _abort_launch_overlay() -> void:
+	var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+	if overlay_nodes.size() > 0:
+		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+		if overlay:
+			overlay.abort()
 
 
 ## Main entry point for launching a game
@@ -684,6 +697,7 @@ func _launch_steam_with_backend(game: GameResource, backend: String, focus_index
 		var message := "Failed to launch %s. Is the app installed?" % steam.get_backend_label(backend)
 		push_error("[LaunchManager] " + message)
 		SystemManager.notifications.show_notification(message, SystemManager.notifications.Type.ERROR)
+		_abort_launch_overlay()
 		# launch_failed_hook is _restore_after_launch: undo the trim.
 		if launch_failed_hook.is_valid():
 			launch_failed_hook.call()
@@ -701,6 +715,7 @@ func _queue_game_download_then_launch(game: GameResource) -> void:
 			_launch_with_emulator_check(game)
 		else:
 			SystemManager.notifications.show_notification("Download failed for " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+			_abort_launch_overlay()
 			_end_launch(game.romm_id)
 	)
 
@@ -726,6 +741,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			var pending_game: GameResource = pending_data.game
 			if pending_game.romm_id == game.romm_id:
 				SystemManager.notifications.show_notification("Game already pending launch! Waiting for emulator installation...", SystemManager.notifications.Type.WARNING)
+				_abort_launch_overlay()
 				return false
 
 	if not is_actually_installed:
@@ -748,6 +764,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		else:
 			SystemManager.notifications.show_notification("Failed to queue " + emulator_name + " download", SystemManager.notifications.Type.ERROR)
 			_pending_launches.erase(emulator_id)
+			_abort_launch_overlay()
 			_end_launch(game.romm_id)
 		return false
 	
@@ -832,6 +849,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 						failed_cb.call()
 				for i in range(matching_indices.size() - 1, -1, -1):
 					_pending_firmware_launches.remove_at(matching_indices[i])
+				_abort_launch_overlay()
 				return
 			
 			print("[LaunchManager] Firmware ready for " + game.platform_slug + ", continuing launch...")
@@ -859,6 +877,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 		if not prep_success:
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			SystemManager.notifications.show_notification("Failed to prepare game for launch", SystemManager.notifications.Type.ERROR)
+			_abort_launch_overlay()
 			_end_launch(game.romm_id)
 			if on_failed.is_valid():
 				on_failed.call()
@@ -883,6 +902,7 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	
 	if emulator_id == "":
 		SystemManager.notifications.show_notification("No emulator configured for platform: " + game.platform_slug, SystemManager.notifications.Type.ERROR)
+		_abort_launch_overlay()
 		_end_launch(game.romm_id)
 		return
 	
@@ -945,6 +965,7 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 			_end_launch((_pending_core_launches[i].game as GameResource).romm_id)
 		for i in range(matching_indices.size() - 1, -1, -1):
 			_pending_core_launches.remove_at(matching_indices[i])
+		_abort_launch_overlay()
 		core_download_completed.emit(platform_slug, core_id, false)
 		return
 	
@@ -967,6 +988,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 		var bg_game = process.get_background_game()
 		if bg_game and bg_game.romm_id == game.romm_id:
 			push_warning("[LaunchManager] _launch_game_internal: " + game.get_display_name() + " is already running, ignoring duplicate launch")
+			_abort_launch_overlay()
 			_end_launch(game.romm_id)
 			return
 	
@@ -981,6 +1003,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	if not launch_intent:
 		push_error("[LaunchManager] _launch_game_internal: create_launch_intent returned null")
 		SystemManager.notifications.show_notification("Failed to create launch intent", SystemManager.notifications.Type.ERROR)
+		_abort_launch_overlay()
 		_end_launch(game.romm_id)
 		print("[LaunchManager] _launch_game_internal: EXIT (null intent)")
 		return
@@ -1016,6 +1039,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	if not success:
 		push_error("[LaunchManager] _launch_game_internal: execute_launch returned false")
 		SystemManager.notifications.show_notification("Failed to launch " + game.get_display_name(), SystemManager.notifications.Type.ERROR)
+		_abort_launch_overlay()
 		if launch_failed_hook.is_valid():
 			launch_failed_hook.call()
 		_end_launch(game.romm_id)

@@ -5,7 +5,9 @@ const DEBUG_LOG: bool = false
 
 # games_grid is declared in base View class; initialize here
 @onready var margin_container: MarginContainer = $MarginContainer
-@onready var platform_indicator: PlatformIndicator = $MarginContainer/VBoxContainer/PlatformIndicator
+# The platform indicator lives in the top control bar (toolbar-owned); resolved
+# in _ready() via UIManager.toolbar.get_platform_indicator().
+var platform_indicator: PlatformIndicator = null
 
 var _total_games: int = 0
 var _is_loading: bool = false
@@ -130,11 +132,16 @@ func _ready():
 	_update_grid_orientation()
 	print("[LibraryView] _update_grid_orientation elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
+	# The platform indicator is toolbar-owned (it sits in the top control bar);
+	# resolve it before the platforms list load below paints it.
+	if UIManager and UIManager.toolbar:
+		platform_indicator = UIManager.toolbar.get_platform_indicator()
+
 	# Load platforms list for indicator
 	phase_start_us = Time.get_ticks_usec()
 	_load_platforms_list()
 	print("[LibraryView] _load_platforms_list elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-	
+
 	# Connect platform indicator signals
 	if platform_indicator:
 		platform_indicator.platform_selected.connect(_on_platform_selected)

@@ -445,7 +445,8 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 		var vbox_separation = _main_content_vbox.get_theme_constant("separation")
 		available_height -= vbox_separation
 
-	# View-specific chrome above the grid.
+	# View-specific chrome above the grid. (The Library platform indicator lives
+	# in the control bar now, so its height is covered by the toolbar subtraction.)
 	if target_view == null and grid != null:
 		var current: Node = grid
 		for i in range(3):
@@ -454,14 +455,7 @@ func compute_grid_available_size(grid: VirtualScrollGridContainer, target_view: 
 			current = current.get_parent()
 		target_view = current as Control
 
-	if target_view is LibraryView:
-		var platform_indicator: Control = target_view.get_node_or_null("MarginContainer/VBoxContainer/PlatformIndicator")
-		if platform_indicator:
-			platform_indicator.size.x = available_width
-			if platform_indicator.has_method("_apply_responsive_layout"):
-				platform_indicator._apply_responsive_layout()
-			available_height -= platform_indicator.get_combined_minimum_size().y
-	elif target_view is CollectionView:
+	if target_view is CollectionView:
 		var title_label: Control = target_view.get_node_or_null("MarginContainer/VBoxContainer/CollectionTitle")
 		if title_label:
 			title_label.size.x = available_width

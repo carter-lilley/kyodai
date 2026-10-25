@@ -1277,8 +1277,15 @@ static func _extract_zip_native_streaming(zip_path: String, extract_dir: String,
 		# Check for completion marker (most reliable method)
 		if file_exists(completion_marker):
 			completed = true
-			# Read success marker content ("true" or "false")
-			var success_text = read_file(success_marker).strip_edges()
+			# Read success marker content ("true" or "false"). Retry briefly on an
+			# empty/missing read: marker writes may go through SAF where visibility
+			# lags, and older ExtractorService builds wrote completion before success.
+			var success_text = ""
+			for attempt in 10:
+				success_text = read_file(success_marker).strip_edges()
+				if success_text != "":
+					break
+				OS.delay_msec(200)
 			success = success_text == "true"
 			print("[SystemManager.filesystem] Extraction complete marker found, success=" + str(success))
 			break

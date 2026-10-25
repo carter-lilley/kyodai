@@ -20,6 +20,7 @@ const HOLD_DURATION: float = 0.1
 const PHASE2_DURATION: float = 0.5
 
 var _is_animating: bool = false
+var _tween: Tween = null
 var _phase1_completed: bool = false
 var _original_card_rect: Rect2
 var _game: GameResource
@@ -296,6 +297,7 @@ func _animate_transition():
 	if not tween:
 		push_error("[LaunchTransitionOverlay] Failed to create tween")
 		return
+	_tween = tween
 
 	# Calculate fullscreen target (screen aspect ratio) with slight overshoot to hide AA edge
 	var viewport_size = Vector2(get_viewport().size)
@@ -425,6 +427,7 @@ func _animate_fallback_transition() -> void:
 		_is_animating = false
 		is_transition_active = false
 		return
+	_tween = tween
 
 	tween.tween_property(self, "modulate:a", 1.0, PHASE1_DURATION)
 	tween.chain().tween_callback(func():
@@ -435,6 +438,7 @@ func _animate_fallback_transition() -> void:
 	tween.chain().tween_callback(_on_animation_complete)
 
 func _on_animation_complete():
+	_tween = null
 	# On desktop, connect to background_state_exited signal when process polling detects exit
 	# On Android, keep the overlay visible until NOTIFICATION_APPLICATION_RESUMED fires
 	if LaunchManager:
@@ -456,6 +460,26 @@ func _on_background_state_exited(_exited_game: GameResource, _exit_code: int) ->
 	if LaunchManager:
 		if LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
 			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+
+## Aborts the transition and hides the overlay immediately. Required on every
+## launch-failure path: when a launch fails after game_launch_initiated fired
+## (e.g. game prep failed), no background state is entered and no Android
+## RESUMED notification arrives - without this the fullscreen black overlay
+## sticks forever, covering the error notification and eating all input.
+func abort() -> void:
+	if _tween and _tween.is_valid():
+		_tween.kill()
+	_tween = null
+	_is_animating = false
+	is_transition_active = false
+	_phase1_completed = false
+	visible = false
+	if _game_title_label:
+		_game_title_label.visible = false
+	if _fallback_bg:
+		_fallback_bg.visible = false
+	if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
+		LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:

@@ -14,6 +14,9 @@ var _more_button: M3IconButton = null
 var _mask: Panel = null
 var _toolbar: PanelContainer = null
 var _user_avatar: UserAvatar = null
+var _platform_indicator: PlatformIndicator = null
+var _controlbar_left: HBoxContainer = null
+var _controlbar_right: HBoxContainer = null
 var _main_content_vbox: VBoxContainer = null
 var _content_wrapper: Control = null
 
@@ -51,10 +54,13 @@ func initialize(
 	_toolbar = _main_content_vbox.get_node_or_null("controlbar_background")
 	if _toolbar:
 		_toolbar.z_index = OverlayLayers.TOOLBAR_Z
-	_zoom_slider = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3Slider_Zoom")
-	_view_mode_group = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3ButtonGroup")
-	_more_button = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/M3IconButton_More")
-	_user_avatar = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/UserAvatar")
+	_zoom_slider = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarLeft/M3Slider_Zoom")
+	_view_mode_group = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarRight/M3ButtonGroup")
+	_more_button = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarRight/M3IconButton_More")
+	_user_avatar = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarLeft/UserAvatar")
+	_platform_indicator = _main_content_vbox.get_node_or_null("controlbar_background/PlatformIndicator")
+	_controlbar_left = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarLeft")
+	_controlbar_right = _main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/ControlBarRight")
 
 	# Create debounced zoom save timer (replaces _process polling)
 	_zoom_save_timer = Timer.new()
@@ -74,6 +80,14 @@ func initialize(
 		_toolbar.resized.connect(_update_mask_height)
 		_update_mask_height.call_deferred()
 		update_controlbar_mask_color()
+
+	# Keep the overlay platform indicator inset by the wider side cluster so
+	# its content row sits on the control bar's true center, and its 5/3/1
+	# chip tiering tracks the real remaining slot.
+	if _toolbar:
+		if not _toolbar.resized.is_connected(_update_indicator_inset):
+			_toolbar.resized.connect(_update_indicator_inset)
+		_update_indicator_inset.call_deferred()
 
 func connect_signals() -> void:
 	# Connect zoom slider signals. value_changed is deferred until after startup
@@ -167,6 +181,46 @@ func _update_zoom_slider_stops(games_grid: VirtualScrollGridContainer) -> void:
 		_zoom_slider.step = 0.05
 		_zoom_slider.label_behavior = M3Slider.LabelBehavior.WHILE_DRAGGING
 
+## Show/hide the toolbar-hosted platform indicator (Library view only).
+## Re-push the side inset afterwards since the toggle changes what the side
+## clusters contain (zoom slider / view buttons appear with the grid views).
+func _set_platform_indicator_visible(value: bool) -> void:
+	if _platform_indicator:
+		_platform_indicator.visible = value
+	_update_indicator_inset()
+
+## The toolbar-hosted platform indicator (Library view wires its signals).
+func get_platform_indicator() -> PlatformIndicator:
+	return _platform_indicator
+
+## Push the control bar's side-cluster inset to the platform indicator. The
+## indicator overlays the bar full-rect; insetting both of its sides by the
+## wider cluster's content width keeps its content row on the bar's true
+## center by construction — no min-width equalization, no stretch-ratio
+## assumptions, and nothing depends on when children's sizes settle. Content
+## widths are summed from visible children so the result can't feed back.
+func _update_indicator_inset() -> void:
+	if not _toolbar or not is_instance_valid(_toolbar):
+		return
+	if not _controlbar_left or not _controlbar_right:
+		return
+	var side_w := maxf(_hbox_content_min_width(_controlbar_left), _hbox_content_min_width(_controlbar_right))
+	side_w += M3Units.dp(8)
+	if _platform_indicator:
+		_platform_indicator.set_side_inset(side_w)
+
+## Sum of visible children's combined minimum widths plus separations.
+func _hbox_content_min_width(box: BoxContainer) -> float:
+	var w := 0.0
+	var visible_count := 0
+	for child in box.get_children():
+		if child is Control and child.visible:
+			w += child.get_combined_minimum_size().x
+			visible_count += 1
+	if visible_count > 1:
+		w += box.get_theme_constant("separation") * (visible_count - 1)
+	return w
+
 func _find_nearest_snap_index(ratio: float) -> int:
 	"""Find the index of the snap ratio closest to the given ratio."""
 	if _current_snap_ratios.is_empty():
@@ -190,12 +244,14 @@ func sync_zoom_slider_to_view(view_name: String) -> void:
 			_view_mode_group.visible = false
 		if _zoom_slider:
 			_zoom_slider.visible = false
+		_set_platform_indicator_visible(false)
 		return
 
 	if _view_mode_group:
 		_view_mode_group.visible = true
 	if _zoom_slider:
 		_zoom_slider.visible = true
+	_set_platform_indicator_visible(view_name == "Library")
 
 	var view = UIManager.get_view(view_name)
 	if not view:

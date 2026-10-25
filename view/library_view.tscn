@@ -1,8 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://djryygss138q3"]
+[gd_scene load_steps=2 format=3 uid="uid://djryygss138q3"]
 
 [ext_resource type="Script" uid="uid://bfusgr7caldoo" path="res://view/library_view.gd" id="1_libview"]
 [ext_resource type="Script" uid="uid://c6n20pn08r6jn" path="res://base_class/nodes/virtual_scroll_grid_container.gd" id="2_vscroll"]
-[ext_resource type="Script" path="res://components/platform_indicator.gd" id="3_platformindicator"]
 
 [node name="LibraryView" type="Control" unique_id=575533095]
 layout_mode = 3
@@ -28,11 +27,6 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-
-[node name="PlatformIndicator" type="Control" parent="MarginContainer/VBoxContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-script = ExtResource("3_platformindicator")
 
 [node name="VirtualScrollGridContainer" type="Control" parent="MarginContainer/VBoxContainer" unique_id=806442112]
 layout_mode = 2

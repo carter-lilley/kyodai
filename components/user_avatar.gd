@@ -13,7 +13,7 @@ extends Control
 ## its inner edge (hard discard), so instead the media is inset by the ring
 ## width and both visible edges come from shaders that do AA.
 
-const SIZE_DP := 88
+const SIZE_DP := 56
 
 ## Ring width as a ratio of the avatar width (media inset revealing the disc).
 const BORDER_RATIO := 0.07
@@ -99,6 +99,13 @@ func _ready() -> void:
 	_stack.set_visible(false)
 
 	resized.connect(_on_resized)
+
+## Re-bake dp-derived sizes on UI scale changes (the avatar lives in the
+## control bar, outside the view tree that gets rebuilt on scale changes).
+func refresh_scale() -> void:
+	custom_minimum_size = Vector2.ONE * M3Units.dp(SIZE_DP)
+	if _fallback_icon and _fallback_icon.icon_settings:
+		_fallback_icon.icon_settings.icon_size = int(M3Units.dp(SIZE_DP))
 
 func _on_resized() -> void:
 	if _media_container:

@@ -1756,7 +1756,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             }
             Log.i(TAG, "[AltAccess] Symlinks created for " + storageRoot);
         } catch (Exception e) {
-            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot + ": " + e.getMessage());
+            // Log the full stack trace: ErrnoException from Os.symlink carries the
+            // errno (EACCES/EPERM/ENOSYS...) we need to tell a hard SELinux denial
+            // apart from a transient failure on handheld firmwares (AYN/Retroid).
+            Log.w(TAG, "[AltAccess] Setup failed for " + storageRoot, e);
         }
     }
     

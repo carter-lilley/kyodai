@@ -22,6 +22,31 @@ const RESIZE_DEBOUNCE_TIME: float = 0.1
 
 const MIN_HEIGHT_DP: float = 50.0
 const VERTICAL_PADDING_DP: float = 8.0
+## Tighter padding when embedded in the control bar (the bar's own padding
+## already separates the indicator from the screen edge).
+const EMBEDDED_VERTICAL_PADDING_DP: float = 4.0
+
+## True when hosted inside the top control bar instead of its own library row:
+## drops the standalone row's 50dp floor so the bar stays avatar-height.
+@export var embedded_in_toolbar: bool = false
+
+## Toolbar-pushed side inset (embedded mode). The indicator root is fit
+## full-rect over the control bar by the bar's PanelContainer; the toolbar
+## pushes the wider side cluster's width here so the content row can be inset
+## symmetrically — an [S, width-S] rect is centered by construction, with no
+## BoxContainer allocation math. The remaining slot also drives the 5/3/1
+## chip tiering.
+var _side_inset: float = 0.0
+
+func set_side_inset(px: float) -> void:
+	if is_equal_approx(_side_inset, px):
+		return
+	_side_inset = px
+	var hbox := get_node_or_null("MainContainer") as HBoxContainer
+	if hbox:
+		hbox.offset_left = px
+		hbox.offset_right = -px
+	_request_layout_recompute()
 
 var _current_button_size: M3Button.Size = M3Button.Size.SMALL
 var _resize_debounce_timer: Timer
@@ -56,8 +81,14 @@ func _setup_ui():
 	hbox.name = "MainContainer"
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# IGNORE so the full-bar row's empty areas pass input through to whatever
+	# sits beneath; the buttons inside still stop input themselves.
+	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_theme_constant_override("separation", int(M3Units.dp(8)))
 	add_child(hbox)
+	if _side_inset > 0.0:
+		hbox.offset_left = _side_inset
+		hbox.offset_right = -_side_inset
 	
 	# Filter button (outside the group, on the left)
 	_filter_button = M3IconButton.new()
@@ -68,6 +99,10 @@ func _setup_ui():
 	_filter_button.focus_mode = Control.FOCUS_NONE
 	_filter_button.pressed.connect(_on_filter_clicked)
 	hbox.add_child(_filter_button)
+	# M3Button._ready() stomps size_flags_vertical to 0 (top-aligned in an
+	# HBox); re-apply shrink-center AFTER add_child so the button centers in
+	# the control bar row. Same workaround as the toolbar's More button.
+	_filter_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	# Search button (outside the group)
 	_search_button = M3IconButton.new()
@@ -81,6 +116,7 @@ func _setup_ui():
 	_search_button.badge_icon_name = "analog-r"
 	_search_button.badge_icon_font = "ControllerIcons"
 	hbox.add_child(_search_button)
+	_search_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	# Resize debounce timer (may already exist if a resize arrived pre-_ready)
 	if _resize_debounce_timer == null:
@@ -112,6 +148,8 @@ func _request_layout_recompute() -> void:
 
 func _apply_responsive_layout() -> void:
 	var available_width := size.x
+	if embedded_in_toolbar:
+		available_width = size.x - 2.0 * _side_inset
 	if available_width <= 0:
 		available_width = get_viewport_rect().size.x
 	
@@ -171,7 +209,7 @@ func _rebuild_platform_group() -> void:
 	prev_btn.badge_corner = M3Button.BadgeCorner.BOTTOM_LEFT
 	prev_btn.text = ""
 	prev_btn.button_size = _current_button_size
-	prev_btn.button_variant = M3Button.Variant.OUTLINED
+	prev_btn.button_variant = M3Button.Variant.TONAL
 	prev_btn.focus_mode = Control.FOCUS_NONE
 	prev_btn.pressed.connect(_on_prev_clicked)
 	
@@ -198,7 +236,7 @@ func _rebuild_platform_group() -> void:
 	next_btn.badge_icon_font = "ControllerIcons"
 	next_btn.text = ""
 	next_btn.button_size = _current_button_size
-	next_btn.button_variant = M3Button.Variant.OUTLINED
+	next_btn.button_variant = M3Button.Variant.TONAL
 	next_btn.focus_mode = Control.FOCUS_NONE
 	next_btn.pressed.connect(_on_next_clicked)
 	
@@ -215,6 +253,9 @@ func _rebuild_platform_group() -> void:
 	_platform_group.add_child(next_btn)
 	hbox.add_child(_platform_group)
 	hbox.move_child(_platform_group, 1)
+	# Vertically center the chip row within the control bar (the group fills
+	# the bar height, but its M3Buttons self-report 0 vertical flags).
+	_platform_group.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 ## Button heights are fixed per M3Button.Size tier, so the minimum height is
 ## derived from the current tier's spec — no child min-size scan, no deferred
@@ -222,7 +263,10 @@ func _rebuild_platform_group() -> void:
 ## ui_manager reads this via get_combined_minimum_size().
 func _update_minimum_height() -> void:
 	var button_height_px := M3Units.dp(M3Button.SIZE_SPECS[_current_button_size]["height"])
-	custom_minimum_size.y = max(M3Units.dp(MIN_HEIGHT_DP), button_height_px + M3Units.dp(VERTICAL_PADDING_DP))
+	if embedded_in_toolbar:
+		custom_minimum_size.y = button_height_px + M3Units.dp(EMBEDDED_VERTICAL_PADDING_DP)
+	else:
+		custom_minimum_size.y = max(M3Units.dp(MIN_HEIGHT_DP), button_height_px + M3Units.dp(VERTICAL_PADDING_DP))
 
 func update_display(platforms: Array[Dictionary], current_index: int):
 	_platforms = platforms
