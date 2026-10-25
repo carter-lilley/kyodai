@@ -142,9 +142,32 @@ jobs:
     - name: Export Android APK
       run: |
         mkdir -p build/android
+        # Kyodai is used as a home app on handhelds, and AOSP strips PiP
+        # support from home-typed activities (ActivityRecord.
+        # supportsPictureInPicture() requires a standard/undefined activity
+        # type). Godot 4.7's Android template enables PiP unconditionally
+        # (manifest flag + GodotApp.isPiPEnabled()->true), so the engine's
+        # setup-time setPictureInPictureParams() throws IllegalStateException
+        # and crash-loops the app on every cold start as home. Patch PiP off
+        # in the build template SOURCE: --install-android-build-template is a
+        # no-op unless combined with --export-*, so the generated android/build
+        # can't be patched in a separate step (a standalone run silently does
+        # nothing and hangs the job on the game process).
+        TPL="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/android_source.zip"
+        mkdir -p /tmp/asrc && cd /tmp/asrc
+        unzip -o -q "$TPL" src/main/AndroidManifest.xml src/main/java/com/godot/game/GodotApp.java
+        sed -i 's/android:supportsPictureInPicture="true"/android:supportsPictureInPicture="false"/' \
+          src/main/AndroidManifest.xml
+        sed -i '/isPiPEnabled/,/}/s/return true;/return false;/' \
+          src/main/java/com/godot/game/GodotApp.java
+        zip -q "$TPL" src/main/AndroidManifest.xml src/main/java/com/godot/game/GodotApp.java
+        # Fail loudly if the patch didn't land (bash -e: grep exit 1 fails the step)
+        unzip -p "$TPL" src/main/AndroidManifest.xml | grep -q 'supportsPictureInPicture="false"'
+        unzip -p "$TPL" src/main/java/com/godot/game/GodotApp.java | grep -q 'return false;'
+        cd - > /dev/null
         # The preset uses gradle_build=true, so this runs a full Gradle build.
         # --install-android-build-template lays down android/build (gitignored)
-        # from the export templates before exporting.
+        # from the (now patched) export templates before exporting.
         ./godot/${GODOT_BIN} --headless --path . --install-android-build-template \
           --export-debug "Android" build/android/Kyodai.apk
 
