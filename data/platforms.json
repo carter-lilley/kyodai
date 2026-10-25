@@ -432,7 +432,7 @@
 		"name": "Xbox",
 		"default_emulator": {
 			"_default": "xemu",
-			"android": "x1box"
+			"android": "hakux"
 		},
 		"firmware": {
 			"expected_files": [

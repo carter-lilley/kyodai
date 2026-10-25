@@ -51,7 +51,7 @@
 	"platforms": {
 	  "android": {
 		"action": "android.intent.action.VIEW",
-		"package": "com.armsx2",
+		"package": "com.armsx2.nightly",
 		"class": "com.armsx2.BootSplashActivity",
 		"rom_delivery": "intent_data",
 		"mime_type": "application/octet-stream"
@@ -65,7 +65,8 @@
 		"android": {
 		  "action_type": "download_repo",
 		  "github_repo": "ARMSX2/ARMSX2",
-		  "asset_pattern": "ARMSX2-.*-a11-armv8\\.2-sdk30\\.apk"
+		  "asset_pattern": "ARMSX2-nightly-.*-Android-arm64\\.apk",
+		  "include_prereleases": true
 		}
 	  }
 	},
@@ -74,11 +75,11 @@
 	  "platforms": {
 		"android": {
 		  "action_type": "apk_install",
-		  "package_name": "com.armsx2",
-		  "expected_file": "ARMSX2-*-a11-*.apk",
+		  "package_name": "com.armsx2.nightly",
+		  "expected_file": "ARMSX2-nightly-*-Android-arm64.apk",
 		  "validate": {
 			"action_type": "package_installed",
-			"package": "com.armsx2"
+			"package": "com.armsx2.nightly"
 		  }
 		}
 	  }
