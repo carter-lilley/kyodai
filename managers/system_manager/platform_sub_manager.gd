@@ -236,8 +236,10 @@ func open_manage_storage_settings():
 # ANDROID APP-DATA (SAF) ACCESS — just-in-time grant
 # Direct File I/O (with MANAGE_EXTERNAL_STORAGE) is our primary path for all
 # storage. Other apps' /Android/data/ and /Android/obb/ are the one exception:
-# Android blocks them per-app regardless of MES, so they require a one-time
-# document-tree grant. This guard prompts only when access is actually needed
+# they're gated on the ext_data_rw group. When Kyodai holds it (firmware-
+# dependent), direct I/O just works; failing that, a live vendor root daemon
+# covers every package; failing that, we need a one-time document-tree grant
+# per package folder. This guard prompts only when no route exists
 # (argosy-style), calls back with true once usable access exists.
 # ============================================================================
 
@@ -249,8 +251,12 @@ func has_android_data_access(path: String = "") -> bool:
 	var plugin = _get_android_plugin()
 	if plugin == null:
 		return false
-	# AltAccess (storage-root symlink, direct File I/O with just MES) counts
-	if bool(plugin.isAltAccessSupported()):
+	# Holding ext_data_rw ourselves means direct File I/O into Android/data works
+	if plugin.has_method("hasExtDataRwAccess") and bool(plugin.hasExtDataRwAccess()):
+		return true
+	# A live vendor root daemon covers writes for any package (root tier)
+	var root_available = plugin.call("rootAvailable")
+	if root_available != null and root_available:
 		return true
 	if path != "":
 		return bool(plugin.hasSafGrantFor(path))
@@ -268,7 +274,7 @@ func ensure_android_data_access(on_ready: Callable, path: String = "") -> void:
 	if plugin == null:
 		on_ready.call(false)
 		return
-	if bool(plugin.isAltAccessSupported()) or has_android_data_access(path):
+	if has_android_data_access(path):
 		on_ready.call(true)
 		return
 	# A grant flow is already in flight; queue behind it

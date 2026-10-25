@@ -28,6 +28,7 @@ var _force_install_step: Dictionary = {}
 ## (e.g. skip-forward vs retry-backward on a missing input), which would
 ## otherwise recurse synchronously until the stack overflows.
 var _install_step_executions: Dictionary = {}
+var _install_grant_prompt_pending: Dictionary = {}  # emulator_id -> true while the SAF picker is up
 const MAX_STEP_EXECUTIONS := 5
 
 ## Config guard state: emulator_id -> Array of {original, backup}. Populated
@@ -1204,7 +1205,10 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 	var asset_pattern = platform_config.get("asset_pattern", "")
 	var release_tag = platform_config.get("release_tag", "")
 	var api_base_url = platform_config.get("api_base_url", "")  # For non-GitHub hosts (e.g., Gitea/Forgejo)
-	
+	# Opt into prereleases (e.g. ARMSX2 nightlies, the only channel carrying
+	# some fixes). Default off: most repos should track stable releases.
+	var include_prereleases = platform_config.get("include_prereleases", false)
+
 	if github_repo == "" or asset_pattern == "":
 		push_error("[EmulatorManager] Invalid download_repo config for step: " + step_name)
 		return false
@@ -1241,7 +1245,8 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 				print("[EmulatorManager] Resolved emulator version for " + emulator_id + ": " + version_to_save)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size, asset_sha256),
 		release_tag,
-		api_base_url
+		api_base_url,
+		include_prereleases
 	)
 	return true
 
@@ -1922,6 +1927,13 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 	# Fresh install attempt: reset the retry-loop guard.
 	_install_step_executions.erase(emulator_id)
 
+	# Android: steps that touch the emulator's private app-data folder need a
+	# one-time document-tree grant on devices without direct access or a root
+	# daemon. Prompt up front rather than failing mid-flow with a cryptic
+	# "failed to queue/create" error; the grant callback restarts the flow.
+	if _install_flow_needs_app_data(_install_steps) and _prompt_for_app_data_access(emulator_id):
+		return true  # picker is up; flow resumes (or fails) from its callback
+
 	# Find the first incomplete step to start from
 	var progress = get_install_progress(emulator_id)
 	var start_step = 0
@@ -1945,6 +1957,45 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 			_force_install_step.erase(emulator_id)
 	
 	return _execute_install_step(emulator_id, start_step)
+
+## True when any install step references {app_data} (the emulator's private
+## /Android/data folder) - i.e. the flow needs restricted-path access.
+func _install_flow_needs_app_data(install_steps: Array) -> bool:
+	return JSON.stringify(install_steps).contains("{app_data}")
+
+## Gates an install flow on Android app-data access. Returns true when the
+## grant picker was just shown (caller must pause; the callback restarts the
+## flow on grant, or fails it cleanly on denial). Returns false when access
+## already exists, the path isn't restricted, or we're not on Android.
+func _prompt_for_app_data_access(emulator_id: String) -> bool:
+	if not SystemManager.platform.is_android():
+		return false
+	var app_data = LaunchManager.get_app_data_path(emulator_id)
+	if app_data == "":
+		return false
+	if SystemManager.platform.has_android_data_access(app_data):
+		return false
+	# Re-entrancy guard: one picker per emulator at a time.
+	if _install_grant_prompt_pending.has(emulator_id):
+		return true
+	_install_grant_prompt_pending[emulator_id] = true
+	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	var emulator_name = RegistrySubManager.get_emulator_display_name(emulator, emulator_id)
+	print("[EmulatorManager] Install for " + emulator_id + " needs storage access to " + app_data + " - prompting")
+	_emulator_install_progress[emulator_id] = "Waiting for storage access..."
+	SystemManager.platform.ensure_android_data_access(func(granted: bool):
+		_install_grant_prompt_pending.erase(emulator_id)
+		if granted:
+			print("[EmulatorManager] Storage access granted for " + emulator_id + " - restarting install flow")
+			_execute_install_steps(emulator_id, {}, [])
+		else:
+			push_warning("[EmulatorManager] Storage access denied for " + emulator_id)
+			_emulator_install_progress[emulator_id] = "Storage access denied"
+			_end_force_install(emulator_id)
+			install_steps_failed.emit(emulator_id, "Storage access denied for " + emulator_name)
+			launch_manager.emulator_extraction_completed.emit(emulator_id, false)
+	, app_data)
+	return true
 
 ## Gets display name for a step based on step_name
 ## Optionally prepends the emulator name for context in notifications

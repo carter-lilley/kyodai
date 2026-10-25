@@ -91,7 +91,7 @@ static func compute_folder_zip_hash(dir_path: String, root_name: String = "") ->
 	lines.sort()
 	if lines.is_empty() and _is_restricted(dir_path):
 		# On a restricted path an empty collection may mean "no read access"
-		# (AltAccess/SAF failure) rather than a genuinely empty save - make it
+		# (direct/SAF tier failure) rather than a genuinely empty save - make it
 		# visible instead of silently hashing nothing.
 		push_warning("[ContentHash] Restricted path collected zero files (possible read-access failure): " + dir_path)
 	return _md5_bytes("\n".join(lines).to_utf8_buffer())

@@ -756,7 +756,10 @@ func _check_repo_update(emulator_id: String, _emulator_name: String, installed_v
 	var asset_pattern = platform_config.get("asset_pattern", "")
 	var release_tag = platform_config.get("release_tag", "")
 	var api_base_url = platform_config.get("api_base_url", "")
-	
+	# Must mirror _handle_download_repo_step: a prerelease-tracking emulator
+	# (e.g. ARMSX2 nightlies) would otherwise check updates against stable only.
+	var include_prereleases = platform_config.get("include_prereleases", false)
+
 	if github_repo == "" or asset_pattern == "":
 		results.failed.append(emulator_id)
 		results.failed_details[emulator_id] = "Invalid repo configuration"
@@ -829,7 +832,8 @@ func _check_repo_update(emulator_id: String, _emulator_name: String, installed_v
 			
 			_check_updates_complete(results, callback, progress_callback),
 		release_tag,
-		api_base_url
+		api_base_url,
+		include_prereleases
 	)
 
 ## Triggers re-installation of an emulator for update.
