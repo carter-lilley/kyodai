@@ -1,6 +1,8 @@
 class_name LaunchIntent
 extends Resource
 
+const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+
 ## Represents a platform-agnostic intent to launch a game
 ## Contains all information needed to execute the launch on any supported platform
 
@@ -66,8 +68,11 @@ func is_valid() -> bool:
 	if rom_path == "":
 		return false
 	
-	# Check if ROM path exists (file or directory)
-	if not FileAccess.file_exists(rom_path) and not DirAccess.dir_exists_absolute(rom_path):
+	# Check if ROM path exists (file or directory). Routed through FSM so
+	# restricted Android paths (another app's Android/data, e.g. extracted
+	# PS3 games) validate via the KyodaiBridge plugin - raw FileAccess/
+	# DirAccess are denied there and would falsely invalidate the intent.
+	if not FSM.file_exists(rom_path) and not FSM.dir_exists(rom_path):
 		return false
 	
 	if emulator_id == "":

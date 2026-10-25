@@ -1207,29 +1207,34 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if to_emu_dir:
 		if _ps3_game_has_files(emu_disc_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + emu_disc_path)
-			_unwrap_ps3_wrapper(emu_disc_path)
-			intent.rom_path = emu_disc_path
-			if not is_shuffler:
-				_store_file_path(game, emu_disc_path)
-			return true
+			if _unwrap_ps3_wrapper(emu_disc_path):
+				intent.rom_path = emu_disc_path
+				if not is_shuffler:
+					_store_file_path(game, emu_disc_path)
+				return true
+			# A failed unwrap leaves a wrapped/partial folder RPCS3 cannot boot;
+			# fall through so the extraction path wipes it and starts clean.
+			push_warning("[GameManager] RPCS3: Unwrap failed for existing install, re-extracting: " + emu_disc_path)
 		elif _ps3_game_has_files(emu_digital_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + emu_digital_path)
-			_unwrap_ps3_wrapper(emu_digital_path)
-			intent.rom_path = emu_digital_path
-			if not is_shuffler:
-				_store_file_path(game, emu_digital_path)
-			return true
-	
+			if _unwrap_ps3_wrapper(emu_digital_path):
+				intent.rom_path = emu_digital_path
+				if not is_shuffler:
+					_store_file_path(game, emu_digital_path)
+				return true
+			push_warning("[GameManager] RPCS3: Unwrap failed for existing install, re-extracting: " + emu_digital_path)
+
 	if _ps3_game_has_files(extract_path):
 		if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
-		_unwrap_ps3_wrapper(extract_path)
-		# Update intent to point to extracted folder
-		intent.rom_path = extract_path
-		if DEBUG_LOG: print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
-		if not is_shuffler:
-			_store_file_path(game, extract_path)
-		if DEBUG_LOG: print("[GameManager] RPCS3: After _store_file_path, game.file_path=" + game.file_path)
-		return true
+		if _unwrap_ps3_wrapper(extract_path):
+			# Update intent to point to extracted folder
+			intent.rom_path = extract_path
+			if DEBUG_LOG: print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
+			if not is_shuffler:
+				_store_file_path(game, extract_path)
+			if DEBUG_LOG: print("[GameManager] RPCS3: After _store_file_path, game.file_path=" + game.file_path)
+			return true
+		push_warning("[GameManager] RPCS3: Unwrap failed for existing install, re-extracting: " + extract_path)
 	
 	if DEBUG_LOG: print("[GameManager] RPCS3: Game not extracted, will extract to: " + extract_path)
 	
