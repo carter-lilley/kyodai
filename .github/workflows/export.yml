@@ -144,10 +144,14 @@ jobs:
         # one signature, which is what allows APKs to install as updates over
         # previous releases. Regenerating this key would force all existing
         # installs to uninstall/reinstall - do not rotate casually.
-        mkdir -p "$HOME/.android"
-        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+        # NB: Godot 4.7's default debug keystore lives in the editor DATA dir
+        # (~/.local/share/godot/keystores/), NOT ~/.android/debug.keystore.
+        # Writing there instead is silently ignored: Godot generates a fresh
+        # key per CI run and every release gets a unique signature.
+        mkdir -p "$HOME/.local/share/godot/keystores"
+        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$HOME/.local/share/godot/keystores/debug.keystore"
         # Fail loudly if the decoded keystore is invalid or the wrong key.
-        ACTUAL_FP=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" \
+        ACTUAL_FP=$(keytool -list -v -keystore "$HOME/.local/share/godot/keystores/debug.keystore" \
           -storepass android -alias androiddebugkey | grep -m1 SHA256 \
           | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
         echo "keystore SHA-256: $ACTUAL_FP"
