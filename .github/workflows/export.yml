@@ -17,6 +17,14 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GODOT_VERSION: 4.7
   GODOT_BIN: Godot_v4.7-stable_linux.x86_64
+  # SHA-256 cert fingerprint of the persistent Android signing key
+  # (~/.android/kyodai-release.keystore, mirrored into the
+  # ANDROID_KEYSTORE_BASE64 secret). Cert fingerprints aren't sensitive.
+  # Godot SILENTLY GENERATES A FRESH DEBUG KEY if the keystore is
+  # missing/unreadable, so both the keystore decode and the built APK are
+  # asserted against this value - a mismatch fails the build instead of
+  # shipping an APK that can't install as an update.
+  EXPECTED_KEYSTORE_FP: "24b941952662ff7932ed54cb9e9df325c4990cb922140992dcd0615eaa2f7f50"
 
 on:
   workflow_dispatch:
@@ -138,6 +146,12 @@ jobs:
         # installs to uninstall/reinstall - do not rotate casually.
         mkdir -p "$HOME/.android"
         echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+        # Fail loudly if the decoded keystore is invalid or the wrong key.
+        ACTUAL_FP=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" \
+          -storepass android -alias androiddebugkey | grep -m1 SHA256 \
+          | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
+        echo "keystore SHA-256: $ACTUAL_FP"
+        [ "$ACTUAL_FP" = "$EXPECTED_KEYSTORE_FP" ]
 
     - name: Export Android APK
       run: |
@@ -170,6 +184,11 @@ jobs:
         # from the (now patched) export templates before exporting.
         ./godot/${GODOT_BIN} --headless --path . --install-android-build-template \
           --export-debug "Android" build/android/Kyodai.apk
+        # Assert the APK carries the persistent signature (see env comment).
+        APK_FP=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs \
+          build/android/Kyodai.apk | grep -m1 "SHA-256 digest" | awk '{print $NF}')
+        echo "APK signer SHA-256: $APK_FP"
+        [ "$APK_FP" = "$EXPECTED_KEYSTORE_FP" ]
 
     - name: Upload Android artifact
       uses: actions/upload-artifact@v4
