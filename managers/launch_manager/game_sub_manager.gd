@@ -1014,6 +1014,18 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	# Handle case where game.file_path points to previously-extracted folder
 	# (from older versions or if user deleted files and we need to re-extract)
 	var zip_path := rom_path
+
+	# The source zip is where RAP licenses live; when rom_path already points
+	# at an extracted folder, the zip stays behind in the games library.
+	var source_zip := rom_path
+	if source_zip.get_extension().to_lower() != "zip" or not FSM.file_exists(source_zip):
+		source_zip = ""
+	if source_zip == "":
+		var root_folder = DataManager.get_setting("games_root_folder")
+		var root_path: String = root_folder.value if root_folder else "user://roms/"
+		var candidate := FSM.join_paths(root_path, game.platform_slug, game.get_active_file_name())
+		if candidate.get_extension().to_lower() == "zip" and FSM.file_exists(candidate):
+			source_zip = candidate
 	
 	if FSM.dir_exists(rom_path):
 		# This might be an extracted folder. Check if it has actual game files.
@@ -1049,7 +1061,8 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 						# Also update title_id if it's different
 						if game.get_active_title_id() != title_id_from_sfo:
 							_store_title_id(game, title_id_from_sfo)
-						
+
+						_ensure_rpcs3_license(source_zip, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
 						return true
 			
 			# Fallback: find the original ZIP
@@ -1208,6 +1221,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		if _ps3_game_has_files(emu_disc_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + emu_disc_path)
 			if _unwrap_ps3_wrapper(emu_disc_path):
+				_ensure_rpcs3_license(zip_path, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
 				intent.rom_path = emu_disc_path
 				if not is_shuffler:
 					_store_file_path(game, emu_disc_path)
@@ -1218,6 +1232,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		elif _ps3_game_has_files(emu_digital_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + emu_digital_path)
 			if _unwrap_ps3_wrapper(emu_digital_path):
+				_ensure_rpcs3_license(zip_path, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
 				intent.rom_path = emu_digital_path
 				if not is_shuffler:
 					_store_file_path(game, emu_digital_path)
@@ -1227,6 +1242,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if _ps3_game_has_files(extract_path):
 		if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at: " + extract_path)
 		if _unwrap_ps3_wrapper(extract_path):
+			_ensure_rpcs3_license(zip_path, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
 			# Update intent to point to extracted folder
 			intent.rom_path = extract_path
 			if DEBUG_LOG: print("[GameManager] RPCS3: Calling _store_file_path with extract_path=" + extract_path)
@@ -1359,6 +1375,7 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				push_warning("[GameManager] RPCS3: Failed to create shuffler sentinel at " + sentinel_path)
 
 	print("[GameManager] RPCS3: Game extracted successfully at: " + final_extract_path)
+	_ensure_rpcs3_license(zip_path, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
 	return true
 
 
@@ -1478,6 +1495,104 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 	
 	print("[GameManager] RPCS3: Waiting for extraction to complete...")
 	return await _await_extraction(item_id, "GameManager] RPCS3")
+
+
+## Resolves the RPCS3 exdata dir (<dev_hdd0>/home/<user>/exdata), where RAP
+## license files live. Uses the same base the game prep uses for
+## dev_hdd0/game: the managed install dir on desktop, the declared resolution
+## anchor on Android. Returns "" when the base is unknown (unmanaged install);
+## RAP install is skipped then. User id matches Rpcs3VfsResolver (multi-user
+## unsupported, saves and RAPs share the profile).
+func _rpcs3_exdata_dir(emulator_id: String, platform_slug: String) -> String:
+	var base := ""
+	if not SystemManager.platform.is_android():
+		if launch_manager.registry.get_emulator_install_path(emulator_id) == "":
+			return ""
+		base = launch_manager.registry._get_emulator_directory(emulator_id).rstrip("/")
+	else:
+		var anchor_raw := str(launch_manager.registry.get_emulator(emulator_id).get("resolution", {}).get("anchor", ""))
+		if anchor_raw == "":
+			return ""
+		base = FSM.resolve_emulator_path(anchor_raw, emulator_id, platform_slug).rstrip("/")
+	if base == "":
+		return ""
+	return base + "/dev_hdd0/home/" + Rpcs3VfsResolver.USER_ID + "/exdata"
+
+
+## Ensures RPCS3 has the RAP license files carried by the game zip installed
+## in exdata_dir, where RPCS3 looks for them. PSN (HDD) games refuse to boot
+## without their RAP; the zip is the source of truth so a fresh device
+## self-heals on first launch. Any .rap entry anywhere in the archive is
+## installed (stray RAPs are harmless, 16 bytes each; disc games ship none).
+## Idempotent: RAPs already on disk are left alone. Never blocks the launch.
+func _ensure_rpcs3_license(zip_path: String, exdata_dir: String) -> void:
+	if zip_path == "" or exdata_dir == "":
+		return
+	var resolved_zip = TitleIDParser._resolve_zip_path(zip_path)
+	if resolved_zip == "":
+		return
+
+	var zr := ZIPReader.new()
+	if zr.open(resolved_zip) == OK:
+		for entry in zr.get_files():
+			if entry.ends_with("/") or entry.get_extension().to_lower() != "rap":
+				continue
+			_install_rpcs3_rap(entry.get_file(), zr.read_file(entry), exdata_dir)
+		zr.close()
+	else:
+		# ZIPReader fails on some ZIP64 archives; use the bundled 7z instead
+		zr.close()
+		_install_rpcs3_raps_with_7z(resolved_zip, exdata_dir)
+
+
+## Writes one RAP license into exdata_dir, skipping files already on disk
+func _install_rpcs3_rap(file_name: String, bytes: PackedByteArray, exdata_dir: String) -> void:
+	if file_name == "" or bytes.is_empty():
+		return
+	var dst := exdata_dir + "/" + file_name
+	if FSM.file_exists(dst):
+		return
+	if not FSM.dir_exists(exdata_dir):
+		FSM.make_dir_recursive(exdata_dir)
+	if FSM.write_file_bytes(dst, bytes):
+		print("[GameManager] RPCS3: Installed RAP license: " + dst)
+	else:
+		push_warning("[GameManager] RPCS3: Failed to write RAP license: " + dst)
+
+
+## 7-Zip fallback for _ensure_rpcs3_license (ZIP64 archives ZIPReader can't
+## open). Desktop only; Android goes through the native ZIPReader path.
+func _install_rpcs3_raps_with_7z(zip_path: String, exdata_dir: String) -> void:
+	var binary_path = FSM._get_7z_binary_path()
+	if binary_path == "":
+		return
+
+	var output := []
+	if OS.execute(binary_path, ["l", "-slt", zip_path], output, true) != 0 or output.is_empty():
+		return
+
+	var rap_entries: Array[String] = []
+	for line in str(output[0]).split("\n"):
+		if line.begins_with("Path = "):
+			var entry := line.substr(7).strip_edges()
+			if entry.get_extension().to_lower() == "rap":
+				rap_entries.append(entry)
+
+	var temp_dir := "user://temp/ps3_rap/"
+	for entry in rap_entries:
+		var file_name := entry.get_file()
+		if file_name == "" or FSM.file_exists(exdata_dir + "/" + file_name):
+			continue
+		if not DirAccess.dir_exists_absolute(temp_dir):
+			DirAccess.make_dir_recursive_absolute(temp_dir)
+		var extract_args := ["e", zip_path, entry, "-o" + FSM.resolve_path(temp_dir, {"format": FSM.PathFormat.ABSOLUTE}), "-y"]
+		# `7z e` flattens to the entry's basename
+		var extracted := temp_dir + file_name
+		if OS.execute(binary_path, extract_args, output, true) == 0 and FSM.file_exists(extracted):
+			_install_rpcs3_rap(file_name, FSM.read_file_bytes(extracted), exdata_dir)
+			DirAccess.remove_absolute(extracted)
+		else:
+			push_warning("[GameManager] RPCS3: 7-Zip failed to extract RAP entry: " + entry)
 
 
 ## Prepares a PS4 game for launch by extracting the TitleID and extracting game files

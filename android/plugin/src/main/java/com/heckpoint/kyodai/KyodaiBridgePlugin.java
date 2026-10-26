@@ -1857,6 +1857,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         return StorageTier.tierFor(activity, path);
     }
 
+    /**
+     * 0=direct, 1=saf, 2=root, 3=none - the access route for a path. This is
+     * the single source of truth for GDScript flow decisions: NONE means no
+     * route exists (prompt for a grant); non-DIRECT means plain File I/O
+     * (e.g. HTTPRequest downloads) cannot write the path and must stage.
+     */
+    @UsedByGodot
+    public int accessRouteForPath(String path) {
+        return StorageTier.accessRouteFor(activity, path);
+    }
+
     /** Ownership repair after SAF-tier writes; see StorageTier. */
     private void postSafFixup(String path) {
         if (requiresDocumentsContract(path)) {

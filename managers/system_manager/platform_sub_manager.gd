@@ -245,35 +245,48 @@ func open_manage_storage_settings():
 
 var _saf_grant_pending_callback: Callable = Callable()
 
+## The access route for a filesystem path - the single source of truth for
+## flow decisions (prompt for a grant, stage a download, proceed). Mirrors
+## StorageTier in the KyodaiBridge plugin, whose probes (ext_data_rw gid,
+## persisted grant coverage, vendor root daemon) back every file op.
+enum AccessRoute { DIRECT, SAF, ROOT, NONE }
+
+## Resolves the route for an absolute path. DIRECT: plain File I/O works
+## (unrestricted path, desktop, or we hold ext_data_rw). SAF: a persisted
+## document-tree grant covers the path - only plugin operations reach it.
+## ROOT: a live vendor daemon writes via the plugin; our own process still
+## cannot direct-write. NONE: no route exists - prompt for a grant.
+func access_route(path: String) -> int:
+	if not is_android():
+		return AccessRoute.DIRECT
+	var plugin = _get_android_plugin()
+	if plugin == null or path == "":
+		return AccessRoute.NONE
+	return int(plugin.call("accessRouteForPath", path))
+
+## True when any access route exists for the path (direct, SAF grant, or root
+## daemon). When false, the flow should prompt for a document-tree grant.
 func has_android_data_access(path: String = "") -> bool:
 	if not is_android():
 		return true
 	var plugin = _get_android_plugin()
 	if plugin == null:
 		return false
-	if has_direct_android_data_access():
-		return true
-	if path != "":
-		return bool(plugin.hasSafGrantFor(path))
-	return bool(plugin.hasSafGrant())
+	if path == "":
+		# Legacy no-path semantics: any viable route mechanism.
+		if plugin.has_method("hasExtDataRwAccess") and bool(plugin.hasExtDataRwAccess()):
+			return true
+		var root_available = plugin.call("rootAvailable")
+		if root_available != null and root_available:
+			return true
+		return bool(plugin.hasSafGrant())
+	return access_route(path) != AccessRoute.NONE
 
-## True when direct File I/O into other apps' Android/data works on this
-## device: we hold ext_data_rw ourselves, or a live vendor root daemon covers
-## writes for any package. When false but a SAF grant exists, access only
-## works through the plugin's DocumentsContract operations - plain
-## FileAccess/HTTPRequest writes still fail.
-func has_direct_android_data_access() -> bool:
-	if not is_android():
-		return true
-	var plugin = _get_android_plugin()
-	if plugin == null:
-		return false
-	# Holding ext_data_rw ourselves means direct File I/O into Android/data works
-	if plugin.has_method("hasExtDataRwAccess") and bool(plugin.hasExtDataRwAccess()):
-		return true
-	# A live vendor root daemon covers writes for any package (root tier)
-	var root_available = plugin.call("rootAvailable")
-	return root_available != null and root_available
+## True when plain File I/O (FileAccess, HTTPRequest downloads) can write the
+## path directly. Root-daemon devices answer false for restricted paths: only
+## the daemon writes there, via plugin calls - our own process cannot.
+func has_direct_android_data_access(path: String = "") -> bool:
+	return access_route(path) == AccessRoute.DIRECT
 
 ## Calls on_ready(granted: bool). If a document-tree grant already exists, calls
 ## back immediately with true. Otherwise shows a prompt and launches the system

@@ -1974,20 +1974,18 @@ func _install_flow_needs_app_data(emulator_id: String, install_steps: Array) -> 
 	if platforms.is_empty():
 		platforms = [""]
 	for platform in platforms:
-		if _is_restricted_android_path(DataManager.resolve_default_save_directory(emulator_id, platform)):
+		if _declared_path_needs_grant(DataManager.resolve_default_save_directory(emulator_id, platform)):
 			return true
-		if _is_restricted_android_path(launch_manager.firmware.get_firmware_directory(emulator_id, platform)):
+		if _declared_path_needs_grant(launch_manager.firmware.get_firmware_directory(emulator_id, platform)):
 			return true
 	return false
 
-## The restricted-path probe used across sync/firmware: app-private
-## Android/data|obb trees sit behind SAF grants on devices without direct
-## access or a root daemon.
-func _is_restricted_android_path(path: String) -> bool:
+## True when no access route to the path exists on this device - the install
+## flow should prompt for a document-tree grant before touching it.
+func _declared_path_needs_grant(path: String) -> bool:
 	if path == "":
 		return false
-	var normalized := path.replace("\\", "/")
-	return normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
+	return SystemManager.platform.access_route(path) == PlatformSubManager.AccessRoute.NONE
 
 ## Gates an install flow on Android app-data access. Returns true when the
 ## grant picker was just shown (caller must pause; the callback restarts the

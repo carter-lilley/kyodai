@@ -43,6 +43,8 @@ final class StorageTier {
     static final int TIER_DIRECT = 0;
     static final int TIER_SAF = 1;
     static final int TIER_ROOT = 2;
+    /** Flow-decision state: no route can reach the path (prompt for a grant). */
+    static final int ROUTE_NONE = 3;
 
     /** ext_data_rw - the group the FUSE daemon assigns to all Android/data files. */
     static final int EXT_DATA_RW_GID = 1078;
@@ -230,11 +232,29 @@ final class StorageTier {
         return TIER_SAF;
     }
 
+    /**
+     * The access route for a path, for GDScript flow decisions (prompt for a
+     * grant, stage a download, proceed). Unlike tierFor - which folds "no
+     * route" into TIER_SAF so ops fail loudly - this distinguishes ROUTE_NONE
+     * (no grant coverage, no direct I/O, no root) from a viable SAF route.
+     */
+    static int accessRouteFor(Context context, String path) {
+        long t0 = SafPerf.start();
+        try {
+            int tier = tierForImpl(context, path);
+            if (tier == TIER_SAF && !hasGrantCoverageImpl(context, path)) {
+                return ROUTE_NONE;
+            }
+            return tier;
+        } finally { SafPerf.record("accessRoute", t0); }
+    }
+
     static String tierName(int tier) {
         switch (tier) {
             case TIER_DIRECT: return "direct";
             case TIER_SAF: return "saf";
             case TIER_ROOT: return "root";
+            case ROUTE_NONE: return "none";
             default: return "unknown";
         }
     }

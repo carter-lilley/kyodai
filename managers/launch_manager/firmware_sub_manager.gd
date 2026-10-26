@@ -319,10 +319,7 @@ func _finish_firmware_extract(extract_success: bool, error_msg: String, firmware
 ## Android blocks other apps' /Android/data even with all-files access; a
 ## one-time document-tree grant unlocks it. Prompt just-in-time and retry once.
 func _retry_or_fail_firmware_extract(temp_path: String, firmware_dir: String, platform_slug: String, emulator_id: String, callback: Callable, error_msg: String) -> void:
-	var normalized = firmware_dir.replace("\\", "/")
-	var is_restricted = normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
-	if not SystemManager.platform.is_android() or not is_restricted \
-			or SystemManager.platform.has_android_data_access(firmware_dir):
+	if SystemManager.platform.access_route(firmware_dir) != PlatformSubManager.AccessRoute.NONE:
 		_finish_firmware_extract(false, error_msg, firmware_dir, platform_slug, emulator_id, callback, temp_path.get_file())
 		return
 

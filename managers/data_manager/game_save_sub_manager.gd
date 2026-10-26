@@ -2552,38 +2552,28 @@ func _format_conflict_timestamp(unix_time: int) -> String:
 	return "%s %d, %d at %d:%02d %s" % [month, day, year, hour, minute, ampm]
 
 
-## Returns "" when save sync may proceed, or the restricted probe path that
-## needs a document-tree grant first (emulator save dir under Android/data|obb
-## with no usable access route on this device). Falls back to the emulator's
-## app-data root when save_dir is empty: an unreadable config makes the
-## resolver return "", but the tree is still restricted.
+## Returns "" when save sync may proceed, or the probe path that needs a
+## document-tree grant first (no access route to the emulator's save dir on
+## this device). Falls back to the emulator's app-data root when save_dir is
+## empty: an unreadable config makes the resolver return "", but the tree is
+## still restricted.
 func _save_sync_grant_probe(emulator_id: String, save_dir: String) -> String:
-	if not SystemManager.platform.is_android():
-		return ""
 	var probe_dir = save_dir
 	if probe_dir == "":
 		probe_dir = LaunchManager.get_app_data_path(emulator_id)
 	if probe_dir == "":
 		return ""
-	var normalized_dir = probe_dir.replace("\\", "/")
-	if not normalized_dir.contains("/Android/data/") and not normalized_dir.contains("/Android/obb/"):
-		return ""
-	if SystemManager.platform.has_android_data_access(probe_dir):
+	if SystemManager.platform.access_route(probe_dir) != PlatformSubManager.AccessRoute.NONE:
 		return ""
 	return probe_dir
 
 
-## Godot's HTTPRequest writes download_file via direct File I/O, which cannot
-## touch SAF-grant-only Android/data|obb trees. True when a download to this
-## destination must be staged in user://temp and placed via the plugin.
-## Devices with direct file access keep the single-write path.
+## Godot's HTTPRequest writes download_file via direct File I/O, which only
+## works on DIRECT-route paths. SAF and ROOT routes must stage in user://temp
+## and place the file via the plugin (a root daemon writes for us, but our
+## own process cannot). Devices with direct file access keep the fast path.
 func _must_stage_download(path: String) -> bool:
-	if not SystemManager.platform.is_android():
-		return false
-	var normalized = path.replace("\\", "/")
-	if not normalized.contains("/Android/data/") and not normalized.contains("/Android/obb/"):
-		return false
-	return not SystemManager.platform.has_direct_android_data_access()
+	return SystemManager.platform.access_route(path) != PlatformSubManager.AccessRoute.DIRECT
 
 
 ## Main sync entry point for manual and auto sync
