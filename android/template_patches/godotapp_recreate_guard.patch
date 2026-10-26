@@ -1,0 +1,58 @@
+--- src/main/java/com/godot/game/GodotApp.java
++++ src/main/java/com/godot/game/GodotApp.java
+@@ -34,6 +34,7 @@
+ import org.godotengine.godot.GodotActivity;
+ 
+ import android.os.Bundle;
++import android.os.SystemClock;
+ import android.util.Log;
+ 
+ import androidx.activity.EdgeToEdge;
+@@ -44,6 +45,21 @@
+  * Feel free to extend and modify this class for your custom logic.
+  */
+ public class GodotApp extends GodotActivity {
++	private static final String TAG = "GodotApp";
++
++	// Kyodai: guard against rapid same-process activity recreation. When the
++	// system recreates this activity twice within a few seconds (observed on
++	// AYN Thor when returning from a game as the HOME app), the second surface
++	// handoff can kill the Vulkan surface mid-reattach, leaving the app on a
++	// black screen with dead input. Rather than race into that zombie state,
++	// restart the process cleanly. The rebirth cooldown (persisted across the
++	// process death rebirth itself causes) prevents restart loops.
++	private static final String PREFS_NAME = "kyodai_recreate_guard";
++	private static final String PREF_LAST_REBIRTH_MS = "last_rebirth_ms";
++	private static final long RECREATE_WINDOW_MS = 3000;
++	private static final long REBIRTH_COOLDOWN_MS = 30000;
++	private static long lastCreateElapsedMs = -1;
++
+ 	static {
+ 		// .NET libraries.
+ 		if (BuildConfig.FLAVOR.equals("mono")) {
+@@ -75,6 +91,25 @@
+ 		if (godot != null && godot.getDisableGodotSplash()) {
+ 			splashScreen.setKeepOnScreenCondition(() -> godot.getRunStatus() != Godot.RunStatus.STARTED);
+ 		}
++
++		long now = SystemClock.elapsedRealtime();
++		long sinceLastCreateMs = lastCreateElapsedMs >= 0 ? now - lastCreateElapsedMs : -1;
++		lastCreateElapsedMs = now;
++		if (sinceLastCreateMs >= 0 && sinceLastCreateMs < RECREATE_WINDOW_MS) {
++			long nowWallMs = System.currentTimeMillis();
++			long lastRebirthMs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
++					.getLong(PREF_LAST_REBIRTH_MS, 0);
++			if (nowWallMs - lastRebirthMs > REBIRTH_COOLDOWN_MS) {
++				Log.w(TAG, "Activity recreated " + sinceLastCreateMs + "ms after previous create; restarting process to avoid a dead render surface");
++				getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
++						.edit()
++						.putLong(PREF_LAST_REBIRTH_MS, nowWallMs)
++						.apply();
++				triggerRebirth(null, getIntent());
++			} else {
++				Log.w(TAG, "Rapid activity recreation detected again, but rebirth is on cooldown");
++			}
++		}
+ 	}
+ 
+ 	@Override
