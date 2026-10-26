@@ -9,10 +9,22 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 const CONTENT_MARGIN_PATH := ^"MarginContainer"
 const HEIGHT_FRACTION := 0.85
+## Height fraction on short viewports (landscape handhelds): the fixed
+## chrome + header leave too little for tab content otherwise, so the sheet
+## takes nearly the full screen height.
+const FULL_HEIGHT_FRACTION := 0.95
+const SHORT_VIEWPORT_HEIGHT_DP := 600.0
 const WIDTH_FRACTION := 0.75
 const MAX_WIDTH_DP := 1200.0
 const H_MARGIN_DP := 32.0
 const MAX_DETAILS_TEXTURE_SIZE: int = 1024
+
+## Below this viewport width the header stacks (title row + left-aligned
+## button row) and the two chip rows merge into one truncated line. Sits
+## ABOVE the shared compact breakpoint: the sheet's fixed width fraction and
+## cover column leave the header row too cramped to share well before the
+## global compact tier kicks in (e.g. an 832dp-wide handheld panel).
+const STACKED_HEADER_VIEWPORT_DP := 900.0
 
 
 const TAB_MARGIN_TOP_DP := 12.0
@@ -48,14 +60,17 @@ const STAR_GAP_DP := 2.0
 @onready var related_header: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedHeader
 @onready var related_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll
 @onready var related_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Related/RelatedTabScroll/RelatedTabContent/RelatedSection/RelatedScroll/RowMargin/RelatedRow
-@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard
-@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
-@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
-@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
-@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
-@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
-@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/SiblingDropdown
-@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesVBox/StatusDropdown
+@onready var files_scroll: ScrollContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll
+@onready var files_card: PanelContainer = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard
+@onready var file_info_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileInfoLabel
+@onready var file_size_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/FileSizeLabel
+@onready var title_id_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/TitleIdLabel
+@onready var status_chip: M3Chip = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/StatusChipRow/StatusChip
+@onready var sync_status_label: Label = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/FilesCard/CardMargin/CardVBox/SyncStatusLabel
+@onready var sibling_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/SiblingDropdown
+@onready var status_dropdown: M3OptionButton = $MarginContainer/HBoxContainer/ContentVBox/ContentTabs/Files/FilesScroll/FilesVBox/StatusDropdown
+@onready var header_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow
+@onready var button_row: HBoxContainer = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow
 @onready var action_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/ActionButton
 @onready var sync_button: M3Button = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/SyncButton
 @onready var favorite_button: M3IconButton = $MarginContainer/HBoxContainer/ContentVBox/HeaderRow/ButtonRow/FavoriteButton
@@ -185,6 +200,18 @@ func _refit_metadata_row() -> void:
 func _on_content_row_resized() -> void:
 	_refit_metadata_row()
 
+func _on_tab_changed(_tab: int) -> void:
+	if visible and is_node_ready():
+		_reposition_open()
+		# TEMP DIAGNOSTICS
+		if _sheet_container:
+			M3Debug.geom("details_tier", "tab=%d content_min=%s stamped=%s button_row_parent=%s studio_visible=%s" % [
+				_tab, _sheet_container.get_combined_minimum_size(), _sheet_container.size,
+				button_row.get_parent().name if is_instance_valid(button_row) else "?",
+				studio_row.visible if is_instance_valid(studio_row) else "?"])
+			_dump_min_chain("tab%d-x" % _tab, _sheet_container, "x", 0)
+			_dump_min_chain("tab%d-y" % _tab, _sheet_container, "y", 0)
+
 func refresh_theme():
 	super.refresh_theme()
 	if is_node_ready():
@@ -257,7 +284,25 @@ func _setup_tab_badges() -> void:
 	bar.item_rect_changed.connect(_position_tab_badges)
 	_position_tab_badges.call_deferred()
 
+## True while a next-idle badge refit is scheduled; keeps the double-pass in
+## _position_tab_badges from queueing unbounded deferred calls.
+var _badge_refit_pending := false
+
 func _position_tab_badges() -> void:
+	_apply_tab_badge_positions()
+	# Tab rects only settle once the bar re-sorts during the idle flush after
+	# a tab visibility flip, so a same-frame read can be stale (e.g. tabs
+	# unhidden during hidden prep). Re-run once on the next idle so the
+	# badges can't be stranded on pre-unhide rects.
+	if not _badge_refit_pending:
+		_badge_refit_pending = true
+		_refit_tab_badges.call_deferred()
+
+func _refit_tab_badges() -> void:
+	_badge_refit_pending = false
+	_apply_tab_badge_positions()
+
+func _apply_tab_badge_positions() -> void:
 	if not is_instance_valid(_tab_badge_prev) or not is_instance_valid(_tab_badge_next):
 		return
 	var bar := content_tabs.get_tab_bar()
@@ -294,6 +339,8 @@ func _apply_m3_control_styling() -> void:
 		M3Theme.style_scrollbar(screenshots_scroll.get_h_scroll_bar())
 	if is_instance_valid(desc_scroll):
 		M3Theme.style_scrollbar(desc_scroll.get_v_scroll_bar())
+	if is_instance_valid(files_scroll):
+		M3Theme.style_scrollbar(files_scroll.get_v_scroll_bar())
 
 ## Group the related-games row in a rounded section card (SettingsSection's
 ## surface language) sitting under the left-aligned header.
@@ -326,7 +373,7 @@ func _setup_focus_neighbors() -> void:
 func _apply_content_scaling() -> void:
 	if not is_instance_valid(_content_root):
 		return
-	var edge := M3Units.dpi(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
+	var edge := M3Units.dpi(10.0 if _small_layout else (16.0 if (_compact_layout or _stacked_header) else 24.0))
 	var margin := _content_root as MarginContainer
 	if margin:
 		margin.add_theme_constant_override("margin_left", edge)
@@ -392,6 +439,16 @@ func _connect_signals() -> void:
 		desc_fold_button.pressed.connect(_on_desc_fold_pressed)
 	if desc_scroll:
 		desc_scroll.resized.connect(_on_desc_scroll_resized)
+	if content_tabs:
+		# Safety net: the TabContainer's combined minimum tracks the SELECTED
+		# tab, so a tab whose content minimum ever exceeds the stamp would
+		# clamp the shell taller (Control.set_size clamps up) and strand it
+		# overflowing the bottom screen edge. Re-anchor on every tab change;
+		# the per-tab ScrollContainers keep the minimum under budget so this
+		# only ever runs as a no-op re-stamp.
+		var bar := content_tabs.get_tab_bar()
+		if bar and not bar.tab_changed.is_connected(_on_tab_changed):
+			bar.tab_changed.connect(_on_tab_changed)
 	if metadata_row:
 		metadata_row.resized.connect(_on_content_row_resized)
 	if studio_row:
@@ -403,6 +460,7 @@ const RELATED_TAB_INDEX := 2
 const SCREENSHOTS_TAB_INDEX := 3
 var _compact_layout := false
 var _small_layout := false
+var _stacked_header := false
 
 ## Viewport-dp breakpoint check, measured against the same authoritative
 ## viewport the sheet stamps its geometry against (DS-aware: the active
@@ -416,15 +474,26 @@ func _is_viewport_narrow(breakpoint_dp: float) -> bool:
 	return viewport.get_visible_rect().size.x < M3Units.dp(breakpoint_dp)
 
 ## Tiered layout (shared breakpoints live on DisplaySubManager):
-## - expanded: full margins
+## - expanded: full margins; title and actions share the header row (the
+##   title truncates with an ellipsis), studio and metadata chips are
+##   separate rows
+## - stacked header (<900dp viewport, sheet-specific): the title gets its own
+##   row with the actions on a left-aligned row beneath + studio and metadata
+##   chips merged into a single truncated row
 ## - compact (<700dp viewport): tighter margins
 ## - small (<600dp viewport): compact + cover hidden + dense chips
-## The title truncates with an ellipsis so the actions always share its row.
 func _apply_responsive_layout() -> void:
 	if not is_node_ready():
 		return
 	var small := _is_viewport_narrow(DisplaySubManager.SMALL_VIEWPORT_DP)
 	var compact := small or _is_viewport_narrow(DisplaySubManager.COMPACT_VIEWPORT_DP)
+	var stacked := _is_viewport_narrow(STACKED_HEADER_VIEWPORT_DP)
+	# TEMP DIAGNOSTICS
+	var _vp = M3Overlay.get_sizing_viewport(get_viewport())
+	M3Debug.geom("details_tier", "viewport_px=%s scale=%.3f dp900=%.1f dp700=%.1f dp600=%.1f -> stacked=%s small=%s compact=%s (was stacked=%s small=%s compact=%s)" % [
+		_vp.get_visible_rect().size if _vp else Vector2.ZERO, M3Units.get_scale(),
+		M3Units.dp(STACKED_HEADER_VIEWPORT_DP), M3Units.dp(700.0), M3Units.dp(600.0),
+		stacked, small, compact, _stacked_header, _small_layout, _compact_layout])
 	var changed := false
 	if compact != _compact_layout:
 		_compact_layout = compact
@@ -433,15 +502,47 @@ func _apply_responsive_layout() -> void:
 		_small_layout = small
 		changed = true
 		cover_container.visible = not small
-		# Rebuild metadata chips with/without dense sizing.
-		if _current_game:
-			_populate_metadata_chips(_current_game)
+	var stacked_changed := stacked != _stacked_header
+	if stacked_changed:
+		_stacked_header = stacked
+		changed = true
 	if changed:
+		_apply_header_layout_tier()
+		# Rebuild the header chips for the tier: the stacked-header tier merges
+		# the studio and metadata rows into one truncated line; wider tiers
+		# keep them as separate rows. Small additionally switches to dense chips.
+		if _current_game:
+			_populate_studio(_current_game)
+			_populate_metadata_chips(_current_game)
+			if stacked_changed:
+				# Card sizes are tier-dependent; rebuild the strips so a full
+				# row fits the shorter tab content area instead of clipping.
+				_populate_screenshots(_current_game)
+				_populate_related_games(_current_game)
 		_apply_content_scaling()
 	# Tier flips change both the margins and the small-mode rule, so the
 	# strip's inline-vs-tab placement is only valid for the tier it was
 	# computed in. Idempotent.
 	_decide_screenshots_placement()
+
+## Stacked-header tier: the title gets its own full-width row and the action
+## buttons drop to a left-aligned row directly beneath it (reparented out of
+## the header HBox into the content column, right after the header). Reversed
+## on exit. Idempotent. Focus neighbors are stored as NodePaths, so the chains
+## must be rebuilt after any reparent.
+func _apply_header_layout_tier() -> void:
+	if not is_instance_valid(button_row) or not is_instance_valid(header_row) or not is_instance_valid(content_vbox):
+		return
+	if _stacked_header:
+		if button_row.get_parent() == header_row:
+			header_row.remove_child(button_row)
+			content_vbox.add_child(button_row)
+			content_vbox.move_child(button_row, header_row.get_index() + 1)
+	elif button_row.get_parent() == content_vbox:
+		content_vbox.remove_child(button_row)
+		header_row.add_child(button_row)
+	_setup_focus_neighbors()
+	_update_chips_focus_chain()
 
 ## Related always lives in its own tab; only the tab's visibility is managed
 ## here (hidden when the game has no related games).
@@ -492,7 +593,7 @@ func _compute_overview_budget() -> float:
 	if bar:
 		used += bar.get_combined_minimum_size().y
 	used += M3Units.dp(TAB_MARGIN_TOP_DP)
-	return maxf(0.0, screen.y * HEIGHT_FRACTION - used)
+	return maxf(0.0, screen.y * _get_sheet_height_fraction() - used)
 
 ## Moves the screenshots strip between the Overview column (inline, under the
 ## description) and its own tab. Inline only when the strip's fixed minimum
@@ -561,12 +662,21 @@ func _dump_min_chain(tag: String, node: Control, axis: String, depth: int) -> vo
 	if worst:
 		_dump_min_chain(tag, worst, axis, depth + 1)
 
+## Sheet height as a fraction of the sizing viewport: nearly full-height on
+## short landscape screens (handhelds), the standard 85% elsewhere.
+func _get_sheet_height_fraction() -> float:
+	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
+	if viewport == null:
+		return HEIGHT_FRACTION
+	var screen_dp_y := viewport.get_visible_rect().size.y / M3Units.get_scale()
+	return FULL_HEIGHT_FRACTION if screen_dp_y < SHORT_VIEWPORT_HEIGHT_DP else HEIGHT_FRACTION
+
 func _set_sheet_height() -> void:
 	var viewport = M3Overlay.get_sizing_viewport(get_viewport())
 	if not viewport:
 		return
 	var screen_dp := viewport.get_visible_rect().size.y / M3Units.get_scale()
-	var new_peek := screen_dp * HEIGHT_FRACTION
+	var new_peek := screen_dp * _get_sheet_height_fraction()
 	peek_height = new_peek
 
 func _reduce_top_padding() -> void:
@@ -578,8 +688,8 @@ func _reduce_top_padding() -> void:
 	if margin:
 		margin.add_theme_constant_override("margin_top", int(M3Units.dp(4.0)))
 
-## Reclaim vertical chrome in small mode: kill the (hidden) drag handle's
-## spacer and shrink the header pad so content gets the room.
+## Reclaim vertical chrome in the stacked-header tier: kill the (hidden)
+## drag handle's spacer and shrink the header pad so content gets the room.
 func _apply_chrome_tier() -> void:
 	if not _sheet_container:
 		return
@@ -591,10 +701,10 @@ func _apply_chrome_tier() -> void:
 		return
 	var drag_margin := root.get_node_or_null("DragMargin")
 	if drag_margin:
-		drag_margin.custom_minimum_size = Vector2(0, M3Units.dp(0.0 if _small_layout else 16.0))
+		drag_margin.custom_minimum_size = Vector2(0, M3Units.dp(0.0 if _stacked_header else 16.0))
 	var header_pad := root.get_node_or_null("HeaderPad")
 	if header_pad:
-		header_pad.custom_minimum_size = Vector2(0, M3Units.dp(4.0 if _small_layout else 8.0))
+		header_pad.custom_minimum_size = Vector2(0, M3Units.dp(4.0 if _stacked_header else 8.0))
 
 func _get_sheet_width(screen_width: float) -> float:
 	var ui_scale := M3Units.get_scale()
@@ -689,26 +799,40 @@ func _populate_studio(game: GameResource) -> void:
 		child.queue_free()
 	_studio_chips.clear()
 	var companies := game.get_igdb_companies()
-	studio_row.visible = not companies.is_empty()
+	studio_row.visible = not companies.is_empty() and not _stacked_header
+	if _stacked_header:
+		# The stacked-header tier merges the company chips into the metadata
+		# row's single truncated line; they're created by
+		# _populate_metadata_chips so the row's overflow pass and focus chain
+		# own them. This row stays hidden.
+		return
 	for company in companies:
-		var chip := M3Chip.new()
-		chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
-		chip.text = company
-		chip.dense = true
-		chip.focus_mode = Control.FOCUS_ALL
-		chip.tooltip_text = "Show all games by %s" % company
-		chip.pressed.connect(_on_company_chip_pressed.bind(company))
+		var chip := _make_studio_chip(company)
 		studio_row.add_child(chip)
 		_studio_chips.append(chip)
 	_layout_studio_row_overflow()
 	# Overflow visibility is final here; wire the focus chain last.
 	_update_chips_focus_chain()
 
+func _make_studio_chip(company: String) -> M3Chip:
+	var chip := M3Chip.new()
+	chip.chip_variant = M3Chip.ChipVariant.SUGGESTION
+	chip.text = company
+	chip.dense = true
+	chip.focus_mode = Control.FOCUS_ALL
+	chip.tooltip_text = "Show all games by %s" % company
+	chip.pressed.connect(_on_company_chip_pressed.bind(company))
+	return chip
+
 ## Same single-line overflow discipline as the metadata row: hide the chips
 ## that don't fit so the row's combined minimum width can never inflate the
 ## sheet past its stamped width (clip_contents alone still propagates min size).
 func _layout_studio_row_overflow() -> void:
 	if not is_instance_valid(studio_row) or _studio_chips.is_empty():
+		return
+	if _stacked_header:
+		# Merged into the metadata row in this tier; that row's overflow
+		# pass owns chip visibility.
 		return
 	var sep := float(studio_row.get_theme_constant("separation"))
 	var avail := studio_row.size.x
@@ -783,6 +907,17 @@ func _populate_metadata_chips(game: GameResource) -> void:
 	_stars_trailer = null
 	var platform_name: String = game.platform if game.platform else "Unknown Platform"
 	_add_metadata_chip(platform_name, "gamepad-variant", true, true, "platform", game.platform_slug, "", platform_name)
+	if _stacked_header:
+		# Merged single line, platform first: company chips slot in ahead of
+		# date/genre, and the overflow pass truncates them all into one "+N"
+		# line. _populate_studio keeps its own row hidden in this tier.
+		_studio_chips.clear()
+		for company in game.get_igdb_companies():
+			var studio_chip := _make_studio_chip(company)
+			_interactive_meta_chips.append(studio_chip)
+			metadata_row.add_child(studio_chip)
+			metadata_row.move_child(studio_chip, 1 + _studio_chips.size())
+			_studio_chips.append(studio_chip)
 	if game.release_date > 0:
 		var year := int(Time.get_datetime_dict_from_unix_time(int(game.release_date / 1000.0)).year)
 		if year > 1971:
@@ -827,7 +962,11 @@ func _populate_metadata_chips(game: GameResource) -> void:
 func _layout_metadata_row_overflow() -> void:
 	if not is_instance_valid(metadata_row):
 		return
-	var n := _metadata_chips.size()
+	# The stacked-header tier merges the studio chips into this row; overflow
+	# then runs over the combined list (companies first, then platform/date/
+	# genre).
+	var chips := _get_metadata_row_chips()
+	var n := chips.size()
 	if n == 0:
 		return
 	var sep := float(metadata_row.get_theme_constant("separation"))
@@ -845,25 +984,37 @@ func _layout_metadata_row_overflow() -> void:
 	var used := 0.0
 	var fit := 0
 	for i in range(n):
-		if not is_instance_valid(_metadata_chips[i]):
+		if not is_instance_valid(chips[i]):
 			break
-		var w := _metadata_chips[i].get_combined_minimum_size().x + sep
+		var w := chips[i].get_combined_minimum_size().x + sep
 		var rest := n - i - 1
 		var reserve := trailer_w + (overflow_w if rest > 0 else 0.0)
 		if fit == 0 or used + w + reserve <= avail:
-			# Always show at least the platform chip.
+			# Always show at least the first chip.
 			used += w
 			fit += 1
 		else:
 			break
 	for i in range(n):
-		if is_instance_valid(_metadata_chips[i]):
-			_metadata_chips[i].visible = i < fit
+		if is_instance_valid(chips[i]):
+			chips[i].visible = i < fit
 	var hidden := n - fit
 	if is_instance_valid(_overflow_chip):
 		_overflow_chip.visible = hidden > 0
 		if hidden > 0:
 			_overflow_chip.text = "+%d" % hidden
+
+## Ordered chips living in the metadata row. Wider tiers keep the rows
+## separate; the stacked-header tier merges the studio chips in right behind
+## the platform chip, which always leads the row.
+func _get_metadata_row_chips() -> Array[M3Chip]:
+	if _stacked_header and not _studio_chips.is_empty() and not _metadata_chips.is_empty():
+		var all: Array[M3Chip] = [_metadata_chips[0]]  # platform leads
+		all.append_array(_studio_chips)
+		for i in range(1, _metadata_chips.size()):
+			all.append(_metadata_chips[i])
+		return all
+	return _metadata_chips
 
 ## Deterministic width of the metadata row for the synchronous overflow pass,
 ## used before the row has been laid out (e.g. first summon).
@@ -887,7 +1038,7 @@ func _estimate_metadata_row_width() -> float:
 	if sheet_margin:
 		chrome = float(sheet_margin.get_theme_constant("margin_left")) \
 			+ float(sheet_margin.get_theme_constant("margin_right"))
-	var edge := M3Units.dp(10.0 if _small_layout else (16.0 if _compact_layout else 24.0))
+	var edge := M3Units.dp(10.0 if _small_layout else (16.0 if (_compact_layout or _stacked_header) else 24.0))
 	var content_w := stamped - chrome - edge * 2.0
 	if not _small_layout and is_instance_valid(cover_container) and cover_container.visible:
 		# Cover column takes ~0.3 of the HBox (stretch ratio 0.3/0.7) plus the gap.
@@ -1057,6 +1208,12 @@ func _on_desc_fold_pressed() -> void:
 # ==================== SCREENSHOTS ====================
 
 const SCREENSHOT_HEIGHT_DP := 140.0
+## Shorter strip in the stacked-header tier so a full row fits the shorter
+## tab content area instead of clipping mid-card.
+const SCREENSHOT_HEIGHT_STACKED_DP := 112.0
+
+func _screenshot_strip_height_dp() -> float:
+	return SCREENSHOT_HEIGHT_STACKED_DP if _stacked_header else SCREENSHOT_HEIGHT_DP
 
 func _populate_screenshots(game: GameResource) -> void:
 	if not is_instance_valid(screenshots_section) or not is_instance_valid(screenshots_row):
@@ -1100,7 +1257,7 @@ func _update_screenshots_header() -> void:
 	screenshots_header.text = "Screenshots" if _screenshots_count == 0 else "Screenshots (%d)" % _screenshots_count
 
 func _add_screenshot_thumb(url: String, for_romm_id: int, at_position: int = -1) -> void:
-	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
+	var height := M3Units.dp(_screenshot_strip_height_dp())
 	# Media-only M3Card: no text, so the media fills the card with the card's
 	# rounded-corner rendering. Clickable: opens the fullscreen lightbox.
 	var card := M3Card.new()
@@ -1140,7 +1297,7 @@ func _on_screenshot_thumb_pressed(card: M3Card) -> void:
 	ScreenshotLightbox.show_image(texture, url, card)
 
 func _add_screenshot_upload_card() -> void:
-	var height := M3Units.dp(SCREENSHOT_HEIGHT_DP)
+	var height := M3Units.dp(_screenshot_strip_height_dp())
 	var card := M3Card.new()
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
@@ -1239,6 +1396,10 @@ func _upload_screenshot(path: String) -> void:
 const RELATED_CARD_WIDTH_DP := 120.0
 # Media is 3:4 (160dp tall at 120dp wide) plus the ~36dp caption-only text area.
 const RELATED_CARD_HEIGHT_DP := 120.0 / 0.75 + 36.0
+## Smaller cards in the stacked-header tier so a full card fits the shorter
+## tab content area instead of clipping mid-card.
+const RELATED_CARD_WIDTH_STACKED_DP := 96.0
+const RELATED_CARD_HEIGHT_STACKED_DP := 96.0 / 0.75 + 36.0
 const RELATED_TYPE_LABELS := {
 	"dlc": "DLC",
 	"expansion": "Expansion",
@@ -1324,7 +1485,9 @@ func _add_related_card(entry: Dictionary) -> void:
 	var card := M3Card.new()
 	card.card_variant = M3Card.Variant.FILLED
 	card.enforce_min_height = false
-	card.custom_minimum_size = Vector2(M3Units.dp(RELATED_CARD_WIDTH_DP), M3Units.dp(RELATED_CARD_HEIGHT_DP))
+	var card_w := RELATED_CARD_WIDTH_STACKED_DP if _stacked_header else RELATED_CARD_WIDTH_DP
+	var card_h := RELATED_CARD_HEIGHT_STACKED_DP if _stacked_header else RELATED_CARD_HEIGHT_DP
+	card.custom_minimum_size = Vector2(M3Units.dp(card_w), M3Units.dp(card_h))
 	card.media_aspect_ratio = 0.75  # IGDB covers are 3:4
 	# Caption-only cards: the type label stands in for the title.
 	var type_label: String = RELATED_TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", "")).capitalize())

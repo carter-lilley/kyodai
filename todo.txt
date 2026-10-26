@@ -6,6 +6,13 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 retroarch unknown ver.?
 - universal extraction normalizer (walk down for expected files...saves & games)
 
+app is killing itself in background?
+on failed launch, next launch transition image is the wrong image??
+tapping more context menu items focus snaps back to top
+x details small view needs title visible on own row, buttons below
+x details small view 'files' tap changes content height? of image in left column for some reason?
+x details small view screenshots/related cut off and cant be scrolled to?
+staggered grid calculating wrong size on launch, padding/margins between rows often wrong
 to test: ps3 psn games
 maybe make cores on demand
 
