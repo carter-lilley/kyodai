@@ -41,6 +41,7 @@ func clear_firmware_cache(platform_slug: String, emulator_id: String, core_id: S
 ## Clears the entire firmware readiness cache.
 func clear_all_firmware_cache() -> void:
 	_firmware_ready_cache.clear()
+	_firmware_tree_cache.clear()
 
 ## Clears all cached firmware readiness entries for a given platform.
 func clear_firmware_cache_for_platform(platform_slug: String) -> void:
@@ -48,6 +49,9 @@ func clear_firmware_cache_for_platform(platform_slug: String) -> void:
 	for key in _firmware_ready_cache.keys():
 		if key.begins_with(prefix):
 			_firmware_ready_cache.erase(key)
+	# Firmware content may have changed under the dir: a stale file list would
+	# report newly-downloaded BIOS as missing (or vice versa).
+	_firmware_tree_cache.clear()
 
 ## Gets the firmware directory for an emulator
 ## Resolves paths with wildcards ({emulator_dir}, {app_data}, etc.)
@@ -146,44 +150,65 @@ func is_platform_firmware_ready(platform_slug: String, emulator_id: String, core
 		_firmware_ready_cache[cache_key] = true
 		return true
 	
-	# Check if any expected file exists (searching recursively)
+	# Check if any expected file exists. Direct relative-path hits first (one
+	# stat each - the common case); only genuinely-missing files then share a
+	# SINGLE bounded tree walk, matched in memory. The old one-full-walk-per-
+	# file search cost ~2s per missing file on a 3.4k-entry RetroArch/system
+	# tree, and PSX alone has 7 expected files (~14s per cold check).
+	var found_file := ""
 	for expected_file in expected_files:
-		if _find_file_recursive(firmware_dir, expected_file):
-			if _is_force_pull_firmware(platform_slug) \
-					and not FSM.file_exists(_marker_path(firmware_dir)):
+		if FSM.file_exists(FSM.join_paths(firmware_dir, expected_file)):
+			found_file = expected_file
+			break
+	if found_file == "":
+		var tree := _firmware_tree_paths(firmware_dir)
+		for expected_file in expected_files:
+			var suffix = "/" + expected_file.replace("\\", "/")
+			for tree_path in tree:
+				if tree_path.ends_with(suffix):
+					found_file = expected_file
+					break
+			if found_file != "":
 				break
-			print("[FirmwareManager] is_platform_firmware_ready: found " + expected_file)
+
+	if found_file != "":
+		if not _is_force_pull_firmware(platform_slug) \
+				or FSM.file_exists(_marker_path(firmware_dir)):
+			print("[FirmwareManager] is_platform_firmware_ready: found " + found_file)
 			_firmware_ready_cache[cache_key] = true
 			return true
-	
+
 	print("[FirmwareManager] is_platform_firmware_ready: no expected files found")
 	_firmware_ready_cache[cache_key] = false
 	return false
 
-## Recursively searches for a file in a directory and its subdirectories
-## Returns true if the file is found
-func _find_file_recursive(dir: String, filename: String) -> bool:
-	if not FSM.dir_exists(dir):
-		return false
-	
-	var entries = FSM.list_dir(dir)
-	for entry in entries:
+# Session cache of full file-path lists per firmware dir: every RetroArch-core
+# platform shares /RetroArch/system, so without this each platform re-walks
+# the same tree on a cold pass. Cleared alongside _firmware_ready_cache.
+var _firmware_tree_cache: Dictionary = {}
+
+## File paths under a firmware dir, from cache or one fresh bounded walk.
+func _firmware_tree_paths(firmware_dir: String) -> Array:
+	if _firmware_tree_cache.has(firmware_dir):
+		return _firmware_tree_cache[firmware_dir]
+	var tree := _collect_file_paths(firmware_dir)
+	_firmware_tree_cache[firmware_dir] = tree
+	return tree
+
+## One bounded recursive walk collecting every file path under dir.
+func _collect_file_paths(dir: String, depth: int = 0) -> Array:
+	var out: Array = []
+	if depth > 5:
+		return out
+	for entry in FSM.list_dir(dir):
 		if entry == "." or entry == "..":
 			continue
-		
 		var full_path = FSM.join_paths(dir, entry)
-		
-		# Check if this entry matches the filename (handles subdirs like "dc/dc_boot.bin")
-		if entry == filename or full_path.ends_with("/" + filename) or full_path.ends_with("\\" + filename):
-			if FSM.file_exists(full_path):
-				return true
-		
-		# Recurse into subdirectories
 		if FSM.dir_exists(full_path):
-			if _find_file_recursive(full_path, filename):
-				return true
-	
-	return false
+			out.append_array(_collect_file_paths(full_path, depth + 1))
+		else:
+			out.append(full_path)
+	return out
 
 ## Renames known firmware filename variants to their canonical names, per the
 ## platform's firmware "rename" map (variant basename -> canonical basename).

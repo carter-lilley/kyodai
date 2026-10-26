@@ -524,38 +524,65 @@ func _cards_match_data(data: Array) -> bool:
 func _precompute_card_data(data: Array) -> Dictionary:
 	"""Runs on the DB thread: gather emulator lists, defaults, firmware state,
 	and install status for every platform so the main thread only does UI work."""
+	var _perf_t0 = Time.get_ticks_msec()
 	var platform_emulator_cache: Dictionary = {}
 	var platform_default_core_cache: Dictionary = {}
 	var platform_default_emulator_cache: Dictionary = {}
 	var unique_emulators: Array[String] = []
 
+	var _perf_by_call := {"emus_for_platform": 0, "default_core": 0, "default_emu": 0, "expected_files": 0, "fw_ready": 0}
+	var _perf_slowest: Array = []
 	for platform_data in data:
 		if not platform_data is Dictionary:
 			continue
 		var slug = platform_data.get("slug", "")
 		if slug == "":
 			continue
+		var _pt0 = Time.get_ticks_msec()
 		var platform_emulators = LaunchManager.get_emulators_for_platform(slug)
 		platform_emulator_cache[slug] = platform_emulators
+		var _pt1 = Time.get_ticks_msec()
 		var default_core_id = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
 		platform_default_core_cache[slug] = default_core_id
+		var _pt2 = Time.get_ticks_msec()
 		var default_emulator = LaunchManager.get_default_emulator_for_platform(slug)
 		platform_default_emulator_cache[slug] = default_emulator
+		var _pt3 = Time.get_ticks_msec()
 		# Warm the firmware caches so the per-card firmware indicator refresh on
 		# the main thread hits cache instead of touching the filesystem.
 		LaunchManager.get_platform_firmware_expected_files(slug)
+		var _pt4 = Time.get_ticks_msec()
 		if default_emulator != "":
 			LaunchManager.is_platform_firmware_ready(slug, default_emulator, default_core_id if default_emulator == "retroarch" else "")
+		var _pt5 = Time.get_ticks_msec()
+		_perf_by_call["emus_for_platform"] += _pt1 - _pt0
+		_perf_by_call["default_core"] += _pt2 - _pt1
+		_perf_by_call["default_emu"] += _pt3 - _pt2
+		_perf_by_call["expected_files"] += _pt4 - _pt3
+		_perf_by_call["fw_ready"] += _pt5 - _pt4
+		if _pt5 - _pt0 > 250:
+			_perf_slowest.append([slug, _pt5 - _pt0])
 		for emulator in platform_emulators:
 			var emu_id = emulator.get("id", "")
 			if emu_id != "" and not unique_emulators.has(emu_id):
 				unique_emulators.append(emu_id)
+	_perf_slowest.sort_custom(func(a, b): return a[1] > b[1])
+	print("[PERF] precompute by_call: %s" % str(_perf_by_call))
+	print("[PERF] precompute slowest platforms: %s" % str(_perf_slowest.slice(0, 8)))
 
 	# Pre-validate each unique emulator once (filesystem scans; cached after).
+	var _perf_t1 = Time.get_ticks_msec()
 	var precomputed_status: Dictionary = {}
 	for emu_id in unique_emulators:
 		var progress = LaunchManager.get_install_progress(emu_id)
 		precomputed_status[emu_id] = progress["status"] == "complete"
+
+	print("[PERF] precompute_card_data: platform_loop=%dms install_validate=%dms total=%dms" % [
+		_perf_t1 - _perf_t0, Time.get_ticks_msec() - _perf_t1, Time.get_ticks_msec() - _perf_t0])
+	if Engine.has_singleton("KyodaiBridge"):
+		var bridge = Engine.get_singleton("KyodaiBridge")
+		var snap = bridge.call("safPerfSnapshot")
+		print("[PERF] SAF ops (precompute): " + str(snap))
 
 	return {
 		"emulator_cache": platform_emulator_cache,

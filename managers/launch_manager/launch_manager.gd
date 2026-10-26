@@ -727,7 +727,9 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	var emulator_name = RegistrySubManager.get_emulator_display_name(emu, emulator_id)
 	
 	# Check if emulator is fully installed (cached scan, see _is_emulator_fully_installed)
+	var _perf_t0 = Time.get_ticks_msec()
 	var is_actually_installed = emulator.get_install_progress(emulator_id).get("is_installed", false)
+	print("[PERF] launch.install_progress(%s): %dms" % [emulator_id, Time.get_ticks_msec() - _perf_t0])
 	
 	# If emulator is now installed but there's a stale pending launch, abort it
 	# cleanly so its in-flight guard can't wedge the game as "already launching"
@@ -809,9 +811,12 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	# in a directory the emulator stops reading once launch-time enforcement
 	# runs (process_sub_manager does the same write, but too late for this).
 	RSM.enforce_paths(emulator_id, game.platform_slug, core_id_for_firmware)
+	print("[PERF] launch.enforce_paths(%s): %dms" % [emulator_id, Time.get_ticks_msec() - _perf_t0])
+	_perf_t0 = Time.get_ticks_msec()
 
 	if firmware.is_platform_firmware_ready(game.platform_slug, emulator_id, core_id_for_firmware):
 		firmware.apply_force_pull_config(game.platform_slug, emulator_id)
+		print("[PERF] launch.firmware_ready(%s): %dms" % [emulator_id, Time.get_ticks_msec() - _perf_t0])
 	else:
 		if _pending_firmware_downloads.has(game.platform_slug):
 			print("[LaunchManager] Firmware download already in progress for " + game.platform_slug + ", will launch when ready")
@@ -873,7 +878,10 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	if prepare_game:
 		# Emulator and firmware are ready - prepare game
 		print("[LaunchManager] _ensure_prerequisites: Preparing game for emulator: " + emulator_id)
+		var _perf_prep_t0 = Time.get_ticks_msec()
 		var prep_success = await $GameSubManager._prepare_game_for_launch(game, emulator_id, is_shuffler, rom_path_override)
+		print("[PERF] launch.prepare_game(%s): %dms" % [emulator_id, Time.get_ticks_msec() - _perf_prep_t0])
+		_perf_dump_saf_stats("launch:" + emulator_id)
 		if not prep_success:
 			push_error("[LaunchManager] Failed to prepare game for launch: " + game.get_display_name())
 			SystemManager.notifications.show_notification("Failed to prepare game for launch", SystemManager.notifications.Type.ERROR)
@@ -893,6 +901,16 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 	
 	on_ready.call()
 	return true
+
+## Dumps the plugin's SAF op counters (and resets them) - diagnostic for the
+## restricted-path I/O cost on SAF-tier devices.
+func _perf_dump_saf_stats(label: String) -> void:
+	if not SystemManager.platform.is_android():
+		return
+	if Engine.has_singleton("KyodaiBridge"):
+		var bridge = Engine.get_singleton("KyodaiBridge")
+		var snap = bridge.call("safPerfSnapshot")
+		print("[PERF] SAF ops (" + label + "): " + str(snap))
 
 ## Check emulator status and launch game (game must be downloaded)
 func _launch_with_emulator_check(game: GameResource) -> void:
