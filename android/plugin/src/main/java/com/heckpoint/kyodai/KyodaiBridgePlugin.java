@@ -1807,6 +1807,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 uris.add(treeUri.toString());
                 activity.getSharedPreferences(SAF_PREFS, Context.MODE_PRIVATE)
                         .edit().putStringSet(SAF_TREE_URIS_KEY, uris).apply();
+                StorageTier.invalidateGrantBases();
                 granted = true;
                 Log.d(TAG, "SAF tree grant persisted: " + treeUri);
             } catch (Exception e) {
@@ -1961,6 +1962,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Opens a read stream: direct File first, then DocumentsContract. */
     private InputStream openInputFor(String path) throws Exception {
+        long t0 = SafPerf.start();
+        try { return openInputForImpl(path); }
+        finally { SafPerf.record("openInputFor", t0); }
+    }
+
+    private InputStream openInputForImpl(String path) throws Exception {
         File file = new File(path);
         if (file.exists() && file.canRead()) {
             return new FileInputStream(file);
@@ -1976,6 +1983,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Opens a write stream (truncating): direct File first, then DocumentsContract with create-if-missing. */
     private OutputStream openOutputFor(String path) throws Exception {
+        long t0 = SafPerf.start();
+        try { return openOutputForImpl(path); }
+        finally { SafPerf.record("openOutputFor", t0); }
+    }
+
+    private OutputStream openOutputForImpl(String path) throws Exception {
         File file = new File(path);
         File parent = file.getParentFile();
         if (parent != null && !parent.exists()) {
@@ -2024,7 +2037,18 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      * Checks if a file exists, using DocumentsContract for restricted paths.
      */
     @UsedByGodot
+    public String safPerfSnapshot() {
+        return SafPerf.snapshotAndReset();
+    }
+
+    @UsedByGodot
     public boolean androidFileExists(String path) {
+        long t0 = SafPerf.start();
+        try { return androidFileExistsImpl(path); }
+        finally { SafPerf.record("androidFileExists", t0); }
+    }
+
+    private boolean androidFileExistsImpl(String path) {
         if (path == null || path.isEmpty()) {
             return false;
         }
@@ -2037,17 +2061,25 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         // Fall back to DocumentsContract for restricted paths
         if (requiresDocumentsContract(path)) {
+            boolean[] cached = SafCache.lookup(path);
+            if (cached != null) {
+                return cached[0];
+            }
             try {
                 Uri docUri = pathToDocumentUri(path);
                 if (docUri != null) {
                     android.database.Cursor cursor = activity.getContentResolver().query(
-                        docUri, 
+                        docUri,
                         new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID},
                         null, null, null
                     );
                     if (cursor != null) {
                         boolean exists = cursor.moveToFirst();
                         cursor.close();
+                        // Negative-only caching: a hit tells us nothing about
+                        // the entry's type, and a wrong isDir would poison
+                        // dirExists. Listings/dirExists cache positive entries.
+                        if (!exists) SafCache.put(path, false, false);
                         return exists;
                     }
                 }
@@ -2056,6 +2088,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     if (msg.contains("FileNotFoundException") || msg.contains("Missing file")
                             || msg.contains("No such file")) {
                         // Expected during marker polling — file simply doesn't exist yet
+                        SafCache.put(path, false, false);
                         return false;
                     }
                     Log.w(TAG, "DocumentsContract fileExists failed: " + msg);
@@ -2071,6 +2104,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidDirExists(String path) {
+        long t0 = SafPerf.start();
+        try { return androidDirExistsImpl(path); }
+        finally { SafPerf.record("androidDirExists", t0); }
+    }
+
+    private boolean androidDirExistsImpl(String path) {
         if (path == null || path.isEmpty()) {
             return false;
         }
@@ -2083,11 +2122,15 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         // Fall back to DocumentsContract for restricted paths
         if (requiresDocumentsContract(path)) {
+            boolean[] cached = SafCache.lookup(path);
+            if (cached != null) {
+                return cached[0] && cached[1];
+            }
             try {
                 Uri docUri = pathToDocumentUri(path);
                 if (docUri != null) {
                     android.database.Cursor cursor = activity.getContentResolver().query(
-                        docUri, 
+                        docUri,
                         new String[]{
                             android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                             android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
@@ -2095,8 +2138,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                         null, null, null
                     );
                     if (cursor != null) {
+                        boolean exists = false;
                         boolean isDir = false;
                         if (cursor.moveToFirst()) {
+                            exists = true;
                             int mimeTypeIndex = cursor.getColumnIndex(
                                 android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
                             );
@@ -2106,11 +2151,18 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                             }
                         }
                         cursor.close();
+                        SafCache.put(path, exists, isDir);
                         return isDir;
                     }
                 }
             } catch (Exception e) {
-                Log.w(TAG, "DocumentsContract dirExists failed: " + e.getMessage());
+                String msg = String.valueOf(e.getMessage());
+                if (msg.contains("FileNotFoundException") || msg.contains("Missing file")
+                        || msg.contains("No such file")) {
+                    SafCache.put(path, false, false);
+                    return false;
+                }
+                Log.w(TAG, "DocumentsContract dirExists failed: " + msg);
             }
         }
         
@@ -2123,6 +2175,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public String androidReadFile(String path) {
+        long t0 = SafPerf.start();
+        try { return androidReadFileImpl(path); }
+        finally { SafPerf.record("androidReadFile", t0); }
+    }
+
+    private String androidReadFileImpl(String path) {
         if (path == null || path.isEmpty()) {
             return "";
         }
@@ -2171,6 +2229,13 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidWriteFile(String path, String base64Data) {
+        long t0 = SafPerf.start();
+        try { return androidWriteFileImpl(path, base64Data); }
+        finally { SafPerf.record("androidWriteFile", t0); }
+    }
+
+    private boolean androidWriteFileImpl(String path, String base64Data) {
+        SafCache.invalidateTree(path);
         if (path == null || path.isEmpty() || base64Data == null) {
             return false;
         }
@@ -2223,6 +2288,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public String androidListDir(String path) {
+        long t0 = SafPerf.start();
+        try { return androidListDirImpl(path); }
+        finally { SafPerf.record("androidListDir", t0); }
+    }
+
+    private String androidListDirImpl(String path) {
         if (path == null || path.isEmpty()) {
             return "[]";
         }
@@ -2243,6 +2314,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         // Fall back to DocumentsContract for restricted paths
         if (requiresDocumentsContract(path)) {
+            java.util.List<String> cachedListing = SafCache.lookupListing(path);
+            if (cachedListing != null) {
+                return new org.json.JSONArray(cachedListing).toString();
+            }
             try {
                 Uri childrenUri = childrenUriFor(path);
                 if (childrenUri != null) {
@@ -2256,11 +2331,18 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     );
 
                     if (cursor != null) {
+                        java.util.HashMap<String, Boolean> childTypes = new java.util.HashMap<>();
                         while (cursor.moveToNext()) {
                             String name = cursor.getString(0);
+                            String mime = cursor.getString(1);
                             files.add(name);
+                            childTypes.put(name,
+                                android.provider.DocumentsContract.Document.MIME_TYPE_DIR.equals(mime));
                         }
                         cursor.close();
+                        // Cache the listing AND prime per-child exists/isDir, so
+                        // recursive walks don't re-query every entry one by one.
+                        SafCache.putListing(path, new java.util.ArrayList<>(files), childTypes);
                     }
                 }
             } catch (Exception e) {
@@ -2277,6 +2359,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public long androidGetModifiedTime(String path) {
+        long t0 = SafPerf.start();
+        try { return androidGetModifiedTimeImpl(path); }
+        finally { SafPerf.record("androidGetModifiedTime", t0); }
+    }
+
+    private long androidGetModifiedTimeImpl(String path) {
         if (path == null || path.isEmpty()) {
             return 0;
         }
@@ -2317,6 +2405,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidCreateDir(String path) {
+        SafCache.invalidateTree(path);
         if (path == null || path.isEmpty()) {
             return false;
         }
@@ -2346,6 +2435,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     private boolean createDirViaSaf(String path) {
+        long t0 = SafPerf.start();
+        try { return createDirViaSafImpl(path); }
+        finally { SafPerf.record("createDirViaSaf", t0); }
+    }
+
+    private boolean createDirViaSafImpl(String path) {
         Uri treeUri = treeUriForPath(path);
         if (treeUri == null) return false;
         String[] vp = splitVolumePath(path);
@@ -2384,6 +2479,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     private boolean safDocExists(Uri treeUri, String docId) {
+        long t0 = SafPerf.start();
+        try { return safDocExistsImpl(treeUri, docId); }
+        finally { SafPerf.record("safDocExists", t0); }
+    }
+
+    private boolean safDocExistsImpl(Uri treeUri, String docId) {
         try {
             Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
             android.database.Cursor cursor = activity.getContentResolver().query(
@@ -2405,6 +2506,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidDeleteRecursive(String path) {
+        SafCache.invalidateTree(path);
         if (path == null || path.isEmpty()) {
             return false;
         }
@@ -2453,6 +2555,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidCopyFile(String sourcePath, String destPath) {
+        SafCache.invalidateTree(destPath);
         if (sourcePath == null || sourcePath.isEmpty() || destPath == null || destPath.isEmpty()) {
             return false;
         }
@@ -2506,6 +2609,8 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidRename(String sourcePath, String destPath) {
+        SafCache.invalidateTree(sourcePath);
+        SafCache.invalidateTree(destPath);
         if (sourcePath == null || sourcePath.isEmpty() || destPath == null || destPath.isEmpty()) {
             return false;
         }
@@ -2648,6 +2753,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public long androidGetFileSize(String path) {
+        long t0 = SafPerf.start();
+        try { return androidGetFileSizeImpl(path); }
+        finally { SafPerf.record("androidGetFileSize", t0); }
+    }
+
+    private long androidGetFileSizeImpl(String path) {
         if (path == null || path.isEmpty()) {
             return -1;
         }
@@ -2681,6 +2792,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean androidDeleteFile(String path) {
+        SafCache.invalidateTree(path);
         if (path == null || path.isEmpty()) {
             return false;
         }

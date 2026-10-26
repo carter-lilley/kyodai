@@ -140,25 +140,15 @@ final class StorageTier {
      * bare URIs also accept them alongside any grant.
      */
     static boolean hasGrantCoverage(Context context, String path) {
+        long t0 = SafPerf.start();
+        try { return hasGrantCoverageImpl(context, path); }
+        finally { SafPerf.record("grantCoverage", t0); }
+    }
+
+    private static boolean hasGrantCoverageImpl(Context context, String path) {
         if (context == null || path == null) return false;
         try {
-            for (UriPermission p : context.getContentResolver().getPersistedUriPermissions()) {
-                if (!p.isReadPermission() || !p.isWritePermission()) continue;
-                String uri = p.getUri().toString();
-                if (!uri.startsWith(DOCS_TREE_PREFIX)) continue;
-                String docId;
-                try {
-                    docId = URLDecoder.decode(uri.substring(DOCS_TREE_PREFIX.length()), "UTF-8");
-                } catch (Exception e) {
-                    continue;
-                }
-                int colon = docId.indexOf(':');
-                if (colon <= 0) continue;
-                String volume = docId.substring(0, colon);
-                String rel = docId.substring(colon + 1);
-                String base = volume.equals("primary")
-                        ? "/storage/emulated/0" : "/storage/" + volume;
-                String prefix = base + "/" + rel;
+            for (String prefix : grantBases(context)) {
                 if (path.equals(prefix) || path.startsWith(prefix + "/")) {
                     return true;
                 }
@@ -167,6 +157,41 @@ final class StorageTier {
             Log.w(TAG, "[StorageTier] grant coverage check failed: " + e.getMessage());
         }
         return false;
+    }
+
+    // Decoded grant path prefixes, cached for the session: reading persisted
+    // URI permissions is itself a binder call, and tierFor runs per op.
+    // Invalidated when a new grant is taken (KyodaiBridgePlugin SAF result).
+    private static volatile java.util.ArrayList<String> grantBasesCache = null;
+
+    static void invalidateGrantBases() {
+        grantBasesCache = null;
+    }
+
+    private static java.util.ArrayList<String> grantBases(Context context) {
+        java.util.ArrayList<String> bases = grantBasesCache;
+        if (bases != null) return bases;
+        bases = new java.util.ArrayList<>();
+        for (UriPermission p : context.getContentResolver().getPersistedUriPermissions()) {
+            if (!p.isReadPermission() || !p.isWritePermission()) continue;
+            String uri = p.getUri().toString();
+            if (!uri.startsWith(DOCS_TREE_PREFIX)) continue;
+            String docId;
+            try {
+                docId = URLDecoder.decode(uri.substring(DOCS_TREE_PREFIX.length()), "UTF-8");
+            } catch (Exception e) {
+                continue;
+            }
+            int colon = docId.indexOf(':');
+            if (colon <= 0) continue;
+            String volume = docId.substring(0, colon);
+            String rel = docId.substring(colon + 1);
+            String base = volume.equals("primary")
+                    ? "/storage/emulated/0" : "/storage/" + volume;
+            bases.add(base + "/" + rel);
+        }
+        grantBasesCache = bases;
+        return bases;
     }
 
     /** The uid of an installed package, or -1 when unknown. */
@@ -190,6 +215,12 @@ final class StorageTier {
      * current behavior (with the SAF code as the transient-failure fallback).
      */
     static int tierFor(Context context, String path) {
+        long t0 = SafPerf.start();
+        try { return tierForImpl(context, path); }
+        finally { SafPerf.record("tierFor", t0); }
+    }
+
+    private static int tierForImpl(Context context, String path) {
         if (!isRestrictedPath(path)) return TIER_DIRECT;
         if (selfHasExtDataRw()) return TIER_DIRECT;
         if (hasGrantCoverage(context, path)) return TIER_SAF;
