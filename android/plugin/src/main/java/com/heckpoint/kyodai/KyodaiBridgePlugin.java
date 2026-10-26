@@ -20,7 +20,12 @@ import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -928,7 +933,116 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return false;
         }
     }
-    
+
+    /**
+     * Battery state via the sticky ACTION_BATTERY_CHANGED broadcast. This is
+     * legal on every Android build, unlike the GDScript sysfs probe
+     * (/sys/class/power_supply): SELinux denies untrusted_app access to
+     * vendor_sysfs_battery_supply on some handheld firmwares (AYN Odin 2
+     * Mini). No permissions required.
+     *
+     * @return Dictionary: "percent" int (0-100, -1 unknown), "status" int
+     *         matching StatusBar.PowerState in GDScript
+     *         (0 unknown, 1 on battery, 3 charging, 4 charged)
+     */
+    @UsedByGodot
+    public Dictionary getBatteryState() {
+        Dictionary result = new Dictionary();
+        result.put("percent", -1);
+        result.put("status", 0);
+        if (activity == null) {
+            Log.e(TAG, "getBatteryState: Activity is null");
+            return result;
+        }
+        try {
+            // Null receiver: only fetches the sticky intent, no callback
+            // delivery, so no Looper is needed on the calling thread.
+            Intent battery = activity.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery == null) {
+                return result;
+            }
+            int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            if (level >= 0 && scale > 0) {
+                result.put("percent", Math.round(level * 100f / scale));
+            }
+            int status;
+            switch (battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1)) {
+                case BatteryManager.BATTERY_STATUS_CHARGING:
+                    status = 3; // CHARGING
+                    break;
+                case BatteryManager.BATTERY_STATUS_FULL:
+                    status = 4; // CHARGED
+                    break;
+                case BatteryManager.BATTERY_STATUS_DISCHARGING:
+                case BatteryManager.BATTERY_STATUS_NOT_CHARGING:
+                    status = 1; // ON_BATTERY
+                    break;
+                default:
+                    status = 0; // UNKNOWN
+            }
+            result.put("status", status);
+        } catch (Exception e) {
+            Log.e(TAG, "getBatteryState failed", e);
+        }
+        return result;
+    }
+
+    /**
+     * Network state via ConnectivityManager. This is legal on every Android
+     * build, unlike the GDScript sysfs probe (/sys/class/net +
+     * /proc/net/wireless): SELinux denies untrusted_app access to sysfs_net
+     * on some handheld firmwares (AYN Odin 2 Mini). No permissions required.
+     *
+     * @return Dictionary: "state" int matching StatusBar.WifiState in
+     *         GDScript (0 unknown, 1 off, 2 wifi connected, 3 ethernet up),
+     *         "percent" int (0-100 signal strength, -1 unknown)
+     */
+    @UsedByGodot
+    public Dictionary getWifiState() {
+        Dictionary result = new Dictionary();
+        result.put("state", 0);
+        result.put("percent", -1);
+        if (activity == null) {
+            Log.e(TAG, "getWifiState: Activity is null");
+            return result;
+        }
+        try {
+            ConnectivityManager cm =
+                (ConnectivityManager) activity.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) {
+                return result;
+            }
+            Network network = cm.getActiveNetwork();
+            NetworkCapabilities caps = network != null ? cm.getNetworkCapabilities(network) : null;
+            if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    result.put("state", 2); // CONNECTED
+                    // Signal strength 0-100, API 29+, no permission needed.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        int strength = caps.getSignalStrength();
+                        if (strength != NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED) {
+                            result.put("percent", strength);
+                        }
+                    }
+                } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                    result.put("state", 3); // ETHERNET_UP
+                }
+            }
+            if ((int) result.get("state") == 0) {
+                // No usable network: distinguish "wifi off" from "unknown".
+                WifiManager wm = (WifiManager) activity.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+                if (wm != null && !wm.isWifiEnabled()) {
+                    result.put("state", 1); // OFF
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "getWifiState failed", e);
+        }
+        return result;
+    }
+
     // ============================================================================
     // Content URI Resolution (No SAF - requires MANAGE_EXTERNAL_STORAGE)
     // ============================================================================

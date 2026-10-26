@@ -251,16 +251,29 @@ func has_android_data_access(path: String = "") -> bool:
 	var plugin = _get_android_plugin()
 	if plugin == null:
 		return false
+	if has_direct_android_data_access():
+		return true
+	if path != "":
+		return bool(plugin.hasSafGrantFor(path))
+	return bool(plugin.hasSafGrant())
+
+## True when direct File I/O into other apps' Android/data works on this
+## device: we hold ext_data_rw ourselves, or a live vendor root daemon covers
+## writes for any package. When false but a SAF grant exists, access only
+## works through the plugin's DocumentsContract operations - plain
+## FileAccess/HTTPRequest writes still fail.
+func has_direct_android_data_access() -> bool:
+	if not is_android():
+		return true
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
 	# Holding ext_data_rw ourselves means direct File I/O into Android/data works
 	if plugin.has_method("hasExtDataRwAccess") and bool(plugin.hasExtDataRwAccess()):
 		return true
 	# A live vendor root daemon covers writes for any package (root tier)
 	var root_available = plugin.call("rootAvailable")
-	if root_available != null and root_available:
-		return true
-	if path != "":
-		return bool(plugin.hasSafGrantFor(path))
-	return bool(plugin.hasSafGrant())
+	return root_available != null and root_available
 
 ## Calls on_ready(granted: bool). If a document-tree grant already exists, calls
 ## back immediately with true. Otherwise shows a prompt and launches the system

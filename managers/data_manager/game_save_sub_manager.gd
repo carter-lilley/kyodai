@@ -2552,6 +2552,40 @@ func _format_conflict_timestamp(unix_time: int) -> String:
 	return "%s %d, %d at %d:%02d %s" % [month, day, year, hour, minute, ampm]
 
 
+## Returns "" when save sync may proceed, or the restricted probe path that
+## needs a document-tree grant first (emulator save dir under Android/data|obb
+## with no usable access route on this device). Falls back to the emulator's
+## app-data root when save_dir is empty: an unreadable config makes the
+## resolver return "", but the tree is still restricted.
+func _save_sync_grant_probe(emulator_id: String, save_dir: String) -> String:
+	if not SystemManager.platform.is_android():
+		return ""
+	var probe_dir = save_dir
+	if probe_dir == "":
+		probe_dir = LaunchManager.get_app_data_path(emulator_id)
+	if probe_dir == "":
+		return ""
+	var normalized_dir = probe_dir.replace("\\", "/")
+	if not normalized_dir.contains("/Android/data/") and not normalized_dir.contains("/Android/obb/"):
+		return ""
+	if SystemManager.platform.has_android_data_access(probe_dir):
+		return ""
+	return probe_dir
+
+
+## Godot's HTTPRequest writes download_file via direct File I/O, which cannot
+## touch SAF-grant-only Android/data|obb trees. True when a download to this
+## destination must be staged in user://temp and placed via the plugin.
+## Devices with direct file access keep the single-write path.
+func _must_stage_download(path: String) -> bool:
+	if not SystemManager.platform.is_android():
+		return false
+	var normalized = path.replace("\\", "/")
+	if not normalized.contains("/Android/data/") and not normalized.contains("/Android/obb/"):
+		return false
+	return not SystemManager.platform.has_direct_android_data_access()
+
+
 ## Main sync entry point for manual and auto sync
 func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Callable = Callable()) -> void:
 	var sync_key = _save_sync_key(game, emulator_id)
@@ -2563,18 +2597,15 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 
 	# Android: emulator save dirs under /Android/data/ need a one-time folder
 	# grant. Prompt just-in-time (before marking the sync in flight) and retry.
-	if SystemManager.platform.is_android():
-		var probe_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
-		var normalized_dir = probe_dir.replace("\\", "/")
-		var restricted_dir = normalized_dir.contains("/Android/data/") or normalized_dir.contains("/Android/obb/")
-		if restricted_dir and not SystemManager.platform.has_android_data_access(probe_dir):
-			SystemManager.platform.ensure_android_data_access(func(granted: bool):
-				if granted:
-					sync_saves_for_game(game, emulator_id, callback)
-				elif callback.is_valid():
-					callback.call(false, "Folder access required to sync saves from this emulator")
-			, probe_dir)
-			return
+	var grant_probe = _save_sync_grant_probe(emulator_id, resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game)))
+	if grant_probe != "":
+		SystemManager.platform.ensure_android_data_access(func(granted: bool):
+			if granted:
+				sync_saves_for_game(game, emulator_id, callback)
+			elif callback.is_valid():
+				callback.call(false, "Folder access required to sync saves from this emulator")
+		, grant_probe)
+		return
 
 	_begin_save_sync(sync_key)
 	var user_callback = callback
@@ -2905,6 +2936,7 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 	# correction below must be visible to post_extraction).
 	var boundary_path := {"path": ""}
 	var zip_path = ""
+	var download_dest = ""
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	var save_dir = resolve_active_save_directory(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 
@@ -2934,23 +2966,48 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 		local_path = record_path
 		if emulator_id == "retroarch":
 			FSM.make_dir_recursive(record_path.get_base_dir())
+		# Godot's HTTPRequest writes download_file with direct File I/O, which
+		# cannot touch SAF-grant-only Android/data trees; stage in user://temp
+		# and place via the plugin after the download. Devices with direct
+		# access keep the single-write path.
+		if _must_stage_download(local_path):
+			download_dest = "user://temp/saves/staged_" + str(Time.get_ticks_msec()) + "_" + file_name
+			FSM.make_dir_recursive(download_dest.get_base_dir())
+			print("[GameSaveSubManager] Destination is SAF-gated; staging download in " + download_dest)
 
 	# Last-line defense for filename aliases. A remote-only record should only
 	# materialize a missing save; it must never overwrite a file/folder that
 	# discovery already associates with a different filename.
 	if local == null and record_path != "":
-		var destination_exists := FSM.dir_exists(record_path) if is_folder_save else FSM.file_exists(record_path)
+		var check_path: String = record_path
+		if is_folder_save:
+			# Some strategies resolve record_path to a container dir (pcsx2's
+			# resolve_path returns the memcard root); the save actually lands in
+			# the extract-dest child, so that child is the path to guard.
+			var dest := _get_extract_dest(emulator_id, save_dir, record_path, game, file_name)
+			if dest != "" and dest.get_base_dir().rstrip("/") == record_path.rstrip("/"):
+				check_path = dest
+		var destination_exists := FSM.dir_exists(check_path) if is_folder_save else FSM.file_exists(check_path)
 		if destination_exists:
-			push_warning("[GameSaveSubManager] Refusing to download remote save '" + file_name + "' (id " + str(save_id) + ") over existing unresolved local path: " + record_path)
+			push_warning("[GameSaveSubManager] Refusing to download remote save '" + file_name + "' (id " + str(save_id) + ") over existing unresolved local path: " + check_path)
 			on_done.call(false)
 			return
 
-	_ensure_save_directory_exists(emulator_id)
+	# Without the top-level save dir nothing downstream (extraction, boundary
+	# hashing) can succeed - fail fast instead of downloading a zip to nowhere.
+	if not _ensure_save_directory_exists(emulator_id, save_dir):
+		push_error("[GameSaveSubManager] Save directory unavailable for " + emulator_id + " - aborting download of '" + file_name + "'")
+		SystemManager.notifications.show_notification("Save download failed for " + game.get_display_name() + ": no access to the emulator's save folder", SystemManager.notifications.Type.ERROR)
+		on_done.call(false)
+		return
+
+	if download_dest == "":
+		download_dest = local_path
 
 	boundary_path.path = record_path
 	print("[GameSaveSubManager] Downloading remote save '" + file_name + "' (id " + str(save_id) + ") -> '" + local_path + "' (record path: '" + record_path + "')")
 
-	SystemManager.network.download_save(save_id, device_id, local_path, func(_success: bool, _status_code: int, error_msg: String):
+	SystemManager.network.download_save(save_id, device_id, download_dest, func(_success: bool, _status_code: int, error_msg: String):
 		if not _success:
 			push_error("[GameSaveSubManager] Download failed for save " + str(save_id) + ": " + error_msg)
 			on_done.call(false)
@@ -2959,6 +3016,15 @@ func _execute_save_download(game: GameResource, emulator_id: String, remote: Dic
 		SystemManager.network.confirm_save_downloaded(save_id, device_id, func(_data, confirm_error):
 			if confirm_error != "":
 				push_warning("[GameSaveSubManager] Failed to confirm download: " + confirm_error)
+
+			# Place a staged download into the (possibly SAF-gated) destination
+			# tree via the plugin before any extraction reads it.
+			if download_dest != local_path:
+				if not FSM.move(download_dest, local_path):
+					push_error("[GameSaveSubManager] Failed to place staged download at '" + local_path + "'")
+					FSM.delete_file(download_dest)
+					on_done.call(false)
+					return
 
 			var post_extraction = func(extract_success: bool):
 				if not extract_success:
@@ -3085,7 +3151,18 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if save_dir == "" or extensions.is_empty():
 		print("[GameSaveSubManager] Auto-upload aborted: no save dir or extensions (dir=" + save_dir + ", ext count=" + str(extensions.size()) + ")")
 		return
-	
+
+	# Android: without a document-tree grant for a restricted save dir, every
+	# SAF call fails mid-sync. Prompt just-in-time and retry once granted;
+	# on denial, skip the upload silently (the game already ran).
+	var grant_probe = _save_sync_grant_probe(emulator_id, save_dir)
+	if grant_probe != "":
+		SystemManager.platform.ensure_android_data_access(func(granted: bool):
+			if granted:
+				auto_upload_saves_for_game(game, emulator_id)
+		, grant_probe)
+		return
+
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 	if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
 		if game.get_active_title_id() == "":
@@ -3492,7 +3569,20 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 		if on_complete.is_valid():
 			on_complete.call()
 		return
-	
+
+	# Android: without a document-tree grant for a restricted save dir, every
+	# SAF call fails mid-sync. Prompt just-in-time and retry once granted;
+	# on denial, launch proceeds without syncing.
+	var grant_probe = _save_sync_grant_probe(emulator_id, save_dir)
+	if grant_probe != "":
+		SystemManager.platform.ensure_android_data_access(func(granted: bool):
+			if granted:
+				auto_download_saves_for_game(game, emulator_id, on_complete)
+			elif on_complete.is_valid():
+				on_complete.call()
+		, grant_probe)
+		return
+
 	var is_folder_save = uses_folder_saves(emulator_id, game.platform_slug, _get_core_id_for_save_resolution(emulator_id, game))
 
 	var sync_key = _save_sync_key(game, emulator_id)

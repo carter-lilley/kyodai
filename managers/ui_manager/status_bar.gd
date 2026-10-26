@@ -221,41 +221,51 @@ func _refresh_wifi() -> void:
 
 
 func _query_wifi_android() -> void:
-	# Wifi state via sysfs/procfs, readable with no permissions.
 	var state := WifiState.UNKNOWN
 	var percent := -1
 
-	var iface := ""
-	var dir := DirAccess.open(ANDROID_NET_IFACES_PATH)
-	if dir:
-		for entry in dir.get_directories():
-			if entry.begins_with("wlan"):
-				iface = entry
-				break
+	# Prefer the KyodaiBridge plugin (ConnectivityManager): /sys/class/net and
+	# /proc/net/wireless are SELinux-denied for untrusted_app on some handheld
+	# firmwares (AYN Odin 2 Mini), while the Android API is always legal.
+	if Engine.has_singleton("KyodaiBridge"):
+		var data: Dictionary = Engine.get_singleton("KyodaiBridge").getWifiState()
+		state = int(data.get("state", WifiState.UNKNOWN))
+		percent = int(data.get("percent", -1))
 
-	if not iface.is_empty():
-		# NOTE: sysfs files report a bogus st_size, so get_as_text() fails its
-		# length check and returns "". get_line() reads byte-by-byte instead.
-		var operstate := ""
-		var operstate_file := FileAccess.open(ANDROID_NET_IFACES_PATH + "/" + iface + "/operstate", FileAccess.READ)
-		if operstate_file:
-			operstate = operstate_file.get_line().strip_edges()
+	if state == WifiState.UNKNOWN:
+		# Fallback: sysfs/procfs probe, readable with no permissions where
+		# SELinux permits it.
+		var iface := ""
+		var dir := DirAccess.open(ANDROID_NET_IFACES_PATH)
+		if dir:
+			for entry in dir.get_directories():
+				if entry.begins_with("wlan"):
+					iface = entry
+					break
 
-		if operstate == "up":
-			state = WifiState.CONNECTED
-			# Signal quality from /proc/net/wireless: "wlan0: 0000   62.  -48. ..."
-			var wireless_file := FileAccess.open(ANDROID_PROC_WIRELESS_PATH, FileAccess.READ)
-			if wireless_file:
-				while wireless_file.get_position() < wireless_file.get_length():
-					var line := wireless_file.get_line().strip_edges()
-					if line.begins_with(iface + ":"):
-						var tokens := line.split(" ", false)
-						if tokens.size() >= 3:
-							var quality := float(tokens[2].trim_suffix("."))
-							percent = int(round(quality / 70.0 * 100.0))
-						break
-		else:
-			state = WifiState.OFF
+		if not iface.is_empty():
+			# NOTE: sysfs files report a bogus st_size, so get_as_text() fails its
+			# length check and returns "". get_line() reads byte-by-byte instead.
+			var operstate := ""
+			var operstate_file := FileAccess.open(ANDROID_NET_IFACES_PATH + "/" + iface + "/operstate", FileAccess.READ)
+			if operstate_file:
+				operstate = operstate_file.get_line().strip_edges()
+
+			if operstate == "up":
+				state = WifiState.CONNECTED
+				# Signal quality from /proc/net/wireless: "wlan0: 0000   62.  -48. ..."
+				var wireless_file := FileAccess.open(ANDROID_PROC_WIRELESS_PATH, FileAccess.READ)
+				if wireless_file:
+					while wireless_file.get_position() < wireless_file.get_length():
+						var line := wireless_file.get_line().strip_edges()
+						if line.begins_with(iface + ":"):
+							var tokens := line.split(" ", false)
+							if tokens.size() >= 3:
+								var quality := float(tokens[2].trim_suffix("."))
+								percent = int(round(quality / 70.0 * 100.0))
+							break
+			else:
+				state = WifiState.OFF
 	call_deferred("_on_wifi_queried", state, percent)
 
 
@@ -420,28 +430,38 @@ func _query_battery_windows() -> void:
 
 
 func _query_battery_android() -> void:
-	# Android exposes battery info via sysfs, readable with no permissions.
 	var state := PowerState.UNKNOWN
 	var percent := -1
 
-	var capacity_file := FileAccess.open(ANDROID_BATTERY_CAPACITY_PATH, FileAccess.READ)
-	if capacity_file:
-		# NOTE: sysfs files report a bogus st_size, so get_as_text() fails its
-		# length check and returns "". get_line() reads byte-by-byte instead.
-		percent = int(capacity_file.get_line().strip_edges())
-		state = PowerState.ON_BATTERY
+	# Prefer the KyodaiBridge plugin (sticky battery intent): the sysfs probe
+	# below is SELinux-denied for untrusted_app on some handheld firmwares
+	# (AYN Odin 2 Mini), while the Android API is always legal.
+	if Engine.has_singleton("KyodaiBridge"):
+		var data: Dictionary = Engine.get_singleton("KyodaiBridge").getBatteryState()
+		percent = int(data.get("percent", -1))
+		state = int(data.get("status", PowerState.UNKNOWN))
 
-		var status_file := FileAccess.open(ANDROID_BATTERY_STATUS_PATH, FileAccess.READ)
-		if status_file:
-			match status_file.get_line().strip_edges():
-				"Charging":
-					state = PowerState.CHARGING
-				"Full":
-					state = PowerState.CHARGED
-				_:
-					state = PowerState.ON_BATTERY
-	else:
-		print("[StatusBar] android battery capacity not readable at ", ANDROID_BATTERY_CAPACITY_PATH)
+	if state == PowerState.UNKNOWN:
+		# Fallback: sysfs probe, readable with no permissions where SELinux
+		# permits it (e.g. Odin 3).
+		var capacity_file := FileAccess.open(ANDROID_BATTERY_CAPACITY_PATH, FileAccess.READ)
+		if capacity_file:
+			# NOTE: sysfs files report a bogus st_size, so get_as_text() fails its
+			# length check and returns "". get_line() reads byte-by-byte instead.
+			percent = int(capacity_file.get_line().strip_edges())
+			state = PowerState.ON_BATTERY
+
+			var status_file := FileAccess.open(ANDROID_BATTERY_STATUS_PATH, FileAccess.READ)
+			if status_file:
+				match status_file.get_line().strip_edges():
+					"Charging":
+						state = PowerState.CHARGING
+					"Full":
+						state = PowerState.CHARGED
+					_:
+						state = PowerState.ON_BATTERY
+		else:
+			print("[StatusBar] android battery unavailable via bridge and sysfs")
 	if is_instance_valid(self):
 		call_deferred("_on_battery_queried", state, percent)
 

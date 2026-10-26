@@ -20,6 +20,19 @@ var _sections: Array[SettingsSection] = []
 
 const COMPACT_TRAILING_MAX_WIDTH_DP := 200.0
 
+# Dense-capable trailing controls in compact mode: text fields / option
+# buttons shrink their container, path-row buttons drop a size.
+var _dense_fields: Array[M3TextField] = []
+var _dense_buttons: Array[M3Button] = []
+
+func _register_dense_field(field: M3TextField) -> void:
+	_dense_fields.append(field)
+	field.dense = _compact
+
+func _register_dense_button(button: M3Button) -> void:
+	_dense_buttons.append(button)
+	button.button_size = M3Button.Size.EXTRA_SMALL if _compact else M3Button.Size.MEDIUM
+
 const State = SettingsVar.SettingState
 const Type = SettingsVar.SettingType
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
@@ -48,14 +61,9 @@ func _exit_tree() -> void:
 		SystemManager.display.viewport_size_changed.disconnect(_reevaluate_compact)
 
 func _reevaluate_compact(_new_size: Vector2 = Vector2.ZERO) -> void:
-	var small := true
-	if SystemManager.display:
-		small = SystemManager.display.is_small_viewport()
-	else:
-		var viewport := get_viewport()
-		if viewport:
-			small = viewport.get_visible_rect().size.x < M3Units.dp(DisplaySubManager.SMALL_VIEWPORT_DP)
-	set_compact(small)
+	# Two-axis rule shared with M3Dialog (narrow OR short): a width-only
+	# check misses landscape handhelds, which are short but wide in dp.
+	set_compact(DisplaySubManager.is_cramped_viewport(M3Overlay.get_sizing_viewport(get_viewport())))
 
 func set_compact(small: bool) -> void:
 	if _compact == small:
@@ -84,6 +92,12 @@ func set_compact(small: bool) -> void:
 	for section in _sections:
 		if is_instance_valid(section):
 			section.compact = small
+	for field in _dense_fields:
+		if is_instance_valid(field):
+			field.dense = small
+	for button in _dense_buttons:
+		if is_instance_valid(button):
+			button.button_size = M3Button.Size.EXTRA_SMALL if small else M3Button.Size.MEDIUM
 
 func initialize_settings_menu(subgroup : String, settingsvars : Array[SettingsVar], icon : String = ""):
 	_current_section = SettingsSection.new(subgroup, icon)
@@ -224,6 +238,8 @@ func clear_controls() -> void:
 	controls.clear()
 	_rows_by_property.clear()
 	_visibility_rules.clear()
+	_dense_fields.clear()
+	_dense_buttons.clear()
 	_current_section = null
 
 func refresh_all_control_values() -> void:
@@ -236,7 +252,7 @@ func refresh_theme() -> void:
 	_refresh_theme_recursive(self)
 
 func refresh_scale() -> void:
-	add_theme_constant_override("separation", int(M3Units.dp(16)))
+	add_theme_constant_override("separation", int(M3Units.dp(10.0 if _compact else 16.0)))
 	for control in controls.values():
 		if not is_instance_valid(control):
 			continue
@@ -387,6 +403,7 @@ func match_var_type(settingsvar : SettingsVar):
 				id += 1
 			option_button.selected = matched_index
 			option_button.editable = settingsvar.state == 0
+			_register_dense_field(option_button)
 			# Store options for reverse lookup when refreshing values
 			option_button.set_meta("options", settingsvar.options.duplicate())
 			_add_setting_row(_make_label_block(settingsvar), [option_button])
@@ -450,6 +467,7 @@ func match_var_type(settingsvar : SettingsVar):
 			text_field.secret = settingsvar.encrypted
 			_set_trailing_width(text_field, settingsvar, 240.0)
 			text_field.size_flags_horizontal = Control.SIZE_SHRINK_END
+			_register_dense_field(text_field)
 			_add_setting_row(_make_label_block(settingsvar), [text_field])
 			controls[settingsvar.property_name] = text_field
 			_apply_metadata(text_field, settingsvar.metadata)
@@ -467,6 +485,7 @@ func match_var_type(settingsvar : SettingsVar):
 			path_field.focus_mode = Control.FOCUS_NONE
 			path_field.virtual_keyboard_enabled = false
 			path_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_register_dense_field(path_field)
 			controls[settingsvar.property_name] = path_field
 			_apply_metadata(path_field, settingsvar.metadata)
 			_apply_accent(path_field)
@@ -477,6 +496,7 @@ func match_var_type(settingsvar : SettingsVar):
 			browse_button.button_variant = M3Button.Variant.OUTLINED
 			browse_button.disabled = settingsvar.state != 0
 			browse_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			_register_dense_button(browse_button)
 
 			var path_controls = HBoxContainer.new()
 			path_controls.add_theme_constant_override("separation", int(M3Units.dp(8)))
@@ -496,6 +516,7 @@ func match_var_type(settingsvar : SettingsVar):
 				clear_button.disabled = settingsvar.state != 0
 				clear_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 				clear_button.visible = not path_field.text.is_empty()
+				_register_dense_button(clear_button)
 				path_controls.add_child(clear_button)
 				clear_button.pressed.connect(func():
 					path_field.text = ""

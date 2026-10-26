@@ -1931,7 +1931,7 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 	# one-time document-tree grant on devices without direct access or a root
 	# daemon. Prompt up front rather than failing mid-flow with a cryptic
 	# "failed to queue/create" error; the grant callback restarts the flow.
-	if _install_flow_needs_app_data(_install_steps) and _prompt_for_app_data_access(emulator_id):
+	if _install_flow_needs_app_data(emulator_id, _install_steps) and _prompt_for_app_data_access(emulator_id):
 		return true  # picker is up; flow resumes (or fails) from its callback
 
 	# Find the first incomplete step to start from
@@ -1958,10 +1958,36 @@ func _execute_install_steps(emulator_id: String, _emulator: Dictionary, _install
 	
 	return _execute_install_step(emulator_id, start_step)
 
-## True when any install step references {app_data} (the emulator's private
-## /Android/data folder) - i.e. the flow needs restricted-path access.
-func _install_flow_needs_app_data(install_steps: Array) -> bool:
-	return JSON.stringify(install_steps).contains("{app_data}")
+## True when the flow needs restricted-path access to the emulator's private
+## /Android/data folder: either an install step references {app_data}, or a
+## declared save/firmware directory resolves under Android/data|obb. The
+## latter matters because those dirs are auto-created when the steps finish
+## (_create_emulator_save_directory) - without a grant that creation fails
+## and every later save sync is denied.
+func _install_flow_needs_app_data(emulator_id: String, install_steps: Array) -> bool:
+	if JSON.stringify(install_steps).contains("{app_data}"):
+		return true
+	var emulator = launch_manager.registry.get_emulator(emulator_id)
+	if emulator.is_empty():
+		return false
+	var platforms: Array = emulator.get("meta", {}).get("platforms", [])
+	if platforms.is_empty():
+		platforms = [""]
+	for platform in platforms:
+		if _is_restricted_android_path(DataManager.resolve_default_save_directory(emulator_id, platform)):
+			return true
+		if _is_restricted_android_path(launch_manager.firmware.get_firmware_directory(emulator_id, platform)):
+			return true
+	return false
+
+## The restricted-path probe used across sync/firmware: app-private
+## Android/data|obb trees sit behind SAF grants on devices without direct
+## access or a root daemon.
+func _is_restricted_android_path(path: String) -> bool:
+	if path == "":
+		return false
+	var normalized := path.replace("\\", "/")
+	return normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
 
 ## Gates an install flow on Android app-data access. Returns true when the
 ## grant picker was just shown (caller must pause; the callback restarts the

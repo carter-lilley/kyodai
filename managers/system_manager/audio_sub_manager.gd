@@ -38,6 +38,11 @@ var _music_volume := 1.0
 ## switch), so focus return only resumes what it paused. Game-launch pauses
 ## (LaunchManager.background_state_entered) are owned by LaunchManager.
 var _paused_for_focus := false
+## In-flight BGM fade-out tween from pause_background_music(). Tracked so a
+## resume can cancel it before its finished callback pauses the stream out
+## from under playback that was already resumed (focus-out -> focus-in can
+## arrive within the fade window when the device wakes straight into the app).
+var _bgm_pause_tween: Tween = null
 
 func _ready() -> void:
 	_setup_audio_buses()
@@ -586,6 +591,7 @@ func play_background_music_file(path: String, fade_duration: float = DEFAULT_FAD
 		return false
 
 	_current_bgm_path = effective_path
+	_cancel_bgm_pause_tween()
 	_bgm_player.stop()
 	_bgm_player.stream_paused = false
 	_bgm_player.stream = stream
@@ -600,6 +606,7 @@ func play_background_music_file(path: String, fade_duration: float = DEFAULT_FAD
 func stop_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> void:
 	"""Stop the background music track."""
 	_current_bgm_path = ""
+	_cancel_bgm_pause_tween()
 	if not _bgm_player.playing:
 		_bgm_player.stream = null
 		return
@@ -613,19 +620,31 @@ func pause_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> voi
 	"""Pause background music (e.g., while a game is running)."""
 	if not _bgm_player.playing or _bgm_player.stream_paused:
 		return
+	_cancel_bgm_pause_tween()
 	if fade_duration > 0.0:
 		var tween = create_tween()
+		_bgm_pause_tween = tween
 		tween.tween_property(_bgm_player, "volume_db", -80.0, fade_duration)
 		tween.finished.connect(func():
-			if _bgm_player.playing:
-				_bgm_player.stream_paused = true
+			# Only pause if this fade is still the current one — a resume may
+			# have superseded it while the tween was in flight.
+			if _bgm_pause_tween == tween:
+				_bgm_pause_tween = null
+				if _bgm_player.playing:
+					_bgm_player.stream_paused = true
 		)
 	else:
 		_bgm_player.stream_paused = true
 
 func resume_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> void:
 	"""Resume background music after a pause."""
-	if _current_bgm_path.is_empty() or not _bgm_player.stream or not _bgm_player.stream_paused:
+	if _current_bgm_path.is_empty() or not _bgm_player.stream:
+		return
+	var pause_in_flight := _bgm_pause_tween != null
+	_cancel_bgm_pause_tween()
+	# Nothing to do if the music is already audibly playing (no pause applied
+	# and none in flight).
+	if not pause_in_flight and not _bgm_player.stream_paused:
 		return
 	_bgm_player.stream_paused = false
 	if fade_duration > 0.0:
@@ -633,6 +652,13 @@ func resume_background_music(fade_duration: float = DEFAULT_FADE_DURATION) -> vo
 		_create_volume_tween(_bgm_player, 0.0, fade_duration)
 	else:
 		_bgm_player.volume_db = 0.0
+
+func _cancel_bgm_pause_tween() -> void:
+	"""Kill any in-flight BGM pause fade so its finished callback can't pause
+	the stream after playback has resumed."""
+	if _bgm_pause_tween:
+		_bgm_pause_tween.kill()
+		_bgm_pause_tween = null
 
 func is_background_music_playing() -> bool:
 	"""Check if background music is currently playing."""

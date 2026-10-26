@@ -415,6 +415,21 @@ func is_compact_viewport() -> bool:
 func is_small_viewport() -> bool:
 	return is_narrow_viewport(SMALL_VIEWPORT_DP)
 
+## Height axis of the two-axis cramped rule (narrow OR short).
+const CRAMPED_HEIGHT_DP := 700.0
+
+## Two-axis "cramped screen" rule shared by dialogs and settings content:
+## narrow (portrait/small window) OR short (landscape handheld) viewports.
+## Width-only rules miss landscape handhelds — a 1080p TV-handheld panel at
+## high DPI is wide in dp but very short. Static + viewport parameter because
+## the caller's sizing viewport (DS-aware, via M3Overlay.get_sizing_viewport)
+## is authoritative; this manager's cached size can lag it across screen swaps.
+static func is_cramped_viewport(viewport: Viewport) -> bool:
+	if viewport == null:
+		return false
+	var size: Vector2 = viewport.get_visible_rect().size
+	return size.x < M3Units.dp(SMALL_VIEWPORT_DP) or size.y < M3Units.dp(CRAMPED_HEIGHT_DP)
+
 func _calculate_ui_scale() -> float:
 	"""Compute the DP scale from the current monitor/OS settings.
 
