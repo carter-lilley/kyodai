@@ -380,6 +380,8 @@ func _resolve_saf_grant(granted: bool) -> void:
 var _install_grant_awaiting_retry := false  # sent the user to grant; install retries on return
 var _installs_since_grant := 0              # install intents fired while the grant is held
 var _restore_prompt_snoozed := false        # user chose "not now"; re-arms on the next install
+var _restart_prompt_snoozed := false        # user declined the restart; re-arms on a new session
+var _install_prompt_open := false           # a session dialog is on screen; never stack another
 var _startup_grant_check_done := false
 
 ## True when the user currently allows Kyodai to install APKs.
@@ -408,6 +410,8 @@ func ensure_install_permission(reason: String) -> bool:
 	if can_install_unknown_apps():
 		return true
 	_install_grant_awaiting_retry = true
+	_restore_prompt_snoozed = false
+	_restart_prompt_snoozed = false
 	UIManager.show_confirm(
 		"Install Permission Needed",
 		"Installing %s requires Android's 'Install unknown apps' switch for Kyodai.\n\nOn this device that switch temporarily pauses fast storage - turn it back off when you're done installing (Kyodai will remind you).\n\nEnable it in the screen that opens, then retry." % reason,
@@ -417,12 +421,13 @@ func ensure_install_permission(reason: String) -> bool:
 	return false
 
 ## Called after an install intent was successfully fired. Re-arms the
-## restore prompt for the next focus return.
+## restore/restart prompts for the next focus return.
 func notify_install_started() -> void:
 	if not is_android():
 		return
 	_installs_since_grant += 1
 	_restore_prompt_snoozed = false
+	_restart_prompt_snoozed = false
 
 ## Evaluates grant/storage coupling and runs the JIT prompts. Called
 ## (deferred) on window focus-in and once after startup. The coupling check -
@@ -462,22 +467,31 @@ func evaluate_install_grant_state(on_startup: bool = false) -> void:
 			_prompt_restart_for_fast_storage()
 
 func _prompt_restore_fast_storage() -> void:
-	if _restore_prompt_snoozed:
+	if _restore_prompt_snoozed or _install_prompt_open:
 		return
 	_restore_prompt_snoozed = true
+	_install_prompt_open = true
 	UIManager.show_confirm(
 		"Restore Fast Storage",
 		"The 'Install unknown apps' switch is still on, and this device runs Kyodai's storage in slow compatibility mode while it is.\n\nDone installing for now? Turn the switch off to restore full speed.",
 		func(): open_install_unknown_apps_settings(),
-		Callable()  # "Not now": snoozed until the next install
+		Callable(),  # "Not now": snoozed until the next install
+		func(): _install_prompt_open = false
 	)
 
 func _prompt_restart_for_fast_storage() -> void:
+	# Snoozed or not, this must never nag: a failed/declined restart leaves
+	# the state matching on every focus-in, which would loop the dialog.
+	if _restart_prompt_snoozed or _install_prompt_open:
+		return
+	_restart_prompt_snoozed = true
+	_install_prompt_open = true
 	UIManager.show_confirm(
 		"Restart to Restore Fast Storage",
 		"The install switch is off - full storage speed comes back when Kyodai restarts.\n\nRestart now?",
 		func(): _restart_app(),
-		Callable()
+		Callable(),
+		func(): _install_prompt_open = false
 	)
 
 func _restart_app() -> void:

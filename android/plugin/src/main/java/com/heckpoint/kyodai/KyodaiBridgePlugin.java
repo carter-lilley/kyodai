@@ -917,14 +917,16 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     /**
-     * Hard-restarts the app: relaunches the launcher activity in a fresh task
-     * and kills the current process. Needed after the user revokes the
-     * "Install unknown apps" grant on firmware that strips the ext_data_rw /
-     * sdcard_rw supplementary gids while the grant is held (AYN Odin family):
-     * process gids are stamped by zygote at fork time, so only a fresh
-     * process picks the restored gids up.
+     * Hard-restarts the app in a guaranteed-fresh process: schedules the
+     * launcher intent via AlarmManager and kills this process immediately.
+     * A plain startActivity while this process is alive lets AMS reuse the
+     * process for the new activity, which would keep the stripped
+     * supplementary gids this method exists to shed (AYN Odin firmware
+     * restores the ext_data_rw / sdcard_rw gids only at fork time, after the
+     * user revokes the "Install unknown apps" grant). The alarm fires after
+     * process death, so AMS forks a new process with fresh gids.
      *
-     * @return true if the relaunch intent was dispatched
+     * @return true if the restart was scheduled
      */
     @UsedByGodot
     public boolean restartApp() {
@@ -941,14 +943,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 return false;
             }
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            activity.startActivity(intent);
-            activity.finish();
-            // Kill after the new task is spawned so the fresh process does
-            // not inherit this process's stripped supplementary gids.
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                android.os.Process.killProcess(android.os.Process.myPid());
-                System.exit(0);
-            }, 300);
+            android.app.PendingIntent restartIntent = android.app.PendingIntent.getActivity(
+                    activity, 0x5EAD, intent,
+                    android.app.PendingIntent.FLAG_CANCEL_CURRENT
+                            | android.app.PendingIntent.FLAG_IMMUTABLE);
+            android.app.AlarmManager alarm =
+                    (android.app.AlarmManager) activity.getSystemService(android.content.Context.ALARM_SERVICE);
+            alarm.set(android.app.AlarmManager.RTC,
+                    System.currentTimeMillis() + 250, restartIntent);
+            // Die now so the alarm-started activity gets a fresh process.
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(0);
             return true;
         } catch (Exception e) {
             Log.e(TAG, "restartApp failed: " + e.getMessage());
