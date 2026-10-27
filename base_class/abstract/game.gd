@@ -62,6 +62,10 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Timestamp of when this game was last played (ISO format)
 @export var last_played: String = ""
 
+## Total seconds spent playing this game (accumulated locally per session;
+## the server payload never provides it, so sync preserves the local value)
+@export var play_seconds: int = 0
+
 ## Whether the "present wrap" overlay has been unwrapped (first focus).
 ## Persists so a wrapped game stays unwrapped across restarts even if never launched.
 @export var unwrapped: bool = false

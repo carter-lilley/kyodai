@@ -17,6 +17,12 @@ var _is_in_background_state: bool = false
 var _background_poll_timer: Timer = null
 var _poll_in_flight: bool = false
 const BACKGROUND_POLL_INTERVAL: float = 1.0
+# Android session ownership lives in the Java session service (its own
+# :session process), which watches emulator presence via UsageStats and
+# survives an LMK kill of this process. GDScript only supplies the emulator
+# package at launch and consumes the record the service leaves behind.
+var _android_emulator_package: String = ""
+var _android_presence_perm_warned: bool = false
 # Linux launches lead their own process group (Godot's create_process calls
 # setsid() in the forked child): every wrapper/payload descendant (AppImage
 # AppRun, sh, env) shares its PGID. Group liveness is the source of truth
@@ -47,19 +53,44 @@ const LINGERING_POLL_INTERVAL: float = 2.0
 # Cached own-process PGID: group signals must never target Kyodai's own group.
 var _own_pgid: int = -1
 
+# Game session tracking (playtime + Android LMK protection). The pending
+# session record is written to disk BEFORE the handoff so that a process
+# kill mid-session (LMK, crash) can be recovered on the next launch.
+var _session_start_ms: int = 0
+const PENDING_SESSION_PATH = "user://pending_game_session.json"
+## Cap for sessions recovered after a process kill; without it a kill
+## would inflate playtime by the entire time the launcher was dead.
+const MAX_RECOVERED_SESSION_SECONDS: int = 12 * 3600
+
 var launch_manager: Node
 
 func _ready():
 	launch_manager = get_parent()
 
-	# Initialize background state polling (desktop only)
-	if not SystemManager.platform.is_android():
-		_background_poll_timer = Timer.new()
-		_background_poll_timer.wait_time = BACKGROUND_POLL_INTERVAL
-		_background_poll_timer.one_shot = false
-		_background_poll_timer.timeout.connect(_on_background_poll_timeout)
-		add_child(_background_poll_timer)
-		if DEBUG_LOG: print("[ProcessManager] Poll timer created, in_tree=", _background_poll_timer.is_inside_tree(), " wait=", _background_poll_timer.wait_time)
+	# Initialize background state polling (desktop PGID liveness; the Android
+	# presence watch lives in the Java session service, not here).
+	_background_poll_timer = Timer.new()
+	_background_poll_timer.wait_time = BACKGROUND_POLL_INTERVAL
+	_background_poll_timer.one_shot = false
+	_background_poll_timer.timeout.connect(_on_background_poll_timeout)
+	add_child(_background_poll_timer)
+	if DEBUG_LOG: print("[ProcessManager] Poll timer created, in_tree=", _background_poll_timer.is_inside_tree(), " wait=", _background_poll_timer.wait_time)
+
+	# If a pending session record survived, the launcher was killed mid-game
+	# (LMK under a memory-hungry emulator). Finalize its playtime once the DB
+	# is up instead of losing the session entirely.
+	if FileAccess.file_exists(PENDING_SESSION_PATH):
+		if DataManager.database.is_database_ready():
+			_recover_pending_session()
+		else:
+			DataManager.database_ready.connect(_recover_pending_session, CONNECT_ONE_SHOT)
+
+	# A session service running at GDScript boot belongs to a session this
+	# process can no longer continue: either the pending record above was just
+	# recovered (session over) or there is none (zombie). The service also
+	# self-terminates when it sees Kyodai foregrounded; stop it immediately so
+	# it doesn't linger with a stale notification and locks.
+	SystemManager.platform.stop_game_session_foreground_service()
 
 
 # ============================================================================
@@ -265,10 +296,14 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 	else:
 		if DEBUG_LOG: print("[ProcessManager] Poll timer not available")
 
+	_begin_game_session(game)
 	launch_manager.background_state_entered.emit(pid, game)
 
-## Enter background state for Android (no PID polling)
-func enter_background_state_android(game: GameResource) -> void:
+## Enter background state for Android. The session service (its own process)
+## owns session end from here: it watches emulator presence via UsageStats,
+## annotates the pending record with end_unix, and cold-starts us into save
+## upload when the game exits. This process only finalizes on resume.
+func enter_background_state_android(game: GameResource, emulator_package: String = "") -> void:
 	if _is_in_background_state:
 		if DEBUG_LOG: print("[ProcessManager] Warning: Already in background state, ignoring Android entry")
 		return
@@ -277,9 +312,15 @@ func enter_background_state_android(game: GameResource) -> void:
 	_background_active_pid = -1  # No PID on Android
 	_background_active_game = game
 	_is_in_background_state = true
+	_android_emulator_package = emulator_package
 
-	# Don't start poll timer on Android - we rely on resume notification
+	# Without usage access the service's presence watch can't run; the session
+	# then ends on our resume only, and a kill loses the end timestamp.
+	if emulator_package != "" and not SystemManager.platform.has_usage_stats_permission() and not _android_presence_perm_warned:
+		_android_presence_perm_warned = true
+		push_warning("[ProcessManager] Usage Access not granted; session presence watch disabled (session ends on resume only). Grant via Settings > Usage access.")
 
+	_begin_game_session(game)
 	launch_manager.background_state_entered.emit(-1, game)
 
 ## Exit background state
@@ -309,10 +350,122 @@ func exit_background_state(exit_code: int = 0) -> void:
 	_background_window_misses = 0
 	_background_dead_streak = 0
 	_is_in_background_state = false
+	_android_emulator_package = ""
 
+	_end_game_session(game)
 	launch_manager.background_state_exited.emit(game, exit_code)
 
-## Poll callback - check if process is still running (async: never blocks the main thread)
+
+# ============================================================================
+# GAME SESSION TRACKING (playtime + Android LMK protection)
+# ============================================================================
+
+## Starts a play session for a backgrounded game. On Android this also starts
+## the game-session foreground service, promoting the process out of LMK's
+## cached tier while a memory-hungry emulator holds the foreground. The
+## pending record hits disk before the handoff so a mid-session process kill
+## can be recovered on next launch.
+func _begin_game_session(game: GameResource) -> void:
+	if game == null:
+		return
+	_session_start_ms = Time.get_ticks_msec()
+	var record := {
+		"romm_id": game.romm_id,
+		"title": game.get_display_name(),
+		# Wall time, not ticks: recovery after a kill compares across boots.
+		"start_unix": Time.get_unix_time_from_system(),
+	}
+	var f := FileAccess.open(PENDING_SESSION_PATH, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(record))
+		f.close()
+	else:
+		push_warning("[ProcessManager] Could not write pending session record: " + error_string(FileAccess.get_open_error()))
+	SystemManager.platform.start_game_session_foreground_service(
+		game.get_display_name(), int(record["start_unix"]) * 1000,
+		_android_emulator_package, game.romm_id)
+
+## Ends the active play session: stops the foreground service, accumulates
+## playtime, and clears the pending record. When the session service observed
+## the emulator leaving the foreground before we resumed, its end_unix
+## annotation is more accurate than our ticks (which then include whatever
+## else the user did before coming back).
+func _end_game_session(game: GameResource) -> void:
+	SystemManager.platform.stop_game_session_foreground_service()
+	if _session_start_ms <= 0:
+		return
+	var elapsed_seconds := int((Time.get_ticks_msec() - _session_start_ms) / 1000)
+	_session_start_ms = 0
+	if FileAccess.file_exists(PENDING_SESSION_PATH):
+		var record = _read_pending_record()
+		DirAccess.remove_absolute(PENDING_SESSION_PATH)
+		var end_unix := float(record.get("end_unix", 0.0))
+		var start_unix := float(record.get("start_unix", 0.0))
+		if end_unix > start_unix and start_unix > 0.0:
+			elapsed_seconds = mini(elapsed_seconds, int(end_unix - start_unix))
+	_accumulate_play_seconds(game, elapsed_seconds)
+
+## Adds elapsed seconds to a game's local playtime total (in-memory + DB).
+func _accumulate_play_seconds(game: GameResource, seconds: int) -> void:
+	if game == null or seconds <= 0 or game.romm_id <= 0:
+		return
+	game.play_seconds += seconds
+	DataManager.add_game_play_seconds(game.romm_id, seconds)
+	print("[ProcessManager] Session playtime for ", game.get_display_name(), ": ", seconds, "s (total ", game.play_seconds, "s)")
+
+## Reads the pending session record; {} when missing or unparseable.
+func _read_pending_record() -> Dictionary:
+	var f := FileAccess.open(PENDING_SESSION_PATH, FileAccess.READ)
+	if f == null:
+		return {}
+	var parsed = JSON.parse_string(f.get_as_text())
+	f.close()
+	return parsed if parsed is Dictionary else {}
+
+## Finalizes a session record left behind by a process kill. When the session
+## service observed the emulator's exit it annotated the record with
+## end_unix, making the duration exact; otherwise it is unknowable past the
+## kill and capped at MAX_RECOVERED_SESSION_SECONDS. Either way the game is
+## no longer running (we were relaunched), so the save upload runs here too -
+## this is the path that syncs saves after an LMK kill.
+func _recover_pending_session() -> void:
+	var record := _read_pending_record()
+	if record.is_empty():
+		return
+	DirAccess.remove_absolute(PENDING_SESSION_PATH)
+	var romm_id := int(record.get("romm_id", 0))
+	var start_unix := float(record.get("start_unix", 0.0))
+	if romm_id <= 0 or start_unix <= 0.0:
+		return
+	var end_unix := float(record.get("end_unix", 0.0))
+	var elapsed: int
+	if end_unix > start_unix:
+		elapsed = int(end_unix - start_unix)
+	else:
+		elapsed = mini(int(Time.get_unix_time_from_system() - start_unix), MAX_RECOVERED_SESSION_SECONDS)
+	if elapsed <= 0:
+		return
+	DataManager.add_game_play_seconds(romm_id, elapsed)
+	print("[ProcessManager] Recovered killed session for romm_id ", romm_id, " (", record.get("title", "?"), "): credited ", elapsed, "s", " (exact)" if end_unix > start_unix else " (capped)")
+	_upload_saves_after_recovery(romm_id)
+
+## Save upload for a recovered session. Deferred like the resume path: this
+## runs during boot, and the upload's discovery scan must not stretch the
+## startup-critical window.
+func _upload_saves_after_recovery(romm_id: int) -> void:
+	var game := DataManager.database.get_game_by_id(romm_id)
+	if game == null:
+		print("[ProcessManager] Recovery upload skipped: game not found for romm_id ", romm_id)
+		return
+	var emulator_id: String = launch_manager.resolve_emulator_for_game(game)
+	if emulator_id == "":
+		print("[ProcessManager] Recovery upload skipped: no emulator resolved for ", game.get_display_name())
+		return
+	print("[ProcessManager] Uploading saves after recovered session: ", game.get_display_name())
+	DataManager.auto_upload_saves_for_game.call_deferred(game, emulator_id)
+
+## Poll callback (desktop only): check if process is still running (async:
+## never blocks the main thread).
 func _on_background_poll_timeout() -> void:
 	if DEBUG_LOG: print("[ProcessManager] Poll timer fired")
 	if not _is_in_background_state or _background_active_pid <= 0:
@@ -1524,7 +1677,8 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		return false
 
 	# Enter background state for Android - we track the game and exit on resume
-	enter_background_state_android(intent.game)
+	# (or when the presence watch sees the emulator leave the foreground).
+	enter_background_state_android(intent.game, intent.android_package)
 
 	return true
 

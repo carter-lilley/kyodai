@@ -1205,6 +1205,12 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				emu_disc_path = FSM.join_paths(anchor, "games", title_id)
 				emu_digital_path = FSM.join_paths(anchor, "dev_hdd0", "game", title_id)
 	var to_emu_dir := emu_disc_path != ""
+	if to_emu_dir:
+		# Claim the dev_hdd0 skeleton (game/, home/<user>/exdata, savedata)
+		# before the emulator can create it: on Android, emulator-created dirs
+		# are 0750 under the emulator's uid, which blocks every SAF write
+		# kyodai needs (RAP install, digital relocation, save upload).
+		_ensure_rpcs3_hdd0_skeleton(intent.emulator_id, game.platform_slug)
 	if DEBUG_LOG and to_emu_dir:
 		print("[GameManager] RPCS3: Emulator disc path: " + emu_disc_path)
 		print("[GameManager] RPCS3: Emulator digital path: " + emu_digital_path)
@@ -1220,15 +1226,34 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	if to_emu_dir:
 		if _ps3_game_has_files(emu_disc_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + emu_disc_path)
+			var reused := false
 			if _unwrap_ps3_wrapper(emu_disc_path):
+				# A digital game sitting in the disc path is a leftover of the
+				# broken relocation in older builds; move it where it belongs.
+				if not FSM.dir_exists(FSM.join_paths(emu_disc_path, "PS3_GAME")):
+					print("[GameManager] RPCS3: Digital game found in disc path, relocating to: " + emu_digital_path)
+					if FSM.move_dir_contents(emu_disc_path, emu_digital_path):
+						FSM.delete_dir_recursive(emu_disc_path)
+						intent.rom_path = emu_digital_path
+						reused = true
+					else:
+						# dev_hdd0 locked (emulator-created 0750 dirs block SAF
+						# writes): boot from the disc path as a degraded fallback
+						# instead of re-extracting into the same wall.
+						push_warning("[GameManager] RPCS3: Digital relocation failed, booting from disc path: " + emu_disc_path)
+						intent.rom_path = emu_disc_path
+						reused = true
+				else:
+					intent.rom_path = emu_disc_path
+					reused = true
+			if reused:
 				_ensure_rpcs3_license(zip_path, _rpcs3_exdata_dir(intent.emulator_id, game.platform_slug))
-				intent.rom_path = emu_disc_path
 				if not is_shuffler:
-					_store_file_path(game, emu_disc_path)
+					_store_file_path(game, intent.rom_path)
 				return true
-			# A failed unwrap leaves a wrapped/partial folder RPCS3 cannot boot;
-			# fall through so the extraction path wipes it and starts clean.
-			push_warning("[GameManager] RPCS3: Unwrap failed for existing install, re-extracting: " + emu_disc_path)
+			# A failed unwrap/relocation leaves a wrapped/partial folder RPCS3
+			# cannot boot; fall through so extraction wipes it and starts clean.
+			push_warning("[GameManager] RPCS3: Reuse failed for existing install, re-extracting: " + emu_disc_path)
 		elif _ps3_game_has_files(emu_digital_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at digital path: " + emu_digital_path)
 			if _unwrap_ps3_wrapper(emu_digital_path):
@@ -1327,10 +1352,27 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	# Step 6: Handle wrapper folder (e.g., "Soulcalibur IV/PS3_GAME/" -> "PS3_GAME/")
 	var game_root = sfo_dir.get_base_dir() if is_disc_format else sfo_dir
 	if to_emu_dir and game_root != final_extract_path:
-		if DEBUG_LOG: print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
-		if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
-		if not _unwrap_ps3_wrapper(final_extract_path):
-			return false
+		if is_disc_format:
+			# Disc: staging == final, so the wrapper folder sits inside the
+			# final path and can be unwrapped in place.
+			if DEBUG_LOG: print("[GameManager] RPCS3: Wrapper folder detected: " + game_root.get_file())
+			if DEBUG_LOG: print("[GameManager] RPCS3: Unwrapping to: " + final_extract_path)
+			if not _unwrap_ps3_wrapper(final_extract_path):
+				return false
+		else:
+			# Digital: the game stages into the disc path but must live in
+			# dev_hdd0/game/<TID>. Relocate the game root there — unwrapping
+			# the final path can't work, it doesn't exist yet.
+			print("[GameManager] RPCS3: Relocating digital game from " + game_root + " to " + final_extract_path)
+			if not FSM.move_dir_contents(game_root, final_extract_path):
+				push_error("[GameManager] RPCS3: Failed to relocate digital game to " + final_extract_path)
+				# Degraded fallback (e.g. emulator-created 0750 dev_hdd0 dirs
+				# blocking SAF writes on Android): boot from the staging path.
+				if _unwrap_ps3_wrapper(extract_target):
+					push_warning("[GameManager] RPCS3: Booting digital game from staging path instead: " + extract_target)
+					final_extract_path = extract_target
+				else:
+					return false
 	elif not to_emu_dir:
 		# Fallback: move from temp to final
 		if DEBUG_LOG: print("[GameManager] RPCS3: Moving game files from " + game_root + " to " + final_extract_path)
@@ -1344,9 +1386,10 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	# (e.g. "Game Name/" left behind after unwrapping "Game Name/PS3_GAME/")
 	FSM.prune_empty_dirs(final_extract_path)
 	if to_emu_dir and extract_target != final_extract_path:
-		# Digital games stage into the disc path first; drop the empty staging shell
-		FSM.prune_empty_dirs(extract_target)
-		if FSM.dir_exists(extract_target) and FSM.list_dir(extract_target).is_empty():
+		# Digital games stage into the disc path first; after relocation the
+		# staging shell only holds archive junk (wrapper shells, stray RAPs —
+		# those are installed to exdata separately), so drop it entirely.
+		if FSM.dir_exists(extract_target):
 			FSM.delete_dir_recursive(extract_target)
 	
 	# Step 7: Verify extracted files
@@ -1425,12 +1468,14 @@ func _ps3_game_has_files(game_path: String) -> bool:
 ## PS3_GAME/PARAM.SFO, so a wrapped folder fails with "Nothing to boot".
 func _unwrap_ps3_wrapper(folder_path: String) -> bool:
 	if not FSM.dir_exists(folder_path):
+		push_warning("[GameManager] RPCS3: _unwrap_ps3_wrapper: folder does not exist: " + folder_path)
 		return false
 
 	var sfo_path = FSM.find_file_recursive(folder_path, "PARAM.SFO")
 	if sfo_path == "":
 		sfo_path = FSM.find_file_recursive(folder_path, "PARAM.sfo")
 	if sfo_path == "":
+		push_warning("[GameManager] RPCS3: _unwrap_ps3_wrapper: no PARAM.SFO under: " + folder_path)
 		return false
 
 	var sfo_dir := sfo_path.get_base_dir()
@@ -1497,13 +1542,10 @@ func _extract_ps3_zip(zip_path: String, extract_to: String) -> bool:
 	return await _await_extraction(item_id, "GameManager] RPCS3")
 
 
-## Resolves the RPCS3 exdata dir (<dev_hdd0>/home/<user>/exdata), where RAP
-## license files live. Uses the same base the game prep uses for
+## Resolves the RPCS3 dev_hdd0 root. Uses the same base the game prep uses for
 ## dev_hdd0/game: the managed install dir on desktop, the declared resolution
-## anchor on Android. Returns "" when the base is unknown (unmanaged install);
-## RAP install is skipped then. User id matches Rpcs3VfsResolver (multi-user
-## unsupported, saves and RAPs share the profile).
-func _rpcs3_exdata_dir(emulator_id: String, platform_slug: String) -> String:
+## anchor on Android. Returns "" when the base is unknown (unmanaged install).
+func _rpcs3_hdd0_dir(emulator_id: String, platform_slug: String) -> String:
 	var base := ""
 	if not SystemManager.platform.is_android():
 		if launch_manager.registry.get_emulator_install_path(emulator_id) == "":
@@ -1516,7 +1558,34 @@ func _rpcs3_exdata_dir(emulator_id: String, platform_slug: String) -> String:
 		base = FSM.resolve_emulator_path(anchor_raw, emulator_id, platform_slug).rstrip("/")
 	if base == "":
 		return ""
-	return base + "/dev_hdd0/home/" + Rpcs3VfsResolver.USER_ID + "/exdata"
+	return base + "/dev_hdd0"
+
+
+## Resolves the RPCS3 exdata dir (<dev_hdd0>/home/<user>/exdata), where RAP
+## license files live. Returns "" when the base is unknown (unmanaged install);
+## RAP install is skipped then. User id matches Rpcs3VfsResolver (multi-user
+## unsupported, saves and RAPs share the profile).
+func _rpcs3_exdata_dir(emulator_id: String, platform_slug: String) -> String:
+	var hdd0 := _rpcs3_hdd0_dir(emulator_id, platform_slug)
+	if hdd0 == "":
+		return ""
+	return hdd0 + "/home/" + Rpcs3VfsResolver.USER_ID + "/exdata"
+
+
+## Creates the dev_hdd0 skeleton kyodai needs to write into (digital game dir,
+## exdata for RAPs, savedata for save sync) with kyodai-owned permissions.
+## Matters on Android: SAF-created dirs are group-writable, but if the
+## emulator first-boots before kyodai touches these paths it creates them
+## 0750 under its own uid, and every later SAF write fails (RAP install,
+## digital relocation, save upload). Idempotent; cheap dir checks per launch.
+func _ensure_rpcs3_hdd0_skeleton(emulator_id: String, platform_slug: String) -> void:
+	var hdd0 := _rpcs3_hdd0_dir(emulator_id, platform_slug)
+	if hdd0 == "":
+		return
+	var home := hdd0 + "/home/" + Rpcs3VfsResolver.USER_ID
+	for sub in [hdd0 + "/game", home + "/exdata", home + "/savedata"]:
+		if not FSM.dir_exists(sub):
+			FSM.make_dir_recursive(sub)
 
 
 ## Ensures RPCS3 has the RAP license files carried by the game zip installed
@@ -1524,7 +1593,8 @@ func _rpcs3_exdata_dir(emulator_id: String, platform_slug: String) -> String:
 ## without their RAP; the zip is the source of truth so a fresh device
 ## self-heals on first launch. Any .rap entry anywhere in the archive is
 ## installed (stray RAPs are harmless, 16 bytes each; disc games ship none).
-## Idempotent: RAPs already on disk are left alone. Never blocks the launch.
+## Idempotent: RAPs already on disk are left alone. Never blocks the launch,
+## but failed installs surface a notification since the game won't boot.
 func _ensure_rpcs3_license(zip_path: String, exdata_dir: String) -> void:
 	if zip_path == "" or exdata_dir == "":
 		return
@@ -1532,44 +1602,59 @@ func _ensure_rpcs3_license(zip_path: String, exdata_dir: String) -> void:
 	if resolved_zip == "":
 		return
 
+	var found := 0
+	var failed := 0
 	var zr := ZIPReader.new()
 	if zr.open(resolved_zip) == OK:
 		for entry in zr.get_files():
 			if entry.ends_with("/") or entry.get_extension().to_lower() != "rap":
 				continue
-			_install_rpcs3_rap(entry.get_file(), zr.read_file(entry), exdata_dir)
+			found += 1
+			if not _install_rpcs3_rap(entry.get_file(), zr.read_file(entry), exdata_dir):
+				failed += 1
 		zr.close()
 	else:
 		# ZIPReader fails on some ZIP64 archives; use the bundled 7z instead
 		zr.close()
-		_install_rpcs3_raps_with_7z(resolved_zip, exdata_dir)
+		var result := _install_rpcs3_raps_with_7z(resolved_zip, exdata_dir)
+		found = result[0]
+		failed = result[1]
+
+	if failed > 0:
+		push_error("[GameManager] RPCS3: " + str(failed) + "/" + str(found) + " RAP installs failed (exdata not writable: " + exdata_dir + ")")
+		SystemManager.notifications.show_notification(
+			"Couldn't install the PSN license (RAP) - the game may fail to boot. If the emulator created its dev_hdd0 folders before kyodai did, clear the emulator's app data and retry.",
+			SystemManager.notifications.Type.ERROR)
 
 
-## Writes one RAP license into exdata_dir, skipping files already on disk
-func _install_rpcs3_rap(file_name: String, bytes: PackedByteArray, exdata_dir: String) -> void:
+## Writes one RAP license into exdata_dir. Returns true when the file is on
+## disk afterwards (written now or already present), false on failure.
+func _install_rpcs3_rap(file_name: String, bytes: PackedByteArray, exdata_dir: String) -> bool:
 	if file_name == "" or bytes.is_empty():
-		return
+		return false
 	var dst := exdata_dir + "/" + file_name
 	if FSM.file_exists(dst):
-		return
+		return true
 	if not FSM.dir_exists(exdata_dir):
 		FSM.make_dir_recursive(exdata_dir)
 	if FSM.write_file_bytes(dst, bytes):
 		print("[GameManager] RPCS3: Installed RAP license: " + dst)
-	else:
-		push_warning("[GameManager] RPCS3: Failed to write RAP license: " + dst)
+		return true
+	push_warning("[GameManager] RPCS3: Failed to write RAP license: " + dst)
+	return false
 
 
 ## 7-Zip fallback for _ensure_rpcs3_license (ZIP64 archives ZIPReader can't
 ## open). Desktop only; Android goes through the native ZIPReader path.
-func _install_rpcs3_raps_with_7z(zip_path: String, exdata_dir: String) -> void:
+## Returns [rap entries found, installs failed].
+func _install_rpcs3_raps_with_7z(zip_path: String, exdata_dir: String) -> Array:
 	var binary_path = FSM._get_7z_binary_path()
 	if binary_path == "":
-		return
+		return [0, 0]
 
 	var output := []
 	if OS.execute(binary_path, ["l", "-slt", zip_path], output, true) != 0 or output.is_empty():
-		return
+		return [0, 0]
 
 	var rap_entries: Array[String] = []
 	for line in str(output[0]).split("\n"):
@@ -1578,6 +1663,7 @@ func _install_rpcs3_raps_with_7z(zip_path: String, exdata_dir: String) -> void:
 			if entry.get_extension().to_lower() == "rap":
 				rap_entries.append(entry)
 
+	var failed := 0
 	var temp_dir := "user://temp/ps3_rap/"
 	for entry in rap_entries:
 		var file_name := entry.get_file()
@@ -1589,10 +1675,13 @@ func _install_rpcs3_raps_with_7z(zip_path: String, exdata_dir: String) -> void:
 		# `7z e` flattens to the entry's basename
 		var extracted := temp_dir + file_name
 		if OS.execute(binary_path, extract_args, output, true) == 0 and FSM.file_exists(extracted):
-			_install_rpcs3_rap(file_name, FSM.read_file_bytes(extracted), exdata_dir)
+			if not _install_rpcs3_rap(file_name, FSM.read_file_bytes(extracted), exdata_dir):
+				failed += 1
 			DirAccess.remove_absolute(extracted)
 		else:
 			push_warning("[GameManager] RPCS3: 7-Zip failed to extract RAP entry: " + entry)
+			failed += 1
+	return [rap_entries.size(), failed]
 
 
 ## Prepares a PS4 game for launch by extracting the TitleID and extracting game files

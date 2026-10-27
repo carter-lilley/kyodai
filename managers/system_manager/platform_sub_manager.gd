@@ -1,6 +1,11 @@
 extends Manager
 class_name PlatformSubManager
 
+## Forwarded from the Android plugin's ComponentCallbacks2.onTrimMemory.
+## Level values match Android: 20=UI_HIDDEN 40=BACKGROUND 60=MODERATE
+## 80=COMPLETE (next in line for the LMK kill).
+signal trim_memory(level: int)
+
 enum Platform {
 	WINDOWS,
 	LINUX,
@@ -18,6 +23,8 @@ func _setup_platform_specific_behavior():
 	if is_android():
 		# Disable native Android virtual keyboard - we use our own onscreen keyboard
 		get_tree().node_added.connect(_on_node_added_android)
+		# Forward the plugin's onTrimMemory escalation signal
+		_connect_trim_memory_signal()
 		# Check and request permissions on Android (skip during first-run OOBE)
 		var first_run_completed = DataManager.get_setting("first_run_completed")
 		if first_run_completed and first_run_completed.value:
@@ -25,6 +32,26 @@ func _setup_platform_specific_behavior():
 		# Defer: SystemManager autoloads before DataManager, so settings reads
 		# must wait a frame.
 		call_deferred("_setup_sleep_savers")
+
+## Connects the KyodaiBridge plugin's trim_memory signal for re-emission.
+## Deferred retry covers the case where the plugin singleton is not yet
+## registered at autoload _ready time.
+var _trim_signal_retries: int = 0
+const TRIM_SIGNAL_MAX_RETRIES := 10
+func _connect_trim_memory_signal() -> void:
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		_trim_signal_retries += 1
+		if _trim_signal_retries <= TRIM_SIGNAL_MAX_RETRIES:
+			call_deferred("_connect_trim_memory_signal")
+		else:
+			push_warning("[SystemManager.platform] KyodaiBridge plugin unavailable; trim_memory signal not connected")
+		return
+	if plugin.has_signal("trim_memory") and not plugin.trim_memory.is_connected(_on_plugin_trim_memory):
+		plugin.trim_memory.connect(_on_plugin_trim_memory)
+
+func _on_plugin_trim_memory(level: int) -> void:
+	trim_memory.emit(level)
 
 # ============================================================================
 # SLEEP SAVERS (screen-off Wi-Fi / CPU governor — vendor root daemon required)
@@ -412,6 +439,67 @@ func stop_sync_foreground_service() -> bool:
 		return false
 	plugin.stopSyncForegroundService()
 	return true
+
+## Starts the Android game-session foreground service, which runs in its own
+## process and owns the session end (presence watch, end_unix annotation,
+## launcher cold-start) even when LMK kills the Godot process.
+func start_game_session_foreground_service(game_name: String, start_time_ms: int, emulator_package: String = "", romm_id: int = 0) -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		push_warning("[SystemManager.platform] KyodaiBridge plugin not available for game session foreground service")
+		return false
+	plugin.startGameSessionForegroundService(game_name, start_time_ms, emulator_package, romm_id)
+	return true
+
+## Stops the Android game-session foreground service
+func stop_game_session_foreground_service() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	plugin.stopGameSessionForegroundService()
+	return true
+
+## True when the user granted Usage Access (Settings > Usage access).
+## The Android presence watch degrades to resume-only tracking without it.
+func has_usage_stats_permission() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	return bool(plugin.hasUsageStatsPermission())
+
+## Opens the system Usage Access settings page.
+func open_usage_access_settings() -> void:
+	if not is_android():
+		return
+	var plugin = _get_android_plugin()
+	if plugin != null:
+		plugin.openUsageAccessSettings()
+
+## Package that most recently moved to the foreground within lookback_ms,
+## or "" when unknown/ungranted. "" must never count as a presence miss.
+func get_foreground_package_name(lookback_ms: int) -> String:
+	if not is_android():
+		return ""
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return ""
+	var result = plugin.getForegroundPackageName(lookback_ms)
+	return result if result is String else ""
+
+## True when the keyguard is locked (screen off mid-game is not a miss).
+func is_keyguard_locked() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	return bool(plugin.isKeyguardLocked())
 
 func _exit_tree() -> void:
 	"""Disconnect platform-specific scene-tree signals to avoid leaked callables."""

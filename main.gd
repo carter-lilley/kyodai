@@ -162,6 +162,10 @@ func _ready():
 		LaunchManager.pre_launch_hook = _pre_launch_trim
 		LaunchManager.launch_failed_hook = _restore_after_launch
 
+	# Android memory-pressure escalation (plugin forwards onTrimMemory levels)
+	if SystemManager and SystemManager.platform:
+		SystemManager.platform.trim_memory.connect(_on_android_trim_memory)
+
 	# Background-state input gate: _input propagates in reverse tree order
 	# (deepest/rightmost first), so the blocking set_input_as_handled() in
 	# Main._input runs AFTER the views have already consumed bumpers/right
@@ -967,6 +971,32 @@ func _pre_launch_trim(_game: GameResource) -> void:
 # aborts at its next await when a new launch re-trims mid-restore.
 var _restore_generation: int = 0
 
+## Android ComponentCallbacks2.onTrimMemory escalation, forwarded by the
+## plugin. Only acts during a game session: ordinary backgrounding is left
+## untrimmed so returning to the launcher stays instant, and LMK kills stay
+## visible during testing instead of being masked.
+## Levels: 20=UI_HIDDEN 40=BACKGROUND 60=MODERATE 80=COMPLETE (next to die).
+func _on_android_trim_memory(level: int) -> void:
+	_log_rss("onTrimMemory level=%d" % level)
+	if not (LaunchManager and LaunchManager.is_in_background_state()):
+		return
+	if level >= 80:
+		_deep_trim_for_critical()
+	elif level >= 40:
+		# Standard trim; usually a no-op since the pre-launch trim already ran.
+		_trim_memory("trim_memory_%d" % level)
+
+## Last-resort trim when Android warns we are next in line for the kill:
+## everything the standard trim does PLUS the visible window's decoded
+## covers (normally kept for an instant resume frame). Cards swap to the
+## shared placeholder and re-bind from the warmed disk cache on resume.
+func _deep_trim_for_critical() -> void:
+	_trim_memory("critical")
+	if UIManager and UIManager.view:
+		for grid in UIManager.view.get_all_grids():
+			grid.release_active_media()
+	_log_rss("deep trim done")
+
 func _trim_memory(reason: String) -> void:
 	"""Idempotent entry point for launch hibernation."""
 	# Abort any in-flight restore from a previous launch, even when this trim
@@ -1092,16 +1122,19 @@ func _eager_restore_after_trim() -> void:
 	if DEBUG_LOG: print("[Main] eager restore done, total elapsed_us=", Time.get_ticks_usec() - restore_start_us)
 
 func _log_rss(label: String) -> void:
+	# Always on: trim-effectiveness forensics in logcat (LMK investigations).
+	# One /proc read per call, a handful of calls per session.
 	var rss_kb := _get_process_rss_kb()
 	if rss_kb >= 0:
-		if DEBUG_LOG: print("[Main] VmRSS (", label, "): ", snappedf(rss_kb / 1024.0, 0.1), " MB")
+		print("[Main] VmRSS (", label, "): ", snappedf(rss_kb / 1024.0, 0.1), " MB")
 	else:
-		if DEBUG_LOG: print("[Main] Resource count (", label, "): ", Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
+		print("[Main] Resource count (", label, "): ", Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
 
 func _get_process_rss_kb() -> int:
 	"""VmRSS from /proc/self/status (Linux/Android); -1 where unavailable.
-	procfs entries fail stat-style existence checks, so open directly."""
-	var f := FSM.open_file_read("/proc/self/status")
+	procfs entries fail stat-style existence checks, so open directly - and
+	bypass FSM, whose path validation rejects absolute /proc paths."""
+	var f := FileAccess.open("/proc/self/status", FileAccess.READ)
 	if not f:
 		return -1
 	while not f.eof_reached():
@@ -1131,6 +1164,7 @@ func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
 	# Fallback trim for launch paths that bypass pre_launch_hook (e.g. standalone
 	# emulator launches); no-op if the pre-launch trim already ran.
 	_trim_memory("background")
+	_log_rss("background state entered")
 	# Optional: Show overlay or dim the UI
 	# UIManager.set_dimmed(true)
 

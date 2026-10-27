@@ -691,8 +691,8 @@ func _launch_steam_with_backend(game: GameResource, backend: String, focus_index
 		# Enter background state like every other external launch: on resume the
 		# normal exit path hides the launch overlay AND restores the trimmed UI.
 		# Without this, RESUMED leaves the app in its trimmed (black,
-		# unresponsive) state.
-		process.enter_background_state_android(game)
+		# unresponsive) state. The backend package arms the presence watch.
+		process.enter_background_state_android(game, steam.get_installed_package(backend))
 	else:
 		var message := "Failed to launch %s. Is the app installed?" % steam.get_backend_label(backend)
 		push_error("[LaunchManager] " + message)

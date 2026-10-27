@@ -4,12 +4,14 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.ComponentCallbacks2;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.UriPermission;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.ResolveInfo;
@@ -69,7 +71,8 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private Activity activity;
     private BroadcastReceiver extractionReceiver;
     private WindowFocusGuard windowFocusGuard;
-    
+    private ComponentCallbacks2 trimMemoryCallbacks;
+
     public KyodaiBridgePlugin(Godot godot) {
         super(godot);
         Log.d(TAG, "KyodaiBridgePlugin constructor called");
@@ -80,6 +83,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             // Arms the screen-off savers from persisted state and restores
             // anything a previous process left disabled while asleep.
             SleepSaver.init(activity.getApplicationContext());
+            registerTrimMemoryCallbacks(activity);
         }
         Log.i(TAG, "[StorageTier] startup: ext_data_rw=" + StorageTier.selfHasExtDataRw()
                 + " rootDaemon=" + RootShell.isAvailable()
@@ -100,7 +104,38 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         signals.add(new SignalInfo("copy_complete", String.class, Boolean.class, String.class, String.class));
         signals.add(new SignalInfo("chunk_flush_complete", String.class, Boolean.class, String.class));
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
+        signals.add(new SignalInfo("trim_memory", Integer.class));
         return signals;
+    }
+
+    /**
+     * Forwards ComponentCallbacks2 memory-pressure callbacks to Godot as the
+     * "trim_memory" signal. The Godot side decides what (if anything) to
+     * release at each level; escalations matter most while a game session
+     * holds the process in the background under a memory-hungry emulator.
+     */
+    private void registerTrimMemoryCallbacks(Activity host) {
+        trimMemoryCallbacks = new ComponentCallbacks2() {
+            @Override
+            public void onConfigurationChanged(Configuration newConfig) {
+                // Not our concern; the activity handles configuration itself.
+            }
+
+            @Override
+            public void onLowMemory() {
+                // Deprecated coarse signal; treat as CRITICAL-level pressure.
+                Log.d(TAG, "onLowMemory received");
+                emitSignal("trim_memory", 80);
+            }
+
+            @Override
+            public void onTrimMemory(int level) {
+                Log.d(TAG, "onTrimMemory level=" + level);
+                emitSignal("trim_memory", level);
+            }
+        };
+        host.registerComponentCallbacks(trimMemoryCallbacks);
+        Log.d(TAG, "Registered trim-memory callbacks");
     }
     
     /// Hides the native IME and re-hardens the window against soft-input takeover.
@@ -186,6 +221,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 // Never registered or already unregistered - nothing to do
             }
             extractionReceiver = null;
+        }
+        if (trimMemoryCallbacks != null && activity != null) {
+            activity.unregisterComponentCallbacks(trimMemoryCallbacks);
+            trimMemoryCallbacks = null;
         }
         super.onMainDestroy();
     }
@@ -3309,6 +3348,182 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
     }
     
+    // ==================== USAGE STATS (ANDROID PRESENCE WATCH) ====================
+
+    /**
+     * Whether the user granted Usage Access (Settings > Usage access).
+     * The presence watch degrades to resume-only session tracking without it.
+     */
+    @UsedByGodot
+    public boolean hasUsageStatsPermission() {
+        if (activity == null) {
+            return false;
+        }
+        try {
+            android.app.AppOpsManager appOps =
+                (android.app.AppOpsManager) activity.getSystemService(Context.APP_OPS_SERVICE);
+            int mode = appOps.unsafeCheckOpNoThrow(
+                android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(),
+                activity.getPackageName()
+            );
+            return mode == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (Exception e) {
+            Log.e(TAG, "hasUsageStatsPermission check failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Opens the system Usage Access settings page for the user to grant access.
+     */
+    @UsedByGodot
+    public void openUsageAccessSettings() {
+        if (activity == null) {
+            return;
+        }
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "openUsageAccessSettings failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Returns the package that most recently moved to the foreground within
+     * the given lookback window, or "" when unknown/ungranted. Callers should
+     * treat "" as "no information", never as a presence miss.
+     */
+    @UsedByGodot
+    public String getForegroundPackageName(int lookbackMs) {
+        if (activity == null) {
+            return "";
+        }
+        try {
+            android.app.usage.UsageStatsManager usm =
+                (android.app.usage.UsageStatsManager) activity.getSystemService(Context.USAGE_STATS_SERVICE);
+            long now = System.currentTimeMillis();
+            android.app.usage.UsageEvents events = usm.queryEvents(now - lookbackMs, now);
+            android.app.usage.UsageEvents.Event ev = new android.app.usage.UsageEvents.Event();
+            String foreground = "";
+            while (events.hasNextEvent()) {
+                events.getNextEvent(ev);
+                int type = ev.getEventType();
+                if (type == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND
+                        || type == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                    foreground = ev.getPackageName();
+                }
+            }
+            return foreground;
+        } catch (Exception e) {
+            Log.e(TAG, "getForegroundPackageName failed: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * True when the keyguard is locked. A locked screen during gameplay must
+     * not count as an emulator-presence miss.
+     */
+    @UsedByGodot
+    public boolean isKeyguardLocked() {
+        if (activity == null) {
+            return false;
+        }
+        try {
+            android.app.KeyguardManager km =
+                (android.app.KeyguardManager) activity.getSystemService(Context.KEYGUARD_SERVICE);
+            return km != null && km.isKeyguardLocked();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // ==================== FOREGROUND SERVICE FOR GAME SESSIONS ====================
+
+    /**
+     * Starts the foreground service to prevent Android's LMK from killing the
+     * launcher while a game runs in another (memory-hungry) app.
+     * The notification shows a live session clock starting from startTimeMs.
+     *
+     * @param gameName Display name of the running game
+     * @param startTimeMs Session start time in epoch milliseconds
+     */
+    @UsedByGodot
+    public void startGameSessionForegroundService(String gameName, long startTimeMs, String emulatorPackage, long rommId) {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "startGameSessionForegroundService() called");
+        Log.d(TAG, "Game: " + gameName + ", emulator: " + emulatorPackage);
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+
+        try {
+            Intent intent = new Intent(activity, GameSessionForegroundService.class);
+            intent.setAction("START_SESSION");
+            intent.putExtra("game_name", gameName);
+            intent.putExtra("start_time_ms", startTimeMs);
+            intent.putExtra("emulator_package", emulatorPackage != null ? emulatorPackage : "");
+            intent.putExtra("romm_id", rommId);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(intent);
+            } else {
+                activity.startService(intent);
+            }
+
+            // Anchor in the main process: startForeground() only promotes
+            // the hosting process, so without this the Godot process stays
+            // in the cached tier (adj 700) despite the session service.
+            Intent anchor = new Intent(activity, SessionAnchorForegroundService.class);
+            anchor.setAction("START_ANCHOR");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(anchor);
+            } else {
+                activity.startService(anchor);
+            }
+
+            Log.d(TAG, "Game session foreground service started successfully");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR starting game session foreground service: " + e.getMessage());
+            Log.e(TAG, "Exception type: " + e.getClass().getName());
+        }
+    }
+
+    /**
+     * Stops the game session foreground service when the launcher resumes.
+     */
+    @UsedByGodot
+    public void stopGameSessionForegroundService() {
+        Log.d(TAG, "==========================================");
+        Log.d(TAG, "stopGameSessionForegroundService() called");
+
+        if (activity == null) {
+            Log.e(TAG, "ERROR: Activity is null!");
+            return;
+        }
+
+        try {
+            Intent intent = new Intent(activity, GameSessionForegroundService.class);
+            intent.setAction("STOP_SESSION");
+            activity.startService(intent);
+
+            Intent anchor = new Intent(activity, SessionAnchorForegroundService.class);
+            anchor.setAction("STOP_ANCHOR");
+            activity.startService(anchor);
+
+            Log.d(TAG, "Game session foreground service stop requested");
+            Log.d(TAG, "==========================================");
+        } catch (Exception e) {
+            Log.e(TAG, "ERROR stopping game session foreground service: " + e.getMessage());
+        }
+    }
+
     /**
      * Installs an APK file using PackageInstaller with FileProvider content URI.
      * Required for Android N+ where file:// URIs are forbidden.

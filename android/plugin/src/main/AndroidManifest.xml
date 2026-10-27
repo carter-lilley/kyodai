@@ -18,6 +18,16 @@
 	<!-- Foreground service permission for downloads -->
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+	<!-- Session wake lock: save upload on game exit must finish even if the
+	     device is dozing. Also covers the session WiFi lock. -->
+	<uses-permission android:name="android.permission.WAKE_LOCK" />
+
+	<!-- Usage access for the Android presence watch (detecting that the
+	     emulator left the foreground without waiting for our own resume).
+	     Requires a runtime grant via Settings > Usage access. -->
+	<uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+		tools:ignore="ProtectedPermissions" />
 	
 	<!-- Notification permission for Android 13+ (API 33+) -->
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -40,6 +50,7 @@
 	
 	<application
 		android:largeHeap="true"
+		android:persistent="true"
 		android:usesCleartextTraffic="true">
 		<!-- usesCleartextTraffic=true is a DELIBERATE choice (KYD-07): RomM
 		     servers are self-hosted and very commonly plain http:// on LANs
@@ -60,9 +71,20 @@
 				android:resource="@xml/file_paths" />
 		</provider>
 		
-		<meta-data 
-			android:name="org.godotengine.plugin.v2.KyodaiBridge" 
+		<meta-data
+			android:name="org.godotengine.plugin.v2.KyodaiBridge"
 			android:value="com.heckpoint.kyodai.KyodaiBridgePlugin" />
+
+		<!-- Home-app behavior, merged onto the Godot activity (manifest merger
+		     fills in attributes the template leaves unset):
+		     - stateNotNeeded: after a process kill, restart clean instead of
+		       reviving half-dead saved state; our own persistence owns state.
+		     - resumeWhilePausing: the launcher reappears WHILE the emulator is
+		       still pausing, so returning home feels instant. -->
+		<activity
+			android:name="com.godot.game.GodotApp"
+			android:stateNotNeeded="true"
+			android:resumeWhilePausing="true" />
 		
 		<!-- Foreground service for downloads to prevent app kill during large file downloads -->
 		<service
@@ -74,6 +96,30 @@
 		<!-- Foreground service for metadata sync to prevent app kill during RomM sync -->
 		<service
 			android:name=".SyncForegroundService"
+			android:enabled="true"
+			android:exported="false"
+			android:foregroundServiceType="dataSync" />
+
+		<!-- Foreground service that owns a game session while the game runs in
+		     another app (emulators are prime LMK triggers). Runs in its own
+		     tiny process so it survives an LMK sweep of the Godot process:
+		     it keeps watching the emulator, records the session end, and
+		     cold-starts the launcher into save upload when the game exits.
+		     Uses dataSync because the plugin compiles against API 33, where
+		     specialUse (API 34+) is not yet a valid foregroundServiceType. -->
+		<service
+			android:name=".GameSessionForegroundService"
+			android:enabled="true"
+			android:exported="false"
+			android:process=":session"
+			android:foregroundServiceType="dataSync" />
+
+		<!-- Silent anchor that holds perceptible priority for the main (Godot)
+		     process during a session: startForeground() only promotes the
+		     hosting process, so the :session service alone would leave Godot
+		     in the cached tier as LMK's first victim. -->
+		<service
+			android:name=".SessionAnchorForegroundService"
 			android:enabled="true"
 			android:exported="false"
 			android:foregroundServiceType="dataSync" />

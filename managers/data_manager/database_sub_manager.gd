@@ -19,6 +19,7 @@ const _EXPECTED_SCHEMA := {
 		"siblings": "TEXT DEFAULT '[]'", "selected_sibling_id": "INTEGER DEFAULT 0",
 		"is_master_entry": "INTEGER DEFAULT 1", "downloaded_sibling_ids": "TEXT DEFAULT '[]'",
 		"has_cover_art": "INTEGER DEFAULT 1", "last_played": "TEXT DEFAULT ''",
+		"play_seconds": "INTEGER DEFAULT 0",
 		"status": "TEXT DEFAULT ''", "now_playing": "INTEGER DEFAULT 0",
 		"backlogged": "INTEGER DEFAULT 0", "hidden": "INTEGER DEFAULT 0",
 		"hidden_from_home": "INTEGER DEFAULT 0",
@@ -245,6 +246,7 @@ func _create_tables():
 			downloaded_sibling_ids TEXT DEFAULT '[]',
 			has_cover_art INTEGER DEFAULT 1,
 		last_played TEXT DEFAULT '',
+		play_seconds INTEGER DEFAULT 0,
 		status TEXT DEFAULT '',
 		now_playing INTEGER DEFAULT 0,
 		backlogged INTEGER DEFAULT 0,
@@ -851,6 +853,9 @@ func _row_to_game(row: Dictionary) -> GameResource:
 
 	# Restore last_played timestamp
 	game.last_played = row.get("last_played", "")
+
+	# Restore accumulated playtime (local-only; row.get default covers pre-migration schemas)
+	game.play_seconds = int(row.get("play_seconds", 0))
 
 	# Restore present-wrap state
 	game.unwrapped = row.get("unwrapped", 0) == 1
@@ -1511,6 +1516,19 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 		return query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id])
 	MemorySubManager.queue_db_task(func():
 		query_bool("UPDATE games SET last_played = ? WHERE romm_id = ?", [timestamp, romm_id]))
+	return true
+
+
+func add_game_play_seconds(romm_id: int, seconds: int) -> bool:
+	"""Accumulate session playtime onto a game's play_seconds total. Queued on
+	the DB worker when called from the main thread; synchronous when already
+	on it. Local-only value - the RomM payload never carries playtime."""
+	if not _is_db_ready or seconds <= 0 or romm_id <= 0:
+		return false
+	if MemorySubManager.is_db_thread():
+		return query_bool("UPDATE games SET play_seconds = play_seconds + ? WHERE romm_id = ?", [seconds, romm_id])
+	MemorySubManager.queue_db_task(func():
+		query_bool("UPDATE games SET play_seconds = play_seconds + ? WHERE romm_id = ?", [seconds, romm_id]))
 	return true
 
 

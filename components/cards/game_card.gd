@@ -1036,6 +1036,14 @@ func _load_cover(high_priority: bool = false) -> void:
 	else:
 		_set_texture(_loading_texture)
 
+## Deep memory trim: drop the decoded cover so its texture memory is
+## reclaimable. The card swaps to the shared placeholder and stays renderable;
+## retry_cover_if_placeholder() re-binds the cover during post-trim restore.
+func release_cover() -> void:
+	if _current_texture == null or _current_texture == _loading_texture:
+		return
+	_set_texture(null)
+
 ## Nudge for visible cards whose cover fetch was suppressed (fast scroll /
 ## A-Z scrub) or dropped by queue backpressure: nothing else re-triggers the
 ## download they skipped, so re-run the load path when suppression lifts.

@@ -1633,7 +1633,7 @@ func _prefetch_existing_rows(games: Array[GameResource]) -> Dictionary:
 	data_manager.database.lock()
 	var placeholders = ", ".join(romm_ids.map(func(_id): return "?"))
 	var existing_result = data_manager.database.query_array_unlocked(
-		"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
+		"SELECT romm_id, has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, play_seconds, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id IN (%s)" % placeholders,
 		romm_ids
 	)
 	for row in existing_result:
@@ -2396,6 +2396,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 	var downloaded_sibling_ids = JSON.stringify(game.downloaded_sibling_ids)
 	var file_path = game.file_path
 	var last_played = game.last_played
+	var play_seconds = game.play_seconds
 	var title_id = game.title_id
 	var is_favorite = 1 if game.is_favorite else 0
 	var unwrapped = 1 if game.unwrapped else 0
@@ -2406,7 +2407,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 
 	var existing = existing_row
 	if existing.is_empty() and data_manager.database.is_database_ready() and game.romm_id > 0:
-		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id = ?"
+		var check_query = "SELECT has_local_copy, downloaded_sibling_ids, file_path, cover_group_id, cover_group_master, last_played, play_seconds, title_id, m3u_path, is_favorite, unwrapped, hidden_from_home, selected_sibling_id, save_id, save_usage, siblings FROM games WHERE romm_id = ?"
 		var query_result = data_manager.database.query_array_unlocked(check_query, [game.romm_id])
 		if query_result.size() > 0:
 			existing = query_result[0]
@@ -2432,6 +2433,10 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		var existing_last_played = existing.get("last_played", "")
 		if existing_last_played != "":
 			last_played = existing_last_played
+		# Preserve accumulated playtime (recorded locally, never synced)
+		var existing_play_seconds = int(existing.get("play_seconds", 0))
+		if existing_play_seconds > 0:
+			play_seconds = existing_play_seconds
 		var existing_title_id = existing.get("title_id", "")
 		if existing_title_id != "":
 			title_id = existing_title_id
@@ -2482,8 +2487,8 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		INSERT OR REPLACE INTO games
 		(id, romm_id, title, platform, platform_slug, cover_url, cover_path,
 		 file_name, file_path, file_size, has_local_copy, last_updated,
-		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, provider_ids, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 description, genres, rating, release_date, siblings, selected_sibling_id, is_master_entry, downloaded_sibling_ids, has_cover_art, last_played, play_seconds, title_id, save_id, save_usage, cover_group_id, cover_group_master, igdb_metadata, igdb_id, provider_ids, m3u_path, status, now_playing, backlogged, hidden, is_favorite, unwrapped, hidden_from_home, screenshots)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	"""
 
 	var bindings = [
@@ -2509,6 +2514,7 @@ func _build_insert_query(game: GameResource, existing_row: Dictionary = {}) -> D
 		downloaded_sibling_ids,
 		1 if game.has_cover_art else 0,
 		last_played,
+		play_seconds,
 		title_id,
 		save_id,
 		save_usage,

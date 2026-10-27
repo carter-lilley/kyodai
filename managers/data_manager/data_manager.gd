@@ -332,6 +332,11 @@ func update_game_last_played(romm_id: int, timestamp: String) -> bool:
 	return database.update_game_last_played(romm_id, timestamp)
 
 
+## Accumulate session playtime (seconds) onto a game's local total.
+func add_game_play_seconds(romm_id: int, seconds: int) -> bool:
+	return database.add_game_play_seconds(romm_id, seconds)
+
+
 func update_game_unwrapped(romm_id: int, unwrapped: bool) -> bool:
 	return database.update_game_unwrapped(romm_id, unwrapped)
 

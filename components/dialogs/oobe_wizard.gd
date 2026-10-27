@@ -29,9 +29,11 @@ var _romm_connection_panel: RommConnectionPanel
 var _perm_storage_indicator: Indicator
 var _perm_install_indicator: Indicator
 var _perm_notifications_indicator: Indicator
+var _perm_usage_indicator: Indicator
 var _perm_storage_button: M3Button
 var _perm_install_button: M3Button
 var _perm_notifications_button: M3Button
+var _perm_usage_button: M3Button
 
 # Android validation
 var _storage_warning_label: M3Label
@@ -189,6 +191,16 @@ func _build_android_permissions_page() -> VBoxContainer:
 	_perm_notifications_button.pressed.connect(_request_notifications_permission)
 	var notif_row = _add_permission_row(vbox, "Notifications", "Required for download progress alerts", _perm_notifications_button)
 	_perm_notifications_indicator = notif_row.indicator
+
+	vbox.add_child(HSeparator.new())
+
+	# Usage access (optional - improves session tracking)
+	_perm_usage_button = M3Button.new()
+	_perm_usage_button.text = "Open Settings"
+	_perm_usage_button.button_variant = M3Button.Variant.TONAL
+	_perm_usage_button.pressed.connect(_open_usage_settings)
+	var usage_row = _add_permission_row(vbox, "Usage Access", "Recommended: lets Kyodai detect when a game exits, so playtime is exact and saves sync the moment you stop playing. Without it, saves sync when you return to Kyodai.", _perm_usage_button)
+	_perm_usage_indicator = usage_row.indicator
 
 	return vbox
 
@@ -479,6 +491,12 @@ func _open_install_settings():
 
 	SystemManager.platform.open_install_unknown_apps_settings()
 
+func _open_usage_settings():
+	if not SystemManager.platform.is_android():
+		return
+
+	SystemManager.platform.open_usage_access_settings()
+
 func _update_permission_indicators():
 	if not SystemManager.platform.is_android():
 		return
@@ -506,6 +524,15 @@ func _update_permission_indicators():
 
 	if _perm_install_indicator:
 		_perm_install_indicator.set_status(Indicator.Status.WARNING, "Check in Settings")
+
+	if _perm_usage_indicator:
+		var has_usage = SystemManager.platform.has_usage_stats_permission()
+		# WARNING rather than ERROR when missing: session tracking degrades
+		# gracefully without this (saves sync on resume instead of on exit).
+		_perm_usage_indicator.set_status(Indicator.Status.SUCCESS if has_usage else Indicator.Status.WARNING, "Granted" if has_usage else "Recommended")
+		if _perm_usage_button:
+			_perm_usage_button.text = "Granted" if has_usage else "Open Settings"
+			_perm_usage_button.disabled = has_usage
 
 func _save_storage_settings():
 	var games_path = _games_path_field.text.strip_edges()

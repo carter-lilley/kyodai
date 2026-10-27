@@ -887,6 +887,20 @@ func clear_pool() -> void:
 ## Lead beyond the visible window, in lines, when re-warming covers post-trim.
 const RESTORE_PREFETCH_LEAD_LINES := 2
 
+## True after release_active_media(): the next restore must re-bind covers on
+## the visible cards, not just re-warm the cache around them.
+var _active_media_released: bool = false
+
+## Deep trim (TRIM_MEMORY_COMPLETE): drop decoded covers on the VISIBLE cards
+## too, which the standard launch trim deliberately keeps for an instant
+## resume frame. Cards swap to the shared placeholder; restore_after_trim()
+## re-binds them from the (re-warmed) disk cache.
+func release_active_media() -> void:
+	for card in _active_cards:
+		if is_instance_valid(card) and card.has_method("release_cover"):
+			card.release_cover()
+	_active_media_released = true
+
 ## Rebuild what Main's launch-hibernation trim released for this grid: the
 ## inactive card pool (the active window survives the trim with its textures)
 ## and the cover texture cache around the current window. Called on
@@ -897,6 +911,13 @@ func restore_after_trim() -> void:
 		return
 	_instantiate_card_pool()
 	prefetch_covers_around_window()
+	# Deep-trimmed visible cards hold the placeholder; re-request their covers
+	# now that the cache around the window is warming again.
+	if _active_media_released:
+		_active_media_released = false
+		for card in _active_cards:
+			if is_instance_valid(card) and card.has_method("retry_cover_if_placeholder"):
+				card.retry_cover_if_placeholder()
 
 ## Warm the cover texture cache for the visible window plus a small lead in
 ## both directions. Disk-only (preload_cover never downloads) and a no-op for

@@ -38,6 +38,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * while asleep can't leave radios/governors stranded: {@link #init(Context)}
  * (called from the plugin constructor, i.e. every app launch, which implies
  * the screen is on) restores anything the saver had turned off.
+ *
+ * This class is also the central job-lock holder: while any download / sync /
+ * extraction foreground service reports an active job ({@link #jobStarted()}),
+ * a shared partial wake lock + WifiLock keep the CPU and the Wi-Fi radio alive
+ * so the job survives the display turning off. The foreground services alone
+ * only protect the process from the LMK — without a wake lock the kernel
+ * suspends the device seconds after screen-off and the job freezes mid-socket.
+ * Mirrors the lock pattern in GameSessionForegroundService.
  */
 public final class SleepSaver {
 
@@ -47,9 +55,16 @@ public final class SleepSaver {
     private static final String KEY_GOVERNOR_ENABLED = "governor_saver_enabled";
     private static final String KEY_WIFI_DISABLED = "wifi_disabled_by_saver";
     private static final String KEY_GOVERNOR_SAVED = "governor_saved"; // "path=governor;path=governor"
+    // Cross-process job flag: the game-session service lives in its own
+    // process (:session), where the AtomicInteger below is invisible. It
+    // records its activity here instead; same UID => same prefs file.
+    private static final String KEY_SESSION_ACTIVE = "session_job_active";
 
     private static final long DELAY_MS = 30_000L;
     private static final String CPUFREQ_ROOT = "/sys/devices/system/cpu/cpufreq";
+    // Safety timeout for the background-job wake lock; mirrors the session
+    // service's cap. Released when the last job finishes in the normal path.
+    private static final long JOB_WAKE_LOCK_TIMEOUT_MS = 12L * 60 * 60 * 1000;
 
     private static final Object LOCK = new Object();
     private static final AtomicInteger activeJobs = new AtomicInteger(0);
@@ -59,23 +74,126 @@ public final class SleepSaver {
     private static Handler mainHandler;
     private static BroadcastReceiver screenReceiver;
     private static Runnable pendingSleep;
+    // Held (process-locally) while activeJobs > 0. Guarded by LOCK.
+    private static PowerManager.WakeLock jobWakeLock;
+    private static WifiManager.WifiLock jobWifiLock;
 
     private SleepSaver() {}
 
     // ------------------------------------------------------------------
     // Active-job tracking (download / sync / extractor foreground services)
+    // The 0->1 / ->0 transitions acquire/release the shared job locks; the
+    // transitions are serialized on LOCK so a racing start/finish pair can't
+    // strand an acquired lock (release-before-acquire completing).
     // ------------------------------------------------------------------
 
     public static void jobStarted() {
-        activeJobs.incrementAndGet();
+        synchronized (LOCK) {
+            if (activeJobs.getAndIncrement() == 0) {
+                acquireJobLocksLocked();
+            }
+        }
     }
 
     public static void jobFinished() {
-        activeJobs.updateAndGet(v -> Math.max(0, v - 1));
+        synchronized (LOCK) {
+            if (activeJobs.updateAndGet(v -> Math.max(0, v - 1)) == 0) {
+                releaseJobLocksLocked();
+            }
+        }
+    }
+
+    /**
+     * Holds a partial wake lock (time-boxed) and a high-perf WiFi lock while
+     * any background job is active, so downloads/syncs/extractions continue
+     * with the display off. Same pattern as
+     * GameSessionForegroundService.acquireSessionLocks(). Failure degrades to
+     * pre-lock behavior (jobs stall while suspended) — never fatal.
+     */
+    private static void acquireJobLocksLocked() {
+        Context ctx = appContext;
+        if (ctx == null) return;
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            if (pm != null && jobWakeLock == null) {
+                jobWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kyodai:background_jobs");
+                jobWakeLock.setReferenceCounted(false);
+                jobWakeLock.acquire(JOB_WAKE_LOCK_TIMEOUT_MS);
+                Log.d(TAG, "Background-job wake lock acquired");
+            }
+            WifiManager wm = (WifiManager) ctx.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wm != null && jobWifiLock == null) {
+                jobWifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "kyodai:background_jobs");
+                jobWifiLock.setReferenceCounted(false);
+                jobWifiLock.acquire();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to acquire background-job locks: " + e.getMessage());
+        }
+    }
+
+    private static void releaseJobLocksLocked() {
+        if (jobWakeLock != null) {
+            try {
+                if (jobWakeLock.isHeld()) jobWakeLock.release();
+            } catch (Exception ignored) {}
+            jobWakeLock = null;
+            Log.d(TAG, "Background-job wake lock released");
+        }
+        if (jobWifiLock != null) {
+            try {
+                if (jobWifiLock.isHeld()) jobWifiLock.release();
+            } catch (Exception ignored) {}
+            jobWifiLock = null;
+        }
+    }
+
+    /**
+     * Cross-process job tracking for the game-session service, which runs in
+     * its own process (:session) and therefore can't touch the AtomicInteger
+     * above. Writes go to SharedPreferences (shared per-UID).
+     */
+    public static void sessionJobStarted(Context ctx) {
+        if (ctx == null) return;
+        ctx.getApplicationContext()
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SESSION_ACTIVE, true).apply();
+    }
+
+    public static void sessionJobFinished(Context ctx) {
+        if (ctx == null) return;
+        ctx.getApplicationContext()
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SESSION_ACTIVE, false).apply();
     }
 
     public static boolean hasActiveJobs() {
-        return activeJobs.get() > 0;
+        if (activeJobs.get() > 0) return true;
+        Context ctx = appContext;
+        if (ctx == null) return false;
+        if (!prefs().getBoolean(KEY_SESSION_ACTIVE, false)) return false;
+        // Stale-flag guard: a violently killed session process never clears
+        // its flag, so verify the :session process actually exists before
+        // letting it veto the Wi-Fi saver.
+        if (!isSessionProcessAlive(ctx)) {
+            prefs().edit().putBoolean(KEY_SESSION_ACTIVE, false).apply();
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isSessionProcessAlive(Context ctx) {
+        try {
+            android.app.ActivityManager am =
+                (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return false;
+            String sessionProc = ctx.getPackageName() + ":session";
+            for (android.app.ActivityManager.RunningAppProcessInfo p : am.getRunningAppProcesses()) {
+                if (sessionProc.equals(p.processName)) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     // ------------------------------------------------------------------

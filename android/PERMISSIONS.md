@@ -17,7 +17,7 @@ declaration.
 | `INTERNET` | Downloads, RomM sync | Export preset checkbox | none |
 | `ACCESS_NETWORK_STATE` | Network status checks | Export preset checkbox | none |
 | `ACCESS_WIFI_STATE` | Wifi status; sleep saver checks Wi-Fi state before toggling it via root | Export preset checkbox | none |
-| `WAKE_LOCK` | Keep CPU alive during downloads/play | Export preset checkbox (`permissions/wake_lock`) | none |
+| `WAKE_LOCK` | Keep CPU alive during downloads/syncs/extractions with the screen off (`SleepSaver` job locks) and during game sessions (`GameSessionForegroundService`) | Export preset checkbox (`permissions/wake_lock`) + plugin manifest | none |
 | `MANAGE_EXTERNAL_STORAGE` | All-files access: `/storage/emulated/0`, USB/OTG SSD mounts, emulator dirs | Plugin manifest + preset checkbox | Settings intent via `requestManageExternalStoragePermission()` |
 | `READ/WRITE_EXTERNAL_STORAGE` | Legacy storage (API ≤ 29) | Export preset checkboxes | runtime prompt on old APIs |
 | `QUERY_ALL_PACKAGES` | Detect installed emulators (`isPackageInstalled`, app picker) | Plugin manifest + `export_plugin.gd` | none |
