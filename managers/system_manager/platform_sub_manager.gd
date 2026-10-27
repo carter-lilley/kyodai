@@ -32,6 +32,8 @@ func _setup_platform_specific_behavior():
 		# Defer: SystemManager autoloads before DataManager, so settings reads
 		# must wait a frame.
 		call_deferred("_setup_sleep_savers")
+		# Startup leg of the install-grant session check (see below).
+		call_deferred("_startup_install_grant_check")
 
 ## Connects the KyodaiBridge plugin's trim_memory signal for re-emission.
 ## Deferred retry covers the case where the plugin singleton is not yet
@@ -92,6 +94,9 @@ func _notification(what: int) -> void:
 		return
 	if what == NOTIFICATION_APPLICATION_FOCUS_IN:
 		_on_android_window_focus_in()
+		# Returning from the system installer or the grant toggle: run the
+		# install-session state machine (deferred - UI layer may be settling).
+		call_deferred("evaluate_install_grant_state")
 
 func _on_android_window_focus_in() -> void:
 	# The native IME must never be visible - it steals gamepad key events via
@@ -359,15 +364,136 @@ func _resolve_saf_grant(granted: bool) -> void:
 	if callback.is_valid():
 		callback.call(granted)
 
-## Opens Android Settings to enable install permissions
-## Called when user tries to install an emulator without the required permission
-func show_install_permission_dialog():
+# ============================================================================
+# INSTALL PERMISSION SESSION — just-in-time "Install unknown apps"
+# On AYN Odin-family firmware the runtime install grant is coupled to
+# storage: while Kyodai holds it, the system strips the ext_data_rw /
+# sdcard_rw supplementary gids and every Android/data write drops off the
+# direct tier (revoking restores the gids, but only for a fresh process -
+# see StorageTier). So the grant is treated as a temporary session pass:
+# requested only when an install actually needs it, handed back when
+# installs are done, followed by a restart to pick the gids back up. On
+# unaffected firmware the grant strips nothing, the degraded checks below
+# never match, and all of this stays invisible.
+# ============================================================================
+
+var _install_grant_awaiting_retry := false  # sent the user to grant; install retries on return
+var _installs_since_grant := 0              # install intents fired while the grant is held
+var _restore_prompt_snoozed := false        # user chose "not now"; re-arms on the next install
+var _startup_grant_check_done := false
+
+## True when the user currently allows Kyodai to install APKs.
+func can_install_unknown_apps() -> bool:
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return false
+	var granted = plugin.call("canInstallUnknownApps")
+	return granted != null and granted
+
+## True when this process still holds direct storage (ext_data_rw). While the
+## install grant is held on coupled firmware this reads false.
+func has_direct_storage_tier() -> bool:
+	var plugin = _get_android_plugin()
+	if plugin == null:
+		return true  # desktop / no plugin: nothing to couple against
+	var direct = plugin.call("hasExtDataRwAccess")
+	return direct == null or direct  # stale AAR fails open
+
+## Gate for any APK install. Returns true when the install may proceed. When
+## the grant is missing, explains the temporary-permission deal and opens the
+## system toggle; the caller aborts and the user retries after granting.
+func ensure_install_permission(reason: String) -> bool:
+	if not is_android():
+		return true
+	if can_install_unknown_apps():
+		return true
+	_install_grant_awaiting_retry = true
+	UIManager.show_confirm(
+		"Install Permission Needed",
+		"Installing %s requires Android's 'Install unknown apps' switch for Kyodai.\n\nOn this device that switch temporarily pauses fast storage - turn it back off when you're done installing (Kyodai will remind you).\n\nEnable it in the screen that opens, then retry." % reason,
+		func(): open_install_unknown_apps_settings(),
+		Callable()
+	)
+	return false
+
+## Called after an install intent was successfully fired. Re-arms the
+## restore prompt for the next focus return.
+func notify_install_started() -> void:
 	if not is_android():
 		return
-	
-	# Open Android settings directly - user must manually enable "Install unknown apps"
-	# We don't show a notification since we're taking them directly to settings
-	open_install_unknown_apps_settings()
+	_installs_since_grant += 1
+	_restore_prompt_snoozed = false
+
+## Evaluates grant/storage coupling and runs the JIT prompts. Called
+## (deferred) on window focus-in and once after startup. The coupling check -
+## grant held while this process lacks direct storage - doubles as the
+## device gate: on stock Android the grant strips nothing and none of this
+## ever fires.
+func evaluate_install_grant_state(on_startup: bool = false) -> void:
+	if not is_android() or not UIManager:
+		return
+	var first_run = DataManager.get_setting("first_run_completed")
+	if first_run and not first_run.value:
+		return  # OOBE owns the screen; the grant is requested per-install now
+	var granted := can_install_unknown_apps()
+	var direct := has_direct_storage_tier()
+	if granted == direct:
+		# Healthy: either both fine, or unaffected firmware (grant held but
+		# storage intact). Nothing to manage.
+		_install_grant_awaiting_retry = false
+		return
+	if granted and not direct:
+		if _install_grant_awaiting_retry:
+			# User just granted on our request; they're mid-session and will
+			# retry the install. Prompt only once installs have happened.
+			_install_grant_awaiting_retry = false
+			return
+		if on_startup or _installs_since_grant > 0:
+			# Abandoned session (startup) or installs just ran (focus return).
+			_installs_since_grant = 0
+			_prompt_restore_fast_storage()
+	else:
+		# Grant revoked, but this process was started while it was held and
+		# still carries the stripped gids - only a restart picks them back
+		# up. Can't occur at boot: a fresh process after revoke is healthy.
+		_install_grant_awaiting_retry = false
+		_installs_since_grant = 0
+		if not on_startup:
+			_prompt_restart_for_fast_storage()
+
+func _prompt_restore_fast_storage() -> void:
+	if _restore_prompt_snoozed:
+		return
+	_restore_prompt_snoozed = true
+	UIManager.show_confirm(
+		"Restore Fast Storage",
+		"The 'Install unknown apps' switch is still on, and this device runs Kyodai's storage in slow compatibility mode while it is.\n\nDone installing for now? Turn the switch off to restore full speed.",
+		func(): open_install_unknown_apps_settings(),
+		Callable()  # "Not now": snoozed until the next install
+	)
+
+func _prompt_restart_for_fast_storage() -> void:
+	UIManager.show_confirm(
+		"Restart to Restore Fast Storage",
+		"The install switch is off - full storage speed comes back when Kyodai restarts.\n\nRestart now?",
+		func(): _restart_app(),
+		Callable()
+	)
+
+func _restart_app() -> void:
+	var plugin = _get_android_plugin()
+	if plugin != null:
+		plugin.call("restartApp")
+
+
+## One-shot startup check, delayed past boot so any dialog lands on a ready
+## UI layer.
+func _startup_install_grant_check() -> void:
+	if _startup_grant_check_done:
+		return
+	_startup_grant_check_done = true
+	await get_tree().create_timer(2.0).timeout
+	evaluate_install_grant_state(true)
 
 # ============================================================================
 # ANDROID FOREGROUND SERVICE HELPERS (unified for SystemManager.download + DataManager)

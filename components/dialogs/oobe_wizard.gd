@@ -27,11 +27,9 @@ var _steam_path_field: M3TextField
 var _romm_connection_panel: RommConnectionPanel
 
 var _perm_storage_indicator: Indicator
-var _perm_install_indicator: Indicator
 var _perm_notifications_indicator: Indicator
 var _perm_usage_indicator: Indicator
 var _perm_storage_button: M3Button
-var _perm_install_button: M3Button
 var _perm_notifications_button: M3Button
 var _perm_usage_button: M3Button
 
@@ -171,16 +169,6 @@ func _build_android_permissions_page() -> VBoxContainer:
 	_perm_storage_button.pressed.connect(_request_storage_permission)
 	var storage_row = _add_permission_row(vbox, "All Files Access", "Required to access game files on internal and SD card storage. You will be taken to system settings to enable this.", _perm_storage_button)
 	_perm_storage_indicator = storage_row.indicator
-
-	vbox.add_child(HSeparator.new())
-
-	# Install unknown apps
-	_perm_install_button = M3Button.new()
-	_perm_install_button.text = "Open Settings"
-	_perm_install_button.button_variant = M3Button.Variant.TONAL
-	_perm_install_button.pressed.connect(_open_install_settings)
-	var install_row = _add_permission_row(vbox, "Install Unknown Apps", "Required to install emulator APKs. You'll be prompted when installing your first emulator.", _perm_install_button)
-	_perm_install_indicator = install_row.indicator
 
 	vbox.add_child(HSeparator.new())
 
@@ -485,12 +473,6 @@ func _request_notifications_permission():
 
 	OS.request_permissions()
 
-func _open_install_settings():
-	if not SystemManager.platform.is_android():
-		return
-
-	SystemManager.platform.open_install_unknown_apps_settings()
-
 func _open_usage_settings():
 	if not SystemManager.platform.is_android():
 		return
@@ -521,9 +503,6 @@ func _update_permission_indicators():
 		if _perm_notifications_button:
 			_perm_notifications_button.text = "Granted" if has_notif else "Grant"
 			_perm_notifications_button.disabled = has_notif
-
-	if _perm_install_indicator:
-		_perm_install_indicator.set_status(Indicator.Status.WARNING, "Check in Settings")
 
 	if _perm_usage_indicator:
 		var has_usage = SystemManager.platform.has_usage_stats_permission()

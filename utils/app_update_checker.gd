@@ -190,16 +190,15 @@ static func _install_apk(apk_path: String) -> void:
 	var plugin = Engine.get_singleton("KyodaiBridge")
 
 	# Android 8+ silently blocks installs until the user grants "Install
-	# unknown apps" for Kyodai. NB: has_method() reports false for
-	# GodotPlugin-exposed Java methods (JNI dispatch) - call directly.
-	var can_install_unknown = plugin.call("canInstallUnknownApps")
-	if can_install_unknown != null and not can_install_unknown:
-		plugin.call("requestInstallUnknownAppsPermission")
-		_notify("Allow Kyodai to install apps:\nenable 'Install unknown apps' in the settings screen that just opened, then run the update again", SystemManager.notifications.Type.WARNING)
+	# unknown apps" for Kyodai. The platform helper owns the explainer
+	# dialog and the just-in-time grant lifecycle.
+	if not SystemManager.platform.ensure_install_permission("this update"):
 		return
 
 	var absolute_path: String = FSM.resolve_path(apk_path, {"format": FSM.PathFormat.ABSOLUTE})
 	var success = plugin.call("installApk", absolute_path)
-	if not success:
+	if success:
+		SystemManager.platform.notify_install_started()
+	else:
 		push_error("[AppUpdateChecker] installApk failed for: " + absolute_path)
 		_notify("Couldn't start the installer - the APK is saved at:\n" + apk_path, SystemManager.notifications.Type.ERROR)

@@ -639,19 +639,10 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		# Android 8+ silently blocks APK installs until the user grants the
 		# "Install unknown apps" toggle for Kyodai. Gate here so we don't fire
 		# an intent the system will refuse and then advance the install flow
-		# past a step that never actually ran.
-		# NB: has_method() reports false for GodotPlugin-exposed Java methods
-		# (JNI dispatch, not ClassDB) — call directly; null (stale AAR) fails open.
-		var can_install_unknown = plugin.call("canInstallUnknownApps")
-		if can_install_unknown != null and not can_install_unknown:
-			print("[EmulatorManager] Install-unknown-apps permission not granted, opening settings")
-			plugin.call("requestInstallUnknownAppsPermission")
-			SystemManager.notifications.show_notification(
-				"Allow Kyodai to install apps:\nenable 'Install unknown apps' in the settings screen that just opened, then retry",
-				SystemManager.notifications.Type.WARNING,
-				null,
-				10.0
-			)
+		# past a step that never actually ran. The platform helper owns the
+		# explainer dialog and the just-in-time grant lifecycle.
+		if not SystemManager.platform.ensure_install_permission("emulators"):
+			print("[EmulatorManager] Install-unknown-apps permission not granted, requesting")
 			_emulator_install_progress[emulator_id] = "Install permission required"
 			return false
 		# Convert Godot virtual path (user://) to an absolute filesystem path
@@ -660,6 +651,7 @@ func _execute_apk_install_step(emulator_id: String, step_index: int, apk_config:
 		if DEBUG_LOG: print("[EmulatorManager] Resolved APK path for plugin: " + absolute_apk_path)
 		var success = plugin.call("installApk", absolute_apk_path)
 		if success:
+			SystemManager.platform.notify_install_started()
 			result = Error.OK
 	else:
 		push_error("[EmulatorManager] KyodaiBridge plugin not available for APK install")

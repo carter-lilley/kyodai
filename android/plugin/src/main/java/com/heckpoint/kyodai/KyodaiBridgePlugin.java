@@ -917,6 +917,46 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     /**
+     * Hard-restarts the app: relaunches the launcher activity in a fresh task
+     * and kills the current process. Needed after the user revokes the
+     * "Install unknown apps" grant on firmware that strips the ext_data_rw /
+     * sdcard_rw supplementary gids while the grant is held (AYN Odin family):
+     * process gids are stamped by zygote at fork time, so only a fresh
+     * process picks the restored gids up.
+     *
+     * @return true if the relaunch intent was dispatched
+     */
+    @UsedByGodot
+    public boolean restartApp() {
+        Log.d(TAG, "restartApp() called");
+        if (activity == null) {
+            Log.e(TAG, "restartApp: Activity is null");
+            return false;
+        }
+        try {
+            Intent intent = activity.getPackageManager()
+                    .getLaunchIntentForPackage(activity.getPackageName());
+            if (intent == null) {
+                Log.e(TAG, "restartApp: no launch intent for own package");
+                return false;
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            activity.startActivity(intent);
+            activity.finish();
+            // Kill after the new task is spawned so the fresh process does
+            // not inherit this process's stripped supplementary gids.
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                android.os.Process.killProcess(android.os.Process.myPid());
+                System.exit(0);
+            }, 300);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "restartApp failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Checks whether the app is exempt from battery optimizations (doze /
      * background restrictions). Requires the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
      * manifest permission.
