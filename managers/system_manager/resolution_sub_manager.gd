@@ -104,11 +104,54 @@ static func _paths_already_enforced(config_path: String, sections: Dictionary, s
 				return false
 	return true
 
+## Launch-time enforce memo. enforce_paths runs twice per launch
+## (LaunchManager._ensure_prerequisites, then ProcessSubManager._execute_*)
+## with identical arguments, and each run re-resolves and re-reads the
+## emulator's config - expensive when the config sits behind SAF. The
+## emulator cannot rewrite its own config while it isn't running, so the
+## second call within a launch safely reuses the first result.
+static var _enforce_memo: Dictionary = {}  # "emu|platform|core" -> {result: bool, timestamp: int}
+static var _enforce_memo_mutex := Mutex.new()
+const ENFORCE_MEMO_TTL_MS := 15000
+
+## Drops memoized enforce results (one emulator, or all when omitted). Call
+## after writing an emulator's config outside the launch path so the next
+## launch re-reads the file instead of reusing a pre-write result.
+static func invalidate_enforce_memo(emulator_id: String = "") -> void:
+	_enforce_memo_mutex.lock()
+	if emulator_id == "":
+		_enforce_memo.clear()
+	else:
+		for key in _enforce_memo.keys():
+			if (key as String).begins_with(emulator_id + "|"):
+				_enforce_memo.erase(key)
+	_enforce_memo_mutex.unlock()
+
 ## Enforces Kyodai-managed data paths in the emulator's live config file.
+## Memoized for ENFORCE_MEMO_TTL_MS - see _enforce_memo.
+static func enforce_paths(emulator_id: String, platform_slug: String = "", core_id: String = "") -> bool:
+	var memo_key := emulator_id + "|" + platform_slug + "|" + core_id
+	_enforce_memo_mutex.lock()
+	if _enforce_memo.has(memo_key):
+		var entry: Dictionary = _enforce_memo[memo_key]
+		if Time.get_ticks_msec() - entry.timestamp < ENFORCE_MEMO_TTL_MS:
+			var memo_result: bool = entry.result
+			_enforce_memo_mutex.unlock()
+			return memo_result
+		_enforce_memo.erase(memo_key)
+	_enforce_memo_mutex.unlock()
+
+	var result := _enforce_paths_impl(emulator_id, platform_slug, core_id)
+
+	_enforce_memo_mutex.lock()
+	_enforce_memo[memo_key] = {"result": result, "timestamp": Time.get_ticks_msec()}
+	_enforce_memo_mutex.unlock()
+	return result
+
 ## Uses the same config candidate selection that resolve() uses, so the writer
 ## always targets the config the emulator is actually reading. If no candidate
 ## exists yet, the first/preferred candidate is created.
-static func enforce_paths(emulator_id: String, platform_slug: String = "", core_id: String = "") -> bool:
+static func _enforce_paths_impl(emulator_id: String, platform_slug: String = "", core_id: String = "") -> bool:
 	if not is_instance_valid(LaunchManager):
 		return false
 	var emulator: Dictionary = LaunchManager.registry.get_emulator(emulator_id)

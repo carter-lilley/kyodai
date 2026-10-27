@@ -285,11 +285,14 @@ func _post_ready_startup() -> void:
 
 	# Extract bundled tools on packaged builds (binaries inside the PCK cannot
 	# be executed). File IO + chmod; every consumer also extracts lazily on
-	# demand, so running it here just warms the cache.
+	# demand (extract_binary is idempotent), so this warm-up runs on the
+	# extraction worker instead of the startup path.
 	if SystemManager.platform.is_packaged():
 		phase_start_us = Time.get_ticks_usec()
-		AndroidBinaryExtractor.extract_all_binaries()
-		if DEBUG_LOG: print("[Main] binary extraction elapsed_us=", Time.get_ticks_usec() - phase_start_us)
+		MemorySubManager.queue_extraction_task(func():
+			AndroidBinaryExtractor.extract_all_binaries()
+		)
+		if DEBUG_LOG: print("[Main] binary extraction kickoff elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Self-update check: fire-and-forget GitHub release lookup on the user's
 	# configured channel; shows a dialog only when a newer release exists.
@@ -880,10 +883,12 @@ func _notification(what: int) -> void:
 		else:
 			if DEBUG_LOG: print("[Main] No saved focus index, skipping restoration")
 
-		# Clear emulator validation cache and stale pending launches
-		# This handles APK installs that completed while the app was in the background
+		# Reconcile stale pending launches (handles APK installs that completed
+		# while backgrounded). The validation cache is intentionally NOT cleared
+		# here: pending emulators get targeted invalidation inside
+		# clear_stale_pending_launches, and everything else self-heals via TTL,
+		# so the next launch after resume no longer re-scans every install step.
 		if LaunchManager:
-			LaunchManager.clear_validation_cache()
 			LaunchManager.clear_stale_pending_launches()
 			# Re-scan the .steam export folder: games installed/uninstalled in
 			# Steam frontends (GameNative/DroidDeck) while backgrounded
@@ -893,11 +898,14 @@ func _notification(what: int) -> void:
 				LaunchManager.update.on_app_resumed()
 		var platforms_view = UIManager.get_settings_dialog_platforms_view()
 		if platforms_view and platforms_view.has_method("refresh_cards"):
-			platforms_view.refresh_cards()
-			print("[Main] Refreshed platform cards after resume")
-			# Restore focus to the platform card the user was last interacting with
-			if platforms_view.has_method("restore_focus_to_last_active"):
-				call_deferred("_restore_platform_focus")
+			# Refreshing hidden cards is wasted work on the resume frame -
+			# on_view_show re-renders from data the next time the dialog opens.
+			if platforms_view.is_visible_in_tree():
+				platforms_view.refresh_cards()
+				print("[Main] Refreshed platform cards after resume")
+				# Restore focus to the platform card the user was last interacting with
+				if platforms_view.has_method("restore_focus_to_last_active"):
+					call_deferred("_restore_platform_focus")
 
 		# Dismiss any stale notifications (e.g., extraction notifications that completed while backgrounded)
 		if SystemManager.notifications:

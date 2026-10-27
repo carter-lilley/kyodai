@@ -49,9 +49,34 @@ static func _get_sigil_path() -> String:
 		push_error("[SigilRunner] Unsupported platform for sigil")
 		return ""
 
+## Bridges the callback-based worker queues into a coroutine. The os-execute
+## pool marshals callbacks through MemorySubManager's main-thread queue, so
+## awaiting this signal resumes on the main thread.
+class _AsyncResult:
+	signal finished(result: Dictionary)
+
+## Async variant of extract(): the sigil subprocess blocks on
+## OS.execute(..., true) and prod-key staging can hit SAF storage, so the
+## whole extraction runs on the os-execute worker pool instead of freezing
+## the launch path. Awaited from game prep; same result contract as extract().
+static func extract_async(rom_path: String, platform_slug: String, prod_keys_path: String = "") -> Dictionary:
+	if MemorySubManager.is_shutting_down():
+		# Queued callbacks are dropped during shutdown, so the await below
+		# would never resume; title-ID extraction is best-effort anyway.
+		return {}
+	var holder := _AsyncResult.new()
+	MemorySubManager.queue_os_execute_task(
+		func(): return extract(rom_path, platform_slug, prod_keys_path),
+		func(result) -> void:
+			holder.finished.emit(result if result is Dictionary else {})
+	)
+	return await holder.finished
+
 ## Runs sigil on a ROM and returns the parsed result:
 ## {title_id, save_id, raw_serial, usage, source, experimental}
 ## Returns an empty Dictionary on any failure.
+## NOTE: blocks the calling thread on a subprocess - launch paths must use
+## extract_async() instead.
 static func extract(rom_path: String, platform_slug: String, prod_keys_path: String = "") -> Dictionary:
 	var slug = sigil_slug_for(platform_slug)
 	if slug == "" or rom_path == "":

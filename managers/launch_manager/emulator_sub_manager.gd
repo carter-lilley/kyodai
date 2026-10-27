@@ -6,6 +6,7 @@ class_name EmulatorSubManager
 const DEBUG_LOG: bool = false
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
+const RSM = preload("res://managers/system_manager/resolution_sub_manager.gd")
 
 # Track installation progress for UI display only
 var _emulator_install_progress: Dictionary = {}  # emulator_id -> progress text for UI
@@ -39,7 +40,12 @@ var _config_guard: Dictionary = {}
 ## Validation cache to avoid redundant file system operations
 # emulator_id -> {result: Dictionary, timestamp: int, step_results: Dictionary}
 var _validation_cache: Dictionary = {}
-var _cache_ttl_ms: int = 5000  # 5 second cache TTL
+## Long enough that back-to-back launches and card refreshes don't re-scan
+## every install step (each is a filesystem/package probe, possibly via SAF).
+## Stale entries self-heal after the TTL; state-changing events (install
+## steps, extractions, resume-time pending-launch reconciliation) erase
+## targeted entries instead of clearing the whole cache.
+const VALIDATION_CACHE_TTL_MS: int = 60000
 var _validation_cache_mutex: Mutex = Mutex.new()  # get_install_progress is called from main + DB threads
 
 ## Emitted when an install step begins executing (step_index is 0-based).
@@ -70,6 +76,12 @@ func _erase_validation_cache(emulator_id: String) -> void:
 	_validation_cache.erase(emulator_id)
 	_validation_cache_mutex.unlock()
 
+## Public targeted invalidation for callers that know one emulator's install
+## state may have changed (e.g. post-APK-install checks). Prefer this over
+## clear_validation_cache() so unrelated emulators keep their cached scans.
+func erase_validation_cache(emulator_id: String) -> void:
+	_erase_validation_cache(emulator_id)
+
 ## Reconciles pending launches after potential APK installations.
 ## Call on app resume. Never drops a pending launch without either resuming it
 ## or releasing its in-flight guard via LaunchManager._abort_pending_launches.
@@ -84,6 +96,9 @@ func clear_stale_pending_launches() -> void:
 		# continuation - leave the pending launch queued.
 		if launch_manager._open_install_reminders.has(emulator_id):
 			continue
+		# The pending emulator may have been APK-installed while backgrounded;
+		# drop its cached scan so the resumed launch re-validates fresh.
+		_erase_validation_cache(emulator_id)
 		var install_steps = emulator.get("install", [])
 		var all_valid = true
 		for i in range(install_steps.size()):
@@ -334,6 +349,7 @@ func repair_emulator_config(emulator_id: String) -> bool:
 	
 	# Force all steps to re-apply (overwrite existing config files)
 	_force_install_step[emulator_id] = true
+	RSM.invalidate_enforce_memo(emulator_id)
 	
 	# Start from step 1 (skip download)
 	print("[EmulatorManager] Repairing config for " + emulator_id + " from step 1")
@@ -1806,7 +1822,12 @@ func edit_emulator_file(
 		push_error("[EmulatorManager] Could not resolve emulator path: " + file_path)
 		return false
 
-	return CSM.edit_text(full_path, edits, create_if_missing, append_if_missing, section_name)
+	var ok: bool = CSM.edit_text(full_path, edits, create_if_missing, append_if_missing, section_name)
+	if ok:
+		# Config changed outside the launch path; the next launch's
+		# enforce_paths must re-read the file, not reuse a memoized result.
+		RSM.invalidate_enforce_memo(emulator_id)
+	return ok
 
 
 ## Same as edit_emulator_file, but stores the original file content first so it can be restored later.
@@ -1834,7 +1855,10 @@ func restore_emulator_file(emulator_id: String, file_path: String) -> bool:
 		push_error("[EmulatorManager] Could not resolve emulator path for restore: " + file_path)
 		return false
 
-	return CSM.restore_backup(full_path)
+	var ok: bool = CSM.restore_backup(full_path)
+	if ok:
+		RSM.invalidate_enforce_memo(emulator_id)
+	return ok
 
 ## Returns true if a backup exists for the given emulator file.
 func has_emulator_file_backup(emulator_id: String, file_path: String) -> bool:
@@ -2428,7 +2452,7 @@ func get_install_progress(emulator_id: String) -> Dictionary:
 	if _validation_cache.has(emulator_id):
 		var cached = _validation_cache[emulator_id]
 		var elapsed = Time.get_ticks_msec() - cached.timestamp
-		if elapsed < _cache_ttl_ms:
+		if elapsed < VALIDATION_CACHE_TTL_MS:
 			_validation_cache_mutex.unlock()
 			return cached.result
 	_validation_cache_mutex.unlock()

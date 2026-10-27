@@ -43,24 +43,50 @@ func _begin_save_sync(key: String) -> void:
 func _end_save_sync(key: String) -> void:
 	_save_sync_in_flight.erase(key)
 
-## Runs save-discovery/zip work off the main thread when safe. Android restricted
-## paths (/Android/data, /Android/obb) go through the KyodaiBridge plugin whose
-## worker-thread behavior is unverified - a false empty scan could trigger a
-## remote-over-local download, so those run inline on the calling thread.
+## True for Android paths that route through the KyodaiBridge plugin
+## (/Android/data, /Android/obb - DocumentsContract/SAF or vendor root).
+func _is_restricted_android_path(path: String) -> bool:
+	if not SystemManager.platform.is_android():
+		return false
+	var normalized = path.replace("\\", "/")
+	return normalized.contains("/Android/data/") or normalized.contains("/Android/obb/")
+
+## Kill switch for threaded restricted-path I/O: touch this file to restore
+## the old inline behavior without a rebuild.
+const FORCE_INLINE_RESTRICTED_IO_FILE := "user://debug/force_inline_restricted_io"
+## -1 unknown, 0 thread, 1 force inline. Cached; the kill switch is read once.
+var _force_inline_restricted_io: int = -1
+
+## Runs save-discovery/zip work off the main thread when safe. Restricted
+## Android paths go through the KyodaiBridge plugin, whose SAF methods were
+## audited thread-safe (stateless ContentResolver/DocumentsContract calls;
+## SafCache/StorageTier/RootShell guard their shared state), so they thread
+## too - on SAF-tier devices the inline path serialized a binder round-trip
+## per file on the main thread, freezing launch. Safeguard: an EMPTY threaded
+## scan on a restricted path is re-verified inline before any
+## remote-over-local download decision (see auto_download_saves_for_game).
 func _should_thread_io(path: String) -> bool:
-	if SystemManager.platform.is_android():
-		var normalized = path.replace("\\", "/")
-		if normalized.contains("/Android/data/") or normalized.contains("/Android/obb/"):
-			return false
+	if _is_restricted_android_path(path):
+		if _force_inline_restricted_io == -1:
+			_force_inline_restricted_io = 1 if FileAccess.file_exists(FORCE_INLINE_RESTRICTED_IO_FILE) else 0
+			if _force_inline_restricted_io == 1:
+				print("[GameSaveSubManager] threaded restricted-path I/O disabled via " + FORCE_INLINE_RESTRICTED_IO_FILE)
+		return _force_inline_restricted_io == 0
 	return true
 
 func _run_io_task(path: String, work: Callable, callback: Callable) -> void:
-	if _should_thread_io(path):
-		MemorySubManager.queue_extraction_task(work, callback)
-	else:
+	if not _should_thread_io(path):
 		var result = work.call()
 		if callback.is_valid():
 			callback.call(result)
+		return
+	if _is_restricted_android_path(path):
+		# Restricted scans go to the multi-threaded os-execute pool, not the
+		# single extraction thread: a big archive extraction (game download)
+		# must not stall a pre-launch save sync queued behind it.
+		MemorySubManager.queue_os_execute_task(work, callback)
+	else:
+		MemorySubManager.queue_extraction_task(work, callback)
 
 func _ready() -> void:
 	_init_strategies()
@@ -1144,7 +1170,11 @@ func _gavel_decide(emulator_id: String, game: GameResource, local_save, remote, 
 	var hash_info := {"hash": "", "size": 0}
 	var local_file = null
 	if local_save != null:
-		hash_info = _compute_local_save_hash(emulator_id, game, local_save)
+		# Reuse the hash the discovery task computed (pre-launch scan hashes
+		# inside the I/O task now); only hash here when the record lacks one.
+		hash_info = local_save.get("_hash_info", {})
+		if hash_info.get("hash", "") == "":
+			hash_info = _compute_local_save_hash(emulator_id, game, local_save)
 		local_file = {"filename": local_save.file_name, "size": hash_info.size, "mtime": local_save.get("modified_time", 0)}
 	var server_saves: Array = [remote] if remote != null else []
 	var decision = Gavel.compute_sync_action(local_file, server_saves, _gavel_files_state(db_rec), device_id, hash_info.hash if hash_info.hash != "" else null)
@@ -2629,12 +2659,27 @@ func sync_saves_for_game(game: GameResource, emulator_id: String, callback: Call
 				callback.call(false, validation_error)
 			return
 
-	# Discovery walks the save directory tree; run it off the main thread when safe
+	# Discovery walks the save directory tree and hashing reads every local
+	# save; both run inside the I/O task (see auto_download_saves_for_game).
 	var scan_work := func() -> Array[Dictionary]:
+		var found: Array[Dictionary]
 		if is_folder_save_flow:
-			return _discover_emulator_saves(emulator_id, save_dir, game)
-		return _discover_game_saves(save_dir, game, extensions)
-	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
+			found = _discover_emulator_saves(emulator_id, save_dir, game)
+		else:
+			found = _discover_game_saves(save_dir, game, extensions)
+		for save in found:
+			save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
+		return found
+	var scan_threaded := _should_thread_io(save_dir)
+	_run_io_task(save_dir, scan_work, func(threaded_saves: Array[Dictionary]):
+		# Manual sync can download remote-over-local; apply the same
+		# empty-scan safeguard as the pre-launch flow.
+		var local_saves: Array[Dictionary] = threaded_saves
+		if local_saves.is_empty() and scan_threaded and _is_restricted_android_path(save_dir):
+			var inline_saves: Array[Dictionary] = scan_work.call()
+			if not inline_saves.is_empty():
+				push_warning("[GameSaveSubManager] sync: threaded scan found 0 saves but inline re-scan found " + str(inline_saves.size()) + " in " + save_dir + " - using inline result")
+				local_saves = inline_saves
 		_ensure_device_registered(func(success: bool, error: String):
 			if not success:
 				if callback.is_valid():
@@ -3162,11 +3207,17 @@ func auto_upload_saves_for_game(game: GameResource, emulator_id: String) -> void
 	if prepare.is_valid():
 		prepare.call(save_dir, game)
 
-	# Discovery walks the save directory tree; run it off the main thread when safe
+	# Discovery walks the save directory tree and hashing reads every local
+	# save; both run inside the I/O task (see auto_download_saves_for_game).
 	var scan_work := func() -> Array[Dictionary]:
+		var found: Array[Dictionary]
 		if is_folder_save or (emulator_id == "dolphin" and game.platform_slug == "ngc"):
-			return _discover_emulator_saves(emulator_id, save_dir, game)
-		return _discover_game_saves(save_dir, game, extensions)
+			found = _discover_emulator_saves(emulator_id, save_dir, game)
+		else:
+			found = _discover_game_saves(save_dir, game, extensions)
+		for save in found:
+			save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
+		return found
 	_run_io_task(save_dir, scan_work, func(local_saves: Array[Dictionary]):
 		if local_saves.is_empty():
 			if DEBUG_LOG: print("[GameSaveSubManager] No local saves found for auto-upload (emulator: " + emulator_id + ", title_id: " + game.get_active_title_id() + ", dir: " + save_dir + "), skipping.")
@@ -3646,11 +3697,19 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			if prepare.is_valid():
 				prepare.call(save_dir, game)
 
-			# Discovery walks the save directory tree; run it off the main thread when safe
+			# Discovery walks the save directory tree and hashing reads every
+			# local save; both run inside the I/O task so SAF-tier devices don't
+			# serialize per-file ContentResolver round-trips on the main thread.
 			var scan_work := func() -> Array[Dictionary]:
+				var found: Array[Dictionary]
 				if is_folder_save:
-					return _discover_emulator_saves(emulator_id, save_dir, game)
-				return _discover_game_saves(save_dir, game, extensions)
+					found = _discover_emulator_saves(emulator_id, save_dir, game)
+				else:
+					found = _discover_game_saves(save_dir, game, extensions)
+				for save in found:
+					save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
+				return found
+			var scan_threaded := _should_thread_io(save_dir)
 			var scan_state := {"done": false, "result": []}
 			_run_io_task(save_dir, scan_work, func(scan_result: Array[Dictionary]):
 				scan_state["result"] = scan_result
@@ -3659,13 +3718,26 @@ func auto_download_saves_for_game(game: GameResource, emulator_id: String, on_co
 			while not scan_state["done"]:
 				await get_tree().process_frame
 			local_saves = scan_state["result"]
-			
+
+			# Safeguard for threaded restricted-path scans: an empty result
+			# could theoretically be a plugin/threading lie, and acting on it
+			# would mean remote-over-local downloads clobbering real saves.
+			# When an empty scan could change a decision (remote saves or DB
+			# records exist), re-scan inline once and trust the inline result.
+			if local_saves.is_empty() and scan_threaded and _is_restricted_android_path(save_dir) \
+					and (not remote_saves.is_empty() or not db_records.is_empty()):
+				var inline_saves: Array[Dictionary] = scan_work.call()
+				if not inline_saves.is_empty():
+					push_warning("[GameSaveSubManager] threaded scan found 0 saves but inline re-scan found " + str(inline_saves.size()) + " in " + save_dir + " - using inline result")
+					local_saves = inline_saves
+				elif DEBUG_LOG:
+					print("[GameSaveSubManager] empty-scan re-verify agreed for " + save_dir)
+
 			if DEBUG_LOG: print("[GameSaveSubManager] auto_download: found " + str(local_saves.size()) + " local saves in " + save_dir)
-			
+
 			var local_by_name: Dictionary = {}
 			for save in local_saves:
 				local_by_name[save.file_name] = save
-				save["_hash_info"] = _compute_local_save_hash(emulator_id, game, save)
 			
 			remote_saves = _filter_remote_saves_by_destination(game, emulator_id, local_saves, remote_saves, save_dir, is_folder_save)
 

@@ -498,6 +498,9 @@ func on_install_reminder_dismissed(emulator_id: String) -> void:
 	if not _pending_launches.has(emulator_id):
 		return  # Plain dismiss: no game launch is waiting on this emulator
 
+	# The user was just sent to the system APK installer for this emulator, so
+	# its cached validation is likely stale-negative; re-scan fresh.
+	emulator.erase_validation_cache(emulator_id)
 	if _is_emulator_fully_installed(emulator_id):
 		print("[LaunchManager] Install reminder dismissed, emulator installed - resuming pending launch for: " + emulator_id)
 		_continue_pending_launches(emulator_id)
@@ -508,7 +511,8 @@ func on_install_reminder_dismissed(emulator_id: String) -> void:
 
 ## Validates every registry install step for an emulator. Uses the cached
 ## get_install_progress scan so a launch sequence validates once instead of
-## re-probing the filesystem at every stage (5 s TTL, cleared on installs).
+## re-probing the filesystem at every stage (60 s TTL, targeted invalidation
+## on install/state-changing events).
 func _is_emulator_fully_installed(emulator_id: String) -> bool:
 	var emu = registry.get_emulator(emulator_id)
 	if emu.is_empty():

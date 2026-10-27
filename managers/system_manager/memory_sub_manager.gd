@@ -1073,6 +1073,33 @@ static func queue_main_thread_callback(callback: Callable, args: Array = []):
 	_instance._mt_callbacks.append({"callback": callback, "args": args})
 	_instance._mt_callback_mutex.unlock()
 
+## Queues an arbitrary blocking callable to the OS-execute worker pool.
+## Use for work that spawns subprocesses but needs pre/post steps (staging
+## files, parsing output) kept on the same worker. Calls back on the main
+## thread with the callable's return value.
+static func queue_os_execute_task(callable: Callable, callback: Callable = Callable()):
+	if _instance == null:
+		push_error("[SystemManager.memory] Not initialized - cannot queue OS execute task")
+		return
+
+	_instance._os_execute_mutex.lock()
+
+	if _instance._os_execute_queue.size() >= MAX_OS_EXECUTE_QUEUE_SIZE:
+		_instance._os_execute_mutex.unlock()
+		push_error("[SystemManager.memory] OS execute queue full - cannot queue task")
+		if callback.is_valid():
+			callback.call_deferred(null)
+		return
+
+	_instance._os_execute_queue.append({
+		"callable": callable,
+		"callback": func(result):
+			if callback.is_valid():
+				queue_main_thread_callback(func(): callback.call(result))
+	})
+	_instance._os_execute_mutex.unlock()
+	_instance._os_execute_semaphore.post()
+
 ## Queues an OS.execute() call to run on a dedicated background thread pool.
 ## Calls back on the main thread with {exit_code: int, output: Array[String]}.
 static func queue_os_execute(path: String, arguments: Array = [], callback: Callable = Callable()):

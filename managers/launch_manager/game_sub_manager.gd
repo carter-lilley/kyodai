@@ -93,7 +93,7 @@ func _ensure_save_identity(game: GameResource, rom_path: String, emulator_id: St
 		return
 
 	if DEBUG_LOG: print("[GameManager] ID pass: extracting title id from " + rom_path)
-	var sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
+	var sigil_result = await _SigilRunner.extract_async(rom_path, game.platform_slug)
 	var title_id = sigil_result.get("title_id", "")
 	if title_id == "" and game.platform_slug == "wii" and rom_path.get_extension().to_lower() == "wad":
 		# Sigil only reads Wii discs; WAD packages carry the id in their ticket
@@ -156,7 +156,7 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 	# below keep their own semantics; this fills the gap for families without
 	# one (RetroArch, ...). Uses the pre-m3u ROM path — sigil reads discs, not
 	# playlists. Best-effort: failure never blocks the launch.
-	_ensure_save_identity(game, temp_intent.rom_path, emulator_id)
+	await _ensure_save_identity(game, temp_intent.rom_path, emulator_id)
 
 	# Multi-disc games on m3u-capable platforms launch through a generated
 	# playlist so the emulator can swap discs. A specific disc sibling selected
@@ -173,34 +173,37 @@ func _prepare_game_for_launch(game: GameResource, emulator_id: String, is_shuffl
 
 	# Dispatch prep on architecture family so forks (nethersx2, aps3e,
 	# x360-mobile, ...) share their parent emulator's preparation logic.
+	# NOTE: prep functions are coroutines (sigil extraction runs on the
+	# os-execute worker pool); every branch must await its prep call so
+	# `result` is a bool, not a function state.
 	match launch_manager.registry.get_emulator_architecture(emulator_id):
 		"azahar":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Azahar game...")
-			result = _prepare_azahar_game(game, temp_intent)
+			result = await _prepare_azahar_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Azahar prep result = " + str(result))
 		"cemu":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Cemu game...")
-			result = _prepare_cemu_game(game, temp_intent)
+			result = await _prepare_cemu_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Cemu prep result = " + str(result))
 		"eden":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Eden game...")
-			result = _prepare_eden_game(game, temp_intent)
+			result = await _prepare_eden_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Eden prep result = " + str(result))
 		"melonds":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing melonDS game...")
-			result = _prepare_melonds_game(game, temp_intent)
+			result = await _prepare_melonds_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: melonDS prep result = " + str(result))
 		"dolphin":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Dolphin game...")
-			result = _prepare_dolphin_game(game, temp_intent)
+			result = await _prepare_dolphin_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Dolphin prep result = " + str(result))
 		"pcsx2":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing PCSX2 game...")
-			result = _prepare_pcsx2_game(game, temp_intent)
+			result = await _prepare_pcsx2_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: PCSX2 prep result = " + str(result))
 		"ppsspp":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing PPSSPP game...")
-			result = _prepare_ppsspp_game(game, temp_intent)
+			result = await _prepare_ppsspp_game(game, temp_intent)
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: PPSSPP prep result = " + str(result))
 		"vita3k", "vita3k-canary":
 			if DEBUG_LOG: print("[GameManager] _prepare_game_for_launch: Preparing Vita3K game...")
@@ -234,7 +237,7 @@ func _prepare_azahar_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if DEBUG_LOG: print("[GameManager] Azahar: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
-	var sigil_result = _SigilRunner.extract(rom_path, "3ds")
+	var sigil_result = await _SigilRunner.extract_async(rom_path, "3ds")
 	var title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		push_error("[GameManager] Azahar: Failed to extract TitleID from: " + rom_path)
@@ -260,7 +263,7 @@ func _prepare_cemu_game(game: GameResource, intent: LaunchIntent) -> bool:
 	if DEBUG_LOG: print("[GameManager] Cemu: Preparing game from ROM path: " + intent.rom_path)
 	
 	var rom_path = intent.rom_path
-	var sigil_result = _SigilRunner.extract(rom_path, "wiiu")
+	var sigil_result = await _SigilRunner.extract_async(rom_path, "wiiu")
 	var title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		push_error("[GameManager] Cemu: Failed to extract TitleID from: " + rom_path)
@@ -390,7 +393,7 @@ func _prepare_eden_game(game: GameResource, intent: LaunchIntent) -> bool:
 	
 	if title_id == "":
 		var prod_keys = TitleIDParser._get_prod_keys_path(launch_manager.registry._get_emulator_directory("eden"))
-		sigil_result = _SigilRunner.extract(rom_path, "switch", prod_keys)
+		sigil_result = await _SigilRunner.extract_async(rom_path, "switch", prod_keys)
 		title_id = sigil_result.get("title_id", "")
 	if title_id == "":
 		if DEBUG_LOG: print("[GameManager] Eden: ROM extraction failed, trying game_list.db lookup...")
@@ -425,7 +428,7 @@ func _prepare_dolphin_game(game: GameResource, intent: LaunchIntent) -> bool:
 	var game_id = ""
 	var sigil_result := {}
 	if FSM.file_exists(rom_path):
-		sigil_result = _SigilRunner.extract(rom_path, game.platform_slug)
+		sigil_result = await _SigilRunner.extract_async(rom_path, game.platform_slug)
 		game_id = sigil_result.get("title_id", "")
 		if game_id == "" and game.platform_slug == "wii" and rom_path.get_extension().to_lower() == "wad":
 			# Sigil only reads Wii discs; WAD packages carry the id in their ticket
@@ -687,7 +690,7 @@ func _prepare_pcsx2_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 	# Try extracting serial from ROM
 	if FSM.file_exists(rom_path):
-		sigil_result = _SigilRunner.extract(rom_path, "ps2")
+		sigil_result = await _SigilRunner.extract_async(rom_path, "ps2")
 		serial = sigil_result.get("title_id", "")
 		if serial != "":
 			if DEBUG_LOG: print("[GameManager] PCSX2: Serial from ROM: " + serial)
@@ -721,7 +724,7 @@ func _prepare_ppsspp_game(game: GameResource, intent: LaunchIntent) -> bool:
 
 	# Try extracting game ID from ROM
 	if FSM.file_exists(rom_path):
-		sigil_result = _SigilRunner.extract(rom_path, "psp")
+		sigil_result = await _SigilRunner.extract_async(rom_path, "psp")
 		game_id = sigil_result.get("title_id", "")
 		if game_id != "":
 			if DEBUG_LOG: print("[GameManager] PPSSPP: Game ID from ROM: " + game_id)
@@ -899,36 +902,12 @@ func _extract_vita_zip(zip_path: String, extract_to: String, title_id: String) -
 		if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT false (queue failed)")
 		return false
 	if DEBUG_LOG: print("[GameManager] Vita3K: Extraction queued with item_id=" + item_id)
-	
-	# Use Dictionary for thread-safe state tracking (reference type)
-	var future = {"complete": false, "success": false, "message": ""}
-	
-	var on_complete = func(completed_item_id: String, success: bool, message: String):
-		if completed_item_id == item_id:
-			future.complete = true
-			future.success = success
-			future.message = message
-			if DEBUG_LOG: print("[GameManager] Vita3K: Extraction callback received - success=" + str(success) + ", message=" + message)
-	
-	SystemManager.download.extraction_completed.connect(on_complete)
-	
-	# Wait for completion (with timeout)
-	var timeout = 300.0  # 5 minutes timeout
-	var elapsed = 0.0
-	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: Starting poll loop")
-	while not future.complete and elapsed < timeout:
-		await get_tree().process_frame
-		elapsed += get_process_delta_time()
-	
-	SystemManager.download.extraction_completed.disconnect(on_complete)
-	
-	if not future.complete:
-		push_error("[GameManager] Vita game extraction timed out")
-		if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT false (timeout)")
-		return false
-	
-	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT " + str(future.success))
-	return future.success
+
+	# Signal+timer wait (shared with the other extraction paths); a per-frame
+	# poll loop would burn a frame every tick for the whole extraction.
+	var extract_success = await _await_extraction(item_id, "GameManager Vita3K", 300.0)
+	if DEBUG_LOG: print("[GameManager] _extract_vita_zip: EXIT " + str(extract_success))
+	return extract_success
 
 
 ## Ensures Vita3K has a license rif for the given title under ux0/license/<title_id>.
