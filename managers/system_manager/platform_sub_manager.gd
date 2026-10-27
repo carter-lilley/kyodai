@@ -442,12 +442,14 @@ func evaluate_install_grant_state(on_startup: bool = false) -> void:
 		return  # OOBE owns the screen; the grant is requested per-install now
 	var granted := can_install_unknown_apps()
 	var direct := has_direct_storage_tier()
-	if granted == direct:
-		# Healthy: either both fine, or unaffected firmware (grant held but
-		# storage intact). Nothing to manage.
+	if direct:
+		# Healthy: this process has full direct storage - the grant was never
+		# held, the firmware doesn't couple grant and gids (stock Android),
+		# or this is a fresh process after a revoke. Nothing to manage.
 		_install_grant_awaiting_retry = false
 		return
-	if granted and not direct:
+	if granted:
+		# Degraded: grant held, gids stripped.
 		if _install_grant_awaiting_retry:
 			# User just granted on our request; they're mid-session and will
 			# retry the install. Prompt only once installs have happened.
@@ -458,9 +460,10 @@ func evaluate_install_grant_state(on_startup: bool = false) -> void:
 			_installs_since_grant = 0
 			_prompt_restore_fast_storage()
 	else:
-		# Grant revoked, but this process was started while it was held and
-		# still carries the stripped gids - only a restart picks them back
-		# up. Can't occur at boot: a fresh process after revoke is healthy.
+		# Stale: grant revoked, but this process was forked while it was held
+		# and still carries the stripped gids - only a restart picks them
+		# back up. Can't occur at boot: a fresh process after revoke is
+		# healthy (direct) and returns above.
 		_install_grant_awaiting_retry = false
 		_installs_since_grant = 0
 		if not on_startup:

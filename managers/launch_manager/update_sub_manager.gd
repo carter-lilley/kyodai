@@ -50,6 +50,10 @@ func _connect_signals() -> void:
 ## enter a queue; updates run up to the platform's concurrency limit
 ## (1 on Android, a few on desktop).
 func begin_session(emulator_ids: Array) -> void:
+	# Update sessions end in APK installs: gate on the install grant up
+	# front rather than after the downloads have already run.
+	if not SystemManager.platform.ensure_install_permission("emulator updates"):
+		return
 	var added: Array[String] = []
 	for emulator_id in emulator_ids:
 		var id := str(emulator_id)

@@ -1012,6 +1012,11 @@ func _save_settings():
 	DataManager.save_settings()
 
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
+	# Emulator downloads end in an APK install: gate on the install grant
+	# before anything queues (just-in-time session, see platform manager).
+	if not SystemManager.platform.ensure_install_permission("emulators"):
+		return
+
 	# Track which platform initiated the download for focus restoration later
 	_last_active_platform_slug = card.platform_slug
 

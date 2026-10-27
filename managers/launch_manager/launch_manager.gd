@@ -751,6 +751,12 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 				return false
 
 	if not is_actually_installed:
+		# Auto-install ends in an APK install: gate on the install grant
+		# before queuing anything; abort so the user can grant and re-launch.
+		if not SystemManager.platform.ensure_install_permission(emulator_name):
+			_abort_launch_overlay()
+			_end_launch(game.romm_id)
+			return false
 		SystemManager.notifications.show_notification("Setting up " + emulator_name + "...", SystemManager.notifications.Type.INFO)
 
 		if not emulator_extraction_completed.is_connected(_on_emulator_installed_for_launch):

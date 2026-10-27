@@ -125,7 +125,9 @@ static func _show_update_dialog(tag: String, current: String, download_url: Stri
 	dialog.add_action("Later", func(): dialog.dismiss(), false)
 	if on_android:
 		dialog.add_action("Download & Install", func():
-			_download_update(tag, download_url, size)
+			# Gate before downloading: the install at the end needs the grant.
+			if SystemManager.platform.ensure_install_permission("this update"):
+				_download_update(tag, download_url, size)
 			dialog.dismiss()
 		, true)
 	else:
