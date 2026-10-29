@@ -377,12 +377,13 @@ func _resolve_saf_grant(granted: bool) -> void:
 # never match, and all of this stays invisible.
 # ============================================================================
 
-var _install_grant_awaiting_retry := false  # sent the user to grant; install retries on return
+var _install_grant_awaiting_retry := false  # sent the user to grant; install resumes on return
 var _installs_since_grant := 0              # install intents fired while the grant is held
 var _restore_prompt_snoozed := false        # user chose "not now"; re-arms on the next install
 var _restart_prompt_snoozed := false        # user declined the restart; re-arms on a new session
 var _install_prompt_open := false           # a session dialog is on screen; never stack another
 var _startup_grant_check_done := false
+var _pending_install_action: Callable = Callable()  # blocked action to fire once the grant lands
 
 ## True when the user currently allows Kyodai to install APKs.
 func can_install_unknown_apps() -> bool:
@@ -401,24 +402,37 @@ func has_direct_storage_tier() -> bool:
 	var direct = plugin.call("hasExtDataRwAccess")
 	return direct == null or direct  # stale AAR fails open
 
-## Gate for any APK install. Returns true when the install may proceed. When
-## the grant is missing, explains the temporary-permission deal and opens the
-## system toggle; the caller aborts and the user retries after granting.
-func ensure_install_permission(reason: String) -> bool:
+## Gate for any APK install. Returns true when the install may proceed.
+## When the grant is missing, explains the temporary-permission deal and
+## opens the system toggle; on_granted is stashed and fired automatically
+## when the user returns with the grant enabled (enabling takes effect
+## immediately - unlike revoking, no restart is needed), so the blocked
+## install RESUMES instead of dying. Callers that pass no continuation fall
+## back to manual retry.
+func ensure_install_permission(reason: String, on_granted: Callable = Callable()) -> bool:
 	if not is_android():
 		return true
 	if can_install_unknown_apps():
 		return true
 	_install_grant_awaiting_retry = true
+	_pending_install_action = on_granted
 	_restore_prompt_snoozed = false
 	_restart_prompt_snoozed = false
 	UIManager.show_confirm(
 		"Install Permission Needed",
-		"Installing %s requires Android's 'Install unknown apps' switch for Kyodai.\n\nOn this device that switch temporarily pauses fast storage - turn it back off when you're done installing (Kyodai will remind you).\n\nEnable it in the screen that opens, then retry." % reason,
+		"Installing %s requires Android's 'Install unknown apps' switch for Kyodai.\n\nOn this device that switch temporarily pauses fast storage - turn it back off when you're done installing (Kyodai will remind you).\n\nEnable it in the screen that opens and the install continues on its own." % reason,
 		func(): open_install_unknown_apps_settings(),
 		Callable()
 	)
 	return false
+
+## Fires (and clears) the stashed continuation of a grant-blocked install.
+func _fire_pending_install_action() -> void:
+	var action = _pending_install_action
+	_pending_install_action = Callable()
+	if action.is_valid():
+		print("[SystemManager.platform] Install grant enabled - resuming blocked install")
+		action.call()
 
 ## Called after an install intent was successfully fired. Re-arms the
 ## restore/restart prompts for the next focus return.
@@ -445,15 +459,18 @@ func evaluate_install_grant_state(on_startup: bool = false) -> void:
 	if direct:
 		# Healthy: this process has full direct storage - the grant was never
 		# held, the firmware doesn't couple grant and gids (stock Android),
-		# or this is a fresh process after a revoke. Nothing to manage.
+		# or this is a fresh process after a revoke. Nothing to manage; drop
+		# any blocked-install continuation (the user bailed on the explainer).
 		_install_grant_awaiting_retry = false
+		_pending_install_action = Callable()
 		return
 	if granted:
 		# Degraded: grant held, gids stripped.
 		if _install_grant_awaiting_retry:
-			# User just granted on our request; they're mid-session and will
-			# retry the install. Prompt only once installs have happened.
+			# User just granted on our request - the grant takes effect
+			# immediately, so the blocked install resumes right now.
 			_install_grant_awaiting_retry = false
+			_fire_pending_install_action()
 			return
 		if on_startup or _installs_since_grant > 0:
 			# Abandoned session (startup) or installs just ran (focus return).

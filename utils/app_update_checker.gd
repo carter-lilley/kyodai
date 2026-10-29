@@ -125,9 +125,12 @@ static func _show_update_dialog(tag: String, current: String, download_url: Stri
 	dialog.add_action("Later", func(): dialog.dismiss(), false)
 	if on_android:
 		dialog.add_action("Download & Install", func():
-			# Gate before downloading: the install at the end needs the grant.
-			if SystemManager.platform.ensure_install_permission("this update"):
-				_download_update(tag, download_url, size)
+			# Gate before downloading: the install at the end needs the
+			# grant. When blocked, the continuation resumes the download
+			# automatically once the user grants - no manual retry.
+			var start_download := func(): _download_update(tag, download_url, size)
+			if SystemManager.platform.ensure_install_permission("this update", start_download):
+				start_download.call()
 			dialog.dismiss()
 		, true)
 	else:

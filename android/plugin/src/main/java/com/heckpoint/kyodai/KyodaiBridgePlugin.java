@@ -889,10 +889,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
 
         Uri packageUri = Uri.parse("package:" + activity.getPackageName());
+        // NO_HISTORY + EXCLUDE_FROM_RECENTS: the toggle page must not linger
+        // as a task after the user leaves it - a leftover page resurfaces on
+        // its own every time its task is brought forward (app restart, game
+        // exit, recents), looking like the app re-opens it spontaneously.
+        final int transientFlags = Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_NO_HISTORY
+                | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS;
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
             intent.setData(packageUri);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(transientFlags);
             activity.startActivity(intent);
             Log.d(TAG, "Launched manage unknown app sources settings");
             Log.d(TAG, "==========================================");
@@ -904,7 +911,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
             intent.setData(packageUri);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(transientFlags);
             activity.startActivity(intent);
             Log.d(TAG, "Launched application details settings for install unknown apps");
             Log.d(TAG, "==========================================");

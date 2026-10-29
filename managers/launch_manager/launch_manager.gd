@@ -752,8 +752,12 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 
 	if not is_actually_installed:
 		# Auto-install ends in an APK install: gate on the install grant
-		# before queuing anything; abort so the user can grant and re-launch.
-		if not SystemManager.platform.ensure_install_permission(emulator_name):
+		# before queuing anything. The continuation re-runs the whole
+		# prerequisite pass once the user grants, so the launch resumes on
+		# its own; the visible overlay is still reset in the meantime.
+		if not SystemManager.platform.ensure_install_permission(emulator_name, func():
+			_ensure_prerequisites(game, emulator_id, on_ready, prepare_game, is_shuffler, rom_path_override, on_failed)
+		):
 			_abort_launch_overlay()
 			_end_launch(game.romm_id)
 			return false

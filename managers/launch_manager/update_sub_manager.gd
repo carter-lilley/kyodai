@@ -51,8 +51,9 @@ func _connect_signals() -> void:
 ## (1 on Android, a few on desktop).
 func begin_session(emulator_ids: Array) -> void:
 	# Update sessions end in APK installs: gate on the install grant up
-	# front rather than after the downloads have already run.
-	if not SystemManager.platform.ensure_install_permission("emulator updates"):
+	# front rather than after the downloads have already run. The
+	# continuation re-runs the session once the user grants.
+	if not SystemManager.platform.ensure_install_permission("emulator updates", func(): begin_session(emulator_ids)):
 		return
 	var added: Array[String] = []
 	for emulator_id in emulator_ids:

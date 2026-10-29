@@ -6,6 +6,15 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 - universal extraction normalizer (walk down for expected files...saves & games)
 maybe make cores on demand
 
+game screen transition/loads - transition to black after cover transition ends, screengrab and transition back when resuming?
+cocoon seamless game switch?
+in-built steam library?
+emufii rooms?
+playtime?
+flex-grid sizes and card widgets (random, etc..)
+manuals..
+proper api client onboarding/pairing with token/qr like argosy does
+
 ## configs
 	- user/identity profile resolver for emulator installs and saves
 		- 3ds, xenia, eden, vita, (cemu & ps2?)
