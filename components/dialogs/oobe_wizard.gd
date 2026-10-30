@@ -471,7 +471,9 @@ func _request_notifications_permission():
 	if not SystemManager.platform.is_android():
 		return
 
-	OS.request_permissions()
+	# Singular request only - OS.request_permissions() sweeps every manifest
+	# permission and would open the "Install unknown apps" settings page.
+	OS.request_permission("android.permission.POST_NOTIFICATIONS")
 
 func _open_usage_settings():
 	if not SystemManager.platform.is_android():

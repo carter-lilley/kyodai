@@ -243,7 +243,7 @@ func _initialize_threads():
 	_sync_thread.start(_sync_worker)
 
 func _ready():
-	set_process(true)
+	FrameWorkScheduler.register(self, _run_memory_frame_work)
 	# Reconnect invalidates the negative cache so covers that failed while
 	# offline retry immediately instead of waiting out the TTL. Deferred:
 	# SystemManager's @onready sub-manager refs aren't set until after this
@@ -306,6 +306,7 @@ func _get_texture_cache_mb() -> float:
 	return mb
 
 func _exit_tree():
+	FrameWorkScheduler.unregister(self)
 	Performance.remove_custom_monitor("memory/image_queue_high")
 	Performance.remove_custom_monitor("memory/image_queue_low")
 	Performance.remove_custom_monitor("memory/image_tasks_inflight")
@@ -315,8 +316,10 @@ func _exit_tree():
 	Performance.remove_custom_monitor("memory/texture_cache_mb")
 	shutdown()
 
-func _process(_delta):
-	WarmupBudget.begin_frame()
+func _process(delta):
+	FrameWorkScheduler.drain(delta)
+
+func _run_memory_frame_work(_delta):
 	_drain_mt_callbacks()
 	_process_batches()
 	_drain_lp_callbacks()

@@ -25,10 +25,7 @@ static func _is_restricted(path: String) -> bool:
 ## MD5 of raw file bytes, streamed.
 static func compute_file_hash(path: String) -> String:
 	if _is_restricted(path):
-		var data = FSM.read_file_bytes(path)
-		if data.is_empty():
-			return ""
-		return _md5_bytes(data)
+		return FSM.md5_file(path)
 	var f = FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return ""
@@ -47,7 +44,7 @@ static func compute_file_hash(path: String) -> String:
 static func _is_zip_file(path: String) -> bool:
 	var magic: PackedByteArray
 	if _is_restricted(path):
-		magic = FSM.read_file_bytes(path)
+		magic = FSM.read_file_chunk(path, 4)
 	else:
 		var f = FileAccess.open(path, FileAccess.READ)
 		if f == null:
@@ -61,6 +58,8 @@ static func _is_zip_file(path: String) -> bool:
 ## RomM's zip hash: MD5 of the sorted "name:md5(content)" lines of all
 ## non-directory entries.
 static func compute_zip_hash(zip_path: String) -> String:
+	if _is_restricted(zip_path):
+		return FSM.zip_hash(zip_path)
 	var zr = ZIPReader.new()
 	if zr.open(zip_path) != OK:
 		return ""
@@ -127,6 +126,7 @@ static func _collect_folder_hash_lines(dir_path: String, zip_prefix: String, lin
 		if FSM.dir_exists(full_path):
 			_collect_folder_hash_lines(full_path, zip_path + "/", lines)
 		else:
-			var data = FSM.read_file_bytes(full_path)
-			if not data.is_empty():
-				lines.append(zip_path + ":" + _md5_bytes(data))
+			if FSM.get_file_size(full_path) > 0:
+				var hash := FSM.md5_file(full_path)
+				if not hash.is_empty():
+					lines.append(zip_path + ":" + hash)

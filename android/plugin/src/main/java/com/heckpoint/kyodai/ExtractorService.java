@@ -417,6 +417,7 @@ public class ExtractorService extends Service {
                     Log.e(TAG, "Root finalize failed for: " + extractDir);
                     return false;
                 }
+                SafCache.invalidateTree(extractDir);
             }
 
             // SAF tier: the extracted tree is provider-owned; when the root
@@ -549,6 +550,7 @@ public class ExtractorService extends Service {
 
     /** Creates a directory (and parents), falling back to root/SAF tiers. */
     private boolean ensureDir(String path) {
+        SafCache.invalidateTree(path);
         File dir = new File(path);
         if (dir.exists() && dir.isDirectory()) return true;
         if (dir.mkdirs()) return true;
@@ -622,6 +624,7 @@ public class ExtractorService extends Service {
     /** Opens a truncating write stream: direct File first, then
      *  DocumentsContract with create-if-missing. */
     private OutputStream openOutputFor(String path) throws Exception {
+        SafCache.invalidateTree(path);
         File file = new File(path);
         File parent = file.getParentFile();
         if (parent != null && parent.canWrite()) {
@@ -667,6 +670,7 @@ public class ExtractorService extends Service {
     }
 
     private void writeTextFile(String path, String content) throws Exception {
+        SafCache.invalidateTree(path);
         if (StorageTier.tierFor(this, path) == StorageTier.TIER_ROOT) {
             if (!StorageTier.rootWriteFile(this, path, content.getBytes("UTF-8"))) {
                 throw new java.io.IOException("root write failed: " + path);

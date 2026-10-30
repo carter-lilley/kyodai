@@ -13,7 +13,7 @@ emufii rooms?
 playtime?
 flex-grid sizes and card widgets (random, etc..)
 manuals..
-proper api client onboarding/pairing with token/qr like argosy does
+x proper api client onboarding/pairing with token/qr like argosy does
 
 ## configs
 	- user/identity profile resolver for emulator installs and saves

@@ -17,10 +17,13 @@ const RESIZE_GRIPS_SCRIPT := preload("res://components/overlays/window_resize_gr
 @onready var focus: FocusSubManager = $FocusSubManager
 @onready var toolbar: ToolbarSubManager = $ToolbarSubManager
 
+func _enter_tree() -> void:
+	FrameWorkScheduler.register(self, _run_frame_work)
+
 func _ready() -> void:
 	PlatformCardPool.process(0.0)
 
-func _process(delta: float) -> void:
+func _run_frame_work(delta: float) -> void:
 	if not PlatformCardPool.is_warm():
 		PlatformCardPool.process(delta)
 
@@ -1068,6 +1071,7 @@ func _exit_tree() -> void:
 	Nodes still in the tree are left for the tree to free; orphaned overlays are
 	freed immediately because queue_free() may not flush during process exit."""
 
+	FrameWorkScheduler.unregister(self)
 	_exit_focus_lock()
 
 	# Drop all cached node references so the tree can free them.

@@ -217,7 +217,14 @@ func _request_android_permissions():
 		permissions_to_request.append("android.permission.POST_NOTIFICATIONS")
 	
 	if permissions_to_request.size() > 0:
-		OS.request_permissions()
+		# Request each permission individually. OS.request_permissions() sweeps
+		# EVERY manifest permission - including REQUEST_INSTALL_PACKAGES, which
+		# Godot handles by opening the "Install unknown apps" settings page.
+		# Since WRITE_EXTERNAL_STORAGE can never be granted on Android 13+,
+		# permissions_to_request is never empty there, so the blanket call made
+		# that settings page appear at EVERY app start.
+		for permission in permissions_to_request:
+			OS.request_permission(permission)
 	
 	# Note: "Install unknown apps" permission is checked when user tries to install an emulator
 	# We don't prompt on startup to avoid annoying the user

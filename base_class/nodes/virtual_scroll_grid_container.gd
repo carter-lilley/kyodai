@@ -812,6 +812,7 @@ func _on_display_size_changed(_new_size: Vector2):
 	_on_resize_debounced()
 
 func _enter_tree():
+	FrameWorkScheduler.register(self, _run_frame_work)
 	# frame_pre_draw (visual stamping) reconnects in _visual_sync's own
 	# _enter_tree on every tree entry (DS reparents, nav rebuilds).
 	# Connect to centralized card settings state (idempotent via is_connected guards)
@@ -834,6 +835,7 @@ func _enter_tree():
 	_focus.reconnect_viewport()
 
 func _exit_tree():
+	FrameWorkScheduler.unregister(self)
 	# frame_pre_draw (visual stamping) is disconnected by _visual_sync's own
 	# _exit_tree; frame_post_draw audit/reality-check connections are owned
 	# (and released) by _debug_overlay. Both exit the tree before this parent.
@@ -1039,7 +1041,7 @@ func _gui_input(event: InputEvent) -> void:
 	if _scroll_container and event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
 		_scroll_container._on_gui_input(event)
 
-func _process(_delta: float):
+func _run_frame_work(_delta: float):
 	if _window.processing_scroll:
 		_window.processing_scroll = false
 		push_warning("[Grid] _is_processing_scroll was left set between frames; force-cleared")

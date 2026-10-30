@@ -206,6 +206,42 @@ static func sha256_file(path: String) -> String:
 	f.close()
 	return ctx.finish().hex_encode()
 
+## Computes an MD5 digest. Restricted paths stream through the Java plugin so
+## file bytes never cross JNI; direct paths use Godot's streaming hash context.
+static func md5_file(path: String) -> String:
+	if path.is_empty():
+		return ""
+	if _is_restricted_android_path(path):
+		var plugin = _get_plugin()
+		if plugin == null:
+			return ""
+		return str(plugin.call("androidComputeFileHash", path))
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var ctx := HashingContext.new()
+	if ctx.start(HashingContext.HASH_MD5) != OK:
+		file.close()
+		return ""
+	var length := file.get_length()
+	while file.get_position() < length:
+		var remaining: int = length - file.get_position()
+		if ctx.update(file.get_buffer(mini(1024 * 1024, remaining))) != OK:
+			file.close()
+			return ""
+	file.close()
+	return ctx.finish().hex_encode()
+
+## Computes the RomM-parity hash of a ZIP on a restricted path, streaming the
+## archive in Java. Direct ZIP hashing remains in ContentHash.
+static func zip_hash(path: String) -> String:
+	if not _is_restricted_android_path(path):
+		return ""
+	var plugin = _get_plugin()
+	if plugin == null:
+		return ""
+	return str(plugin.call("androidComputeZipHash", path))
+
 ## Universal path resolver - handles all path formats and transformations
 ##
 ## Options:
@@ -501,21 +537,52 @@ static func _plugin_read_file(path: String) -> PackedByteArray:
 	var plugin = _get_plugin()
 	if plugin == null:
 		return PackedByteArray()
-	
-	var base64_data = plugin.call("androidReadFile", path)
-	if base64_data.is_empty():
+	var handle = plugin.call("androidOpenRead", path)
+	if handle <= 0:
 		return PackedByteArray()
-	
-	return Marshalls.base64_to_raw(base64_data)
+	var data := PackedByteArray()
+	while true:
+		var base64_chunk = plugin.call("androidReadChunk", handle, 1024 * 1024)
+		if base64_chunk == null:
+			plugin.call("androidCloseRead", handle)
+			return PackedByteArray()
+		if base64_chunk.is_empty():
+			break
+		data.append_array(Marshalls.base64_to_raw(base64_chunk))
+	plugin.call("androidCloseRead", handle)
+	return data
+
+## Delegates a bounded file read to plugin for restricted paths
+static func _plugin_read_file_chunk(path: String, max_bytes: int) -> PackedByteArray:
+	var plugin = _get_plugin()
+	if plugin == null or max_bytes <= 0:
+		return PackedByteArray()
+	var handle = plugin.call("androidOpenRead", path)
+	if handle <= 0:
+		return PackedByteArray()
+	var base64_chunk = plugin.call("androidReadChunk", handle, max_bytes)
+	plugin.call("androidCloseRead", handle)
+	if base64_chunk == null or base64_chunk.is_empty():
+		return PackedByteArray()
+	return Marshalls.base64_to_raw(base64_chunk)
 
 ## Delegates file write to plugin for restricted paths
 static func _plugin_write_file(path: String, data: PackedByteArray) -> bool:
 	var plugin = _get_plugin()
 	if plugin == null:
 		return false
-	
-	var base64_data = Marshalls.raw_to_base64(data)
-	return plugin.call("androidWriteFile", path, base64_data)
+	var handle = plugin.call("androidOpenWrite", path)
+	if handle <= 0:
+		return false
+	var offset := 0
+	while offset < data.size():
+		var end := mini(offset + 1024 * 1024, data.size())
+		var base64_chunk = Marshalls.raw_to_base64(data.slice(offset, end))
+		if not plugin.call("androidWriteChunk", handle, base64_chunk):
+			plugin.call("androidCloseWrite", handle)
+			return false
+		offset = end
+	return bool(plugin.call("androidCloseWrite", handle))
 
 ## Delegates file delete to plugin for restricted paths
 static func _plugin_delete_file(path: String) -> bool:
@@ -1053,6 +1120,21 @@ static func read_file_bytes(path: String) -> PackedByteArray:
 		return PackedByteArray()
 	
 	var data = file.get_buffer(file.get_length())
+	file.close()
+	return data
+
+## Reads at most max_bytes from the beginning of a file, without pulling the
+## whole file through JNI. Returns an empty array on error or EOF.
+static func read_file_chunk(path: String, max_bytes: int) -> PackedByteArray:
+	if path.is_empty() or max_bytes <= 0:
+		return PackedByteArray()
+	path = resolve_content_uri(path)
+	if _is_restricted_android_path(path):
+		return _plugin_read_file_chunk(path, max_bytes)
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return PackedByteArray()
+	var data := file.get_buffer(max_bytes)
 	file.close()
 	return data
 

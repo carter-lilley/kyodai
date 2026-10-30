@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.UriPermission;
+import android.content.res.AssetFileDescriptor;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
@@ -827,10 +828,15 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                // Open system settings for All Files Access permission
+                // Open system settings for All Files Access permission.
+                // NO_HISTORY, no NEW_TASK: the page must open inside our
+                // task (a task of its own leaves a recents card wearing our
+                // icon) and finish when it leaves the foreground (else it
+                // parks on top of our task and intercepts every return).
+                // See requestInstallUnknownAppsPermission.
                 Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
                 intent.setData(Uri.parse("package:" + activity.getPackageName()));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
                 activity.startActivity(intent);
                 Log.d(TAG, "Launched system settings for MANAGE_EXTERNAL_STORAGE");
             } else {
@@ -889,17 +895,21 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
 
         Uri packageUri = Uri.parse("package:" + activity.getPackageName());
-        // NO_HISTORY + EXCLUDE_FROM_RECENTS: the toggle page must not linger
-        // as a task after the user leaves it - a leftover page resurfaces on
-        // its own every time its task is brought forward (app restart, game
-        // exit, recents), looking like the app re-opens it spontaneously.
-        final int transientFlags = Intent.FLAG_ACTIVITY_NEW_TASK
-                | Intent.FLAG_ACTIVITY_NO_HISTORY
-                | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS;
+        // NO_HISTORY, and crucially no NEW_TASK. The toggle page must open
+        // INSIDE our own task: in a task of its own it leaves a recents card
+        // that wears our icon and name, and tapping that card relaunches the
+        // page fresh - it looked exactly like the app re-opening the page on
+        // every boot/resume (AYN's recents keeps the zombie card even with
+        // EXCLUDE_FROM_RECENTS). But inside our task a plain page parks on
+        // top of it forever - it survives lock/unlock, task re-entry, even
+        // our own death (it is a Settings process) - and intercepts every
+        // return to the app. NO_HISTORY makes it finish the moment it leaves
+        // the foreground (Back, Home, lock, app switch), so it can neither
+        // leave a card nor shadow the task.
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
             intent.setData(packageUri);
-            intent.addFlags(transientFlags);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
             activity.startActivity(intent);
             Log.d(TAG, "Launched manage unknown app sources settings");
             Log.d(TAG, "==========================================");
@@ -911,7 +921,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
             intent.setData(packageUri);
-            intent.addFlags(transientFlags);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
             activity.startActivity(intent);
             Log.d(TAG, "Launched application details settings for install unknown apps");
             Log.d(TAG, "==========================================");
@@ -1014,7 +1024,6 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
             intent.setData(Uri.parse("package:" + activity.getPackageName()));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity.startActivity(intent);
             Log.d(TAG, "Launched ignore battery optimizations dialog");
             Log.d(TAG, "==========================================");
@@ -1423,6 +1432,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean copyFileAsync(String sourcePath, String destPath, String itemName) {
+        SafCache.invalidateTree(destPath);
         Log.d(TAG, "==========================================");
         Log.d(TAG, "copyFileAsync() called");
         Log.d(TAG, "Source: " + sourcePath);
@@ -1613,6 +1623,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public boolean prepareChunkedDestination(String destPath, long totalSize) {
+        SafCache.invalidateTree(destPath);
         if (activity == null || destPath == null || destPath.isEmpty()) {
             return false;
         }
@@ -1684,6 +1695,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Creates the destination document via DocumentsContract if missing. */
     private Uri ensureDocumentExists(String path) {
+        SafCache.invalidateTree(path);
         Uri uri = documentUriFor(path);
         if (uri == null) {
             return null;
@@ -1746,6 +1758,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     /** Streams a chunk file into the destination at a byte offset. */
     private boolean writeChunkAt(String chunkPath, String destPath, long offset) throws Exception {
+        SafCache.invalidateTree(destPath);
         if (StorageTier.tierFor(activity, destPath) == StorageTier.TIER_ROOT) {
             return false;
         }
@@ -2176,6 +2189,38 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 DocumentsContract.buildChildDocumentsUri(DOCS_AUTHORITY, docId), vp[1]);
     }
 
+    /** Opens an SAF asset stream and closes its descriptor with the stream. */
+    private InputStream openAssetInput(Uri uri) throws Exception {
+        final AssetFileDescriptor descriptor = activity.getContentResolver().openAssetFileDescriptor(uri, "r");
+        if (descriptor == null) return null;
+        try {
+            return new java.io.FilterInputStream(new FileInputStream(descriptor.getFileDescriptor())) {
+                @Override public void close() throws java.io.IOException {
+                    try { super.close(); } finally { descriptor.close(); }
+                }
+            };
+        } catch (Exception e) {
+            descriptor.close();
+            throw e;
+        }
+    }
+
+    /** Opens a truncating SAF asset stream and closes its descriptor with the stream. */
+    private OutputStream openAssetOutput(Uri uri) throws Exception {
+        final AssetFileDescriptor descriptor = activity.getContentResolver().openAssetFileDescriptor(uri, "wt");
+        if (descriptor == null) return null;
+        try {
+            return new java.io.FilterOutputStream(new FileOutputStream(descriptor.getFileDescriptor())) {
+                @Override public void close() throws java.io.IOException {
+                    try { super.close(); } finally { descriptor.close(); }
+                }
+            };
+        } catch (Exception e) {
+            descriptor.close();
+            throw e;
+        }
+    }
+
     /** Opens a read stream: direct File first, then DocumentsContract. */
     private InputStream openInputFor(String path) throws Exception {
         long t0 = SafPerf.start();
@@ -2191,7 +2236,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         if (requiresDocumentsContract(path)) {
             Uri uri = documentUriFor(path);
             if (uri != null) {
-                return activity.getContentResolver().openInputStream(uri);
+                return openAssetInput(uri);
             }
         }
         return null;
@@ -2217,7 +2262,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             Uri uri = documentUriFor(path);
             if (uri != null) {
                 try {
-                    OutputStream out = activity.getContentResolver().openOutputStream(uri, "wt");
+                    OutputStream out = openAssetOutput(uri);
                     if (out != null) return out;
                 } catch (Exception e) {
                     Log.d(TAG, "openOutputFor: existing doc open failed, creating: " + e.getMessage());
@@ -2230,7 +2275,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     Uri created = DocumentsContract.createDocument(
                             activity.getContentResolver(), parentUri, "application/octet-stream", name);
                     if (created != null) {
-                        return activity.getContentResolver().openOutputStream(created, "wt");
+                        return openAssetOutput(created);
                     }
                 }
             }
@@ -2286,16 +2331,27 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 if (docUri != null) {
                     android.database.Cursor cursor = activity.getContentResolver().query(
                         docUri,
-                        new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                        new String[]{
+                            android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                        },
                         null, null, null
                     );
                     if (cursor != null) {
                         boolean exists = cursor.moveToFirst();
+                        boolean isDir = false;
+                        if (exists) {
+                            int mimeIndex = cursor.getColumnIndex(
+                                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE);
+                            if (mimeIndex >= 0) {
+                                isDir = android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                                        .equals(cursor.getString(mimeIndex));
+                            }
+                        }
                         cursor.close();
-                        // Negative-only caching: a hit tells us nothing about
-                        // the entry's type, and a wrong isDir would poison
-                        // dirExists. Listings/dirExists cache positive entries.
-                        if (!exists) SafCache.put(path, false, false);
+                        // Cache positive existence and type as well as misses;
+                        // all plugin mutations invalidate their affected tree.
+                        SafCache.put(path, exists, isDir);
                         return exists;
                     }
                 }
@@ -2497,6 +2553,151 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         return false;
     }
     
+    /** Opens a bounded read stream; use androidReadChunk/androidCloseRead. */
+    @UsedByGodot
+    public int androidOpenRead(String path) {
+        if (path == null || path.isEmpty()) return -1;
+        try {
+            InputStream input = openInputFor(path);
+            if (input == null) return -1;
+            return SafStreams.openRead(path, input);
+        } catch (Exception e) {
+            Log.w(TAG, "androidOpenRead failed: " + e.getMessage());
+            return -1;
+        }
+    }
+
+    /** Returns null on error, an empty string on EOF, or a base64 chunk. */
+    @UsedByGodot
+    public String androidReadChunk(int handle, int maxBytes) {
+        return SafStreams.readChunk(handle, maxBytes);
+    }
+
+    @UsedByGodot
+    public boolean androidCloseRead(int handle) {
+        return SafStreams.closeRead(handle);
+    }
+
+    /** Opens a bounded write stream; use androidWriteChunk/androidCloseWrite. */
+    @UsedByGodot
+    public int androidOpenWrite(String path) {
+        if (path == null || path.isEmpty()) return -1;
+        SafCache.invalidateTree(path);
+        File rootStaging = null;
+        try {
+            OutputStream output;
+            if (requiresDocumentsContract(path)
+                    && StorageTier.tierFor(activity, path) == StorageTier.TIER_ROOT) {
+                rootStaging = new File(activity.getCacheDir(),
+                        "root-stream-" + java.util.UUID.randomUUID());
+                output = new FileOutputStream(rootStaging);
+            } else {
+                output = openOutputFor(path);
+            }
+            if (output == null) return -1;
+            return SafStreams.openWrite(path, output, rootStaging);
+        } catch (Exception e) {
+            if (rootStaging != null) rootStaging.delete();
+            Log.w(TAG, "androidOpenWrite failed: " + e.getMessage());
+            return -1;
+        }
+    }
+
+    @UsedByGodot
+    public boolean androidWriteChunk(int handle, String base64Data) {
+        return SafStreams.writeChunk(handle, base64Data);
+    }
+
+    /** Flushes and finalizes the destination; a root-tier file is copied by the daemon. */
+    @UsedByGodot
+    public boolean androidCloseWrite(int handle) {
+        SafStreams.Session session = SafStreams.closeWrite(handle);
+        if (session == null) return false;
+        boolean ok = !session.failed;
+        if (session.rootStaging != null) {
+            if (ok) {
+                StorageTier.logOp("write", session.path, StorageTier.TIER_ROOT);
+                ok = StorageTier.rootCopyFile(activity, session.rootStaging.getAbsolutePath(), session.path);
+            }
+            session.rootStaging.delete();
+        } else if (ok) {
+            postSafFixup(session.path);
+        }
+        SafCache.invalidateTree(session.path);
+        return ok;
+    }
+
+    /** Streaming MD5 used by save sync; avoids a base64/JNI file round trip. */
+    @UsedByGodot
+    public String androidComputeFileHash(String path) {
+        if (path == null || path.isEmpty()) return "";
+        try {
+            InputStream input = openInputFor(path);
+            if (input == null) return "";
+            try {
+                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
+                byte[] buffer = new byte[1024 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    digest.update(buffer, 0, read);
+                }
+                return hex(digest.digest());
+            } finally {
+                input.close();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "androidComputeFileHash failed: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /** Streaming RomM-parity ZIP hash: sorted "entry:md5(content)" lines. */
+    @UsedByGodot
+    public String androidComputeZipHash(String path) {
+        if (path == null || path.isEmpty()) return "";
+        try {
+            InputStream input = openInputFor(path);
+            if (input == null) return "";
+            java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+            try (ZipInputStream zip = new ZipInputStream(input)) {
+                byte[] buffer = new byte[1024 * 1024];
+                java.security.MessageDigest entryDigest = java.security.MessageDigest.getInstance("MD5");
+                ZipEntry entry;
+                while ((entry = zip.getNextEntry()) != null) {
+                    if (entry.isDirectory() || entry.getName().endsWith("/")) continue;
+                    entryDigest.reset();
+                    int read;
+                    while ((read = zip.read(buffer)) != -1) {
+                        entryDigest.update(buffer, 0, read);
+                    }
+                    lines.add(entry.getName() + ":" + hex(entryDigest.digest()));
+                    zip.closeEntry();
+                }
+            }
+            java.util.Collections.sort(lines);
+            java.security.MessageDigest outer = java.security.MessageDigest.getInstance("MD5");
+            for (int i = 0; i < lines.size(); i++) {
+                if (i > 0) outer.update((byte) '\n');
+                outer.update(lines.get(i).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            return hex(outer.digest());
+        } catch (Exception e) {
+            Log.w(TAG, "androidComputeZipHash failed: " + e.getMessage());
+            return "";
+        }
+    }
+
+    private static String hex(byte[] bytes) {
+        final char[] digits = "0123456789abcdef".toCharArray();
+        char[] out = new char[bytes.length * 2];
+        for (int i = 0; i < bytes.length; i++) {
+            int value = bytes[i] & 0xff;
+            out[i * 2] = digits[value >>> 4];
+            out[i * 2 + 1] = digits[value & 0x0f];
+        }
+        return new String(out);
+    }
+
     /**
      * Lists files in a directory.
      * Returns a JSON array of filenames.
@@ -3435,8 +3636,11 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             return;
         }
         try {
+            // NO_HISTORY, no NEW_TASK: keep the page inside our task (no
+            // recents card) and make it finish when it leaves the foreground
+            // (no shadowing our task). See requestInstallUnknownAppsPermission.
             Intent intent = new Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
             activity.startActivity(intent);
         } catch (Exception e) {
             Log.e(TAG, "openUsageAccessSettings failed: " + e.getMessage());
