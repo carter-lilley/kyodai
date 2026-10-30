@@ -34,20 +34,13 @@ func _create_entry(game: GameResource) -> Dictionary:
 	return {
 		"game": game,
 		"temp_path": "",
-		"pid": -1,
-		# Process group of the real emulator payload. Refreshed from the game
-		# window's _NET_WM_PID owner: emulators re-exec/fork away from the
-		# spawned leader (AppImage AppRun, Vita3K's second window), so the
-		# launch-time pid's group can point at a dead wrapper.
-		"pgid": -1,
+		# Live runtime identity belongs to GameSession.runtime once launched.
+		# Bag state below remains limited to selection/readiness concerns.
+		"session": null,
 		"started": false,
 		"active": false,
 		"emulator_id": "",
 		"suspend_method": "",
-		# Captured X11 window ID for this game's window (Linux/X11 backend).
-		# Treated as a cache: validated before use and re-captured when the
-		# emulator recreates its window (Vita3K/Cemu boot behavior).
-		"window_xid": "",
 		"status": EntryStatus.QUEUED,
 		"download_id": "",
 		# How many times this slot has been swapped for a candidate so far.

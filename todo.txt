@@ -7,7 +7,7 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 maybe make cores on demand
 
 game screen transition/loads - transition to black after cover transition ends, screengrab and transition back when resuming?
-cocoon seamless game switch?
+x cocoon seamless game switch?
 in-built steam library?
 emufii rooms?
 playtime?

@@ -1,0 +1,64 @@
+name: Test Session Lifecycle
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'base_class/abstract/game_session.gd'
+      - 'base_class/abstract/session_feature_flags.gd'
+      - 'main.gd'
+      - 'managers/launch_manager/**'
+      - 'managers/system_manager/platform_sub_manager.gd'
+      - 'utils/launch/headless_launch_runner.gd'
+      - 'utils/session_lifecycle_test.*'
+      - 'utils/shuffler_lifecycle_test.*'
+      - '.github/workflows/test-session.yml'
+  pull_request:
+    paths:
+      - 'base_class/abstract/game_session.gd'
+      - 'base_class/abstract/session_feature_flags.gd'
+      - 'main.gd'
+      - 'managers/launch_manager/**'
+      - 'managers/system_manager/platform_sub_manager.gd'
+      - 'utils/launch/headless_launch_runner.gd'
+      - 'utils/session_lifecycle_test.*'
+      - 'utils/shuffler_lifecycle_test.*'
+      - '.github/workflows/test-session.yml'
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7
+  HOME: ${{ runner.temp }}/kyodai-session-home
+  XDG_DATA_HOME: ${{ runner.temp }}/kyodai-session-data
+  XDG_CONFIG_HOME: ${{ runner.temp }}/kyodai-session-config
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache Godot editor
+      id: cache-godot
+      uses: actions/cache@v4
+      with:
+        path: godot
+        key: godot-editor-v${{ env.GODOT_VERSION }}-stable-linux
+
+    - name: Download Godot
+      if: steps.cache-godot.outputs.cache-hit != 'true'
+      run: |
+        curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+        unzip godot.zip -d godot
+        chmod +x godot/*
+
+    - name: Import project
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . --import
+
+    - name: Run session lifecycle characterization
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . res://utils/session_lifecycle_test.tscn
+
+    - name: Run shuffler lifecycle characterization
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . res://utils/shuffler_lifecycle_test.tscn

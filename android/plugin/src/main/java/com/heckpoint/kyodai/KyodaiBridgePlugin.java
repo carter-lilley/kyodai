@@ -3709,8 +3709,13 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public void startGameSessionForegroundService(String gameName, long startTimeMs, String emulatorPackage, long rommId) {
+        startGameSessionWithIdentity(gameName, startTimeMs, emulatorPackage, rommId, "");
+    }
+
+    @UsedByGodot
+    public void startGameSessionWithIdentity(String gameName, long startTimeMs, String emulatorPackage, long rommId, String sessionId) {
         Log.d(TAG, "==========================================");
-        Log.d(TAG, "startGameSessionForegroundService() called");
+        Log.d(TAG, "startGameSessionWithIdentity() called");
         Log.d(TAG, "Game: " + gameName + ", emulator: " + emulatorPackage);
 
         if (activity == null) {
@@ -3725,6 +3730,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             intent.putExtra("start_time_ms", startTimeMs);
             intent.putExtra("emulator_package", emulatorPackage != null ? emulatorPackage : "");
             intent.putExtra("romm_id", rommId);
+            intent.putExtra("session_id", sessionId != null ? sessionId : "");
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 activity.startForegroundService(intent);

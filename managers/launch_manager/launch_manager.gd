@@ -10,6 +10,7 @@ const GameManager := preload("res://managers/launch_manager/game_sub_manager.gd"
 const FirmwareManager := preload("res://managers/launch_manager/firmware_sub_manager.gd")
 const LaunchIntentManager := preload("res://managers/launch_manager/launch_intent_sub_manager.gd")
 const ProcessManager := preload("res://managers/launch_manager/process_sub_manager.gd")
+const SessionManager := preload("res://managers/launch_manager/session_sub_manager.gd")
 const CoreManager := preload("res://managers/launch_manager/core_sub_manager.gd")
 const ShufflerManager := preload("res://managers/launch_manager/shuffler_sub_manager.gd")
 const SteamManager := preload("res://managers/launch_manager/steam_sub_manager.gd")
@@ -48,14 +49,14 @@ signal game_launch_initiated(game: GameResource, focus_index: int)
 var pre_launch_hook: Callable
 
 ## Called when a launch fails after pre_launch_hook ran, so the app can undo
-## the hibernation (no background_state_exited fires in that case).
+## the hibernation (no session_finalized fires in that case).
 var launch_failed_hook: Callable
 @warning_ignore("unused_signal")
 signal launch_completed(success: bool, message: String)
 @warning_ignore("unused_signal")
-signal background_state_entered(pid: int, game: GameResource)
+signal session_activated(session: GameSession, legacy_pid: int)
 @warning_ignore("unused_signal")
-signal background_state_exited(game: GameResource, exit_code: int)
+signal session_finalized(session: GameSession, exit_code: int)
 @warning_ignore("unused_signal")
 signal emulator_registry_loaded(success: bool)
 @warning_ignore("unused_signal")
@@ -72,6 +73,7 @@ signal steam_games_updated()
 @onready var firmware: FirmwareManager = $FirmwareSubManager
 @onready var intent_manager: LaunchIntentManager = $LaunchIntentSubManager
 @onready var process: ProcessManager = $ProcessSubManager
+@onready var sessions: SessionManager = $SessionSubManager
 @onready var core: CoreManager = $CoreSubManager
 @onready var m3u: M3UManager = $M3USubManager
 @onready var update: UpdateManager = $UpdateSubManager
@@ -92,6 +94,10 @@ func _enter_tree() -> void:
 	steam = $SteamSubManager
 
 func _ready():
+	# The registry owns terminal finalization and canonical lifecycle signals.
+	sessions.session_activated.connect(func(session, legacy_pid): session_activated.emit(session, legacy_pid))
+	sessions.session_finalized.connect(func(session, exit_code): session_finalized.emit(session, exit_code))
+
 	registry._load_registry()
 	registry._ensure_emulators_directory()
 	

@@ -439,11 +439,11 @@ func _animate_fallback_transition() -> void:
 
 func _on_animation_complete():
 	_tween = null
-	# On desktop, connect to background_state_exited signal when process polling detects exit
+	# On desktop, connect to session_finalized when process polling detects exit
 	# On Android, keep the overlay visible until NOTIFICATION_APPLICATION_RESUMED fires
 	if LaunchManager:
-		if not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-			LaunchManager.background_state_exited.connect(_on_background_state_exited)
+		if not LaunchManager.session_finalized.is_connected(_on_session_finalized):
+			LaunchManager.session_finalized.connect(_on_session_finalized)
 
 	# Hide the title label but keep the black overlay
 	if _game_title_label:
@@ -453,13 +453,15 @@ func _on_animation_complete():
 	is_transition_active = false
 	animation_completed.emit()
 
-func _on_background_state_exited(_exited_game: GameResource, _exit_code: int) -> void:
+func _on_session_finalized(session: GameSession, _exit_code: int) -> void:
+	if session.is_shuffler():
+		return
 	# Emulator has exited, hide the overlay
 	visible = false
 	# Disconnect to avoid memory leaks
 	if LaunchManager:
-		if LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+		if LaunchManager.session_finalized.is_connected(_on_session_finalized):
+			LaunchManager.session_finalized.disconnect(_on_session_finalized)
 
 ## Aborts the transition and hides the overlay immediately. Required on every
 ## launch-failure path: when a launch fails after game_launch_initiated fired
@@ -478,20 +480,20 @@ func abort() -> void:
 		_game_title_label.visible = false
 	if _fallback_bg:
 		_fallback_bg.visible = false
-	if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-		LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+	if LaunchManager and LaunchManager.session_finalized.is_connected(_on_session_finalized):
+		LaunchManager.session_finalized.disconnect(_on_session_finalized)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		if visible and SystemManager.platform.is_android():
 			visible = false
-			if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-				LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+			if LaunchManager and LaunchManager.session_finalized.is_connected(_on_session_finalized):
+				LaunchManager.session_finalized.disconnect(_on_session_finalized)
 
 func _exit_tree() -> void:
 	if is_queued_for_deletion():
-		if LaunchManager and LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+		if LaunchManager and LaunchManager.session_finalized.is_connected(_on_session_finalized):
+			LaunchManager.session_finalized.disconnect(_on_session_finalized)
 		if _effect_stack:
 			_effect_stack.free_rids()
 			_effect_stack = null
@@ -505,8 +507,8 @@ func _exit_tree() -> void:
 func _enter_tree() -> void:
 	# Re-establish the game-exit listener after reparenting while the overlay
 	# is still covering during gameplay (it hides when the game exits).
-	if visible and LaunchManager and not LaunchManager.background_state_exited.is_connected(_on_background_state_exited):
-		LaunchManager.background_state_exited.connect(_on_background_state_exited)
+	if visible and LaunchManager and not LaunchManager.session_finalized.is_connected(_on_session_finalized):
+		LaunchManager.session_finalized.connect(_on_session_finalized)
 
 func is_animating() -> bool:
 	return _is_animating

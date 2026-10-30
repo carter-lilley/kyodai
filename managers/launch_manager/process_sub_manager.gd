@@ -56,11 +56,13 @@ var _own_pgid: int = -1
 # Game session tracking (playtime + Android LMK protection). The pending
 # session record is written to disk BEFORE the handoff so that a process
 # kill mid-session (LMK, crash) can be recovered on the next launch.
-var _session_start_ms: int = 0
-const PENDING_SESSION_PATH = "user://pending_game_session.json"
-## Cap for sessions recovered after a process kill; without it a kill
-## would inflate playtime by the entire time the launcher was dead.
-const MAX_RECOVERED_SESSION_SECONDS: int = 12 * 3600
+var _active_session: GameSession = null
+var _background_backend: GameSession.Backend = GameSession.Backend.UNKNOWN
+var _recovery_in_progress: bool = false
+var _recovery_rerun_requested: bool = false
+var _recovery_retry_scheduled: bool = false
+var _initial_recovery_completed: bool = false
+signal recovery_completed
 
 var launch_manager: Node
 
@@ -76,20 +78,17 @@ func _ready():
 	add_child(_background_poll_timer)
 	if DEBUG_LOG: print("[ProcessManager] Poll timer created, in_tree=", _background_poll_timer.is_inside_tree(), " wait=", _background_poll_timer.wait_time)
 
-	# If a pending session record survived, the launcher was killed mid-game
-	# (LMK under a memory-hungry emulator). Finalize its playtime once the DB
-	# is up instead of losing the session entirely.
-	if FileAccess.file_exists(PENDING_SESSION_PATH):
-		if DataManager.database.is_database_ready():
-			_recover_pending_session()
-		else:
-			DataManager.database_ready.connect(_recover_pending_session, CONNECT_ONE_SHOT)
+	# Recover after the facade has connected registry signals. Every pending
+	# record first gets a chance to prove its runtime survived; launcher death
+	# alone does not prove that the game ended.
+	if DataManager.database.is_database_ready():
+		call_deferred("_recover_pending_sessions")
+	else:
+		DataManager.database_ready.connect(func(): call_deferred("_recover_pending_sessions"), CONNECT_ONE_SHOT)
 
-	# A session service running at GDScript boot belongs to a session this
-	# process can no longer continue: either the pending record above was just
-	# recovered (session over) or there is none (zombie). The service also
-	# self-terminates when it sees Kyodai foregrounded; stop it immediately so
-	# it doesn't linger with a stale notification and locks.
+	# Any native watch from the old process is stopped before recovery. The
+	# registry re-arms it only when a pending runtime is actually reattached; terminal
+	# recovery stops permanently, and no watch is left for an empty record.
 	SystemManager.platform.stop_game_session_foreground_service()
 
 
@@ -259,6 +258,7 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 		return
 
 	print("[ProcessManager] Entering background state with PID: ", pid)
+	_background_backend = GameSession.Backend.DESKTOP_PROCESS
 	_background_active_pid = pid
 	_background_active_pgid = get_pgid(pid)
 	if _background_active_pgid <= 0 and SystemManager.platform.is_linux():
@@ -297,7 +297,6 @@ func enter_background_state(pid: int, game: GameResource, intent: LaunchIntent =
 		if DEBUG_LOG: print("[ProcessManager] Poll timer not available")
 
 	_begin_game_session(game)
-	launch_manager.background_state_entered.emit(pid, game)
 
 ## Enter background state for Android. The session service (its own process)
 ## owns session end from here: it watches emulator presence via UsageStats,
@@ -309,6 +308,7 @@ func enter_background_state_android(game: GameResource, emulator_package: String
 		return
 
 	print("[ProcessManager] Entering background state for Android launch")
+	_background_backend = GameSession.Backend.ANDROID_TASK
 	_background_active_pid = -1  # No PID on Android
 	_background_active_game = game
 	_is_in_background_state = true
@@ -321,7 +321,6 @@ func enter_background_state_android(game: GameResource, emulator_package: String
 		push_warning("[ProcessManager] Usage Access not granted; session presence watch disabled (session ends on resume only). Grant via Settings > Usage access.")
 
 	_begin_game_session(game)
-	launch_manager.background_state_entered.emit(-1, game)
 
 ## Exit background state
 func exit_background_state(exit_code: int = 0) -> void:
@@ -351,9 +350,9 @@ func exit_background_state(exit_code: int = 0) -> void:
 	_background_dead_streak = 0
 	_is_in_background_state = false
 	_android_emulator_package = ""
+	_background_backend = GameSession.Backend.UNKNOWN
 
-	_end_game_session(game)
-	launch_manager.background_state_exited.emit(game, exit_code)
+	_end_game_session(game, exit_code)
 
 
 # ============================================================================
@@ -366,103 +365,367 @@ func exit_background_state(exit_code: int = 0) -> void:
 ## pending record hits disk before the handoff so a mid-session process kill
 ## can be recovered on next launch.
 func _begin_game_session(game: GameResource) -> void:
-	if game == null:
-		return
-	_session_start_ms = Time.get_ticks_msec()
-	var record := {
-		"romm_id": game.romm_id,
-		"title": game.get_display_name(),
-		# Wall time, not ticks: recovery after a kill compares across boots.
-		"start_unix": Time.get_unix_time_from_system(),
+	var runtime := {
+		"pid": _background_active_pid,
+		"pgid": _background_active_pgid,
+		"package": _android_emulator_package,
+		"window_xid": _background_window_xid,
+		"window_hint": _background_window_hint,
+		"process_start_ticks": _process_start_ticks(_background_active_pid),
+		"boot_id": _current_boot_id(),
+		"signature": _background_active_signature,
+		"exe_signature": _background_active_exe_signature,
 	}
-	var f := FileAccess.open(PENDING_SESSION_PATH, FileAccess.WRITE)
+	_active_session = launch_manager.sessions.begin_session(game, _background_backend, {
+		"title": "" if game else _background_window_hint,
+		"emulator_id": launch_manager.resolve_emulator_for_game(game) if game else _background_window_hint,
+		"runtime": runtime,
+	})
+	launch_manager.sessions.activate_session(_active_session, _background_active_pid)
+
+func _sync_active_session_runtime() -> void:
+	if _active_session == null:
+		return
+	launch_manager.sessions.update_runtime(_active_session, {
+		"pid": _background_active_pid,
+		"pgid": _background_active_pgid,
+		"process_start_ticks": _process_start_ticks(_background_active_pid),
+		"boot_id": _current_boot_id(),
+		"package": _android_emulator_package,
+		"window_xid": _background_window_xid,
+		"window_hint": _background_window_hint,
+		"signature": _background_active_signature,
+		"exe_signature": _background_active_exe_signature,
+	})
+
+func _end_game_session(game: GameResource, exit_code: int = 0) -> void:
+	if _active_session == null and game != null:
+		_active_session = launch_manager.sessions.get_live_for_game(game.romm_id)
+	if _active_session != null:
+		launch_manager.sessions.finalize_once(_active_session, exit_code, "runtime_exited")
+		_active_session = null
+	else:
+		SystemManager.platform.stop_game_session_foreground_service()
+	request_pending_recovery()
+
+func _record_owner_alive(record: Dictionary) -> bool:
+	var owner: Dictionary = record.get("owner", {})
+	if owner.is_empty():
+		return false
+	var pid := int(owner.get("pid", -1))
+	if pid <= 0:
+		return false
+	if pid == OS.get_process_id():
+		return true
+	var recorded_boot := str(owner.get("boot_id", ""))
+	if not recorded_boot.is_empty() and recorded_boot != _current_boot_id():
+		return false
+	var start_ticks := int(owner.get("start_ticks", -1))
+	if start_ticks > 0 and SystemManager.platform.is_linux():
+		return _process_start_ticks(pid) == start_ticks
+	return await is_running_async(pid)
+
+func _recovery_role_allows(record: Dictionary) -> bool:
+	var origin := str(record.get("policy", {}).get("origin", ""))
+	if origin == "headless":
+		return HeadlessLaunchRunner.is_active() and HeadlessLaunchRunner.parse_launch_romm_id() == int(record.get("romm_id", 0))
+	return not HeadlessLaunchRunner.is_active()
+
+func _claim_path(record: Dictionary) -> String:
+	return str(record.get("_pending_path", "")) + ".claim"
+
+func _write_recovery_claim(path: String, token: String) -> void:
+	var f := FileAccess.open(path.path_join("owner.json"), FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify(record))
+		f.store_string(JSON.stringify({
+			"token": token,
+			"owner": {
+				"pid": OS.get_process_id(),
+				"start_ticks": _process_start_ticks(OS.get_process_id()),
+				"boot_id": _current_boot_id(),
+			},
+		}))
 		f.close()
+
+func _claim_pending_record(record: Dictionary) -> bool:
+	var path := _claim_path(record)
+	if path.is_empty():
+		return false
+	if DirAccess.dir_exists_absolute(path):
+		var claim := SessionSubManager._read_pending_record(path.path_join("owner.json"))
+		# Incomplete publications are contested, never assumed dead.
+		if str(claim.get("token", "")).is_empty():
+			return false
+		if await _record_owner_alive(claim):
+			return false
+		var current := SessionSubManager._read_pending_record(path.path_join("owner.json"))
+		if str(current.get("token", "")) != str(claim.get("token", "")):
+			return false
+		# Rename the stale generation out of the way atomically. Another
+		# process cannot publish a new claim under this name until we finish.
+		var stale := path + ".stale-" + str(claim.get("token", ""))
+		if DirAccess.rename_absolute(path, stale) != OK:
+			return false
+		DirAccess.remove_absolute(stale.path_join("owner.json"))
+		DirAccess.remove_absolute(stale)
+	var token := Crypto.new().generate_random_bytes(16).hex_encode()
+	var staging := path + ".tmp-" + token
+	if DirAccess.make_dir_absolute(staging) != OK:
+		return false
+	_write_recovery_claim(staging, token)
+	# Publish a complete owner file atomically. No reader can observe a new
+	# claim directory before its token/owner metadata exists.
+	if DirAccess.rename_absolute(staging, path) != OK:
+		DirAccess.remove_absolute(staging.path_join("owner.json"))
+		DirAccess.remove_absolute(staging)
+		return false
+	record["_claim_token"] = token
+	return true
+
+func _release_recovery_claim(record: Dictionary) -> void:
+	var path := _claim_path(record)
+	if path.is_empty() or not DirAccess.dir_exists_absolute(path):
+		return
+	var current := SessionSubManager._read_pending_record(path.path_join("owner.json"))
+	# Never remove a newer claimant's directory after an await or stale retry.
+	if str(current.get("token", "")) == str(record.get("_claim_token", "")):
+		DirAccess.remove_absolute(path.path_join("owner.json"))
+		DirAccess.remove_absolute(path)
+	record.erase("_claim_token")
+
+## Recovery: every pending record gets a chance to prove that its runtime
+## survived. Ownership/role checks and an atomic per-record claim prevent two
+## launchers from adopting or finalizing the same game concurrently.
+func request_pending_recovery() -> void:
+	if _recovery_in_progress or _is_in_background_state:
+		_recovery_rerun_requested = true
+		return
+	call_deferred("_recover_pending_sessions")
+
+func wait_for_initial_recovery() -> void:
+	if not _initial_recovery_completed:
+		await recovery_completed
+
+func _schedule_recovery_retry() -> void:
+	if _recovery_retry_scheduled:
+		return
+	_recovery_retry_scheduled = true
+	await get_tree().create_timer(1.0).timeout
+	_recovery_retry_scheduled = false
+	request_pending_recovery()
+
+func _recover_pending_sessions() -> void:
+	if launch_manager == null or _recovery_in_progress:
+		return
+	if _is_in_background_state:
+		_recovery_rerun_requested = true
+		return
+	_recovery_in_progress = true
+	var records: Array[Dictionary] = launch_manager.sessions.pending_records()
+	for record in records:
+		if not _recovery_role_allows(record) or await _record_owner_alive(record):
+			continue
+		if not await _claim_pending_record(record):
+			continue
+		var origin := str(record.get("policy", {}).get("origin", ""))
+		if origin == "shuffler":
+			await _retire_shuffler_record(record)
+		elif not _is_in_background_state:
+			var reattached := await _try_reattach_pending_session(record)
+			if not reattached:
+				launch_manager.sessions.finalize_pending_record(record, "runtime_unavailable")
+		# Once one ordinary session is reattached, leave additional records
+		# pending rather than finalizing them without a liveness attempt.
+		_release_recovery_claim(record)
+	_recovery_in_progress = false
+	if not _initial_recovery_completed:
+		_initial_recovery_completed = true
+		recovery_completed.emit()
+	if _recovery_rerun_requested:
+		_recovery_rerun_requested = false
+		call_deferred("_recover_pending_sessions")
+
+func _retire_shuffler_record(record: Dictionary) -> void:
+	var runtime: Dictionary = record.get("runtime", {})
+	var pid := int(runtime.get("pid", -1))
+	var pgid := int(runtime.get("pgid", -1))
+	var recorded_boot := str(runtime.get("boot_id", ""))
+	var current_boot := _current_boot_id()
+	if recorded_boot != current_boot and not recorded_boot.is_empty() and not current_boot.is_empty():
+		# A previous boot's runtime cannot still be alive.
+		launch_manager.sessions.finalize_pending_record(record, "previous_boot")
+		return
+	var signature := str(runtime.get("signature", ""))
+	var exe_signature := str(runtime.get("exe_signature", ""))
+
+	if not SystemManager.platform.is_linux():
+		if recorded_boot != current_boot:
+			# Windows records have no boot ID. A reused PID is not sufficient
+			# proof for a recovery kill, so finalize without signaling anything.
+			launch_manager.sessions.finalize_pending_record(record, "previous_boot")
+			return
+		if pid > 0 and await is_running_async(pid):
+			# We cannot prove this is the original process on Windows. Preserve
+			# the record rather than killing an unrelated process tree.
+			push_warning("[ProcessManager] Windows shuffler runtime identity is unverified; pending record retained without signaling")
+		else:
+			launch_manager.sessions.finalize_pending_record(record, "shuffler_runtime_dead")
+		return
+	if recorded_boot != current_boot:
+		return
+
+	var recorded_start := int(runtime.get("process_start_ticks", -1))
+	var leader_valid := pid > 0 and recorded_start > 0 and _process_start_ticks(pid) == recorded_start
+	var anchor_valid := leader_valid
+	if not anchor_valid and pgid > 1 and is_group_alive(pgid) and (not signature.is_empty() or not exe_signature.is_empty()):
+		for match_pid in find_pids_by_signatures([signature] as Array[String], exe_signature):
+			if get_pgid(match_pid) == pgid:
+				anchor_valid = true
+				break
+	if not anchor_valid and (not signature.is_empty() or not exe_signature.is_empty()):
+		# A setsid'd payload can outlive both its leader and original group.
+		# Strong launch signatures are then the only safe adoption evidence.
+		if not find_pids_by_signatures([signature] as Array[String], exe_signature).is_empty():
+			anchor_valid = true
+	var pids: Dictionary = {}
+	var pgids: Dictionary = {}
+	if anchor_valid:
+		if pid > 0:
+			pids[pid] = true
+		if pgid > 1:
+			pgids[pgid] = true
+		# Once the launch is identified, include escaped payload groups too.
+		if not signature.is_empty() or not exe_signature.is_empty():
+			for match_pid in find_pids_by_signatures([signature] as Array[String], exe_signature):
+				pids[match_pid] = true
+				var match_pgid := get_pgid(match_pid)
+				if match_pgid > 1:
+					pgids[match_pgid] = true
+	if pids.is_empty() and pgids.is_empty():
+		if pgid <= 1 or not is_group_alive(pgid):
+			launch_manager.sessions.finalize_pending_record(record, "shuffler_runtime_dead")
+		return
+
+	var signal_pid := pid if pid > 0 else int(pids.keys()[0])
+	for group_id in pgids:
+		kill_process_async(signal_pid, group_id)
+	var all_dead := false
+	var elapsed := 0.0
+	while elapsed < 3.0:
+		all_dead = true
+		for target_pid in pids:
+			if await is_running_async(target_pid):
+				all_dead = false
+		for group_id in pgids:
+			if is_group_alive(group_id):
+				all_dead = false
+		if all_dead:
+			break
+		await get_tree().create_timer(0.2).timeout
+		elapsed += 0.2
+	if all_dead:
+		launch_manager.sessions.finalize_pending_record(record, "shuffler_recovery_killed")
 	else:
-		push_warning("[ProcessManager] Could not write pending session record: " + error_string(FileAccess.get_open_error()))
-	SystemManager.platform.start_game_session_foreground_service(
-		game.get_display_name(), int(record["start_unix"]) * 1000,
-		_android_emulator_package, game.romm_id)
+		push_warning("[ProcessManager] Shuffler payload survived recovery kill; pending record retained for retry")
+		_schedule_recovery_retry()
 
-## Ends the active play session: stops the foreground service, accumulates
-## playtime, and clears the pending record. When the session service observed
-## the emulator leaving the foreground before we resumed, its end_unix
-## annotation is more accurate than our ticks (which then include whatever
-## else the user did before coming back).
-func _end_game_session(game: GameResource) -> void:
-	SystemManager.platform.stop_game_session_foreground_service()
-	if _session_start_ms <= 0:
-		return
-	var elapsed_seconds := int((Time.get_ticks_msec() - _session_start_ms) / 1000)
-	_session_start_ms = 0
-	if FileAccess.file_exists(PENDING_SESSION_PATH):
-		var record = _read_pending_record()
-		DirAccess.remove_absolute(PENDING_SESSION_PATH)
-		var end_unix := float(record.get("end_unix", 0.0))
-		var start_unix := float(record.get("start_unix", 0.0))
-		if end_unix > start_unix and start_unix > 0.0:
-			elapsed_seconds = mini(elapsed_seconds, int(end_unix - start_unix))
-	_accumulate_play_seconds(game, elapsed_seconds)
+func _game_for_pending_session(romm_id: int) -> GameResource:
+	return launch_manager.sessions.game_for_record(romm_id)
 
-## Adds elapsed seconds to a game's local playtime total (in-memory + DB).
-func _accumulate_play_seconds(game: GameResource, seconds: int) -> void:
-	if game == null or seconds <= 0 or game.romm_id <= 0:
-		return
-	game.play_seconds += seconds
-	DataManager.add_game_play_seconds(game.romm_id, seconds)
-	print("[ProcessManager] Session playtime for ", game.get_display_name(), ": ", seconds, "s (total ", game.play_seconds, "s)")
-
-## Reads the pending session record; {} when missing or unparseable.
-func _read_pending_record() -> Dictionary:
-	var f := FileAccess.open(PENDING_SESSION_PATH, FileAccess.READ)
-	if f == null:
-		return {}
-	var parsed = JSON.parse_string(f.get_as_text())
-	f.close()
-	return parsed if parsed is Dictionary else {}
-
-## Finalizes a session record left behind by a process kill. When the session
-## service observed the emulator's exit it annotated the record with
-## end_unix, making the duration exact; otherwise it is unknowable past the
-## kill and capped at MAX_RECOVERED_SESSION_SECONDS. Either way the game is
-## no longer running (we were relaunched), so the save upload runs here too -
-## this is the path that syncs saves after an LMK kill.
-func _recover_pending_session() -> void:
-	var record := _read_pending_record()
-	if record.is_empty():
-		return
-	DirAccess.remove_absolute(PENDING_SESSION_PATH)
+func _try_reattach_pending_session(record: Dictionary) -> bool:
+	if str(record.get("policy", {}).get("origin", "")) == "shuffler":
+		# A shuffler's interactive bag cannot be reconstructed at boot. Let the
+		# registry close those records instead of attaching them to ordinary UI.
+		return false
+	if GameSession.backend_from_string(str(record.get("backend", ""))) != GameSession.Backend.DESKTOP_PROCESS:
+		# Android task reconciliation is introduced with the privileged task
+		# backend. Until then, retain the legacy conservative recovery behavior.
+		return false
 	var romm_id := int(record.get("romm_id", 0))
-	var start_unix := float(record.get("start_unix", 0.0))
-	if romm_id <= 0 or start_unix <= 0.0:
-		return
-	var end_unix := float(record.get("end_unix", 0.0))
-	var elapsed: int
-	if end_unix > start_unix:
-		elapsed = int(end_unix - start_unix)
-	else:
-		elapsed = mini(int(Time.get_unix_time_from_system() - start_unix), MAX_RECOVERED_SESSION_SECONDS)
-	if elapsed <= 0:
-		return
-	DataManager.add_game_play_seconds(romm_id, elapsed)
-	print("[ProcessManager] Recovered killed session for romm_id ", romm_id, " (", record.get("title", "?"), "): credited ", elapsed, "s", " (exact)" if end_unix > start_unix else " (capped)")
-	_upload_saves_after_recovery(romm_id)
-
-## Save upload for a recovered session. Deferred like the resume path: this
-## runs during boot, and the upload's discovery scan must not stretch the
-## startup-critical window.
-func _upload_saves_after_recovery(romm_id: int) -> void:
-	var game := DataManager.database.get_game_by_id(romm_id)
+	var game := _game_for_pending_session(romm_id)
+	if game == null and romm_id == 0:
+		# Standalone emulator launches have no library GameResource. Preserve a
+		# synthetic session identity so they can still be reattached safely.
+		game = GameResource.new()
+		game.id = "standalone-session"
+		game.romm_id = 0
+		game.title = str(record.get("title", "Emulator"))
+		game.platform_slug = str(record.get("platform_slug", ""))
 	if game == null:
-		print("[ProcessManager] Recovery upload skipped: game not found for romm_id ", romm_id)
-		return
-	var emulator_id: String = launch_manager.resolve_emulator_for_game(game)
-	if emulator_id == "":
-		print("[ProcessManager] Recovery upload skipped: no emulator resolved for ", game.get_display_name())
-		return
-	print("[ProcessManager] Uploading saves after recovered session: ", game.get_display_name())
-	DataManager.auto_upload_saves_for_game.call_deferred(game, emulator_id)
+		return false
+	var runtime: Dictionary = record.get("runtime", {})
+	var pid := int(runtime.get("pid", -1))
+	if pid <= 0 or not SystemManager.platform.is_linux():
+		return false
+	# A live PID is not proof of identity. Reject records from another boot or
+	# a PID that has since been reused before any group can be adopted/signaled.
+	var recorded_boot := str(runtime.get("boot_id", ""))
+	var current_boot := _current_boot_id()
+	if recorded_boot.is_empty() or current_boot.is_empty() or recorded_boot != current_boot:
+		return false
+	var recorded_start := int(runtime.get("process_start_ticks", -1))
+	var leader_valid := recorded_start > 0 and _process_start_ticks(pid) == recorded_start
+	if not leader_valid:
+		# Wrapper/AppImage leaders may exit while the real payload keeps their
+		# process group alive. Allow that case only when the recorded launch
+		# signature identifies a live process in the SAME group; otherwise fail
+		# closed instead of adopting a reused PID/PGID.
+		var signature := str(runtime.get("signature", ""))
+		var exe_signature := str(runtime.get("exe_signature", ""))
+		if signature.is_empty() and exe_signature.is_empty():
+			return false
+		var matching_pid := -1
+		var recorded_pgid := int(runtime.get("pgid", -1))
+		# Process discovery can race a fork/exec during startup. Retry briefly,
+		# but never relax the same-group identity requirement.
+		for attempt in 3:
+			matching_pid = find_process_by_signature(signature, exe_signature)
+			if matching_pid > 0 and recorded_pgid > 1 and get_pgid(matching_pid) == recorded_pgid:
+				break
+			if attempt < 2:
+				await get_tree().create_timer(0.05).timeout
+		if matching_pid <= 0 or recorded_pgid <= 1 or get_pgid(matching_pid) != recorded_pgid:
+			return false
+		pid = matching_pid
+
+	_background_backend = GameSession.Backend.DESKTOP_PROCESS
+	_background_active_game = game
+	_background_active_pid = pid
+	_background_active_pgid = int(runtime.get("pgid", -1))
+	_background_active_signature = str(runtime.get("signature", ""))
+	_background_active_exe_signature = str(runtime.get("exe_signature", ""))
+	_background_window_xid = str(runtime.get("window_xid", ""))
+	_background_window_hint = str(runtime.get("window_hint", ""))
+	_background_window_misses = 0
+	_background_dead_streak = 0
+	_android_emulator_package = ""
+
+	var alive := false
+	if SystemManager.platform.is_linux():
+		alive = _linux_target_alive()
+	else:
+		alive = await is_running_async(_background_active_pid)
+	if not alive:
+		_background_active_game = null
+		_background_active_pid = -1
+		_background_active_pgid = -1
+		_background_backend = GameSession.Backend.UNKNOWN
+		return false
+
+	_is_in_background_state = true
+	var restored_runtime := runtime.duplicate(true)
+	restored_runtime["pid"] = _background_active_pid
+	restored_runtime["pgid"] = _background_active_pgid
+	restored_runtime["process_start_ticks"] = _process_start_ticks(_background_active_pid)
+	restored_runtime["signature"] = _background_active_signature
+	restored_runtime["exe_signature"] = _background_active_exe_signature
+	restored_runtime["window_xid"] = _background_window_xid
+	restored_runtime["window_hint"] = _background_window_hint
+	_active_session = launch_manager.sessions.reattach_session(record, game, restored_runtime)
+	if _background_poll_timer:
+		_background_poll_timer.start()
+	dump_process_state("reattach_pending_session")
+	return _active_session != null
 
 ## Poll callback (desktop only): check if process is still running (async:
 ## never blocks the main thread).
@@ -544,6 +807,7 @@ func _linux_target_alive() -> bool:
 			if pgrp > 1 and pgrp != _background_active_pgid:
 				if DEBUG_LOG: print("[ProcessManager] Adopting PGID ", pgrp, " from live PID ", _background_active_pid)
 				_background_active_pgid = pgrp
+				_sync_active_session_runtime()
 			return true
 	# Group and PID are gone: scan /proc by the launch signature in case the
 	# emulator escaped the group entirely (own setsid, double-fork daemon).
@@ -555,6 +819,7 @@ func _linux_target_alive() -> bool:
 			var pgrp := get_pgid(found_pid)
 			if pgrp > 0:
 				_background_active_pgid = pgrp
+			_sync_active_session_runtime()
 			return true
 	return false
 
@@ -654,6 +919,7 @@ func _find_game_window(tool: String, callback: Callable) -> void:
 				_background_active_pid = owner_pid
 				if owner_pgid > 1 and owner_pgid != _get_own_pgid():
 					_background_active_pgid = owner_pgid
+				_sync_active_session_runtime()
 		callback.call(xid)
 	)
 
@@ -1238,6 +1504,16 @@ func _read_proc_file(path: String) -> String:
 	f.close()
 	return bytes.get_string_from_utf8()
 
+func _current_boot_id() -> String:
+	if not SystemManager.platform.is_linux():
+		return ""
+	return _read_proc_file("/proc/sys/kernel/random/boot_id").strip_edges()
+
+func _process_start_ticks(pid: int) -> int:
+	if pid <= 0 or not SystemManager.platform.is_linux():
+		return -1
+	return int(_parse_proc_stat(pid).get("start_ticks", -1))
+
 ## Parses /proc/<pid>/stat and returns a dictionary with commonly-needed
 ## fields. The command name is wrapped in parentheses and may contain spaces
 ## or closing parens, so we locate the last ')' and split the remaining
@@ -1248,6 +1524,7 @@ func _parse_proc_stat(pid: int) -> Dictionary:
 		"state": "",
 		"ppid": -1,
 		"pgrp": -1,
+		"start_ticks": -1,
 	}
 	if pid <= 0:
 		return result
@@ -1266,6 +1543,8 @@ func _parse_proc_stat(pid: int) -> Dictionary:
 	if fields.size() >= 3:
 		result["ppid"] = fields[1].to_int()
 		result["pgrp"] = fields[2].to_int()
+	if fields.size() >= 20:
+		result["start_ticks"] = fields[19].to_int()
 	return result
 
 # ==================== PROCESS GROUP TRACKING (LINUX) ====================

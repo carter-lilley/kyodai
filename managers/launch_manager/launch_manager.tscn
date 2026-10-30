@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://managers/launch_manager/firmware_sub_manager.gd" id="5_2n8rc"]
 [ext_resource type="Script" path="res://managers/launch_manager/launch_intent_sub_manager.gd" id="6_4s7tw"]
 [ext_resource type="Script" path="res://managers/launch_manager/process_sub_manager.gd" id="7_1v5yz"]
+[ext_resource type="Script" path="res://managers/launch_manager/session_sub_manager.gd" id="7_session"]
 [ext_resource type="Script" path="res://managers/launch_manager/core_sub_manager.gd" id="8_core"]
 [ext_resource type="Script" path="res://managers/launch_manager/shuffler_sub_manager.gd" id="9_shuffler"]
 [ext_resource type="Script" path="res://managers/launch_manager/steam_sub_manager.gd" id="10_steam"]
@@ -30,6 +31,9 @@ script = ExtResource("5_2n8rc")
 
 [node name="LaunchIntentSubManager" type="Node" parent="."]
 script = ExtResource("6_4s7tw")
+
+[node name="SessionSubManager" type="Node" parent="."]
+script = ExtResource("7_session")
 
 [node name="ProcessSubManager" type="Node" parent="."]
 script = ExtResource("7_1v5yz")

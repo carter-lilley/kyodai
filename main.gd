@@ -156,8 +156,8 @@ func _ready():
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 		# Connect to background state signals for desktop
-		LaunchManager.background_state_entered.connect(_on_background_state_entered)
-		LaunchManager.background_state_exited.connect(_on_background_state_exited)
+		LaunchManager.session_activated.connect(_on_session_activated)
+		LaunchManager.session_finalized.connect(_on_session_finalized)
 		# Hibernate (release reclaimable memory) before the process/intent starts
 		LaunchManager.pre_launch_hook = _pre_launch_trim
 		LaunchManager.launch_failed_hook = _restore_after_launch
@@ -1166,13 +1166,15 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 
 	# Note: Pre-launch save sync is now handled inside LaunchManager.launch_game()
 
-func _on_background_state_entered(_pid: int, _game: GameResource) -> void:
-	"""Handle entering background state - input is now blocked in _input."""
-	print("[Main] Background state entered - input blocked")
+func _on_session_activated(session: GameSession, _legacy_pid: int) -> void:
+	"""Handle an ordinary game becoming active; shuffler owns its own UI."""
+	if session.is_shuffler():
+		return
+	print("[Main] Session activated - input blocked")
 	# Fallback trim for launch paths that bypass pre_launch_hook (e.g. standalone
 	# emulator launches); no-op if the pre-launch trim already ran.
 	_trim_memory("background")
-	_log_rss("background state entered")
+	_log_rss("session activated")
 	# Optional: Show overlay or dim the UI
 	# UIManager.set_dimmed(true)
 
@@ -1181,29 +1183,13 @@ func _restore_platform_focus() -> void:
 	if platforms_view and platforms_view.has_method("restore_focus_to_last_active"):
 		platforms_view.restore_focus_to_last_active()
 
-func _on_background_state_exited(_game: GameResource, _exit_code: int) -> void:
-	"""Handle exiting background state - restore focus."""
-	print("[Main] Background state exited - restoring focus")
+func _on_session_finalized(session: GameSession, _exit_code: int) -> void:
+	"""Restore ordinary-launch UI after terminal finalization."""
+	if session.is_shuffler():
+		return
+	print("[Main] Session finalized - restoring focus")
 	_restore_after_launch()
-	# Optional: Remove overlay
-	# UIManager.set_dimmed(false)
-
-	# Auto-upload saves after playing (skip during shuffler sessions)
-	if LaunchManager.is_session_active():
-		print("[Main] Auto-upload skipped: shuffler session active")
-	elif _game:
-		var emulator_id = LaunchManager.resolve_emulator_for_game(_game)
-		print("[Main] Auto-upload check - emulator_id: " + emulator_id)
-		if emulator_id != "":
-			# Deferred: this handler runs inside NOTIFICATION_APPLICATION_RESUMED
-			# propagation, and for /Android/data save paths the discovery scan
-			# runs inline on the main thread (_run_io_task). Keep the scan - and
-			# any snackbar it produces - out of the resume-critical window.
-			DataManager.auto_upload_saves_for_game.call_deferred(_game, emulator_id)
-		else:
-			print("[Main] Auto-upload skipped: no emulator resolved")
-	else:
-		print("[Main] Auto-upload skipped: _game is null")
+	# Save upload belongs to SessionSubManager.finalize_once(), not this UI path.
 
 	# Restore focus to the last known position
 	if _last_focused_index >= 0:
@@ -1231,9 +1217,9 @@ func _exit_tree() -> void:
 	if LaunchManager:
 		if LaunchManager.is_connected("game_launch_initiated", _on_game_launch_initiated):
 			LaunchManager.game_launch_initiated.disconnect(_on_game_launch_initiated)
-		if LaunchManager.is_connected("background_state_entered", _on_background_state_entered):
-			LaunchManager.background_state_entered.disconnect(_on_background_state_entered)
-		if LaunchManager.is_connected("background_state_exited", _on_background_state_exited):
-			LaunchManager.background_state_exited.disconnect(_on_background_state_exited)
+		if LaunchManager.is_connected("session_activated", _on_session_activated):
+			LaunchManager.session_activated.disconnect(_on_session_activated)
+		if LaunchManager.is_connected("session_finalized", _on_session_finalized):
+			LaunchManager.session_finalized.disconnect(_on_session_finalized)
 	if UIManager and UIManager.dual_screen:
 		UIManager.dual_screen.teardown_swap_persistence()

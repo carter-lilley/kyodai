@@ -36,7 +36,7 @@ var _sfx_volume := 1.0
 var _music_volume := 1.0
 ## Set when BGM was paused by an app focus loss (Android screen off / app
 ## switch), so focus return only resumes what it paused. Game-launch pauses
-## (LaunchManager.background_state_entered) are owned by LaunchManager.
+## (LaunchManager.session_activated) are owned by LaunchManager.
 var _paused_for_focus := false
 ## In-flight BGM fade-out tween from pause_background_music(). Tracked so a
 ## resume can cancel it before its finished callback pauses the stream out
@@ -330,10 +330,10 @@ func _apply_initial_volumes() -> void:
 
 	# Pause background music while a game is running (menus-only playback)
 	if LaunchManager:
-		if not LaunchManager.background_state_entered.is_connected(_on_game_background_entered):
-			LaunchManager.background_state_entered.connect(_on_game_background_entered)
-		if not LaunchManager.background_state_exited.is_connected(_on_game_background_exited):
-			LaunchManager.background_state_exited.connect(_on_game_background_exited)
+		if not LaunchManager.session_activated.is_connected(_on_game_session_activated):
+			LaunchManager.session_activated.connect(_on_game_session_activated)
+		if not LaunchManager.session_finalized.is_connected(_on_game_session_finalized):
+			LaunchManager.session_finalized.connect(_on_game_session_finalized)
 
 func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	# Update volumes when settings change
@@ -349,13 +349,14 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			else:
 				play_background_music_file(path)
 
-func _on_game_background_entered(_pid: int, _game: GameResource) -> void:
-	pause_background_music()
+func _on_game_session_activated(session: GameSession, _legacy_pid: int) -> void:
+	if not session.is_shuffler():
+		pause_background_music()
 
-func _on_game_background_exited(_game: GameResource, _exit_code: int) -> void:
+func _on_game_session_finalized(session: GameSession, _exit_code: int) -> void:
 	# A shuffler session owns the music pause end-to-end; don't resume
 	# between rounds when an individual game process exits.
-	if LaunchManager.is_session_active():
+	if session.is_shuffler() or LaunchManager.is_session_active():
 		return
 	resume_background_music()
 

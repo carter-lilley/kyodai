@@ -420,9 +420,12 @@ func stop_session() -> void:
 
 	var kill_pids: Array[int] = []
 	for entry in _bag.entries:
-		if entry.pid != -1:
+		if _entry_pid(entry) != -1:
 			_kill_entry_processes(entry)
-			kill_pids.append(entry.pid)
+			# Confirm every resolved payload, not merely the launch-time leader.
+			for pid in _entry_watch_pids(entry):
+				if not kill_pids.has(pid):
+					kill_pids.append(pid)
 
 	# Wait until the killed processes are actually gone (bounded) before
 	# restoring configs and deleting temp files they may still be writing.
@@ -441,6 +444,14 @@ func stop_session() -> void:
 			if elapsed >= deadline:
 				push_warning("[ShufflerSubManager] Processes still alive after kill timeout: " + str(alive))
 		if DEBUG_LOG: print("[ShufflerSubManager] stop_session: process teardown took " + str(elapsed) + "s")
+
+	for entry in _bag.entries:
+		if await _any_entry_alive(entry):
+			# Keep the session/pending record until every payload is actually gone;
+			# terminal finalization is never a timeout-only decision.
+			_finalize_entry_when_dead(entry)
+		else:
+			_finalize_entry_session(entry, "session_stopped")
 
 	_restore_emulator_file_if_backed_up("retroarch", _retroarch_shuffler_cfg_path())
 	_restore_emulator_file_if_backed_up("pcsx2", PCSX2_SHUFFLER_INI_PATH)
@@ -506,6 +517,11 @@ func stop_session() -> void:
 	_finalize_session_log()
 	session_stopped.emit()
 
+func _finalize_entry_when_dead(entry: Dictionary) -> void:
+	while await _any_entry_alive(entry):
+		await get_tree().create_timer(1.0).timeout
+	_finalize_entry_session(entry, "session_stopped")
+
 func pause_session() -> void:
 	if not can_pause():
 		print("[ShufflerSubManager] pause_session ignored: state=" + str(_state))
@@ -563,17 +579,18 @@ func restart_game() -> void:
 	var entry = _bag.entries[_current_game_index]
 	await _await_launch_settled(entry)
 	await _stop_game(entry)
-	if entry.pid != -1:
+	if _entry_pid(entry) != -1:
 		# Restart boots a fresh instance; the old process (suspended for
 		# suspend-method emulators, possibly still exiting for udp/tcp)
 		# would otherwise be orphaned and untracked forever. Thorough kill:
 		# plain group kill misses payloads that setsid'd out of the group.
 		_kill_entry_processes(entry)
-		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
+		await LaunchManager.process.confirm_process_dead_async(_entry_pid(entry), 3.0)
+		_finalize_entry_session(entry, "restart")
 	entry.started = false
-	entry.pid = -1
-	entry.pgid = -1
-	entry["window_xid"] = ""
+	_set_entry_pid(entry, -1)
+	_set_entry_pgid(entry, -1)
+	_set_entry_xid(entry, "")
 	if _state != State.STOPPING and _state != State.IDLE:
 		_launch_game(entry)
 		# Start the round only once the relaunch has actually produced a
@@ -582,7 +599,7 @@ func restart_game() -> void:
 		# callback instead of idling out a full round on a dead game.
 		await _await_launch_settled(entry)
 		if _state != State.STOPPING and _state != State.IDLE \
-			and (entry.pid != -1 or entry.get("launch_pending", false)):
+			and (_entry_pid(entry) != -1 or entry.get("launch_pending", false)):
 			_start_round_timer(_random_round_time())
 	_switch_in_progress = false
 	_restart_in_progress = false
@@ -634,17 +651,18 @@ func remove_game() -> void:
 		_switch_in_progress = false
 		return
 
-	if entry.pid != -1:
+	if _entry_pid(entry) != -1:
 		# Thorough kill (groups + payload tree + window): plain group kill
 		# misses payloads that setsid'd out of the launch group, leaking a
 		# live game whose window then poisons hint-based matching.
 		_kill_entry_processes(entry)
-		await LaunchManager.process.confirm_process_dead_async(entry.pid)
-		entry.pid = -1
-		entry.pgid = -1
+		await LaunchManager.process.confirm_process_dead_async(_entry_pid(entry))
+		_set_entry_pid(entry, -1)
+		_set_entry_pgid(entry, -1)
 		entry.started = false
 		entry.active = false
-		entry["window_xid"] = ""
+		_set_entry_xid(entry, "")
+	_finalize_entry_session(entry, "reroll")
 
 	# Replace the slot with a fresh candidate and refill it in the background
 	# (download/prep completion is detected via _maybe_complete_reroll), then
@@ -672,6 +690,79 @@ func remove_game() -> void:
 		_switch_to_next_game()
 
 # ============================================================================
+# SHARED SESSION RUNTIME
+# ============================================================================
+
+func _session_for_entry(entry: Dictionary) -> GameSession:
+	return entry.get("session", null)
+
+func _entry_pid(entry: Dictionary) -> int:
+	var session := _session_for_entry(entry)
+	return int(session.runtime.get("pid", -1)) if session else -1
+
+func _entry_pgid(entry: Dictionary) -> int:
+	var session := _session_for_entry(entry)
+	return int(session.runtime.get("pgid", -1)) if session else -1
+
+func _entry_xid(entry: Dictionary) -> String:
+	var session := _session_for_entry(entry)
+	return str(session.runtime.get("window_xid", "")) if session else ""
+
+func _set_entry_pid(entry: Dictionary, pid: int) -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.update_runtime(session, {"pid": pid})
+
+func _set_entry_pgid(entry: Dictionary, pgid: int) -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.update_runtime(session, {"pgid": pgid})
+
+func _set_entry_xid(entry: Dictionary, xid: String) -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.update_runtime(session, {"window_xid": xid})
+
+func _activate_entry_session(entry: Dictionary, pid: int, pgid: int) -> void:
+	var existing := _session_for_entry(entry)
+	if existing and existing.state != GameSession.State.ENDED:
+		return
+	var runtime := {
+		"pid": pid,
+		"pgid": pgid,
+		"process_start_ticks": LaunchManager.process._process_start_ticks(pid),
+		"boot_id": LaunchManager.process._current_boot_id(),
+		"window_xid": "",
+		"window_hint": entry.emulator_id,
+		"signature": _entry_signature(entry),
+	}
+	var session: GameSession = LaunchManager.sessions.begin_session(entry.game, GameSession.Backend.DESKTOP_PROCESS, {
+		"emulator_id": entry.emulator_id,
+		"policy": {"origin": "shuffler"},
+		"runtime": runtime,
+	})
+	entry["session"] = session
+	LaunchManager.sessions.activate_session(session, pid)
+
+func _finalize_entry_session(entry: Dictionary, reason: String = "process_exited") -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.finalize_once(session, 0, reason)
+	# Finalization also detaches this bag entry. A later restart must never
+	# mistake the old positive PID for a process created by the new launch.
+	entry["session"] = null
+
+func _retain_entry_session(entry: Dictionary) -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.retain_session(session)
+
+func _resume_entry_session(entry: Dictionary) -> void:
+	var session := _session_for_entry(entry)
+	if session:
+		LaunchManager.sessions.resume_session(session)
+
+# ============================================================================
 # LOGGING HELPERS
 # ============================================================================
 
@@ -697,8 +788,8 @@ func _format_entry(entry: Dictionary) -> String:
 		entry.game.title,
 		entry.game.platform_slug,
 		_status_name(entry.status),
-		entry.pid,
-		int(entry.get("pgid", -1)),
+		_entry_pid(entry),
+		int(_entry_pgid(entry)),
 		entry.started
 	]
 
@@ -904,7 +995,7 @@ func _complete_reroll_background(index: int) -> void:
 	if _current_game_index != index or index < 0 or index >= _bag.size():
 		return
 	var entry = _bag.entries[index]
-	if entry.status != ShufflerBag.EntryStatus.READY or entry.pid != -1:
+	if entry.status != ShufflerBag.EntryStatus.READY or _entry_pid(entry) != -1:
 		return
 	_switch_in_progress = true
 	await _switch_to_game(index)
@@ -1341,14 +1432,15 @@ func _on_game_chosen(chosen: Dictionary, candidates: Array) -> void:
 			# leak (the reroll flow does the same). The replacement reuses
 			# this slot's download/temp paths, so wait for the process to
 			# actually die — it could otherwise hold files open mid-replace.
-			if entry.pid != -1:
+			if _entry_pid(entry) != -1:
 				_kill_entry_processes(entry)
-				await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
+				await LaunchManager.process.confirm_process_dead_async(_entry_pid(entry), 3.0)
 				entry.started = false
 				entry.active = false
-				entry.pid = -1
-				entry.pgid = -1
-				entry["window_xid"] = ""
+				_set_entry_pid(entry, -1)
+				_set_entry_pgid(entry, -1)
+				_set_entry_xid(entry, "")
+			_finalize_entry_session(entry, "choice_rejected")
 	# The pooled window already hid itself in _on_card_pressed; keep it alive
 	# for the next pick (stop_session frees it).
 	if _choice_window and is_instance_valid(_choice_window):
@@ -1421,11 +1513,11 @@ func _switch_to_game(index: int) -> void:
 	# used to read as "dead" here, which relaunched a fresh instance ON TOP of
 	# the still-running suspended one and erased all tracking of it.
 	var alive_target := {"pid": -1, "pgid": -1}
-	if entry.started and entry.pid != -1:
+	if entry.started and _entry_pid(entry) != -1:
 		if SystemManager.platform.is_linux():
 			alive_target = _resolve_entry_target(entry)
-		elif await _is_process_running_async(entry.pid):
-			alive_target = {"pid": entry.pid, "pgid": -1}
+		elif await _is_process_running_async(_entry_pid(entry)):
+			alive_target = {"pid": _entry_pid(entry), "pgid": -1}
 	if method == "suspend" and alive_target.pid > 0:
 		_adopt_entry_target(entry, alive_target, "_switch_to_game")
 		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: resuming existing process")
@@ -1434,16 +1526,18 @@ func _switch_to_game(index: int) -> void:
 		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: killing lingering process and relaunching")
 		_kill_entry_processes(entry)
 		await LaunchManager.process.confirm_process_dead_async(alive_target.pid, 3.0)
+		_finalize_entry_session(entry, "relaunch")
 		entry.started = false
-		entry.pid = -1
-		entry.pgid = -1
-		entry["window_xid"] = ""
+		_set_entry_pid(entry, -1)
+		_set_entry_pgid(entry, -1)
+		_set_entry_xid(entry, "")
 		_launch_game(entry)
 	else:
 		if DEBUG_LOG: print("[ShufflerSubManager] _switch_to_game: launching fresh")
+		_finalize_entry_session(entry, "runtime_lost")
 		entry.started = false
-		entry.pid = -1
-		entry.pgid = -1
+		_set_entry_pid(entry, -1)
+		_set_entry_pgid(entry, -1)
 		_launch_game(entry)
 
 	print("[ShufflerSubManager] _switch_to_game: launched index=" + str(index) + " state=" + str(_state))
@@ -1524,21 +1618,21 @@ func _launch_game(entry: Dictionary) -> void:
 			var is_stale: bool = (_state != State.ACTIVE and _state != State.PAUSED) \
 				or _current_game_index < 0 or _current_game_index >= _bag.size() \
 				or _bag.entries[_current_game_index].game != game \
-				or entry.pid != -1
+				or _entry_pid(entry) != -1
 			if is_stale:
 				push_warning("[ShufflerSubManager] Late pid " + str(pid) + " for " + game.title + " arrived after switch/stop; killing it")
 				LaunchManager.process.kill_process_async(pid)
 				return
-			entry.pid = pid
-			entry.pgid = LaunchManager.process.get_pgid(pid)
-			if entry.pgid <= 1 and SystemManager.platform.is_linux():
+			var pgid: int = LaunchManager.process.get_pgid(pid)
+			if pgid <= 1 and SystemManager.platform.is_linux():
 				# Godot setsid()s the spawned leader, making it its own group;
 				# assume that layout when the stat read raced the process.
-				entry.pgid = pid
+				pgid = pid
+			_activate_entry_session(entry, pid, pgid)
 			entry.started = true
 			# New process, new window: drop any XID captured for a previous
 			# launch of this entry so it is re-captured below.
-			entry["window_xid"] = ""
+			_set_entry_xid(entry, "")
 			_maximize_with_retry(pid, entry.emulator_id)
 			# Vita3K/Cemu create the real game window seconds after the first;
 			# re-capture on a schedule so the stored XID tracks it.
@@ -1639,7 +1733,7 @@ func _resolve_retroarch_suspend_method(entry: Dictionary) -> String:
 
 func _stop_game(entry: Dictionary) -> void:
 	_maximize_token += 1  # cancel any maximize retries still targeting this entry
-	if entry.pid == -1:
+	if _entry_pid(entry) == -1:
 		print("[ShufflerSubManager] _stop_game: no pid for " + _format_entry(entry))
 		return
 
@@ -1663,23 +1757,25 @@ func _stop_game(entry: Dictionary) -> void:
 ## or ignored the quit, it would keep running (and playing) alongside the next
 ## game. Confirm death and fall back to a hard kill.
 func _confirm_quit_or_kill(entry: Dictionary) -> void:
-	var pid: int = entry.pid
+	var pid: int = _entry_pid(entry)
 	if await LaunchManager.process.confirm_process_dead_async(pid, QUIT_CONFIRM_TIMEOUT_SEC):
-		entry.pid = -1
-		entry.pgid = -1
+		_set_entry_pid(entry, -1)
+		_set_entry_pgid(entry, -1)
 		entry.started = false
 		entry.active = false
+		_finalize_entry_session(entry, "quit_confirmed")
 		return
 	push_warning("[ShufflerSubManager] Quit command ignored by " + _format_entry(entry) + "; killing pid " + str(pid))
 	_kill_entry_processes(entry)
 	await LaunchManager.process.confirm_process_dead_async(pid, 3.0)
-	entry.pid = -1
-	entry.pgid = -1
+	_set_entry_pid(entry, -1)
+	_set_entry_pgid(entry, -1)
 	entry.started = false
 	entry.active = false
+	_finalize_entry_session(entry, "quit_killed")
 
 func _suspend_game(entry: Dictionary) -> void:
-	if entry.pid == -1:
+	if _entry_pid(entry) == -1:
 		print("[ShufflerSubManager] _suspend_game: no pid for " + _format_entry(entry))
 		return
 
@@ -1709,19 +1805,19 @@ func _suspend_game(entry: Dictionary) -> void:
 		var target := _resolve_entry_target(entry)
 		_adopt_entry_target(entry, target, "_suspend_game")
 		signal_pgids = _collect_signal_pgids(entry, target)
-		var diag_pids: Array = [entry.pid, int(target.get("pid", -1))]
+		var diag_pids: Array = [_entry_pid(entry), int(target.get("pid", -1))]
 		var diag_sigs := _entry_signatures(entry)
 		if not diag_sigs.is_empty():
 			diag_pids.append_array(LaunchManager.process.find_pids_by_signatures(diag_sigs))
 		LaunchManager.process.dump_pid_diagnostics("suspend", diag_pids)
-		if int(entry.get("pgid", -1)) > 1:
-			print("[ShufflerSubManager] _suspend_game: group members pre-stop: [" + LaunchManager.process.format_group_states(entry.pgid) + "] signal_pgids=" + str(signal_pgids))
+		if int(_entry_pgid(entry)) > 1:
+			print("[ShufflerSubManager] _suspend_game: group members pre-stop: [" + LaunchManager.process.format_group_states(_entry_pgid(entry)) + "] signal_pgids=" + str(signal_pgids))
 
 	# The stored window XID may be stale (Vita3K/Cemu recreate their window on
 	# game boot); drop it so the hide below falls back to a fresh lookup.
 	await _validate_window_xid(entry)
 
-	await _hide_window_awaited(entry.pid, exe_name, entry.emulator_id)
+	await _hide_window_awaited(_entry_pid(entry), exe_name, entry.emulator_id)
 
 	# Await the suspension before returning: _switch_to_game launches the next
 	# emulator instance immediately after this, and a still-running previous
@@ -1735,10 +1831,10 @@ func _suspend_game(entry: Dictionary) -> void:
 	if SystemManager.platform.is_linux() and not signal_pgids.is_empty():
 		pending.count = signal_pgids.size()
 		for pgid in signal_pgids:
-			LaunchManager.process.suspend_process_async(entry.pid, _pssuspend_path, on_suspend_done, pgid)
+			LaunchManager.process.suspend_process_async(_entry_pid(entry), _pssuspend_path, on_suspend_done, pgid)
 	else:
 		pending.count = 1
-		LaunchManager.process.suspend_process_async(entry.pid, _pssuspend_path, on_suspend_done, int(entry.get("pgid", -1)))
+		LaunchManager.process.suspend_process_async(_entry_pid(entry), _pssuspend_path, on_suspend_done, int(_entry_pgid(entry)))
 	var elapsed := 0.0
 	while pending.count > 0 and elapsed < SUSPEND_AWAIT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.05).timeout
@@ -1762,7 +1858,7 @@ func _suspend_game(entry: Dictionary) -> void:
 					verified = false
 					break
 			if verified:
-				var pid_state: String = LaunchManager.process.get_process_state(entry.pid)
+				var pid_state: String = LaunchManager.process.get_process_state(_entry_pid(entry))
 				if pid_state != "" and pid_state != "Z" and pid_state != "T" and pid_state != "t":
 					verified = false
 			if verified and not sigs.is_empty():
@@ -1775,27 +1871,29 @@ func _suspend_game(entry: Dictionary) -> void:
 				break
 			await get_tree().create_timer(0.05).timeout
 		if not verified:
-			var pgid: int = entry.get("pgid", -1)
-			push_warning("[ShufflerSubManager] _suspend_game: SIGSTOP delivered but game still running for pid " + str(entry.pid) + " pgid=" + str(pgid) + " signal_pgids=" + str(signal_pgids) + " members=[" + LaunchManager.process.format_group_states(pgid) + "]")
+			var pgid: int = _entry_pgid(entry)
+			push_warning("[ShufflerSubManager] _suspend_game: SIGSTOP delivered but game still running for pid " + str(_entry_pid(entry)) + " pgid=" + str(pgid) + " signal_pgids=" + str(signal_pgids) + " members=[" + LaunchManager.process.format_group_states(pgid) + "]")
 			suspended = false
 
 	if suspended:
-		print("[ShufflerSubManager] _suspend_game: pid " + str(entry.pid) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(pending.exit_code) + ")")
+		print("[ShufflerSubManager] _suspend_game: pid " + str(_entry_pid(entry)) + " suspended in " + str(Time.get_ticks_msec() - suspend_start) + "ms (exit_code=" + str(pending.exit_code) + ")")
+		_retain_entry_session(entry)
 	else:
 		# A failed/wedged suspend leaves the outgoing game running and playing
 		# alongside the next one. Kill it instead; the slot relaunches fresh
 		# the next time it is picked.
-		push_warning("[ShufflerSubManager] _suspend_game: suspend failed for pid " + str(entry.pid) + " (signaled=" + str(signal_pgids.size()) + " groups, exit_code=" + str(pending.exit_code) + "); killing to keep only one live game")
+		push_warning("[ShufflerSubManager] _suspend_game: suspend failed for pid " + str(_entry_pid(entry)) + " (signaled=" + str(signal_pgids.size()) + " groups, exit_code=" + str(pending.exit_code) + "); killing to keep only one live game")
 		_kill_entry_processes(entry)
-		await LaunchManager.process.confirm_process_dead_async(entry.pid, 3.0)
-		entry.pid = -1
-		entry.pgid = -1
+		await LaunchManager.process.confirm_process_dead_async(_entry_pid(entry), 3.0)
+		_set_entry_pid(entry, -1)
+		_set_entry_pgid(entry, -1)
 		entry.started = false
+		_finalize_entry_session(entry, "suspend_failed")
 
 	entry.active = false
 
 func _resume_game(entry: Dictionary) -> void:
-	if entry.pid == -1:
+	if _entry_pid(entry) == -1:
 		print("[ShufflerSubManager] _resume_game: no pid for " + _format_entry(entry))
 		return
 
@@ -1808,8 +1906,8 @@ func _resume_game(entry: Dictionary) -> void:
 		var target := _resolve_entry_target(entry)
 		_adopt_entry_target(entry, target, "_resume_game")
 		signal_pgids = _collect_signal_pgids(entry, target)
-		if int(entry.get("pgid", -1)) > 1:
-			print("[ShufflerSubManager] _resume_game: group members pre-resume: [" + LaunchManager.process.format_group_states(entry.pgid) + "] signal_pgids=" + str(signal_pgids))
+		if int(_entry_pgid(entry)) > 1:
+			print("[ShufflerSubManager] _resume_game: group members pre-resume: [" + LaunchManager.process.format_group_states(_entry_pgid(entry)) + "] signal_pgids=" + str(signal_pgids))
 	var resume_start := Time.get_ticks_msec()
 	var pending := {"count": 0, "exit_code": 0}
 	var on_resume_done := func(result: Dictionary):
@@ -1819,16 +1917,16 @@ func _resume_game(entry: Dictionary) -> void:
 	if SystemManager.platform.is_linux() and not signal_pgids.is_empty():
 		pending.count = signal_pgids.size()
 		for pgid in signal_pgids:
-			LaunchManager.process.resume_process_async(entry.pid, _pssuspend_path, on_resume_done, pgid)
+			LaunchManager.process.resume_process_async(_entry_pid(entry), _pssuspend_path, on_resume_done, pgid)
 	else:
 		pending.count = 1
-		LaunchManager.process.resume_process_async(entry.pid, _pssuspend_path, on_resume_done, int(entry.get("pgid", -1)))
+		LaunchManager.process.resume_process_async(_entry_pid(entry), _pssuspend_path, on_resume_done, int(_entry_pgid(entry)))
 	while pending.count > 0 and Time.get_ticks_msec() - resume_start < int(SUSPEND_AWAIT_TIMEOUT_SEC * 1000):
 		await get_tree().create_timer(0.05).timeout
 	if pending.count == 0:
-		print("[ShufflerSubManager] _resume_game: pid " + str(entry.pid) + " resumed in " + str(Time.get_ticks_msec() - resume_start) + "ms (exit_code=" + str(pending.exit_code) + ")")
+		print("[ShufflerSubManager] _resume_game: pid " + str(_entry_pid(entry)) + " resumed in " + str(Time.get_ticks_msec() - resume_start) + "ms (exit_code=" + str(pending.exit_code) + ")")
 	else:
-		push_warning("[ShufflerSubManager] _resume_game: timed out waiting for pssuspend -r (pid " + str(entry.pid) + "); maximizing anyway")
+		push_warning("[ShufflerSubManager] _resume_game: timed out waiting for pssuspend -r (pid " + str(_entry_pid(entry)) + "); maximizing anyway")
 
 	await get_tree().create_timer(0.2).timeout
 
@@ -1836,9 +1934,10 @@ func _resume_game(entry: Dictionary) -> void:
 	# first) invalidates the stored XID; drop stale ones before maximizing.
 	await _validate_window_xid(entry)
 
-	await _maximize_with_retry(entry.pid, entry.emulator_id)
+	await _maximize_with_retry(_entry_pid(entry), entry.emulator_id)
 
 	entry.active = true
+	_resume_entry_session(entry)
 
 # ============================================================================
 # TIMER
@@ -2131,8 +2230,8 @@ func _windowctl_target(pid: int) -> String:
 		return str(pid)
 	if _bag and _bag.entries:
 		for entry in _bag.entries:
-			if entry.pid == pid:
-				var xid: String = entry.get("window_xid", "")
+			if _entry_pid(entry) == pid:
+				var xid: String = _entry_xid(entry)
 				if xid != "":
 					return "xid:" + xid
 				return _group_pid_list(pid)
@@ -2148,8 +2247,8 @@ func _group_pid_list(pid: int) -> String:
 		var pgid := -1
 		if _bag and _bag.entries:
 			for entry in _bag.entries:
-				if entry.pid == pid and int(entry.get("pgid", -1)) > 1:
-					pgid = int(entry.pgid)
+				if _entry_pid(entry) == pid and int(_entry_pgid(entry)) > 1:
+					pgid = int(_entry_pgid(entry))
 					break
 		if pgid <= 1:
 			pgid = LaunchManager.process.get_pgid(pid)
@@ -2185,7 +2284,7 @@ func _entry_signature(entry: Dictionary) -> String:
 	return sigs[0] if not sigs.is_empty() else ""
 
 func _resolve_entry_target(entry: Dictionary) -> Dictionary:
-	var pid: int = entry.get("pid", -1)
+	var pid: int = _entry_pid(entry)
 	var target: Dictionary = LaunchManager.process.resolve_live_target(pid, _entry_signature(entry))
 	if int(target.get("pid", -1)) <= 0:
 		# The tracked pid is gone/unreadable; the payload may still live under
@@ -2194,7 +2293,7 @@ func _resolve_entry_target(entry: Dictionary) -> Dictionary:
 		# Decisive context: if the entry's group still has live members while
 		# the tracked pid is unreadable, the game is alive but invisible to
 		# /proc (bwrap dumpable=0); an empty group means it truly died.
-		var miss_pgid: int = entry.get("pgid", -1)
+		var miss_pgid: int = _entry_pgid(entry)
 		if miss_pgid > 1:
 			print("[ShufflerSubManager] resolve-miss: entry group " + str(miss_pgid) + " members=[" + LaunchManager.process.format_group_states(miss_pgid) + "]")
 		var matches: Array[int] = LaunchManager.process.find_pids_by_signatures(_entry_signatures(entry))
@@ -2210,7 +2309,7 @@ func _resolve_entry_target(entry: Dictionary) -> Dictionary:
 		# leader stays alive for exactly as long as the launch does (sharun
 		# waits on bwrap waits on the payload), so a live entry group means
 		# the game is still there — group signals reach the payload in place.
-		var entry_pgid: int = entry.get("pgid", -1)
+		var entry_pgid: int = _entry_pgid(entry)
 		if entry_pgid > 1 and LaunchManager.process.is_group_alive(entry_pgid):
 			target["pid"] = entry_pgid
 			target["pgid"] = entry_pgid
@@ -2228,8 +2327,8 @@ func _collect_signal_pgids(entry: Dictionary, target: Dictionary = {}) -> Array[
 	var add_pgid := func(pgid: int):
 		if pgid > 1 and pgid != own_pgid and not pgids.has(pgid):
 			pgids.append(pgid)
-	add_pgid.call(int(entry.get("pgid", -1)))
-	var pid: int = entry.get("pid", -1)
+	add_pgid.call(int(_entry_pgid(entry)))
+	var pid: int = _entry_pid(entry)
 	if pid > 0:
 		add_pgid.call(LaunchManager.process.get_pgid(pid))
 	if not target.is_empty():
@@ -2243,6 +2342,32 @@ func _collect_signal_pgids(entry: Dictionary, target: Dictionary = {}) -> Array[
 			add_pgid.call(LaunchManager.process.get_pgid(match_pid))
 	return pgids
 
+func _entry_watch_pids(entry: Dictionary) -> Array[int]:
+	var pids: Dictionary = {}
+	if _entry_pid(entry) > 0:
+		pids[_entry_pid(entry)] = true
+	var target := _resolve_entry_target(entry)
+	if int(target.get("pid", -1)) > 0:
+		pids[int(target.pid)] = true
+	for match_pid in LaunchManager.process.find_pids_by_signatures(_entry_signatures(entry)):
+		pids[match_pid] = true
+	for pgid in _collect_signal_pgids(entry, target):
+		for member_pid in LaunchManager.process.get_group_members(pgid):
+			pids[member_pid] = true
+	var result: Array[int] = []
+	for pid in pids.keys():
+		result.append(pid)
+	return result
+
+func _any_entry_alive(entry: Dictionary) -> bool:
+	for pgid in _collect_signal_pgids(entry):
+		if LaunchManager.process.is_group_alive(pgid):
+			return true
+	for pid in _entry_watch_pids(entry):
+		if await LaunchManager.process.is_running_async(pid):
+			return true
+	return false
+
 ## Adopts a freshly resolved live target into the entry. Returns true when
 ## the resolution changed anything.
 func _adopt_entry_target(entry: Dictionary, target: Dictionary, context: String) -> bool:
@@ -2250,13 +2375,13 @@ func _adopt_entry_target(entry: Dictionary, target: Dictionary, context: String)
 		return false
 	var changed := false
 	var desc := _format_entry(entry)
-	if target.pid != entry.pid:
-		print("[ShufflerSubManager] %s: re-adopting pid %d -> %d for %s" % [context, entry.pid, target.pid, desc])
-		entry.pid = target.pid
+	if target.pid != _entry_pid(entry):
+		print("[ShufflerSubManager] %s: re-adopting pid %d -> %d for %s" % [context, _entry_pid(entry), target.pid, desc])
+		_set_entry_pid(entry, target.pid)
 		changed = true
-	if int(target.get("pgid", -1)) > 1 and target.pgid != entry.get("pgid", -1):
-		print("[ShufflerSubManager] %s: adopting pgid %d for %s (was %d)" % [context, target.pgid, desc, int(entry.get("pgid", -1))])
-		entry.pgid = target.pgid
+	if int(target.get("pgid", -1)) > 1 and target.pgid != _entry_pgid(entry):
+		print("[ShufflerSubManager] %s: adopting pgid %d for %s (was %d)" % [context, target.pgid, desc, int(_entry_pgid(entry))])
+		_set_entry_pgid(entry, target.pgid)
 		changed = true
 	return changed
 
@@ -2266,7 +2391,7 @@ func _adopt_entry_target(entry: Dictionary, target: Dictionary, context: String)
 func _validate_window_xid(entry: Dictionary) -> void:
 	if _window_backend != WindowBackend.LINUX_X11 or _x11_windowctl_path.is_empty():
 		return
-	var xid: String = entry.get("window_xid", "")
+	var xid: String = _entry_xid(entry)
 	if xid == "":
 		return
 	var state := {"done": false, "ok": true}
@@ -2280,7 +2405,7 @@ func _validate_window_xid(entry: Dictionary) -> void:
 		waited += 0.05
 	if state.done and not state.ok:
 		print("[ShufflerSubManager] stored window xid " + xid + " is stale (window recreated?); clearing for re-capture")
-		entry["window_xid"] = ""
+		_set_entry_xid(entry, "")
 
 ## Re-captures the window XID a few times after launch: Vita3K/Cemu create
 ## the real game window seconds after the first one appears, so a single
@@ -2300,7 +2425,7 @@ func _pid_is_live_entry(pid: int) -> bool:
 	if not _bag or not _bag.entries:
 		return false
 	for entry in _bag.entries:
-		if entry.pid == pid:
+		if _entry_pid(entry) == pid:
 			return entry.started
 	return false
 
@@ -2386,7 +2511,7 @@ func _capture_window_xid_from_list(pid: int, hint: String, entry: Dictionary) ->
 				var in_group := false
 				if wowner > 0:
 					var wpgid: int = LaunchManager.process.get_pgid(wowner)
-					var epgid := int(entry.get("pgid", -1))
+					var epgid := int(_entry_pgid(entry))
 					if epgid <= 1:
 						epgid = LaunchManager.process.get_pgid(pid)
 					in_group = wpgid > 1 and wpgid == epgid
@@ -2421,7 +2546,7 @@ func _store_captured_xid(entry: Dictionary, pid: int, xid: String, owner_pid: in
 		if owner_title != "":
 			print("[ShufflerSubManager] rejecting window xid " + xid + " for pid " + str(pid) + ": title names '" + owner_title + "' (\"" + window_name + "\")")
 			return false
-	entry["window_xid"] = xid
+	_set_entry_xid(entry, xid)
 	# The window owner is the real payload (AppRun/Vita3K re-exec away from
 	# the spawned leader); adopt its group so suspend/resume/kill reach the
 	# emulator itself. Guards: hint-matched windows can belong to a DIFFERENT
@@ -2442,9 +2567,9 @@ func _store_captured_xid(entry: Dictionary, pid: int, xid: String, owner_pid: in
 						break
 		if owner_ok:
 			var owner_pgid: int = LaunchManager.process.get_pgid(owner_pid)
-			if owner_pgid > 1 and owner_pgid != entry.pgid:
-				print("[ShufflerSubManager] adopting pgid " + str(owner_pgid) + " from window owner pid " + str(owner_pid) + " (was pgid " + str(entry.pgid) + ")")
-				entry.pgid = owner_pgid
+			if owner_pgid > 1 and owner_pgid != _entry_pgid(entry):
+				print("[ShufflerSubManager] adopting pgid " + str(owner_pgid) + " from window owner pid " + str(owner_pid) + " (was pgid " + str(_entry_pgid(entry)) + ")")
+				_set_entry_pgid(entry, owner_pgid)
 		else:
 			print("[ShufflerSubManager] ignoring window owner pid " + str(owner_pid) + " for pgid adoption (state=" + LaunchManager.process.get_process_state(owner_pid) + ")")
 	print("[ShufflerSubManager] captured window xid " + xid + " for pid " + str(pid) + " (\"" + window_name + "\")")
@@ -2478,7 +2603,7 @@ func _capture_window_xid_find(pid: int, hint: String) -> void:
 			return
 		if _bag and _bag.entries:
 			for entry in _bag.entries:
-				if entry.pid == pid:
+				if _entry_pid(entry) == pid:
 					_store_captured_xid(entry, pid, xid, owner_pid, window_name)
 					break
 	)
@@ -2490,8 +2615,8 @@ func _capture_window_xid_find(pid: int, hint: String) -> void:
 ## that owns the captured game window (the real emulator) as a final
 ## insurance. SIGCONT first so SIGSTOPped games can actually die.
 func _kill_entry_processes(entry: Dictionary) -> void:
-	var pid: int = entry.get("pid", -1)
-	var xid: String = entry.get("window_xid", "")
+	var pid: int = _entry_pid(entry)
+	var xid: String = _entry_xid(entry)
 	if pid <= 0 and xid == "":
 		return
 	if SystemManager.platform.is_windows():

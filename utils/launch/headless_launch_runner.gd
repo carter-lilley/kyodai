@@ -65,6 +65,17 @@ func run(romm_id: int) -> void:
 		_exit(1, "No emulator configured for platform: " + game.platform_slug)
 		return
 
+	# A previous headless companion may have died while its game survived.
+	# Continue that session instead of syncing against it and launching twice.
+	await LaunchManager.process.wait_for_initial_recovery()
+	var recovered: GameSession = LaunchManager.sessions.get_live_for_game(romm_id)
+	if recovered and recovered.backend == GameSession.Backend.DESKTOP_PROCESS:
+		print("[HeadlessLauncher] Reattached to surviving emulator; resuming wait without a second launch")
+		await _wait_for_session_exit(recovered)
+		await _post_launch(recovered)
+		_exit(0, "Headless launch complete for " + game.get_display_name())
+		return
+
 	if LaunchManager.get_install_progress(emulator_id).get("status", "") != "complete":
 		_exit(1, "Emulator " + emulator_id + " is not fully installed - launch from Kyodai to set it up")
 		return
@@ -91,16 +102,66 @@ func run(romm_id: int) -> void:
 		return
 
 	print("[HeadlessLauncher] Emulator running (pid=", pid, ") - waiting for exit")
+	var pgid: int = LaunchManager.process.get_pgid(pid)
+	var session: GameSession = LaunchManager.sessions.begin_session(game, GameSession.Backend.DESKTOP_PROCESS, {
+		"emulator_id": emulator_id,
+		"policy": {"origin": "headless"},
+		"runtime": {
+			"pid": pid,
+			"pgid": pgid,
+			"process_start_ticks": LaunchManager.process._process_start_ticks(pid),
+			"boot_id": LaunchManager.process._current_boot_id(),
+			"signature": game.file_path,
+			"exe_signature": str(intent.launch_args[0]).get_file().get_basename().to_lower() if not intent.launch_args.is_empty() else "",
+		},
+	})
+	LaunchManager.sessions.activate_session(session, pid)
 	LaunchManager._update_last_played(game)
 
-	while await LaunchManager.process.is_running_async(pid):
-		await get_tree().create_timer(PROCESS_POLL_INTERVAL_SEC).timeout
+	await _wait_for_session_exit(session)
 
 	print("[HeadlessLauncher] Emulator exited - starting post-launch save upload")
-	DataManager.auto_upload_saves_for_game(game, emulator_id)
-	await _await_upload_completion(game, emulator_id)
+	await _post_launch(session)
 
 	_exit(0, "Headless launch complete for " + game.get_display_name())
+
+func _wait_for_session_exit(session: GameSession) -> void:
+	var tracked_pid := int(session.runtime.get("pid", -1))
+	var tracked_pgid := int(session.runtime.get("pgid", -1))
+	while true:
+		var alive := false
+		if SystemManager.platform.is_linux():
+			if tracked_pgid > 1 and tracked_pgid != LaunchManager.process.get_own_pgid():
+				alive = LaunchManager.process.is_group_alive(tracked_pgid)
+			if not alive:
+				var target: Dictionary = LaunchManager.process.resolve_live_target(tracked_pid, session.game.file_path)
+				alive = int(target.get("pid", -1)) > 0
+				if alive:
+					var new_pid := int(target.get("pid", tracked_pid))
+					var new_pgid := int(target.get("pgid", tracked_pgid))
+					if new_pid != tracked_pid or new_pgid != tracked_pgid:
+						tracked_pid = new_pid
+						if new_pgid > 0:
+							tracked_pgid = new_pgid
+						LaunchManager.sessions.update_runtime(session, {
+							"pid": tracked_pid,
+							"pgid": tracked_pgid,
+						})
+		else:
+			alive = await LaunchManager.process.is_running_async(tracked_pid)
+		if not alive:
+			break
+		await get_tree().create_timer(PROCESS_POLL_INTERVAL_SEC).timeout
+
+## Isolated terminal hook for the headless launch path. Keeping the upload and
+## its wait together makes the exactly-once contract directly testable.
+func _post_launch(session: GameSession) -> void:
+	_finalize_session(session)
+	LaunchManager.process.request_pending_recovery()
+	await _await_upload_completion(session.game, session.emulator_id)
+
+func _finalize_session(session: GameSession) -> void:
+	LaunchManager.sessions.finalize_once(session, 0, "process_exited")
 
 func _exit(code: int, message: String) -> void:
 	if code == 0:

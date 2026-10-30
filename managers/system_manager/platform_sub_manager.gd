@@ -607,17 +607,27 @@ func stop_sync_foreground_service() -> bool:
 	plugin.stopSyncForegroundService()
 	return true
 
+func supports_per_session_pending_records() -> bool:
+	if not is_android():
+		return false
+	var plugin = _get_android_plugin()
+	return plugin != null and plugin.has_method("startGameSessionWithIdentity")
+
 ## Starts the Android game-session foreground service, which runs in its own
 ## process and owns the session end (presence watch, end_unix annotation,
 ## launcher cold-start) even when LMK kills the Godot process.
-func start_game_session_foreground_service(game_name: String, start_time_ms: int, emulator_package: String = "", romm_id: int = 0) -> bool:
+func start_game_session_foreground_service(game_name: String, start_time_ms: int, emulator_package: String = "", romm_id: int = 0, session_id: String = "") -> bool:
 	if not is_android():
 		return false
 	var plugin = _get_android_plugin()
 	if plugin == null:
 		push_warning("[SystemManager.platform] KyodaiBridge plugin not available for game session foreground service")
 		return false
-	plugin.startGameSessionForegroundService(game_name, start_time_ms, emulator_package, romm_id)
+	if plugin.has_method("startGameSessionWithIdentity"):
+		plugin.startGameSessionWithIdentity(game_name, start_time_ms, emulator_package, romm_id, session_id)
+	else:
+		# Older AARs only understand the single legacy pending-session file.
+		plugin.startGameSessionForegroundService(game_name, start_time_ms, emulator_package, romm_id)
 	return true
 
 ## Stops the Android game-session foreground service
