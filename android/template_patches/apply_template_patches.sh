@@ -20,6 +20,9 @@
 #    when returning to Kyodai-as-HOME from a game) can kill the Vulkan surface
 #    mid-reattach, leaving a black screen with dead input. The guard restarts
 #    the process cleanly instead. See godotapp_recreate_guard.patch.
+# 4. Home-intent forwarding - GodotPlugin has no onNewIntent hook, so retained
+#    sessions receive Home through the existing GodotApp activity. No subclass,
+#    duplicate activity, or launcher-alias override is involved.
 #
 # Idempotent: safe to re-run against an already-patched zip.
 #
@@ -53,6 +56,13 @@ else
   patch -p0 < "$PATCH_DIR/godotapp_recreate_guard.patch"
 fi
 
+# 4. Forward Home intents through the existing GodotApp activity.
+if grep -q kyodai_home_forwarding src/main/java/com/godot/game/GodotApp.java; then
+  echo "Home-intent forwarding already present, skipping patch"
+else
+  patch -p0 < "$PATCH_DIR/godotapp_home_forwarding.patch"
+fi
+
 # Update the two entries in place (python3 zipfile: available on CI runners and
 # dev machines alike; the zip(1) CLI is not).
 python3 - "$TPL" <<'PYEOF'
@@ -77,4 +87,5 @@ unzip -p "$TPL" src/main/AndroidManifest.xml | grep -q 'supportsPictureInPicture
 unzip -p "$TPL" src/main/AndroidManifest.xml | grep -q 'fontWeightAdjustment'
 unzip -p "$TPL" src/main/java/com/godot/game/GodotApp.java | grep -q 'return false;'
 unzip -p "$TPL" src/main/java/com/godot/game/GodotApp.java | grep -q 'kyodai_recreate_guard'
+unzip -p "$TPL" src/main/java/com/godot/game/GodotApp.java | grep -q 'kyodai_home_forwarding'
 echo "Template patches applied and verified: $TPL"

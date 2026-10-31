@@ -6,6 +6,13 @@ extends Control
 ## Morphs from card aspect ratio to screen aspect ratio (cover fit).
 
 signal animation_completed
+signal cold_launch_ready
+signal resume_ready
+
+enum TransitionMode { COLD, RETAINED_RESUME, RETAINED_RETURN }
+var _mode: TransitionMode = TransitionMode.COLD
+var _cold_black_requested := false
+var _cold_black_ready := false
 
 # Static variable to track if any launch transition is animating (accessible globally)
 static var is_transition_active: bool = false
@@ -14,10 +21,12 @@ var _effect_stack: EffectStack = null
 @onready var _margin_container: MarginContainer = $MarginContainer
 @onready var _game_title_label: Label = $MarginContainer/GameTitleLabel
 var _fallback_bg: ColorRect = null
+var _black_curtain: ColorRect = null
 
 const PHASE1_DURATION: float = 0.5
 const HOLD_DURATION: float = 0.1
 const PHASE2_DURATION: float = 0.5
+const COLD_FADE_DURATION: float = 0.25
 
 var _is_animating: bool = false
 var _tween: Tween = null
@@ -67,6 +76,16 @@ func _ready():
 	add_child(_fallback_bg)
 	move_child(_fallback_bg, 0)
 
+	# Cold launches end on this independent black layer. It is deliberately
+	# separate from modulate/HSL so retained snapshots can remain full-color.
+	_black_curtain = ColorRect.new()
+	_black_curtain.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_black_curtain.color = Color.BLACK
+	_black_curtain.visible = false
+	_black_curtain.modulate.a = 0.0
+	_black_curtain.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_black_curtain)
+
 	# Connect to LaunchManager signal
 	if LaunchManager:
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
@@ -102,12 +121,29 @@ func restart(game: GameResource) -> void:
 	_game = game
 	_start_transition()
 
+## Starts a retained resume. The fullscreen signal is the native-focus gate;
+## no cold-launch styling or black fade is applied in this mode.
+func play_resume(game: GameResource) -> void:
+	if _is_animating:
+		abort()
+	_game = game
+	_start_transition(TransitionMode.RETAINED_RESUME)
+
 signal phase1_completed
 
-func _start_transition():
+func _start_transition(mode: TransitionMode = TransitionMode.COLD):
 	if _is_animating:
 		return
 
+	_mode = mode
+	_cold_black_requested = false
+	_cold_black_ready = false
+	modulate.a = 1.0
+	if _black_curtain:
+		_black_curtain.visible = false
+		_black_curtain.modulate.a = 0.0
+	if _game_title_label:
+		_game_title_label.visible = false
 	_is_animating = true
 	is_transition_active = true  # Set global static flag
 	_phase1_completed = false
@@ -172,7 +208,9 @@ func _start_transition():
 			text_width = label_font.get_string_size(game_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 
 		_game_title_label.add_theme_font_size_override("font_size", font_size)
-		_game_title_label.visible = true
+		# The title belongs to the cold landing state, not the initial hero
+		# frame and never to retained resume.
+		_game_title_label.visible = false
 
 	# Setup the EffectStack at the card's position
 	if not _setup_effect_stack(texture, card_rect, start_corner_radius):
@@ -250,19 +288,17 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	media_container.bounds = Rect2(Vector2.ZERO, card_rect.size + Vector2(4, 4))
 	media_container.corner_radius_ratio = start_corner_radius
 
-	# Setup minimal effect stack with base + HSL + gradient overlay
-	# Disable smart crop for launch transition (scale from center, not bottom)
-	# Gradient overlay: vertical black alpha-ramp; faded in via the effect_alpha
-	# uniform so the gradient texture is generated once, not per tween frame.
-	var initial_gradient = Gradient.new()
-	initial_gradient.offsets = [0.0, 1.0]
-	initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 1)]
-
-	var effect_configs = [
-		{"effect_id": "base", "settings": {}},
-		{"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}},
-		{"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_angle": 180.0}}
-	]
+	# Disable smart crop for launch transition (scale from center, not bottom).
+	# Retained resume/return gets a base-texture-only stack: no HSL or gradient
+	# instances can survive from a previous cold landing. Cold launch alone
+	# owns those effects.
+	var effect_configs: Array = [{"effect_id": "base", "settings": {}}]
+	if _mode == TransitionMode.COLD:
+		var initial_gradient = Gradient.new()
+		initial_gradient.offsets = [0.0, 1.0]
+		initial_gradient.colors = [Color(0, 0, 0, 0), Color(0, 0, 0, 1)]
+		effect_configs.append({"effect_id": "hsl", "settings": {"hue_shift": 0.0, "saturation_scale": 1.0, "lightness_scale": 1.0}})
+		effect_configs.append({"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_angle": 180.0}})
 
 	_effect_stack.initialize(media_container, effect_configs)
 	_effect_stack.update_draw_rects()
@@ -349,13 +385,24 @@ func _animate_transition():
 	# After phase 1 completes, emit signal so LaunchManager can proceed with game launch
 	tween.chain().tween_callback(func():
 		_phase1_completed = true
+		if _game_title_label and _mode == TransitionMode.COLD:
+			_game_title_label.visible = true
 		phase1_completed.emit()
 	)
 
 	# Hold after phase 1
 	tween.chain().tween_interval(HOLD_DURATION)
 
-	# PHASE 2: HSL fade + Gradient fade with CIRC + EASE_IN (parallel)
+	if _mode == TransitionMode.RETAINED_RESUME:
+		# The snapshot must reach the native curtain unmodified. In particular,
+		# do not run the cold landing HSL/gradient/title or fade to black.
+		tween.chain().tween_callback(func():
+			_on_animation_complete()
+			resume_ready.emit()
+		)
+		return
+
+	# COLD LANDING: HSL fade + Gradient fade with CIRC + EASE_IN (parallel)
 	var hsl_effect = _effect_stack.get_effect("hsl") as HSLEffect
 	var gradient_effect = _effect_stack.get_effect("gradient_overlay") as GradientOverlayEffect
 
@@ -389,8 +436,98 @@ func _animate_transition():
 	# Stop parallel after phase 2
 	tween.set_parallel(false)
 
-	# Complete
+	# Complete the cold landing state. A separate finish_cold_launch() call
+	# fades to black only after every prerequisite has completed.
 	tween.chain().tween_callback(_on_animation_complete)
+
+## Called by LaunchManager after all cold-launch preparation is complete.
+## The process/intent is not started until this black curtain is ready.
+func finish_cold_launch() -> void:
+	if _mode != TransitionMode.COLD or not visible:
+		cold_launch_ready.emit()
+		return
+	if _cold_black_ready:
+		cold_launch_ready.emit()
+		return
+	if _cold_black_requested:
+		await cold_launch_ready
+		return
+	_cold_black_requested = true
+	# Fast preparation may finish during the landing animation. Let that
+	# landing complete, then replace it with black before opening the app.
+	if _is_animating:
+		await animation_completed
+	if _mode != TransitionMode.COLD or not visible:
+		cold_launch_ready.emit()
+		return
+	if _game_title_label:
+		_game_title_label.visible = false
+	_black_curtain.visible = true
+	_black_curtain.modulate.a = 0.0
+	_is_animating = true
+	is_transition_active = true
+	var tween := get_tree().create_tween()
+	_tween = tween
+	tween.tween_property(_black_curtain, "modulate:a", 1.0, COLD_FADE_DURATION)
+	await tween.finished
+	_tween = null
+	_is_animating = false
+	is_transition_active = false
+	_cold_black_ready = true
+	cold_launch_ready.emit()
+
+## Plays the retained-game return: fullscreen snapshot -> focused card.
+## The actual card then keeps displaying that snapshot while retained.
+func play_return_to_card(texture: Texture2D) -> void:
+	if _is_animating or texture == null:
+		return
+	var info := _get_focused_card_and_texture()
+	if info.is_empty() or info.rect.size.x <= 0 or info.rect.size.y <= 0:
+		abort()
+		return
+	_game = null
+	_mode = TransitionMode.RETAINED_RETURN
+	if _game_title_label:
+		_game_title_label.visible = false
+	if _black_curtain:
+		_black_curtain.visible = false
+		_black_curtain.modulate.a = 0.0
+	var viewport_size := Vector2(get_viewport().size)
+	var overshoot := 4.0
+	var start_size := viewport_size + Vector2(overshoot * 2, overshoot * 2)
+	if not _setup_effect_stack(texture, Rect2(-Vector2(overshoot, overshoot), start_size), 0.0):
+		return
+	visible = true
+	z_index = 1000
+	modulate.a = 1.0
+	_fallback_bg.visible = false
+	_is_animating = true
+	is_transition_active = true
+	var media_container = _effect_stack.media_container
+	var ci = _effect_stack._stack_canvas_item
+	var target_position: Vector2 = info.rect.position - Vector2(2, 2)
+	var target_size: Vector2 = info.rect.size + Vector2(4, 4)
+	var target_radius: float = info.get("corner_radius", 0.06)
+	var tween = get_tree().create_tween()
+	_tween = tween
+	tween.set_trans(Tween.TRANS_QUART)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_method(func(t: float):
+		var current_pos = Vector2(-overshoot, -overshoot).lerp(target_position, t)
+		var current_size = start_size.lerp(target_size, t)
+		media_container.bounds = Rect2(Vector2.ZERO, current_size)
+		if ci.is_valid():
+			RenderingServer.canvas_item_set_transform(ci, Transform2D(0.0, current_pos))
+		media_container.corner_radius_ratio = lerpf(0.0, target_radius, t)
+		_effect_stack.update_draw_rects()
+		_effect_stack.force_refresh(), 0.0, 1.0, 0.35
+	)
+	tween.chain().tween_callback(func():
+		visible = false
+		_is_animating = false
+		is_transition_active = false
+		_tween = null
+	)
 
 ## Fallback transition used when no GameCard texture is available (e.g.
 ## shuffler launches). Fades a black overlay in, emits phase1_completed so the
@@ -475,17 +612,31 @@ func abort() -> void:
 	_is_animating = false
 	is_transition_active = false
 	_phase1_completed = false
+	_cold_black_requested = false
+	_cold_black_ready = false
+	_mode = TransitionMode.COLD
 	visible = false
 	if _game_title_label:
 		_game_title_label.visible = false
 	if _fallback_bg:
 		_fallback_bg.visible = false
+	if _black_curtain:
+		_black_curtain.visible = false
+		_black_curtain.modulate.a = 0.0
 	if LaunchManager and LaunchManager.session_finalized.is_connected(_on_session_finalized):
 		LaunchManager.session_finalized.disconnect(_on_session_finalized)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		if visible and SystemManager.platform.is_android():
+			# A retained return has not finished until its real task snapshot is
+			# ready. Hiding here exposed the grid for one or more frames before
+			# play_return_to_card() could start. Standard Android keeps the old
+			# behavior and hides immediately on launcher resume.
+			var session: GameSession = LaunchManager.process.get_active_android_session() if LaunchManager else null
+			if session and bool(session.policy.get("retain", false)) \
+					and (session.state == GameSession.State.ACTIVE or session.state == GameSession.State.RETAINED):
+				return
 			visible = false
 			if LaunchManager and LaunchManager.session_finalized.is_connected(_on_session_finalized):
 				LaunchManager.session_finalized.disconnect(_on_session_finalized)

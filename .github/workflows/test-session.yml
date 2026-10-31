@@ -12,6 +12,7 @@ on:
       - 'utils/launch/headless_launch_runner.gd'
       - 'utils/session_lifecycle_test.*'
       - 'utils/shuffler_lifecycle_test.*'
+      - 'utils/android_retained_session_test.*'
       - '.github/workflows/test-session.yml'
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - 'utils/launch/headless_launch_runner.gd'
       - 'utils/session_lifecycle_test.*'
       - 'utils/shuffler_lifecycle_test.*'
+      - 'utils/android_retained_session_test.*'
       - '.github/workflows/test-session.yml'
   workflow_dispatch:
 
@@ -62,3 +64,6 @@ jobs:
 
     - name: Run shuffler lifecycle characterization
       run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . res://utils/shuffler_lifecycle_test.tscn
+
+    - name: Run Android retained-session characterization
+      run: ./godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 --headless --path . res://utils/android_retained_session_test.tscn

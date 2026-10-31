@@ -11,6 +11,11 @@ import java.io.FileInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
+import java.util.UUID;
 
 /**
  * Runs shell scripts as root through the vendor daemons shipped on gaming handhelds:
@@ -44,8 +49,6 @@ public final class RootShell {
     private static final String WRAPPER_NAME = "root-run.sh";
     private static final String OUTPUT_NAME = "run-output.txt";
 
-    private static final Object LOCK = new Object();
-
     private RootShell() {}
 
     public static boolean isAvailable() {
@@ -70,43 +73,76 @@ public final class RootShell {
      * {@link #quote(String)} for any path; never interpolate user/ROM-derived text.
      */
     public static Result run(Context context, String body) {
-        synchronized (LOCK) {
-            if (!isAvailable()) return null;
-            try {
-                File dir = new File(context.getCacheDir(), WORK_DIR);
-                dir.mkdirs();
-                dir.setExecutable(true, false);
-
-                File script = new File(dir, SCRIPT_NAME);
-                writeText(script, body + "\n");
-
-                File output = new File(dir, OUTPUT_NAME);
-                output.delete();
-
-                File wrapper = new File(dir, WRAPPER_NAME);
-                writeText(wrapper,
-                        "sh " + script.getAbsolutePath() + " > " + output.getAbsolutePath() + " 2>&1\n" +
-                        "rc=$?\n" +
-                        "chmod 644 " + output.getAbsolutePath() + "\n" +
-                        "echo $rc\n");
-
-                script.setReadable(true, false);
-                wrapper.setReadable(true, false);
-
-                String exitStr = execute("sh " + wrapper.getAbsolutePath());
-                Integer exit = null;
-                if (exitStr != null) {
-                    try {
-                        exit = Integer.parseInt(exitStr.trim());
-                    } catch (NumberFormatException ignored) {}
-                }
-                String out = output.canRead() ? readAll(output) : "";
-                return new Result(exit, out);
-            } catch (Exception e) {
-                Log.w(TAG, "root shell failed: " + e.getMessage());
-                return null;
-            }
+        ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "KyodaiRootShell");
+            thread.setDaemon(true);
+            return thread;
+        });
+        Future<Result> future = executor.submit(() -> runInternal(context, body));
+        try {
+            return future.get(20, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            Log.w(TAG, "root shell timed out");
+            return new Result(null, "timeout");
+        } catch (Exception e) {
+            Log.w(TAG, "root shell failed: " + e.getMessage());
+            return null;
+        } finally {
+            executor.shutdownNow();
         }
+    }
+
+    private static Result runInternal(Context context, String body) {
+        File dir = null;
+        if (!isAvailable()) return null;
+        try {
+            // Unique per invocation: concurrent task/session operations, including
+            // calls from different Kyodai processes, never share request files.
+            dir = new File(context.getCacheDir(), WORK_DIR + "/" + UUID.randomUUID().toString());
+            dir.mkdirs();
+            dir.setExecutable(true, false);
+
+            File script = new File(dir, SCRIPT_NAME);
+            writeText(script, body + "\n");
+
+            File output = new File(dir, OUTPUT_NAME);
+            output.delete();
+
+            File wrapper = new File(dir, WRAPPER_NAME);
+            writeText(wrapper,
+                    "sh " + script.getAbsolutePath() + " > " + output.getAbsolutePath() + " 2>&1\n" +
+                    "rc=$?\n" +
+                    "chmod 644 " + output.getAbsolutePath() + "\n" +
+                    "echo $rc\n");
+
+            script.setReadable(true, false);
+            wrapper.setReadable(true, false);
+
+            String exitStr = execute("sh " + wrapper.getAbsolutePath());
+            Integer exit = null;
+            if (exitStr != null) {
+                try {
+                    exit = Integer.parseInt(exitStr.trim());
+                } catch (NumberFormatException ignored) {}
+            }
+            String out = output.canRead() ? readAll(output) : "";
+            return new Result(exit, out);
+        } catch (Exception e) {
+            Log.w(TAG, "root shell failed: " + e.getMessage());
+            return null;
+        } finally {
+            deleteRecursively(dir);
+        }
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) deleteRecursively(child);
+        }
+        file.delete();
     }
 
     private static void writeText(File file, String text) throws Exception {
@@ -236,12 +272,15 @@ public final class RootShell {
             Process process = new ProcessBuilder(XSU_PATH, command)
                     .redirectErrorStream(true)
                     .start();
-            String out = readAll(process.getInputStream());
-            if (!process.waitFor(30, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IllegalStateException("xsu timed out");
+            try {
+                if (!process.waitFor(15, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    throw new IllegalStateException("xsu timed out");
+                }
+                return readAll(process.getInputStream());
+            } finally {
+                if (process.isAlive()) process.destroyForcibly();
             }
-            return out;
         }
 
         private static String readAll(java.io.InputStream in) throws Exception {

@@ -218,6 +218,7 @@
 		"default_emulator": "retroarch",
 		"firmware": {
 			"expected_files": [
+				"Windows 3.11.dosz",
 				"MT32_CONTROL.ROM",
 				"MT32_PCM.ROM"
 			]

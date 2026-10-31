@@ -1,0 +1,35 @@
+--- src/main/java/com/godot/game/GodotApp.java
++++ src/main/java/com/godot/game/GodotApp.java
+@@ -29,9 +29,11 @@
+ 
+ package com.godot.game;
+ 
++import com.heckpoint.kyodai.KyodaiBridgePlugin;
+ import org.godotengine.godot.Godot;
+ import org.godotengine.godot.GodotActivity;
+ 
++import android.content.Intent;
+ import android.os.Bundle;
+ import android.os.SystemClock;
+ import android.util.Log;
+@@ -115,6 +117,20 @@
+ 		updateWindowAppearance.run();
+ 	}
+ 
++	// kyodai_home_forwarding: GodotPlugin has no onNewIntent hook in 4.7.
++	// Forward only Home intents; all other launch/deep-link behavior stays in
++	// the engine activity.
++	@Override
++	protected void onNewIntent(Intent intent) {
++		super.onNewIntent(intent);
++		if (intent != null && intent.hasCategory(Intent.CATEGORY_HOME)) {
++			KyodaiBridgePlugin bridge = KyodaiBridgePlugin.getInstance();
++			if (bridge != null) {
++				bridge.onHomeIntent();
++			}
++		}
++	}
++
+ 	@Override
+ 	public void onGodotMainLoopStarted() {
+ 		super.onGodotMainLoopStarted();

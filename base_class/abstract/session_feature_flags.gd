@@ -10,8 +10,8 @@ const ANDROID_TASK_SNAPSHOTS := "android_task_snapshots"
 const ANDROID_DISPLAY_TASK_MOVE := "android_display_task_move"
 
 const DEFAULTS := {
-	ANDROID_RETAINED_SESSIONS: false,
-	ANDROID_TASK_SNAPSHOTS: false,
+	ANDROID_RETAINED_SESSIONS: true,
+	ANDROID_TASK_SNAPSHOTS: true,
 	ANDROID_DISPLAY_TASK_MOVE: false,
 }
 

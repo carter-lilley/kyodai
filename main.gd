@@ -157,10 +157,16 @@ func _ready():
 		LaunchManager.game_launch_initiated.connect(_on_game_launch_initiated)
 		# Connect to background state signals for desktop
 		LaunchManager.session_activated.connect(_on_session_activated)
+		LaunchManager.session_retained.connect(_on_session_retained)
 		LaunchManager.session_finalized.connect(_on_session_finalized)
 		# Hibernate (release reclaimable memory) before the process/intent starts
 		LaunchManager.pre_launch_hook = _pre_launch_trim
 		LaunchManager.launch_failed_hook = _restore_after_launch
+
+	if Engine.has_singleton("KyodaiBridge"):
+		var bridge = Engine.get_singleton("KyodaiBridge")
+		if bridge and not bridge.is_connected("android_home_requested", _on_android_home_requested):
+			bridge.connect("android_home_requested", _on_android_home_requested)
 
 	# Android memory-pressure escalation (plugin forwards onTrimMemory levels)
 	if SystemManager and SystemManager.platform:
@@ -851,10 +857,16 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
 
-		# On Android, exiting background state when we resume triggers save upload
+		# Retained sessions pause instead of finalizing. Standard Android keeps
+		# the original resume-to-end behavior, including save upload.
 		if LaunchManager and LaunchManager.is_in_background_state():
-			print("[Main] In background state on resume, exiting to trigger save upload")
-			LaunchManager.force_exit_background_state()
+			if LaunchManager.process._android_retention_configuring:
+				await LaunchManager.process.android_retention_configured
+			if LaunchManager.process.has_retained_android_session():
+				LaunchManager.process.retain_active_android_session()
+			else:
+				print("[Main] In background state on resume, exiting to trigger save upload")
+				LaunchManager.force_exit_background_state()
 
 		# Defensive: the renderer must never stay disabled while the app is
 		# foregrounded outside a game. Lifecycle races (e.g. an activity
@@ -1166,6 +1178,15 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 
 	# Note: Pre-launch save sync is now handled inside LaunchManager.launch_game()
 
+func _on_android_home_requested() -> void:
+	if not LaunchManager or not SystemManager.platform.is_android():
+		return
+	if LaunchManager.process.has_retained_android_session():
+		if LaunchManager.is_in_background_state():
+			LaunchManager.process.retain_active_android_session()
+		else:
+			LaunchManager.resume_retained_game(-1)
+
 func _on_session_activated(session: GameSession, _legacy_pid: int) -> void:
 	"""Handle an ordinary game becoming active; shuffler owns its own UI."""
 	if session.is_shuffler():
@@ -1182,6 +1203,34 @@ func _restore_platform_focus() -> void:
 	var platforms_view = UIManager.get_settings_dialog_platforms_view()
 	if platforms_view and platforms_view.has_method("restore_focus_to_last_active"):
 		platforms_view.restore_focus_to_last_active()
+
+func _on_session_retained(session: GameSession) -> void:
+	if session.is_shuffler():
+		return
+	# Restore the interactive launcher without treating this as a terminal exit.
+	_restore_after_launch()
+	var texture := LaunchManager._session_snapshot_texture(session)
+	for overlay in get_tree().get_nodes_in_group("launch_transition_overlay"):
+		if texture:
+			overlay.play_return_to_card(texture)
+		else:
+			# Never strand the launch curtain if snapshot capture failed.
+			overlay.abort()
+	# Grid restoration can recreate/rebind cards after the first publication.
+	# Reapply the retained snapshot once that work has reached the tree, then
+	# release the native Home curtain onto the already-updated frame.
+	await get_tree().process_frame
+	LaunchManager.process.session_changed_for_android()
+	_release_android_home_curtain(session)
+
+func _release_android_home_curtain(session: GameSession) -> void:
+	var snapshot_path := str(session.runtime.get("snapshotPath", ""))
+	if snapshot_path.is_empty():
+		return
+	var release := FileAccess.open(snapshot_path.get_base_dir().path_join("release-curtain"), FileAccess.WRITE)
+	if release:
+		release.store_string("release\n")
+		release.close()
 
 func _on_session_finalized(session: GameSession, _exit_code: int) -> void:
 	"""Restore ordinary-launch UI after terminal finalization."""
@@ -1219,6 +1268,8 @@ func _exit_tree() -> void:
 			LaunchManager.game_launch_initiated.disconnect(_on_game_launch_initiated)
 		if LaunchManager.is_connected("session_activated", _on_session_activated):
 			LaunchManager.session_activated.disconnect(_on_session_activated)
+		if LaunchManager.is_connected("session_retained", _on_session_retained):
+			LaunchManager.session_retained.disconnect(_on_session_retained)
 		if LaunchManager.is_connected("session_finalized", _on_session_finalized):
 			LaunchManager.session_finalized.disconnect(_on_session_finalized)
 	if UIManager and UIManager.dual_screen:

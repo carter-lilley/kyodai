@@ -63,6 +63,8 @@ var _recovery_rerun_requested: bool = false
 var _recovery_retry_scheduled: bool = false
 var _initial_recovery_completed: bool = false
 signal recovery_completed
+signal android_retention_configured
+var _android_retention_configuring := false
 
 var launch_manager: Node
 
@@ -321,6 +323,213 @@ func enter_background_state_android(game: GameResource, emulator_package: String
 		push_warning("[ProcessManager] Usage Access not granted; session presence watch disabled (session ends on resume only). Grant via Settings > Usage access.")
 
 	_begin_game_session(game)
+	_configure_android_retention()
+
+func _configure_android_retention() -> void:
+	var session := _active_session
+	if session == null or session.backend != GameSession.Backend.ANDROID_TASK:
+		return
+	_android_retention_configuring = true
+	if _android_emulator_package.is_empty() or not await launch_manager.android_tasks.retention_available():
+		_finish_android_retention_configuration()
+		return
+	for attempt in 10:
+		if _active_session != session:
+			_finish_android_retention_configuration()
+			return
+		var result: Dictionary = await launch_manager.android_tasks.list_tasks()
+		if _active_session != session or session.state == GameSession.State.ENDED or session.state == GameSession.State.CLOSING:
+			_finish_android_retention_configuration()
+			return
+		if result.get("ok", false):
+			var candidates: Array = []
+			for task in result.get("tasks", []):
+				if str(task.get("packageName", "")) == _android_emulator_package:
+					candidates.append(task)
+			if candidates.size() == 1:
+				var task: Dictionary = candidates[0]
+				session.runtime.merge({
+					"taskId": int(task.taskId),
+					"package": str(task.packageName),
+					"topActivity": str(task.topActivity),
+					"baseActivity": str(task.get("baseActivity", "")),
+					"displayId": int(task.get("displayId", 0)),
+					"userId": int(task.get("userId", 0)),
+				}, true)
+				session.policy["retain"] = true
+				launch_manager.sessions.update_runtime(session, session.runtime)
+				launch_manager.sessions._start_native_watch(session)
+				launch_manager.android_tasks.set_retained_identity(session.runtime, true)
+				print("[ProcessManager] Android retained task registered: ", session.runtime)
+				_finish_android_retention_configuration()
+				return
+		# Each native list operation already has latency and a deadline. SceneTree
+		# timers do not run while Kyodai is backgrounded, so retry directly.
+	_finish_android_retention_configuration()
+
+func _finish_android_retention_configuration() -> void:
+	if not _android_retention_configuring:
+		return
+	_android_retention_configuring = false
+	android_retention_configured.emit()
+
+func has_retained_android_session() -> bool:
+	return _active_session != null and _active_session.backend == GameSession.Backend.ANDROID_TASK \
+		and bool(_active_session.policy.get("retain", false)) \
+		and (_active_session.state == GameSession.State.ACTIVE or _active_session.state == GameSession.State.RETAINED)
+
+func has_other_retained_game(romm_id: int) -> bool:
+	return has_retained_android_session() and _active_session.romm_id != romm_id
+
+func get_active_android_session() -> GameSession:
+	return _active_session
+
+func retain_active_android_session() -> bool:
+	if not has_retained_android_session() or _android_transition_inflight:
+		return false
+	_android_transition_inflight = true
+	_is_in_background_state = false
+	var session := _active_session
+	launch_manager.android_tasks.set_retained_identity(session.runtime, false)
+	launch_manager.sessions.retain_session(session, false)
+	if await launch_manager.android_tasks.snapshots_available():
+		for attempt in 4:
+			var captured: Dictionary = await launch_manager.android_tasks.capture_snapshot(session.runtime)
+			if captured.get("ok", false):
+				GameCard.evict_session_snapshot(str(session.runtime.get("snapshotPath", "")))
+				session.runtime["snapshotPath"] = str(captured.get("snapshot", {}).get("path", ""))
+				launch_manager.sessions.update_runtime(session, session.runtime)
+				break
+			await get_tree().create_timer(0.15).timeout
+	_android_transition_inflight = false
+	# Publish the snapshot to cards before starting the visible return
+	# transition, so the grid cannot settle on stale cover art.
+	session_changed_for_android()
+	launch_manager.sessions.session_retained.emit(session)
+	return true
+
+func resume_retained_game(romm_id: int = -1) -> Dictionary:
+	if _active_session == null or _android_transition_inflight:
+		return {"ok": false, "code": "busy"}
+	var session := _active_session
+	if romm_id >= 0 and session.romm_id != romm_id:
+		return {"ok": false, "code": "not_found"}
+	if session.state == GameSession.State.LOST:
+		return {"ok": false, "code": "lost"}
+	_android_transition_inflight = true
+	var focused: Dictionary = await launch_manager.android_tasks.focus(session.runtime)
+	_android_transition_inflight = false
+	if focused.get("ok", false):
+		var task: Dictionary = focused.get("task", {})
+		if not task.is_empty():
+			session.runtime.merge({
+				"package": str(task.get("packageName", session.runtime.package)),
+				"topActivity": str(task.get("topActivity", session.runtime.topActivity)),
+				"baseActivity": str(task.get("baseActivity", session.runtime.get("baseActivity", ""))),
+				"displayId": int(task.get("displayId", session.runtime.get("displayId", 0))),
+				"userId": int(task.get("userId", session.runtime.get("userId", 0))),
+			}, true)
+			launch_manager.sessions.update_runtime(session, session.runtime)
+		launch_manager.android_tasks.set_retained_identity(session.runtime, true)
+		_background_backend = GameSession.Backend.ANDROID_TASK
+		_background_active_game = session.game
+		_android_emulator_package = str(session.runtime.get("package", ""))
+		_is_in_background_state = true
+		launch_manager.sessions.resume_session(session)
+		launch_manager.sessions._start_native_watch(session)
+		return {"ok": true}
+	if focused.get("code", "") == "stale_task":
+		mark_android_session_lost(session)
+	return {"ok": false, "code": focused.get("code", "focus_failed"), "error": focused.get("error", "")}
+
+func mark_android_session_lost(session: GameSession) -> void:
+	if session == null:
+		return
+	session.state = GameSession.State.LOST
+	launch_manager.android_tasks.clear_retained_identity()
+	session.pause_playtime()
+	_is_in_background_state = false
+	launch_manager.sessions.update_runtime(session, session.runtime)
+	launch_manager.sessions.session_changed.emit(session)
+
+func close_retained_game(romm_id: int = -1) -> Dictionary:
+	if _active_session == null or _android_transition_inflight:
+		return {"ok": false, "code": "busy"}
+	var session := _active_session
+	if romm_id >= 0 and session.romm_id != romm_id:
+		return {"ok": false, "code": "not_found"}
+	_android_transition_inflight = true
+	session.state = GameSession.State.CLOSING
+	var task_exists := await _android_task_exists(session.runtime)
+	if task_exists:
+		var stopped: Dictionary = await launch_manager.android_tasks.force_stop(session.runtime)
+		if not stopped.get("ok", false) and stopped.get("code", "") != "stale_task":
+			session.state = GameSession.State.RETAINED
+			_android_transition_inflight = false
+			session_changed_for_android()
+			return stopped
+	var removed: Dictionary = await launch_manager.android_tasks.remove_task(session.runtime)
+	if not removed.get("ok", false) and removed.get("code", "") != "stale_task":
+		session.state = GameSession.State.RETAINED
+		_android_transition_inflight = false
+		session_changed_for_android()
+		return removed
+	for attempt in 8:
+		if not await _android_task_exists(session.runtime):
+			break
+		await get_tree().create_timer(0.25).timeout
+	if await _android_task_exists(session.runtime):
+		session.state = GameSession.State.RETAINED
+		_android_transition_inflight = false
+		session_changed_for_android()
+		return {"ok": false, "code": "close_unconfirmed"}
+	await _finalize_android_sessions_for_package(str(session.runtime.get("package", "")))
+	_android_transition_inflight = false
+	return {"ok": true}
+
+func discard_lost_android_session() -> void:
+	if _active_session == null:
+		return
+	await _finalize_android_sessions_for_package(str(_active_session.runtime.get("package", "")))
+
+func _android_task_exists(runtime: Dictionary) -> bool:
+	var result: Dictionary = await launch_manager.android_tasks.list_tasks()
+	if not result.get("ok", false):
+		return true # uncertainty must never become permission to finalize
+	for task in result.get("tasks", []):
+		if int(task.get("taskId", -1)) == int(runtime.get("taskId", -2)):
+			return true
+	return false
+
+func _finalize_android_sessions_for_package(package_name: String) -> void:
+	var affected: Array[GameSession] = launch_manager.sessions.get_live_for_package(package_name)
+	for session in affected:
+		_delete_snapshot(session)
+		launch_manager.sessions.finalize_once(session, 0, "android_closed")
+		if _active_session == session:
+			launch_manager.android_tasks.clear_retained_identity()
+			_active_session = null
+			_clear_android_background()
+
+func _delete_snapshot(session: GameSession) -> void:
+	var path := str(session.runtime.get("snapshotPath", ""))
+	GameCard.evict_session_snapshot(path)
+	if not path.is_empty() and FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	session.runtime.erase("snapshotPath")
+
+func _clear_android_background() -> void:
+	_background_active_pid = -1
+	_background_active_game = null
+	_background_backend = GameSession.Backend.UNKNOWN
+	_android_emulator_package = ""
+	_is_in_background_state = false
+
+func session_changed_for_android() -> void:
+	if _active_session:
+		launch_manager.sessions.session_changed.emit(_active_session)
+
+var _android_transition_inflight := false
 
 ## Exit background state
 func exit_background_state(exit_code: int = 0) -> void:
@@ -402,6 +611,8 @@ func _end_game_session(game: GameResource, exit_code: int = 0) -> void:
 	if _active_session == null and game != null:
 		_active_session = launch_manager.sessions.get_live_for_game(game.romm_id)
 	if _active_session != null:
+		if _active_session.backend == GameSession.Backend.ANDROID_TASK:
+			launch_manager.android_tasks.clear_retained_identity()
 		launch_manager.sessions.finalize_once(_active_session, exit_code, "runtime_exited")
 		_active_session = null
 	else:
@@ -522,6 +733,7 @@ func _recover_pending_sessions() -> void:
 		return
 	_recovery_in_progress = true
 	var records: Array[Dictionary] = launch_manager.sessions.pending_records()
+	var android_recovery_handled := false
 	for record in records:
 		if not _recovery_role_allows(record) or await _record_owner_alive(record):
 			continue
@@ -530,10 +742,14 @@ func _recover_pending_sessions() -> void:
 		var origin := str(record.get("policy", {}).get("origin", ""))
 		if origin == "shuffler":
 			await _retire_shuffler_record(record)
-		elif not _is_in_background_state:
-			var reattached := await _try_reattach_pending_session(record)
-			if not reattached:
+		elif not _is_in_background_state and not android_recovery_handled:
+			var outcome = await _try_reattach_pending_session(record)
+			if outcome == "invalid":
 				launch_manager.sessions.finalize_pending_record(record, "runtime_unavailable")
+			elif outcome == "error":
+				pass # inconclusive backend failure must never become proof of death
+			elif outcome == "lost" or outcome == "reattached":
+				android_recovery_handled = true
 		# Once one ordinary session is reattached, leave additional records
 		# pending rather than finalizing them without a liveness attempt.
 		_release_recovery_claim(record)
@@ -629,10 +845,61 @@ func _retire_shuffler_record(record: Dictionary) -> void:
 		push_warning("[ProcessManager] Shuffler payload survived recovery kill; pending record retained for retry")
 		_schedule_recovery_retry()
 
+func _try_reattach_android_session(record: Dictionary) -> String:
+	if not bool(record.get("policy", {}).get("retain", false)):
+		return "invalid"
+	if float(record.get("end_unix", 0.0)) > float(record.get("start_unix", 0.0)):
+		launch_manager.sessions.finalize_pending_record(record, "native_end_observed")
+		return "ended"
+	var runtime: Dictionary = record.get("runtime", {})
+	var task_id := int(runtime.get("taskId", -1))
+	if task_id <= 0:
+		return "invalid"
+	var result: Dictionary = await launch_manager.android_tasks.list_tasks()
+	if not result.get("ok", false):
+		return "error"
+	for task in result.get("tasks", []):
+		if int(task.get("taskId", -1)) != task_id:
+			continue
+		if str(task.get("packageName", "")) != str(runtime.get("package", "")):
+			continue
+		var romm_id := int(record.get("romm_id", 0))
+		var game := _game_for_pending_session(romm_id)
+		if game == null:
+			return "invalid"
+		var restored_runtime := runtime.duplicate(true)
+		restored_runtime["taskId"] = task_id
+		restored_runtime["package"] = str(task.packageName)
+		restored_runtime["topActivity"] = str(task.topActivity)
+		restored_runtime["baseActivity"] = str(task.get("baseActivity", ""))
+		restored_runtime["displayId"] = int(task.get("displayId", 0))
+		restored_runtime["userId"] = int(task.get("userId", 0))
+		_background_backend = GameSession.Backend.ANDROID_TASK
+		_background_active_game = game
+		_android_emulator_package = restored_runtime.package
+		_is_in_background_state = false
+		_active_session = launch_manager.sessions.reattach_session(record, game, restored_runtime)
+		if _active_session:
+			launch_manager.sessions.retain_session(_active_session)
+			launch_manager.android_tasks.set_retained_identity(_active_session.runtime, false)
+			return "reattached"
+		return "invalid"
+	var lost_game := _game_for_pending_session(int(record.get("romm_id", 0)))
+	if lost_game:
+		_active_session = launch_manager.sessions.mark_lost(record, lost_game)
+		_background_backend = GameSession.Backend.ANDROID_TASK
+		_background_active_game = lost_game
+		_android_emulator_package = str(runtime.get("package", ""))
+		_is_in_background_state = false
+		return "lost"
+	return "invalid"
+
 func _game_for_pending_session(romm_id: int) -> GameResource:
 	return launch_manager.sessions.game_for_record(romm_id)
 
-func _try_reattach_pending_session(record: Dictionary) -> bool:
+func _try_reattach_pending_session(record: Dictionary) -> Variant:
+	if GameSession.backend_from_string(str(record.get("backend", ""))) == GameSession.Backend.ANDROID_TASK:
+		return await _try_reattach_android_session(record)
 	if str(record.get("policy", {}).get("origin", "")) == "shuffler":
 		# A shuffler's interactive bag cannot be reconstructed at boot. Let the
 		# registry close those records instead of attaching them to ordinary UI.
@@ -1269,7 +1536,7 @@ func execute_launch(intent: LaunchIntent) -> bool:
 		return false
 
 	if SystemManager.platform.is_android():
-		return _execute_android(intent)
+		return await _execute_android(intent)
 	else:
 		return await _execute_desktop(intent)
 
@@ -1900,10 +2167,13 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	var absolute_rom_path = FSM.resolve_path(intent.rom_path, {"format": FSM.PathFormat.ABSOLUTE})
 	print("[ProcessManager] Resolved ROM path for Android intent: " + absolute_rom_path)
 
-	# Get configuration from android_config
+	# Retained mode must preserve the existing Android task. Standard mode keeps
+	# the emulator's configured clear_task behavior unchanged.
+	var clear_task = intent.android_config.get("clear_task", true)
+	if await launch_manager.android_tasks.retention_available():
+		clear_task = false
 	var rom_delivery = intent.android_config.get("rom_delivery", "intent_data")
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
-	var clear_task = intent.android_config.get("clear_task", true)
 	var grant_uri_permission = intent.android_config.get("grant_uri_permission", true)
 	var use_document_uri = intent.android_config.get("use_document_uri", false)
 	var use_file_uri = intent.android_config.get("use_file_uri", false)

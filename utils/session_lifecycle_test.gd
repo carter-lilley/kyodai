@@ -33,9 +33,17 @@ class SpySessions:
 	func _stop_native_watch(session: GameSession) -> void:
 		native_stops.append(session.session_id)
 
+class UnsupportedAndroidTasks:
+	extends AndroidTaskSubManager
+	func _ready() -> void:
+		pass
+	func retention_available() -> bool:
+		return false
+
 class FakeFacade:
 	extends Node
 	var sessions: SpySessions
+	var android_tasks: UnsupportedAndroidTasks
 	var entered: Array = []
 	var exited: Array = []
 
@@ -96,9 +104,11 @@ func _fixture() -> Array:
 	var facade := FakeFacade.new()
 	var sessions := SpySessions.new()
 	facade.sessions = sessions
+	facade.android_tasks = UnsupportedAndroidTasks.new()
 	var process := ProcessDouble.new()
 	add_child(facade)
 	facade.add_child(sessions)
+	facade.add_child(facade.android_tasks)
 	facade.add_child(process)
 	facade.wire()
 	_fixtures.append(facade)
@@ -128,8 +138,8 @@ func _ready() -> void:
 func _run() -> void:
 	for i in 5:
 		await get_tree().process_frame
-	_check(not SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_RETAINED_SESSIONS), "Android retained sessions remain opt-in")
-	_check(not SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_TASK_SNAPSHOTS), "Android snapshots remain opt-in")
+	_check(SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_RETAINED_SESSIONS), "Android retained sessions enable when supported")
+	_check(SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_TASK_SNAPSHOTS), "Android snapshots enable when supported")
 	_check(not SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_DISPLAY_TASK_MOVE), "Android display moves remain opt-in")
 
 	await _test_desktop_launch_exit_and_duplicates()
@@ -301,7 +311,7 @@ func _test_desktop_reattach() -> void:
 	var record := session.pending_record()
 	record["_pending_path"] = session.pending_path
 	record["owner"] = {"pid": 1, "start_ticks": 1, "boot_id": process._current_boot_id()}
-	var restored := await process._try_reattach_pending_session(record)
+	var restored: Variant = await process._try_reattach_pending_session(record)
 	_check(restored, "desktop recovery reattaches to a surviving process group")
 	_check(process._active_session.owner.get("pid", -1) == OS.get_process_id(), "reattach transfers ownership to the recovering launcher")
 	_check(process.is_in_background_state(), "reattached process restores background state")

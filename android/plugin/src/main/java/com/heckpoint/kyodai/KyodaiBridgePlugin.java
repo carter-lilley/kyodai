@@ -49,6 +49,8 @@ import org.godotengine.godot.plugin.GodotPlugin;
 import org.godotengine.godot.plugin.SignalInfo;
 import org.godotengine.godot.plugin.UsedByGodot;
 
+import com.heckpoint.kyodai.task.TaskBackendRouter;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -73,14 +75,29 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private BroadcastReceiver extractionReceiver;
     private WindowFocusGuard windowFocusGuard;
     private ComponentCallbacks2 trimMemoryCallbacks;
+    private TaskBackendRouter taskBackend;
+    private volatile int retainedTaskId = -1;
+    private volatile String retainedPackage = "";
+    private volatile String retainedTopActivity = "";
+    private volatile boolean earlyHomeEnabled;
+    private volatile int homeSnapshotTaskId = -1;
+    private volatile String homeSnapshotRequestId = "";
+    private volatile String homeSnapshotJson;
+    private static KyodaiBridgePlugin instance;
+
+    public static KyodaiBridgePlugin getInstance() {
+        return instance;
+    }
 
     public KyodaiBridgePlugin(Godot godot) {
         super(godot);
+        instance = this;
         Log.d(TAG, "KyodaiBridgePlugin constructor called");
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
         if (this.activity != null) {
             this.windowFocusGuard = new WindowFocusGuard(activity);
+            this.taskBackend = new TaskBackendRouter(activity, this::onTaskBackendResult);
             // Arms the screen-off savers from persisted state and restores
             // anything a previous process left disabled while asleep.
             SleepSaver.init(activity.getApplicationContext());
@@ -106,6 +123,8 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         signals.add(new SignalInfo("chunk_flush_complete", String.class, Boolean.class, String.class));
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
         signals.add(new SignalInfo("trim_memory", Integer.class));
+        signals.add(new SignalInfo("android_task_result", String.class, String.class, String.class));
+        signals.add(new SignalInfo("android_home_requested"));
         return signals;
     }
 
@@ -227,6 +246,12 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             activity.unregisterComponentCallbacks(trimMemoryCallbacks);
             trimMemoryCallbacks = null;
         }
+        if (taskBackend != null) {
+            taskBackend.close();
+            taskBackend = null;
+        }
+        androidTaskClearRetainedIdentity();
+        if (instance == this) instance = null;
         super.onMainDestroy();
     }
     
@@ -3697,6 +3722,112 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
     }
 
+    // ==================== ANDROID TASK BACKEND ====================
+
+    public void onHomeIntent() {
+        // Start capture before Godot resumes its activity. The privileged
+        // helper raises the snapshot curtain while Android is still performing
+        // the task transition; GDScript consumes this same result on retain.
+        if (earlyHomeEnabled && taskBackend != null && retainedTaskId > 0) {
+            earlyHomeEnabled = false;
+            homeSnapshotTaskId = retainedTaskId;
+            homeSnapshotRequestId = taskBackend.captureTaskSnapshot(
+                    retainedTaskId, retainedPackage, retainedTopActivity);
+            homeSnapshotJson = null;
+        }
+        emitSignal("android_home_requested");
+    }
+
+    @UsedByGodot
+    public void androidTaskSetRetainedIdentity(int taskId, String packageName, String topActivity, boolean gameForeground) {
+        retainedTaskId = taskId;
+        retainedPackage = packageName != null ? packageName : "";
+        retainedTopActivity = topActivity != null ? topActivity : "";
+        earlyHomeEnabled = gameForeground;
+    }
+
+    @UsedByGodot
+    public void androidTaskClearRetainedIdentity() {
+        retainedTaskId = -1;
+        retainedPackage = "";
+        retainedTopActivity = "";
+        earlyHomeEnabled = false;
+        clearHomeSnapshot();
+    }
+
+    @UsedByGodot
+    public String androidTaskHomeSnapshotStatus(int taskId) {
+        if (taskId != homeSnapshotTaskId || homeSnapshotRequestId.isEmpty()) return "none";
+        return homeSnapshotJson != null ? "ready" : "pending";
+    }
+
+    @UsedByGodot
+    public String androidTaskConsumeHomeSnapshot(int taskId) {
+        if (!"ready".equals(androidTaskHomeSnapshotStatus(taskId))) return "";
+        String result = homeSnapshotJson;
+        clearHomeSnapshot();
+        return result != null ? result : "";
+    }
+
+    private void clearHomeSnapshot() {
+        homeSnapshotTaskId = -1;
+        homeSnapshotRequestId = "";
+        homeSnapshotJson = null;
+    }
+
+    private void onTaskBackendResult(String requestId, String operation, org.json.JSONObject result) {
+        if (requestId.equals(homeSnapshotRequestId)) {
+            homeSnapshotJson = result.toString();
+        }
+        if (activity == null || taskBackend == null) return;
+        activity.runOnUiThread(() -> emitSignal("android_task_result", requestId, operation, result.toString()));
+    }
+
+    @UsedByGodot
+    public String androidTaskProbeCapabilities() {
+        return taskBackend != null ? taskBackend.probeCapabilities() : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskListTasks() {
+        return taskBackend != null ? taskBackend.listTasks() : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskCaptureSnapshot(int taskId, String packageName, String topActivity) {
+        return taskBackend != null ? taskBackend.captureTaskSnapshot(taskId, packageName, topActivity) : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskFocus(int taskId, String packageName, String topActivity) {
+        return taskBackend != null ? taskBackend.focusTask(taskId, packageName, topActivity) : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskForceStop(int taskId, String packageName, int userId) {
+        return taskBackend != null ? taskBackend.forceStopPackage(taskId, packageName, userId) : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskRemove(int taskId, String packageName) {
+        return taskBackend != null ? taskBackend.removeTask(taskId, packageName) : unsupportedTaskCall();
+    }
+
+    @UsedByGodot
+    public String androidTaskMoveDisplay(int taskId, String packageName, int displayId) {
+        return taskBackend != null ? taskBackend.moveTaskToDisplay(taskId, packageName, displayId) : unsupportedTaskCall();
+    }
+
+    private String unsupportedTaskCall() {
+        try {
+            onTaskBackendResult("unsupported", "unsupported", new org.json.JSONObject()
+                    .put("ok", false)
+                    .put("code", "unsupported")
+                    .put("error", "Android task backend unavailable"));
+        } catch (org.json.JSONException ignored) {}
+        return "unsupported";
+    }
+
     // ==================== FOREGROUND SERVICE FOR GAME SESSIONS ====================
 
     /**
@@ -3709,11 +3840,11 @@ public class KyodaiBridgePlugin extends GodotPlugin {
      */
     @UsedByGodot
     public void startGameSessionForegroundService(String gameName, long startTimeMs, String emulatorPackage, long rommId) {
-        startGameSessionWithIdentity(gameName, startTimeMs, emulatorPackage, rommId, "");
+        startGameSessionWithIdentity(gameName, startTimeMs, emulatorPackage, rommId, "", false);
     }
 
     @UsedByGodot
-    public void startGameSessionWithIdentity(String gameName, long startTimeMs, String emulatorPackage, long rommId, String sessionId) {
+    public void startGameSessionWithIdentity(String gameName, long startTimeMs, String emulatorPackage, long rommId, String sessionId, boolean retainedMode) {
         Log.d(TAG, "==========================================");
         Log.d(TAG, "startGameSessionWithIdentity() called");
         Log.d(TAG, "Game: " + gameName + ", emulator: " + emulatorPackage);
@@ -3731,6 +3862,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             intent.putExtra("emulator_package", emulatorPackage != null ? emulatorPackage : "");
             intent.putExtra("romm_id", rommId);
             intent.putExtra("session_id", sessionId != null ? sessionId : "");
+            intent.putExtra("retained_mode", retainedMode);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 activity.startForegroundService(intent);

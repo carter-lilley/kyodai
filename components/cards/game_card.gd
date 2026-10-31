@@ -65,6 +65,8 @@ static func _create_placeholder_texture() -> Texture2D:
 var _loading_texture: Texture2D = _placeholder_texture
 var _current_texture: Texture2D = null
 var _current_texture_game_id: String = ""
+static var _session_texture_cache: Dictionary = {}  # snapshot path -> Texture2D
+const SESSION_TEXTURE_CACHE_LIMIT := 4
 var _image_priority_high: bool = false
 var _pinned_texture_key: String = ""
 # Set by CardMediaLoader: true while a cover fetch/decode is genuinely in
@@ -229,6 +231,9 @@ func _ready():
 	_update_card_state_from_settings()
 	_update_display()
 
+	if LaunchManager and not LaunchManager.session_changed.is_connected(_on_session_changed):
+		LaunchManager.session_changed.connect(_on_session_changed)
+
 	# Connect M3Card signals
 	pressed.connect(_on_card_pressed)
 	gui_input.connect(_on_card_gui_input)
@@ -248,6 +253,9 @@ func _exit_tree():
 	if _pinned_texture_key != "" and SystemManager.memory:
 		SystemManager.memory.unpin_texture(_pinned_texture_key)
 		_pinned_texture_key = ""
+
+	if LaunchManager and LaunchManager.session_changed.is_connected(_on_session_changed):
+		LaunchManager.session_changed.disconnect(_on_session_changed)
 
 	# Kill any focus effect tweens
 	_kill_focus_tweens()
@@ -1056,10 +1064,52 @@ func retry_cover_if_placeholder() -> void:
 func _on_media_texture_loaded(texture: Texture2D) -> void:
 	_set_texture(texture)
 
+static func evict_session_snapshot(path: String) -> void:
+	if not path.is_empty():
+		_session_texture_cache.erase(path)
+
+func _session_snapshot_texture() -> Texture2D:
+	if not game or not LaunchManager:
+		return null
+	var session: GameSession = LaunchManager.sessions.get_live_for_game(game.romm_id)
+	if session == null or session.state != GameSession.State.RETAINED:
+		return null
+	var path := str(session.runtime.get("snapshotPath", ""))
+	if path.is_empty():
+		return null
+	if _session_texture_cache.has(path):
+		return _session_texture_cache[path]
+	var bytes := FSM.read_file_bytes(path)
+	if bytes.size() < 16:
+		return null
+	var img := Image.new()
+	if img.load_jpg_from_buffer(bytes) != OK or img.is_empty():
+		return null
+	var texture := ImageTexture.create_from_image(img)
+	if _session_texture_cache.size() >= SESSION_TEXTURE_CACHE_LIMIT:
+		_session_texture_cache.erase(_session_texture_cache.keys()[0])
+	_session_texture_cache[path] = texture
+	return texture
+
+func _on_session_changed(session: GameSession) -> void:
+	if not game or session.romm_id != game.romm_id:
+		return
+	var snapshot := _session_snapshot_texture()
+	print("[GameCard] Session snapshot update: ", game.romm_id, " state=", session.state, " path=", session.runtime.get("snapshotPath", ""), " loaded=", snapshot != null)
+	if snapshot:
+		_set_texture(snapshot)
+		print("[GameCard] Snapshot applied to current texture: ", _current_texture == snapshot)
+	elif session.state != GameSession.State.RETAINED:
+		_load_cover(true)
+	# While RETAINED with capture still in flight, keep the existing texture;
+	# starting another cover download here only adds a stale completion race.
+
 func _set_texture(tex: Texture2D) -> void:
 	# Use the placeholder for any null texture so cards never render the default
 	# white fallback texture in the shader.
-	var resolved_tex: Texture2D = tex if tex else _loading_texture
+	var resolved_tex: Texture2D = _session_snapshot_texture()
+	if resolved_tex == null:
+		resolved_tex = tex if tex else _loading_texture
 	var is_loading := resolved_tex == _loading_texture and _media_loading
 	# Apply the shimmer state even when the texture itself is unchanged (the
 	# loader may re-emit the placeholder with a different loading state).

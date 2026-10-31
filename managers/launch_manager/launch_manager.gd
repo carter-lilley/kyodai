@@ -16,6 +16,7 @@ const ShufflerManager := preload("res://managers/launch_manager/shuffler_sub_man
 const SteamManager := preload("res://managers/launch_manager/steam_sub_manager.gd")
 const M3UManager := preload("res://managers/launch_manager/m3u_sub_manager.gd")
 const UpdateManager := preload("res://managers/launch_manager/update_sub_manager.gd")
+const AndroidTaskManager := preload("res://managers/launch_manager/android_task_sub_manager.gd")
 
 # Pending-launch orchestration state
 # emulator_id -> {game: GameResource, callback: Callable}
@@ -58,6 +59,12 @@ signal session_activated(session: GameSession, legacy_pid: int)
 @warning_ignore("unused_signal")
 signal session_finalized(session: GameSession, exit_code: int)
 @warning_ignore("unused_signal")
+signal session_retained(session: GameSession)
+@warning_ignore("unused_signal")
+signal session_resumed(session: GameSession)
+@warning_ignore("unused_signal")
+signal session_changed(session: GameSession)
+@warning_ignore("unused_signal")
 signal emulator_registry_loaded(success: bool)
 @warning_ignore("unused_signal")
 signal emulator_extraction_started(emulator_id: String)
@@ -77,6 +84,7 @@ signal steam_games_updated()
 @onready var core: CoreManager = $CoreSubManager
 @onready var m3u: M3UManager = $M3USubManager
 @onready var update: UpdateManager = $UpdateSubManager
+@onready var android_tasks: AndroidTaskManager = $AndroidTaskSubManager
 var shuffler: ShufflerManager
 var steam: SteamManager
 
@@ -96,6 +104,9 @@ func _enter_tree() -> void:
 func _ready():
 	# The registry owns terminal finalization and canonical lifecycle signals.
 	sessions.session_activated.connect(func(session, legacy_pid): session_activated.emit(session, legacy_pid))
+	sessions.session_retained.connect(func(session): session_retained.emit(session))
+	sessions.session_resumed.connect(func(session): session_resumed.emit(session))
+	sessions.session_changed.connect(func(session): session_changed.emit(session))
 	sessions.session_finalized.connect(func(session, exit_code): session_finalized.emit(session, exit_code))
 
 	registry._load_registry()
@@ -391,6 +402,15 @@ func get_background_game() -> GameResource:
 func force_exit_background_state() -> void:
 	process.force_exit_background_state()
 
+func resume_retained_game(romm_id: int) -> Dictionary:
+	return await process.resume_retained_game(romm_id)
+
+func close_retained_game(romm_id: int) -> Dictionary:
+	return await process.close_retained_game(romm_id)
+
+func discard_lost_android_session() -> void:
+	await process.discard_lost_android_session()
+
 # ============================================================================
 # Process execution wrappers
 # ============================================================================
@@ -589,10 +609,36 @@ func _abort_launch_overlay() -> void:
 		if overlay:
 			overlay.abort()
 
+## Prerequisites are complete: turn the cold landing page into a plain black
+## launch curtain before any external process/intent is started.
+func _finish_cold_launch_overlay() -> void:
+	var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+	if overlay_nodes.size() > 0:
+		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+		if overlay:
+			await overlay.finish_cold_launch()
+
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	print("[LaunchManager] launch_game() called for: ", game.get_display_name() if game else "null", " with focus_index: ", focus_index)
+
+	if SystemManager.platform.is_android():
+		if process._android_transition_inflight:
+			SystemManager.notifications.show_notification("Finishing the current game transition first", SystemManager.notifications.Type.INFO)
+			return
+		var retained: GameSession = process.get_active_android_session()
+		if retained and retained.state == GameSession.State.LOST:
+			if retained.romm_id != game.romm_id:
+				SystemManager.notifications.show_notification("Close or discard the lost session before launching another game", SystemManager.notifications.Type.INFO)
+				return
+			await process.discard_lost_android_session()
+		elif process.has_other_retained_game(game.romm_id):
+			SystemManager.notifications.show_notification("Close the current game before launching another", SystemManager.notifications.Type.INFO)
+			return
+		elif process.has_retained_android_session():
+			await _resume_android_with_transition(retained)
+			return
 
 	if not _try_begin_launch(game):
 		return
@@ -691,6 +737,8 @@ func _launch_steam_with_backend(game: GameResource, backend: String, focus_index
 		else:
 			# Fallback: wait for the expected duration
 			await get_tree().create_timer(0.5).timeout
+
+	await _finish_cold_launch_overlay()
 
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
@@ -1018,6 +1066,37 @@ func _on_core_download_completed(platform_slug: String, core_id: String, success
 	for i in range(matching_indices.size() - 1, -1, -1):
 		_pending_core_launches.remove_at(matching_indices[i])
 
+func _resume_android_with_transition(session: GameSession) -> void:
+	var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
+	if overlay_nodes.size() > 0:
+		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
+		var texture := _session_snapshot_texture(session)
+		if overlay and texture:
+			var info: Dictionary = overlay._get_focused_card_and_texture()
+			if not info.is_empty():
+				LaunchTransitionOverlay.set_source(texture, info.rect, info.get("corner_radius", 0.06))
+				overlay.play_resume(session.game)
+				# Do not let Android begin its task transition until the exact
+				# unmodified snapshot is already fullscreen.
+				await overlay.resume_ready
+	var result: Dictionary = await process.resume_retained_game(session.romm_id)
+	if not result.get("ok", false):
+		for node in overlay_nodes:
+			if node is LaunchTransitionOverlay:
+				node.abort()
+
+func _session_snapshot_texture(session: GameSession) -> Texture2D:
+	var path := str(session.runtime.get("snapshotPath", ""))
+	if path.is_empty():
+		return null
+	var bytes := FSM.read_file_bytes(path)
+	if bytes.size() < 16:
+		return null
+	var img := Image.new()
+	if img.load_jpg_from_buffer(bytes) != OK or img.is_empty():
+		return null
+	return ImageTexture.create_from_image(img)
+
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	print("[LaunchManager] _launch_game_internal: ENTER for " + game.get_display_name() + " (emulator: " + emulator_id + ")")
@@ -1064,6 +1143,7 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 			# Fallback: wait for the expected duration
 			await get_tree().create_timer(0.5).timeout
 	
+	await _finish_cold_launch_overlay()
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
 
 	# Let the app hibernate (release UI/memory) before the process starts and,

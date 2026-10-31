@@ -6,6 +6,8 @@ class_name SessionSubManager
 ## are the canonical lifecycle contract for UI and session consumers.
 signal session_changed(session: GameSession)
 signal session_activated(session: GameSession, legacy_pid: int)
+signal session_retained(session: GameSession)
+signal session_resumed(session: GameSession)
 signal session_finalized(session: GameSession, exit_code: int)
 
 const PENDING_SESSION_DIR := "user://pending_game_sessions"
@@ -24,21 +26,30 @@ func activate_session(session: GameSession, legacy_pid: int) -> void:
 	if session == null or session.state == GameSession.State.ENDED:
 		return
 	session.state = GameSession.State.ACTIVE
+	session.resume_playtime()
 	_write_pending_record(session)
 	_start_native_watch(session)
 	session_activated.emit(session, legacy_pid)
 	session_changed.emit(session)
 
-func retain_session(session: GameSession) -> void:
+func retain_session(session: GameSession, emit_signal: bool = true) -> void:
 	if session == null or session.state == GameSession.State.ENDED:
 		return
 	session.state = GameSession.State.RETAINED
+	session.pause_playtime()
+	_write_pending_record(session)
+	_start_native_watch(session)
+	if emit_signal:
+		session_retained.emit(session)
 	session_changed.emit(session)
 
 func resume_session(session: GameSession) -> void:
 	if session == null or session.state == GameSession.State.ENDED:
 		return
 	session.state = GameSession.State.ACTIVE
+	session.resume_playtime()
+	_write_pending_record(session)
+	session_resumed.emit(session)
 	session_changed.emit(session)
 
 ## Reattaches a pending record after launcher process death. The original
@@ -64,6 +75,7 @@ func finalize_once(session: GameSession, exit_code: int = 0, reason: String = "e
 	if session == null or session.state == GameSession.State.ENDED:
 		return false
 	session.state = GameSession.State.CLOSING
+	session.pause_playtime()
 	var record := _read_pending_record(session.pending_path)
 	var end_unix := float(record.get("end_unix", 0.0))
 	var elapsed := session.recovered_elapsed_seconds(end_unix) if recovered else session.elapsed_seconds(end_unix)
@@ -104,6 +116,7 @@ func update_runtime(session: GameSession, runtime: Dictionary) -> void:
 		return
 	session.runtime.merge(runtime, true)
 	_write_pending_record(session)
+	session_changed.emit(session)
 
 func get_session(session_id: String) -> GameSession:
 	return _sessions.get(session_id, null)
@@ -113,6 +126,23 @@ func get_live_for_game(romm_id: int) -> GameSession:
 		if session.romm_id == romm_id and session.state != GameSession.State.ENDED:
 			return session
 	return null
+
+func get_live_for_package(package_name: String) -> Array[GameSession]:
+	var result: Array[GameSession] = []
+	for session in _sessions.values():
+		if session.state != GameSession.State.ENDED and str(session.runtime.get("package", "")) == package_name:
+			result.append(session)
+	return result
+
+func mark_lost(record: Dictionary, game: GameResource) -> GameSession:
+	var session := GameSession.from_pending(record, game)
+	if session.session_id.is_empty():
+		return null
+	session.state = GameSession.State.LOST
+	session.pause_playtime()
+	_sessions[session.session_id] = session
+	session_changed.emit(session)
+	return session
 
 func pending_records() -> Array[Dictionary]:
 	var records: Array[Dictionary] = []
@@ -184,7 +214,8 @@ func _start_native_watch(session: GameSession) -> void:
 		int(session.start_unix) * 1000,
 		str(session.runtime.get("package", "")),
 		session.romm_id,
-		session.session_id
+		session.session_id,
+		session.state == GameSession.State.RETAINED
 	)
 
 func _stop_native_watch(_session: GameSession) -> void:

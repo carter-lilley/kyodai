@@ -996,6 +996,12 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 			var game = DataManager.get_game_by_id(romm_id)
 			if game:
 				LaunchManager.launch_game(game)
+		"resume":
+			await LaunchManager.resume_retained_game(romm_id)
+		"close_session":
+			await LaunchManager.close_retained_game(romm_id)
+		"discard_session":
+			await LaunchManager.discard_lost_android_session()
 		"card_designer":
 			var card_designer_game = DataManager.get_game_by_id(romm_id)
 			if card_designer_game:

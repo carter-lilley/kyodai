@@ -75,16 +75,9 @@
 			android:name="org.godotengine.plugin.v2.KyodaiBridge"
 			android:value="com.heckpoint.kyodai.KyodaiBridgePlugin" />
 
-		<!-- Home-app behavior, merged onto the Godot activity (manifest merger
-		     fills in attributes the template leaves unset):
-		     - stateNotNeeded: after a process kill, restart clean instead of
-		       reviving half-dead saved state; our own persistence owns state.
-		     - resumeWhilePausing: the launcher reappears WHILE the emulator is
-		       still pausing, so returning home feels instant. -->
-		<activity
-			android:name="com.godot.game.GodotApp"
-			android:stateNotNeeded="true"
-			android:resumeWhilePausing="true" />
+		<!-- Home-app behavior and Home-intent forwarding live in the patched
+		     GodotApp template. Keeping the original activity avoids duplicate
+		     launcher routes and preserves Godot's recreate/PiP safeguards. -->
 		
 		<!-- Foreground service for downloads to prevent app kill during large file downloads -->
 		<service

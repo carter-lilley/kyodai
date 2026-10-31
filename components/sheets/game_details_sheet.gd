@@ -1935,6 +1935,16 @@ func _update_action_button() -> void:
 	if not action_button or not _current_game:
 		return
 
+	var session: GameSession = LaunchManager.sessions.get_live_for_game(_current_game.romm_id)
+	if session and session.state == GameSession.State.RETAINED:
+		action_button.text = "Resume"
+		action_button.icon_name = "play"
+		return
+	if session and session.state == GameSession.State.LOST:
+		action_button.text = "Launch Fresh"
+		action_button.icon_name = "play"
+		return
+
 	if _current_game.is_active_variant_downloaded():
 		action_button.text = "Launch"
 		action_button.icon_name = "play"
@@ -1991,6 +2001,10 @@ func _on_sync_button_pressed() -> void:
 
 func _on_action_button_pressed() -> void:
 	if not _current_game:
+		return
+	var session: GameSession = LaunchManager.sessions.get_live_for_game(_current_game.romm_id)
+	if session and session.state == GameSession.State.RETAINED:
+		await LaunchManager.resume_retained_game(_current_game.romm_id)
 		return
 
 	# Skip file check for Steam games - they don't have physical files

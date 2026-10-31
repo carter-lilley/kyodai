@@ -574,6 +574,13 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 		{"id": "details", "text": "Details", "icon": "information"},
 		{"id": "add_to_collection", "text": "Add to Collection", "icon": "folder-plus"}
 	]
+	var session: GameSession = LaunchManager.sessions.get_live_for_game(romm_id)
+	if session and session.state == GameSession.State.RETAINED:
+		items[0] = {"id": "resume", "text": "Resume", "icon": "play"}
+		items.append({"id": "close_session", "text": "Close Game", "icon": "close"})
+	elif session and session.state == GameSession.State.LOST:
+		items[0] = {"id": "launch", "text": "Launch Fresh", "icon": "play"}
+		items.append({"id": "discard_session", "text": "Discard Session", "icon": "close"})
 
 	# Add delete option only if game is downloaded and show_delete is true
 	var game = DataManager.get_game_by_id(romm_id)

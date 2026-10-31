@@ -13,6 +13,7 @@
 [ext_resource type="Script" path="res://managers/launch_manager/steam_sub_manager.gd" id="10_steam"]
 [ext_resource type="Script" path="res://managers/launch_manager/m3u_sub_manager.gd" id="11_m3u"]
 [ext_resource type="Script" path="res://managers/launch_manager/update_sub_manager.gd" id="12_update"]
+[ext_resource type="Script" path="res://managers/launch_manager/android_task_sub_manager.gd" id="13_android_task"]
 
 [node name="LaunchManager" type="Node"]
 script = ExtResource("1_8h4fk")
@@ -52,3 +53,6 @@ script = ExtResource("11_m3u")
 
 [node name="UpdateSubManager" type="Node" parent="."]
 script = ExtResource("12_update")
+
+[node name="AndroidTaskSubManager" type="Node" parent="."]
+script = ExtResource("13_android_task")

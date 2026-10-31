@@ -88,6 +88,7 @@ public class GameSessionForegroundService extends Service {
     private String emulatorPackage = "";
     private long rommId = 0;
     private String pendingSessionFile = PENDING_SESSION_FILE;
+    private boolean retainedMode = false;
 
     // Presence watch state
     private Handler handler;
@@ -138,6 +139,12 @@ public class GameSessionForegroundService extends Service {
                 if (pkg != null) emulatorPackage = pkg;
                 rommId = intent.getLongExtra("romm_id", 0);
                 pendingSessionFile = pendingSessionFile(intent.getStringExtra("session_id"));
+                retainedMode = intent.getBooleanExtra("retained_mode", false);
+                if (retainedMode) {
+                    releaseSessionLocks();
+                } else if (isRunning) {
+                    acquireSessionLocks();
+                }
                 startForegroundService(gameName, startTimeMs);
                 break;
 
@@ -285,6 +292,10 @@ public class GameSessionForegroundService extends Service {
         // Kyodai foreground: its resume path finalizes the session with more
         // accurate tick-based timing; nothing for us to annotate.
         if (fg.startsWith(getPackageName())) {
+            if (retainedMode) {
+                // Home is a retained transition, not session termination.
+                return;
+            }
             Log.d(TAG, "Launcher is foreground; ending session service");
             stopPresenceWatch();
             stopForegroundService();
@@ -297,6 +308,10 @@ public class GameSessionForegroundService extends Service {
         presenceMisses++;
         Log.d(TAG, "Presence miss " + presenceMisses + "/" + PRESENCE_MISS_THRESHOLD + " fg=" + fg);
         if (presenceMisses >= PRESENCE_MISS_THRESHOLD) {
+            if (retainedMode) {
+                // Another app in the foreground is not proof of task death.
+                return;
+            }
             Log.d(TAG, "Emulator left the foreground (fg=" + fg + "); ending session");
             // The launcher finalizes itself when alive (its resume path uses
             // the end_unix annotation we leave). Only a dead launcher needs
