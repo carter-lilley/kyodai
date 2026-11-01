@@ -8,9 +8,17 @@ var _pending: Dictionary = {}  # requestId -> Callable
 var _capabilities: Dictionary = {}
 var _capabilities_ready := false
 var _signal_connected := false
+const NATIVE_CALL_TIMEOUT_MS := 25000
+const HOME_OBSERVER_TIMEOUT_MS := 4000
 
 func _ready() -> void:
 	_ensure_signal_connection(_plugin())
+	call_deferred("_warm_capabilities")
+
+func _warm_capabilities() -> void:
+	# Startup warm-up is detached from launch/UI work. A later launch retries
+	# transient failures instead of caching them as a device verdict.
+	await probe_capabilities()
 
 func _ensure_signal_connection(plugin) -> void:
 	# Engine singletons may not be visible yet during autoload _ready. Retry at
@@ -19,13 +27,11 @@ func _ensure_signal_connection(plugin) -> void:
 		return
 	plugin.connect("android_task_result", _on_result)
 	_signal_connected = true
-	print("[AndroidTasks] Native result signal connected")
 
 func _plugin():
 	return Engine.get_singleton("KyodaiBridge") if Engine.has_singleton("KyodaiBridge") else null
 
 func _on_result(request_id: String, operation: String, json: String) -> void:
-	print("[AndroidTasks] Result ", operation, ": ", json)
 	if _pending.has(request_id):
 		var callback: Callable = _pending[request_id]
 		_pending.erase(request_id)
@@ -56,8 +62,12 @@ func _call(method: String, args: Array = []) -> Dictionary:
 	# Do not poll process_frame: Android pauses SceneTree frames while the game
 	# is foreground, exactly when launch-time task registration must finish.
 	# The native router has its own deadline and always returns a result.
-	while not state.done:
+	var deadline_ms := Time.get_ticks_msec() + NATIVE_CALL_TIMEOUT_MS
+	while not state.done and Time.get_ticks_msec() < deadline_ms:
 		await _result_received
+	if not state.done:
+		_pending.erase(request_id)
+		return {"ok": false, "code": "timeout", "error": "Native task operation timed out"}
 	return state.result
 
 func probe_capabilities() -> Dictionary:
@@ -66,13 +76,22 @@ func probe_capabilities() -> Dictionary:
 	# nested shape too for isolated test doubles, but never discard the real
 	# top-level native capabilities.
 	_capabilities = result.get("capabilities", result)
-	_capabilities_ready = true
+	# A transient public fallback is not a permanent verdict. Reprobe on the
+	# next launch so a recovered vendor daemon can restore retained support.
+	_capabilities_ready = bool(result.get("ok", false)) and bool(_capabilities.get("privileged", false))
 	print("[AndroidTasks] Capabilities: ", _capabilities)
 	return result
 
 func _ensure_capabilities() -> void:
 	if not _capabilities_ready:
 		await probe_capabilities()
+
+func retention_available_cached() -> bool:
+	return _capabilities_ready and bool(_capabilities.get("retainedSessions", false))
+
+func retention_probe_inconclusive() -> bool:
+	var code := str(_capabilities.get("code", ""))
+	return not _capabilities_ready and code in ["timeout", "unavailable", "invalid_response", "unknown"]
 
 func retention_available() -> bool:
 	if not SystemManager.platform.is_android() or not SessionFeatureFlags.enabled(SessionFeatureFlags.ANDROID_RETAINED_SESSIONS):
@@ -98,6 +117,11 @@ func clear_retained_identity() -> void:
 	if plugin:
 		plugin.androidTaskClearRetainedIdentity()
 
+func release_observer() -> void:
+	var plugin = _plugin()
+	if plugin:
+		plugin.androidTaskReleaseObserver()
+
 func _package_name(task: Dictionary) -> String:
 	return str(task.get("package", task.get("packageName", "")))
 
@@ -106,7 +130,8 @@ func capture_snapshot(task: Dictionary) -> Dictionary:
 	var task_id := int(task.taskId)
 	if plugin:
 		var status: String = plugin.androidTaskHomeSnapshotStatus(task_id)
-		while status == "pending":
+		var deadline_ms := Time.get_ticks_msec() + HOME_OBSERVER_TIMEOUT_MS
+		while status == "pending" and Time.get_ticks_msec() < deadline_ms:
 			await _result_received
 			status = plugin.androidTaskHomeSnapshotStatus(task_id)
 		if status == "ready":

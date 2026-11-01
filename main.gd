@@ -158,6 +158,7 @@ func _ready():
 		# Connect to background state signals for desktop
 		LaunchManager.session_activated.connect(_on_session_activated)
 		LaunchManager.session_retained.connect(_on_session_retained)
+		LaunchManager.session_resumed.connect(_on_session_resumed)
 		LaunchManager.session_finalized.connect(_on_session_finalized)
 		# Hibernate (release reclaimable memory) before the process/intent starts
 		LaunchManager.pre_launch_hook = _pre_launch_trim
@@ -864,6 +865,12 @@ func _notification(what: int) -> void:
 				await LaunchManager.process.android_retention_configured
 			if LaunchManager.process.has_retained_android_session():
 				LaunchManager.process.retain_active_android_session()
+			elif LaunchManager.process._android_retention_uncertain and LaunchManager.process.get_active_android_session():
+				# A backend timeout is not task-death evidence. Preserve an
+				# unfinalized recovery record instead of silently ending/uploading.
+				LaunchManager.process.mark_android_session_lost(LaunchManager.process.get_active_android_session())
+				_restore_after_launch()
+				SystemManager.notifications.show_notification("Could not verify the retained game. It has been left running for recovery.", SystemManager.notifications.Type.ERROR)
 			else:
 				print("[Main] In background state on resume, exiting to trigger save upload")
 				LaunchManager.force_exit_background_state()
@@ -1065,6 +1072,7 @@ func _release_heavy_resources(reason: String) -> void:
 	# Static caches; covers re-decode from the disk cache on demand.
 	var cache_start_us := Time.get_ticks_usec()
 	MemorySubManager.clear_texture_cache()
+	GameCard.clear_session_texture_cache()
 	GameCard.clear_platform_icon_cache()
 	EffectBase.clear_shared_caches()
 	EffectStack.clear_script_cache()
@@ -1181,11 +1189,13 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 func _on_android_home_requested() -> void:
 	if not LaunchManager or not SystemManager.platform.is_android():
 		return
-	if LaunchManager.process.has_retained_android_session():
-		if LaunchManager.is_in_background_state():
-			LaunchManager.process.retain_active_android_session()
-		else:
-			LaunchManager.resume_retained_game(-1)
+	# Home is a one-way transition from the emulator to Kyodai. Once Kyodai is
+	# foreground, Home only selects the Home view; it never resumes a game or
+	# restarts an in-flight snapshot transition.
+	if LaunchManager.is_in_background_state() and LaunchManager.process.has_retained_android_session():
+		LaunchManager.process.retain_active_android_session()
+	else:
+		UIManager.switch_to_tab("Home")
 
 func _on_session_activated(session: GameSession, _legacy_pid: int) -> void:
 	"""Handle an ordinary game becoming active; shuffler owns its own UI."""
@@ -1204,24 +1214,51 @@ func _restore_platform_focus() -> void:
 	if platforms_view and platforms_view.has_method("restore_focus_to_last_active"):
 		platforms_view.restore_focus_to_last_active()
 
+func _on_session_resumed(session: GameSession) -> void:
+	if session.is_shuffler():
+		return
+	# Resume uses the same background hibernation policy as a cold activation;
+	# the restored grid/status work must not keep running behind the game.
+	_trim_memory("background")
+
 func _on_session_retained(session: GameSession) -> void:
 	if session.is_shuffler():
 		return
-	# Restore the interactive launcher without treating this as a terminal exit.
-	_restore_after_launch()
+	# Keep heavy grid/settings restoration off the snapshot handoff. The
+	# visible media window survives the trim, so the return can animate first.
 	var texture := LaunchManager._session_snapshot_texture(session)
-	for overlay in get_tree().get_nodes_in_group("launch_transition_overlay"):
+	var overlays := get_tree().get_nodes_in_group("launch_transition_overlay")
+	for overlay in overlays:
 		if texture:
+			var completion := _on_retained_return_finished.bind(session)
+			if not overlay.return_completed.is_connected(completion):
+				overlay.return_completed.connect(completion, CONNECT_ONE_SHOT)
+			if not overlay.return_failed.is_connected(completion):
+				overlay.return_failed.connect(completion, CONNECT_ONE_SHOT)
 			overlay.play_return_to_card(texture)
 		else:
 			# Never strand the launch curtain if snapshot capture failed.
 			overlay.abort()
+			_on_retained_return_finished(session)
+	if overlays.is_empty():
+		_on_retained_return_finished(session)
 	# Grid restoration can recreate/rebind cards after the first publication.
 	# Reapply the retained snapshot once that work has reached the tree, then
 	# release the native Home curtain onto the already-updated frame.
 	await get_tree().process_frame
 	LaunchManager.process.session_changed_for_android()
+	LaunchManager.android_tasks.release_observer()
 	_release_android_home_curtain(session)
+
+func _on_retained_return_finished(session: GameSession) -> void:
+	for overlay in get_tree().get_nodes_in_group("launch_transition_overlay"):
+		var completion := _on_retained_return_finished.bind(session)
+		if overlay.return_completed.is_connected(completion):
+			overlay.return_completed.disconnect(completion)
+		if overlay.return_failed.is_connected(completion):
+			overlay.return_failed.disconnect(completion)
+	if session.state == GameSession.State.RETAINED:
+		_restore_after_launch()
 
 func _release_android_home_curtain(session: GameSession) -> void:
 	var snapshot_path := str(session.runtime.get("snapshotPath", ""))
@@ -1270,6 +1307,8 @@ func _exit_tree() -> void:
 			LaunchManager.session_activated.disconnect(_on_session_activated)
 		if LaunchManager.is_connected("session_retained", _on_session_retained):
 			LaunchManager.session_retained.disconnect(_on_session_retained)
+		if LaunchManager.is_connected("session_resumed", _on_session_resumed):
+			LaunchManager.session_resumed.disconnect(_on_session_resumed)
 		if LaunchManager.is_connected("session_finalized", _on_session_finalized):
 			LaunchManager.session_finalized.disconnect(_on_session_finalized)
 	if UIManager and UIManager.dual_screen:

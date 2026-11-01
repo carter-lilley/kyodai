@@ -88,6 +88,7 @@ public class GameSessionForegroundService extends Service {
     private String emulatorPackage = "";
     private long rommId = 0;
     private String pendingSessionFile = PENDING_SESSION_FILE;
+    private String sessionId = "";
     private boolean retainedMode = false;
 
     // Presence watch state
@@ -132,6 +133,23 @@ public class GameSessionForegroundService extends Service {
 
         switch (action) {
             case "START_SESSION":
+                String nextSessionId = intent.getStringExtra("session_id");
+                if (nextSessionId == null) nextSessionId = "";
+                boolean newSession = !nextSessionId.equals(sessionId);
+                sessionId = nextSessionId;
+                if (newSession) {
+                    emulatorSeen = false;
+                    presenceMisses = 0;
+                    stopPresenceWatch();
+                    if (sessionCap != null) {
+                        handler.removeCallbacks(sessionCap);
+                        sessionCap = null;
+                    }
+                    if (isRunning) {
+                        isRunning = false;
+                        releaseSessionLocks();
+                    }
+                }
                 String name = intent.getStringExtra("game_name");
                 if (name != null) gameName = name;
                 startTimeMs = intent.getLongExtra("start_time_ms", System.currentTimeMillis());
@@ -149,6 +167,11 @@ public class GameSessionForegroundService extends Service {
                 break;
 
             case "STOP_SESSION":
+                String stopSessionId = intent.getStringExtra("session_id");
+                if (stopSessionId != null && !stopSessionId.isEmpty()
+                        && !stopSessionId.equals(sessionId)) {
+                    return START_NOT_STICKY;
+                }
                 stopForegroundService();
                 return START_NOT_STICKY;
 
@@ -196,7 +219,7 @@ public class GameSessionForegroundService extends Service {
             startForeground(NOTIFICATION_ID, notification);
             isRunning = true;
             SleepSaver.sessionJobStarted(this);
-            acquireSessionLocks();
+            if (!retainedMode) acquireSessionLocks();
             startPresenceWatch();
             // Lifetime cap: a service that can never detect session end (no
             // Usage Access) still terminates instead of holding locks forever.
@@ -291,7 +314,7 @@ public class GameSessionForegroundService extends Service {
         }
         // Kyodai foreground: its resume path finalizes the session with more
         // accurate tick-based timing; nothing for us to annotate.
-        if (fg.startsWith(getPackageName())) {
+        if (getPackageName().equals(fg)) {
             if (retainedMode) {
                 // Home is a retained transition, not session termination.
                 return;
@@ -309,7 +332,9 @@ public class GameSessionForegroundService extends Service {
         Log.d(TAG, "Presence miss " + presenceMisses + "/" + PRESENCE_MISS_THRESHOLD + " fg=" + fg);
         if (presenceMisses >= PRESENCE_MISS_THRESHOLD) {
             if (retainedMode) {
-                // Another app in the foreground is not proof of task death.
+                // Another app in the foreground is not proof of task death and
+                // must not cause indefinite polling while retained.
+                stopPresenceWatch();
                 return;
             }
             Log.d(TAG, "Emulator left the foreground (fg=" + fg + "); ending session");
@@ -360,7 +385,9 @@ public class GameSessionForegroundService extends Service {
             if (!obj.has("romm_id")) obj.put("romm_id", rommId);
             if (!obj.has("title")) obj.put("title", gameName);
             if (!obj.has("start_unix")) obj.put("start_unix", startTimeMs / 1000L);
-            writeTextFile(f, obj.toString());
+            File tmp = new File(f.getParentFile(), f.getName() + ".tmp");
+            writeTextFile(tmp, obj.toString());
+            if (!tmp.renameTo(f)) throw new Exception("Could not publish pending session atomically");
             Log.d(TAG, "Annotated pending session with end_unix");
         } catch (Exception e) {
             Log.w(TAG, "Failed to annotate pending session: " + e.getMessage());

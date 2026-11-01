@@ -20,12 +20,19 @@ class FakeAndroidTasks:
 	extends AndroidTaskSubManager
 	var tasks: Array = []
 	var snapshot_count := 0
+	var focus_delay := false
+	var focus_gate := {"open": false}
+	var snapshot_delay := false
+	var snapshot_gate := {"open": false}
 	func _ready() -> void: pass
 	func retention_available() -> bool: return true
 	func snapshots_available() -> bool: return true
 	func list_tasks() -> Dictionary:
 		return {"ok": true, "tasks": tasks.duplicate(true)}
 	func capture_snapshot(_task: Dictionary) -> Dictionary:
+		if snapshot_delay:
+			while not snapshot_gate.open:
+				await get_tree().process_frame
 		snapshot_count += 1
 		DirAccess.make_dir_recursive_absolute("user://android-task-test")
 		var path := "user://android-task-test/frame-%d.jpg" % snapshot_count
@@ -34,6 +41,9 @@ class FakeAndroidTasks:
 		img.save_jpg(path, 1.0)
 		return {"ok": true, "snapshot": {"path": path, "width": 4, "height": 4, "real": true}}
 	func focus(_task: Dictionary) -> Dictionary:
+		if focus_delay:
+			while not focus_gate.open:
+				await get_tree().process_frame
 		return {"ok": false, "code": "stale_task"} if tasks.is_empty() else {"ok": true}
 	func force_stop(_task: Dictionary) -> Dictionary:
 		tasks.clear()
@@ -56,10 +66,13 @@ class FakeFacade:
 
 class ProcessDouble:
 	extends ProcessSubManager
+	var resume_result: Dictionary = {}
 	func _ready() -> void:
 		launch_manager = get_parent()
 		_background_poll_timer = Timer.new()
 		add_child(_background_poll_timer)
+	func start_resume(romm_id: int) -> void:
+		resume_result = await resume_retained_game(romm_id)
 
 func _check(condition: bool, message: String) -> void:
 	if condition:
@@ -120,6 +133,8 @@ func _run() -> void:
 	await _test_transition_modes()
 	await _test_card_snapshot_publication()
 	await _test_retain_resume_close()
+	await _test_repeated_home_during_resume_is_idempotent()
+	await _test_external_close_reconciles()
 	await _test_lost_task()
 	if _failures == 0:
 		print("ANDROID RETAINED SESSION TEST PASSED")
@@ -187,6 +202,17 @@ func _test_card_snapshot_publication() -> void:
 	await get_tree().process_frame
 	_check(card._session_snapshot_texture() != null, "card loads the published retained snapshot")
 	_check(card._current_texture == card._session_snapshot_texture(), "card current texture is the retained snapshot")
+	# Pool removal/reinsertion must reconnect snapshot updates and reapply the
+	# current retained frame rather than leaving stale cover art.
+	remove_child(card)
+	add_child(card)
+	var second_path := "user://android-task-test/card-frame-2.jpg"
+	img.fill(Color.RED)
+	img.save_jpg(second_path, 1.0)
+	session.runtime["snapshotPath"] = second_path
+	LaunchManager.sessions.update_runtime(session, session.runtime)
+	await get_tree().process_frame
+	_check(card._current_texture == GameCard.session_texture_for_path(second_path), "pooled card reconnects and applies the retained snapshot")
 	card.queue_free()
 	LaunchManager.sessions._sessions.erase(session.session_id)
 	SessionSubManager._delete_pending_record(session.pending_path)
@@ -221,12 +247,67 @@ func _test_retain_resume_close() -> void:
 	_check(process.is_in_background_state(), "resumed game owns background state")
 
 	var snapshot_path := str(session.runtime.get("snapshotPath", ""))
+	var close_states: Array = []
+	facade.sessions.session_changed.connect(func(changed: GameSession):
+		close_states.append(changed.state)
+	)
 	var closed := await process.close_retained_game(game.romm_id)
+	_check(close_states.has(GameSession.State.CLOSING), "close publishes CLOSING before task confirmation")
 	_check(closed.get("ok", false), "close confirms task death")
 	_check(session.state == GameSession.State.ENDED, "confirmed close becomes ENDED")
 	_check(facade.sessions.commits.size() == 1, "close credits playtime once")
 	_check(facade.sessions.uploads.size() == 1, "close uploads saves once")
 	_check(not FileAccess.file_exists(snapshot_path), "close removes snapshot state")
+	process.queue_free()
+	await get_tree().process_frame
+
+func _test_repeated_home_during_resume_is_idempotent() -> void:
+	var fixture := _fixture()
+	var facade: FakeFacade = fixture[0]
+	var process: ProcessDouble = fixture[1]
+	var game := _game()
+	facade.android_tasks.tasks = [_task()]
+	process.enter_background_state_android(game, "example.emulator")
+	await _wait_for_registration(process)
+	await process.retain_active_android_session()
+	facade.android_tasks.focus_delay = true
+	facade.android_tasks.focus_gate.open = false
+	process.call_deferred("start_resume", game.romm_id)
+	await get_tree().process_frame
+	_check(not await process.retain_active_android_session(), "duplicate Home cannot start a competing retain during resume")
+	facade.android_tasks.focus_gate.open = true
+	for i in 10:
+		if not process.resume_result.is_empty():
+			break
+		await get_tree().process_frame
+	var result: Dictionary = process.resume_result
+	_check(result.get("ok", false), "in-flight resume completes without being restarted: " + str(result))
+	var session := process.get_active_android_session()
+	_check(session.state == GameSession.State.ACTIVE, "duplicate Home does not corrupt the active session")
+	_check(process.is_in_background_state(), "resume completes its normal foreground handoff")
+	_check(not process._android_transition_inflight, "duplicate Home cannot strand the transition busy flag")
+	_check(facade.sessions.uploads.is_empty(), "repeated Home does not upload or finalize")
+	await process.close_retained_game(game.romm_id)
+	process.queue_free()
+	await get_tree().process_frame
+
+func _test_external_close_reconciles() -> void:
+	var fixture := _fixture()
+	var facade: FakeFacade = fixture[0]
+	var process: ProcessDouble = fixture[1]
+	var game := _game()
+	facade.android_tasks.tasks = [_task()]
+	process.enter_background_state_android(game, "example.emulator")
+	await _wait_for_registration(process)
+	var session := process.get_active_android_session()
+	# The user closes the emulator before returning to Kyodai. The next retain
+	# must reconcile confirmed task death rather than preserving a dead session.
+	facade.android_tasks.tasks.clear()
+	_check(not await process.retain_active_android_session(), "external close does not publish a retained transition")
+	_check(session.state == GameSession.State.ENDED, "confirmed external task death finalizes the session")
+	_check(process.get_active_android_session() == null, "external close clears active session ownership")
+	_check(facade.sessions.commits.size() == 1, "external close credits playtime once")
+	_check(facade.sessions.uploads.size() == 1, "external close uploads saves once")
 	process.queue_free()
 	await get_tree().process_frame
 

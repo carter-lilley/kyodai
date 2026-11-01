@@ -1,6 +1,7 @@
 package com.heckpoint.kyodai.task;
 
 import android.content.Context;
+import android.os.FileObserver;
 
 import com.heckpoint.kyodai.RootShell;
 
@@ -15,6 +16,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /** Full tier backed by a fresh privileged app_process invocation per request. */
 public final class VendorTaskBackend implements AndroidTaskBackend {
@@ -76,6 +80,42 @@ public final class VendorTaskBackend implements AndroidTaskBackend {
         return operation("move_display", taskId, packageName, "", -1, displayId);
     }
 
+    @Override
+    public Result startObserver(int taskId, String packageName, String topActivity,
+                                String homePackage, int ownerPid) throws TaskBackendException {
+        try {
+            JSONObject expected = new JSONObject();
+            expected.put("taskId", taskId);
+            expected.put("packageName", packageName);
+            expected.put("topActivity", topActivity);
+            expected.put("homePackage", homePackage);
+            expected.put("ownerPid", ownerPid);
+            return resultFrom(execute("observe_start", expected));
+        } catch (JSONException e) {
+            throw new TaskBackendException("invalid_request", e.toString());
+        }
+    }
+
+    @Override
+    public Result cleanupHelpers() throws TaskBackendException {
+        try {
+            return resultFrom(execute("cleanup_helpers", new JSONObject()));
+        } catch (JSONException e) {
+            throw new TaskBackendException("invalid_response", e.toString());
+        }
+    }
+
+    @Override
+    public Result setTransitionScale(float scale) throws TaskBackendException {
+        try {
+            JSONObject expected = new JSONObject();
+            expected.put("scale", scale);
+            return resultFrom(execute("transition_scale", expected));
+        } catch (JSONException e) {
+            throw new TaskBackendException("invalid_request", e.toString());
+        }
+    }
+
     private Result operation(String op, int taskId, String packageName, String topActivity,
                              int userId, int displayId) throws TaskBackendException {
         if (taskId <= 0) throw new TaskBackendException("invalid_request", "Invalid task ID");
@@ -127,17 +167,39 @@ public final class VendorTaskBackend implements AndroidTaskBackend {
             String command = "CLASSPATH=" + RootShell.quote(context.getApplicationInfo().sourceDir)
                     + " /system/bin/app_process /system/bin com.heckpoint.kyodai.task.PrivilegedTaskHelper "
                     + RootShell.quote(dir.getAbsolutePath());
-            RootShell.Result shell = RootShell.run(context, command);
-            if (shell == null) {
-                throw new TaskBackendException("unavailable", "Privileged task helper did not run");
-            }
-            if ("timeout".equals(shell.output)) {
-                throw new TaskBackendException("timeout", "Privileged task helper timed out");
-            }
             File resultFile = new File(dir, "result.json");
+            CountDownLatch resultReady = new CountDownLatch(1);
+            FileObserver resultObserver = new FileObserver(dir.getAbsolutePath(),
+                    FileObserver.CREATE | FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+                @Override
+                public void onEvent(int event, String path) {
+                    if ("result.json".equals(path)) resultReady.countDown();
+                }
+            };
+            resultObserver.startWatching();
+            Future<RootShell.Result> shell = RootShell.submit(context, command);
+            try {
+                // The helper publishes its completed result before the vendor
+                // daemon's own shell round trip finishes. Wake on that file
+                // event instead of polling or waiting for the shell.
+                if (!resultFile.isFile()) resultReady.await(20, TimeUnit.SECONDS);
+            } finally {
+                resultObserver.stopWatching();
+            }
             if (!resultFile.isFile()) {
+                if (!shell.isDone()) {
+                    shell.cancel(true);
+                    throw new TaskBackendException("timeout", "Privileged task helper timed out");
+                }
+                RootShell.Result completed = shell.get(1, TimeUnit.SECONDS);
+                if (completed == null) {
+                    throw new TaskBackendException("unavailable", "Privileged task helper did not run");
+                }
+                if ("timeout".equals(completed.output)) {
+                    throw new TaskBackendException("timeout", "Privileged task helper timed out");
+                }
                 throw new TaskBackendException("invalid_response",
-                        shell.output == null || shell.output.isEmpty() ? "No helper result" : shell.output);
+                        completed.output == null || completed.output.isEmpty() ? "No helper result" : completed.output);
             }
             JSONObject result = new JSONObject(readText(resultFile));
             if (!nonce.equals(result.optString("nonce", ""))) {
@@ -154,7 +216,7 @@ public final class VendorTaskBackend implements AndroidTaskBackend {
             throw new TaskBackendException("invalid_response", e.toString());
         } finally {
             if (dir != null) {
-                if ("snapshot".equals(op)) {
+                if ("snapshot".equals(op) || "observe_start".equals(op)) {
                     pruneTaskRequests();
                 } else {
                     deleteRecursively(dir);
@@ -168,7 +230,20 @@ public final class VendorTaskBackend implements AndroidTaskBackend {
         File[] directories = root.listFiles();
         if (directories == null) return;
         java.util.Arrays.sort(directories, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-        for (int i = 8; i < directories.length; i++) deleteRecursively(directories[i]);
+        for (int i = 8; i < directories.length; i++) {
+            File directory = directories[i];
+            boolean releaseWritten = new File(directory, "release-curtain").isFile();
+            boolean fresh = System.currentTimeMillis() - directory.lastModified() < 6 * 60 * 60 * 1000;
+            boolean activeFrame = new File(directory, "frame.jpg").isFile() && !releaseWritten && fresh;
+            boolean observerExited = new File(directory, "observer-exited").isFile();
+            boolean activeObserver = new File(directory, "observer-ready").isFile()
+                    && !releaseWritten && !observerExited;
+            // Never remove the only release channel for a live observer. Age is
+            // not proof that its helper is dead; startup cleanup handles that
+            // using process/owner identity instead.
+            if (activeFrame || activeObserver) continue;
+            deleteRecursively(directory);
+        }
     }
 
     private static void deleteRecursively(File file) {
@@ -207,6 +282,7 @@ public final class VendorTaskBackend implements AndroidTaskBackend {
             result.snapshotHeight = snapshot.optInt("height", 0);
             result.realSnapshot = snapshot.optBoolean("real", false);
         }
+        result.observerReady = value.optBoolean("observer", false);
         return result;
     }
 

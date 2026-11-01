@@ -5,8 +5,8 @@ ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 - universal extraction normalizer (walk down for expected files...saves & games)
 maybe make cores on demand
-
-game screen transition/loads - transition to black after cover transition ends, screengrab and transition back when resuming?
+also the oobe permissions page didnt fit horizontally into the screen, the buttons were pushed off screen right, we should fix that.
+x game screen transition/loads - transition to black after cover transition ends, screengrab and transition back when resuming?
 x cocoon seamless game switch?
 in-built steam library?
 emufii rooms?

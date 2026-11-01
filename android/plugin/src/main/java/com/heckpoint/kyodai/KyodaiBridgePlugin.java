@@ -32,6 +32,7 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.FileObserver;
 import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.util.Base64;
@@ -76,6 +77,8 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private WindowFocusGuard windowFocusGuard;
     private ComponentCallbacks2 trimMemoryCallbacks;
     private TaskBackendRouter taskBackend;
+    private String lastSessionId = "";
+    private volatile boolean destroyed;
     private volatile int retainedTaskId = -1;
     private volatile String retainedPackage = "";
     private volatile String retainedTopActivity = "";
@@ -83,6 +86,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private volatile int homeSnapshotTaskId = -1;
     private volatile String homeSnapshotRequestId = "";
     private volatile String homeSnapshotJson;
+    private FileObserver homeResultObserver;
+    private volatile int observerRequestedTaskId = -1;
+    private volatile String observerNonce = "";
+    private volatile boolean observerReleasePending;
     private static KyodaiBridgePlugin instance;
 
     public static KyodaiBridgePlugin getInstance() {
@@ -91,22 +98,58 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     public KyodaiBridgePlugin(Godot godot) {
         super(godot);
+        destroyed = false;
         instance = this;
         Log.d(TAG, "KyodaiBridgePlugin constructor called");
         this.activity = godot.getActivity();
         Log.d(TAG, "Activity obtained: " + (activity != null ? "YES" : "NO"));
         if (this.activity != null) {
             this.windowFocusGuard = new WindowFocusGuard(activity);
-            this.taskBackend = new TaskBackendRouter(activity, this::onTaskBackendResult);
+            // Lazy background initialization emits no readiness signal and never
+            // participates in Godot's plugin registration or cold-launch timing.
+            startBackendInitialization();
             // Arms the screen-off savers from persisted state and restores
             // anything a previous process left disabled while asleep.
             SleepSaver.init(activity.getApplicationContext());
             registerTrimMemoryCallbacks(activity);
         }
         Log.i(TAG, "[StorageTier] startup: ext_data_rw=" + StorageTier.selfHasExtDataRw()
-                + " rootDaemon=" + RootShell.isAvailable()
+                + " rootDaemon=deferred"
                 + " sdk=" + Build.VERSION.SDK_INT);
         registerExtractionReceiver();
+    }
+
+    private void startBackendInitialization() {
+        if (destroyed || activity == null) return;
+        // Privileged daemon probing can block. Never do it on the activity
+        // thread: a slow daemon must not prevent the first Godot frame.
+        Thread backendInit = new Thread(() -> {
+            try {
+                TaskBackendRouter router = new TaskBackendRouter(activity, this::onTaskBackendResult);
+                if (destroyed) {
+                    router.close();
+                    return;
+                }
+                this.taskBackend = router;
+                if (destroyed) {
+                    this.taskBackend.close();
+                    this.taskBackend = null;
+                    return;
+                }
+                // Subsequent calls are serialized behind this maintenance by
+                // the router, independently of UI and emulator launch.
+                this.taskBackend.cleanupHelpers();
+                if (!destroyed) {
+                    // Dedicated Home/console mode: snapshot curtains alone own
+                    // emulator <-> launcher presentation.
+                    this.taskBackend.setTransitionScale(0.0f);
+                }
+            } catch (Throwable error) {
+                Log.w(TAG, "Privileged backend initialization failed", error);
+            }
+        }, "KyodaiTaskBackendInit");
+        backendInit.setDaemon(true);
+        backendInit.start();
     }
     
     @Override
@@ -222,7 +265,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         
         IntentFilter filter = new IntentFilter(ACTION_EXTRACTION_COMPLETE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            activity.registerReceiver(extractionReceiver, filter, Context.RECEIVER_EXPORTED);
+            activity.registerReceiver(extractionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
             activity.registerReceiver(extractionReceiver, filter);
         }
@@ -231,6 +274,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     @Override
     public void onMainDestroy() {
+        destroyed = true;
         // The receiver is registered against the Activity context; without an
         // unregister the Activity leaks it on recreation (IntentReceiverLeaked)
         // and the destroy stalls long enough to race resume-time restore work.
@@ -251,6 +295,10 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             taskBackend = null;
         }
         androidTaskClearRetainedIdentity();
+        if (chunkFlushExecutor != null) {
+            chunkFlushExecutor.shutdownNow();
+            chunkFlushExecutor = null;
+        }
         if (instance == this) instance = null;
         super.onMainDestroy();
     }
@@ -3725,15 +3773,21 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     // ==================== ANDROID TASK BACKEND ====================
 
     public void onHomeIntent() {
+        if (destroyed) return;
         // Start capture before Godot resumes its activity. The privileged
         // helper raises the snapshot curtain while Android is still performing
         // the task transition; GDScript consumes this same result on retain.
         if (earlyHomeEnabled && taskBackend != null && retainedTaskId > 0) {
             earlyHomeEnabled = false;
             homeSnapshotTaskId = retainedTaskId;
-            homeSnapshotRequestId = taskBackend.captureTaskSnapshot(
-                    retainedTaskId, retainedPackage, retainedTopActivity);
+            if (!observerNonce.isEmpty()) {
+                homeSnapshotRequestId = "observer:" + observerNonce;
+            } else {
+                homeSnapshotRequestId = taskBackend.captureTaskSnapshot(
+                        retainedTaskId, retainedPackage, retainedTopActivity);
+            }
             homeSnapshotJson = null;
+            if (homeSnapshotRequestId.startsWith("observer:")) watchObserverResult();
         }
         emitSignal("android_home_requested");
     }
@@ -3744,10 +3798,17 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         retainedPackage = packageName != null ? packageName : "";
         retainedTopActivity = topActivity != null ? topActivity : "";
         earlyHomeEnabled = gameForeground;
+        if (gameForeground && taskBackend != null && observerRequestedTaskId != taskId) {
+            observerRequestedTaskId = taskId;
+            observerReleasePending = false;
+            taskBackend.startObserver(taskId, retainedPackage, retainedTopActivity,
+                    activity.getPackageName(), android.os.Process.myPid());
+        }
     }
 
     @UsedByGodot
     public void androidTaskClearRetainedIdentity() {
+        androidTaskReleaseObserver();
         retainedTaskId = -1;
         retainedPackage = "";
         retainedTopActivity = "";
@@ -3756,26 +3817,132 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     @UsedByGodot
+    public void androidTaskReleaseObserver() {
+        observerRequestedTaskId = -1;
+        String nonce = observerNonce;
+        observerNonce = "";
+        if (!nonce.isEmpty()) {
+            writeObserverRelease(nonce);
+            observerReleasePending = false;
+        } else {
+            observerReleasePending = true;
+        }
+    }
+
+    @UsedByGodot
     public String androidTaskHomeSnapshotStatus(int taskId) {
         if (taskId != homeSnapshotTaskId || homeSnapshotRequestId.isEmpty()) return "none";
+        if (homeSnapshotRequestId.startsWith("observer:")) {
+            File result = observerResultFile();
+            if (result != null && new File(result.getParentFile(), "observer-exited").isFile()) return "error";
+            if (result == null || !result.isFile()) return "pending";
+            try {
+                org.json.JSONObject parsed = new org.json.JSONObject(readTaskResult(result));
+                return parsed.has("snapshot") || !parsed.optBoolean("ok", false) ? "ready" : "pending";
+            } catch (Exception ignored) {
+                return "pending";
+            }
+        }
         return homeSnapshotJson != null ? "ready" : "pending";
     }
 
     @UsedByGodot
     public String androidTaskConsumeHomeSnapshot(int taskId) {
         if (!"ready".equals(androidTaskHomeSnapshotStatus(taskId))) return "";
-        String result = homeSnapshotJson;
+        String result;
+        if (homeSnapshotRequestId.startsWith("observer:")) {
+            File file = observerResultFile();
+            result = file != null ? readTaskResult(file) : "";
+        } else {
+            result = homeSnapshotJson;
+        }
         clearHomeSnapshot();
         return result != null ? result : "";
     }
 
+    private File observerResultFile() {
+        if (activity == null || !homeSnapshotRequestId.startsWith("observer:")) return null;
+        String nonce = homeSnapshotRequestId.substring("observer:".length());
+        return new File(activity.getFilesDir(), "task-requests/" + nonce + "/result.json");
+    }
+
+    private String readTaskResult(File file) {
+        try (FileInputStream input = new FileInputStream(file)) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = input.read(buffer)) >= 0) output.write(buffer, 0, read);
+            return output.toString("UTF-8");
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void watchObserverResult() {
+        if (homeResultObserver != null) homeResultObserver.stopWatching();
+        File result = observerResultFile();
+        if (result == null || result.getParentFile() == null) return;
+        final String requestId = homeSnapshotRequestId;
+        homeResultObserver = new FileObserver(result.getParentFile().getAbsolutePath(),
+                FileObserver.CREATE | FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+            @Override
+            public void onEvent(int event, String path) {
+                if (!"result.json".equals(path)) return;
+                publishObserverResultIfReady(result, requestId);
+            }
+        };
+        homeResultObserver.startWatching();
+        // The helper may have published before the watcher was installed.
+        publishObserverResultIfReady(result, requestId);
+    }
+
+    private void publishObserverResultIfReady(File result, String requestId) {
+        if (!requestId.equals(homeSnapshotRequestId)) return;
+        try {
+            org.json.JSONObject parsed = new org.json.JSONObject(readTaskResult(result));
+            if (!parsed.has("snapshot") && parsed.optBoolean("ok", true)) return;
+            String expectedNonce = requestId.substring("observer:".length());
+            if (!expectedNonce.equals(parsed.optString("nonce", ""))) return;
+            onTaskBackendResult(requestId, "captureTaskSnapshot", parsed);
+            if (homeResultObserver != null) homeResultObserver.stopWatching();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void writeObserverRelease(String nonce) {
+        if (activity == null || nonce.isEmpty()) return;
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(
+                new File(activity.getFilesDir(), "task-requests/" + nonce + "/release-curtain"))) {
+            out.write("release\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.getFD().sync();
+        } catch (Exception error) {
+            Log.w(TAG, "Could not release task observer", error);
+        }
+    }
+
     private void clearHomeSnapshot() {
+        if (homeResultObserver != null) {
+            homeResultObserver.stopWatching();
+            homeResultObserver = null;
+        }
         homeSnapshotTaskId = -1;
         homeSnapshotRequestId = "";
         homeSnapshotJson = null;
     }
 
     private void onTaskBackendResult(String requestId, String operation, org.json.JSONObject result) {
+        if (destroyed) return;
+        if ("startObserver".equals(operation)) {
+            String nonce = result.optString("nonce", "");
+            if (observerReleasePending) {
+                if (!nonce.isEmpty()) writeObserverRelease(nonce);
+                observerReleasePending = false;
+            } else if (result.optBoolean("ok", false) && result.optBoolean("observer", false) && !nonce.isEmpty()) {
+                observerNonce = nonce;
+            } else {
+                observerRequestedTaskId = -1;
+            }
+        }
         if (requestId.equals(homeSnapshotRequestId)) {
             homeSnapshotJson = result.toString();
         }
@@ -3855,6 +4022,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
 
         try {
+            lastSessionId = sessionId != null ? sessionId : "";
             Intent intent = new Intent(activity, GameSessionForegroundService.class);
             intent.setAction("START_SESSION");
             intent.putExtra("game_name", gameName);
@@ -3905,6 +4073,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         try {
             Intent intent = new Intent(activity, GameSessionForegroundService.class);
             intent.setAction("STOP_SESSION");
+            intent.putExtra("session_id", lastSessionId);
             activity.startService(intent);
 
             Intent anchor = new Intent(activity, SessionAnchorForegroundService.class);

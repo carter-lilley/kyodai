@@ -611,17 +611,24 @@ func _abort_launch_overlay() -> void:
 
 ## Prerequisites are complete: turn the cold landing page into a plain black
 ## launch curtain before any external process/intent is started.
-func _finish_cold_launch_overlay() -> void:
+func _finish_cold_launch_overlay() -> bool:
 	var overlay_nodes = get_tree().get_nodes_in_group("launch_transition_overlay")
 	if overlay_nodes.size() > 0:
 		var overlay = overlay_nodes[0] as LaunchTransitionOverlay
 		if overlay:
-			await overlay.finish_cold_launch()
+			return await overlay.finish_cold_launch()
+	return true
 
 
 ## Main entry point for launching a game
 func launch_game(game: GameResource, focus_index: int = -1) -> void:
 	print("[LaunchManager] launch_game() called for: ", game.get_display_name() if game else "null", " with focus_index: ", focus_index)
+
+	if process.is_in_background_state():
+		var bg_game = process.get_background_game()
+		if bg_game and bg_game.romm_id != game.romm_id:
+			SystemManager.notifications.show_notification("Close the current game before launching another", SystemManager.notifications.Type.INFO)
+			return
 
 	if SystemManager.platform.is_android():
 		if process._android_transition_inflight:
@@ -738,7 +745,12 @@ func _launch_steam_with_backend(game: GameResource, backend: String, focus_index
 			# Fallback: wait for the expected duration
 			await get_tree().create_timer(0.5).timeout
 
-	await _finish_cold_launch_overlay()
+	if not await _finish_cold_launch_overlay():
+		_abort_launch_overlay()
+		if launch_failed_hook.is_valid():
+			launch_failed_hook.call()
+		_end_launch(game.romm_id)
+		return
 
 	if pre_launch_hook.is_valid():
 		await pre_launch_hook.call(game)
@@ -1073,7 +1085,7 @@ func _resume_android_with_transition(session: GameSession) -> void:
 		var texture := _session_snapshot_texture(session)
 		if overlay and texture:
 			var info: Dictionary = overlay._get_focused_card_and_texture()
-			if not info.is_empty():
+			if info.get("card", null) != null and info.get("rect", Rect2()).size.x > 0.0 and info.get("rect", Rect2()).size.y > 0.0:
 				LaunchTransitionOverlay.set_source(texture, info.rect, info.get("corner_radius", 0.06))
 				overlay.play_resume(session.game)
 				# Do not let Android begin its task transition until the exact
@@ -1086,16 +1098,8 @@ func _resume_android_with_transition(session: GameSession) -> void:
 				node.abort()
 
 func _session_snapshot_texture(session: GameSession) -> Texture2D:
-	var path := str(session.runtime.get("snapshotPath", ""))
-	if path.is_empty():
-		return null
-	var bytes := FSM.read_file_bytes(path)
-	if bytes.size() < 16:
-		return null
-	var img := Image.new()
-	if img.load_jpg_from_buffer(bytes) != OK or img.is_empty():
-		return null
-	return ImageTexture.create_from_image(img)
+	# GameCard owns one shared decode/cache path for overlay and card media.
+	return GameCard.session_texture_for_path(str(session.runtime.get("snapshotPath", "")))
 
 ## Internal function to actually launch the game (emulator must be installed)
 func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
@@ -1103,6 +1107,12 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 	
 	if process.is_in_background_state():
 		var bg_game = process.get_background_game()
+		if bg_game and bg_game.romm_id != game.romm_id:
+			push_warning("[LaunchManager] Refusing to launch a different game while another session is active")
+			SystemManager.notifications.show_notification("Close the current game before launching another", SystemManager.notifications.Type.INFO)
+			_abort_launch_overlay()
+			_end_launch(game.romm_id)
+			return
 		if bg_game and bg_game.romm_id == game.romm_id:
 			push_warning("[LaunchManager] _launch_game_internal: " + game.get_display_name() + " is already running, ignoring duplicate launch")
 			_abort_launch_overlay()
@@ -1143,7 +1153,12 @@ func _launch_game_internal(game: GameResource, emulator_id: String) -> void:
 			# Fallback: wait for the expected duration
 			await get_tree().create_timer(0.5).timeout
 	
-	await _finish_cold_launch_overlay()
+	if not await _finish_cold_launch_overlay():
+		_abort_launch_overlay()
+		if launch_failed_hook.is_valid():
+			launch_failed_hook.call()
+		_end_launch(game.romm_id)
+		return
 	print("[LaunchManager] _launch_game_internal: Launch intent created, executing launch...")
 
 	# Let the app hibernate (release UI/memory) before the process starts and,

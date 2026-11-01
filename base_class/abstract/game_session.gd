@@ -23,10 +23,12 @@ var session_start_ms: int = 0
 var runtime: Dictionary = {}
 var owner: Dictionary = {}
 var pending_path: String = ""
+var end_unix: float = 0.0
 var active_elapsed_ms: int = 0
 var last_resume_ms: int = 0
 var last_resume_unix: float = 0.0
 var has_active_timing := false
+var playtime_running := false
 
 static func current_owner() -> Dictionary:
 	return {
@@ -68,6 +70,7 @@ static func from_pending(record: Dictionary, game: GameResource = null) -> GameS
 	session.runtime = record.get("runtime", {}).duplicate(true)
 	session.owner = record.get("owner", {}).duplicate(true)
 	session.pending_path = str(record.get("_pending_path", ""))
+	session.end_unix = float(record.get("end_unix", 0.0))
 	# A restored session keeps wall-clock accounting anchored to the original
 	# launch while subsequent finalization can still use a monotonic clock.
 	var elapsed := maxi(0, int(Time.get_unix_time_from_system() - session.start_unix))
@@ -77,6 +80,7 @@ static func from_pending(record: Dictionary, game: GameResource = null) -> GameS
 	session.has_active_timing = record.has("active_elapsed_ms") or record.has("last_resume_unix")
 	if session.last_resume_unix > 0.0:
 		session.last_resume_ms = Time.get_ticks_msec() - maxi(0, int((Time.get_unix_time_from_system() - session.last_resume_unix) * 1000.0))
+		session.playtime_running = true
 	session.state = State.ACTIVE
 	return session
 
@@ -93,7 +97,7 @@ static func backend_to_string(backend: Backend) -> String:
 		_: return "unknown"
 
 func pending_record() -> Dictionary:
-	return {
+	var record := {
 		"session_id": session_id,
 		"romm_id": romm_id,
 		"title": title,
@@ -107,26 +111,31 @@ func pending_record() -> Dictionary:
 		"runtime": runtime.duplicate(true),
 		"owner": owner.duplicate(true),
 	}
+	if end_unix > 0.0:
+		record["end_unix"] = end_unix
+	return record
 
 func is_shuffler() -> bool:
 	return str(policy.get("origin", "")) == "shuffler"
 
 func resume_playtime() -> void:
-	if last_resume_ms > 0:
+	if playtime_running:
 		return
 	last_resume_ms = Time.get_ticks_msec()
 	last_resume_unix = Time.get_unix_time_from_system()
+	playtime_running = true
 
 func pause_playtime() -> void:
-	if last_resume_ms <= 0:
+	if not playtime_running:
 		return
 	active_elapsed_ms += maxi(0, Time.get_ticks_msec() - last_resume_ms)
 	last_resume_ms = 0
 	last_resume_unix = 0.0
+	playtime_running = false
 
 func active_seconds(end_unix: float = 0.0) -> int:
 	var elapsed := active_elapsed_ms
-	if last_resume_ms > 0:
+	if playtime_running:
 		var end_ms := last_resume_ms
 		if end_unix > 0.0:
 			end_ms += maxi(0, int((end_unix - last_resume_unix) * 1000.0))
@@ -148,7 +157,7 @@ func recovered_elapsed_seconds(end_unix: float = 0.0) -> int:
 		if end_unix > 0.0:
 			return active_seconds(end_unix)
 		var elapsed := active_elapsed_ms
-		if last_resume_ms > 0:
+		if playtime_running:
 			elapsed += mini(maxi(0, Time.get_ticks_msec() - last_resume_ms), MAX_RECOVERED_SESSION_SECONDS * 1000)
 		return maxi(0, int(elapsed / 1000))
 	if start_unix <= 0.0:

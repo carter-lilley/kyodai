@@ -145,6 +145,7 @@ func _run() -> void:
 	await _test_desktop_launch_exit_and_duplicates()
 	await _test_android_resume_is_terminal()
 	await _test_playtime_annotation_and_recovery()
+	await _test_android_end_annotation()
 	await _test_steam_recovery()
 	await _test_recovery_claim()
 	await _test_desktop_reattach()
@@ -250,6 +251,27 @@ func _test_playtime_annotation_and_recovery() -> void:
 	_check(not sessions.finalize_pending_record(invalid, "invalid"), "zero start timestamp is rejected")
 	_check(sessions.commits.size() == 1 and sessions.uploads.size() == 1, "invalid recovery cannot credit or upload")
 	_check(not FileAccess.file_exists(invalid_path), "invalid pending record is cleaned up")
+
+func _test_android_end_annotation() -> void:
+	var fixture := _fixture()
+	var sessions: SpySessions = fixture[1]
+	var game := _game(107, "Android End Timing")
+	var now: float = floor(Time.get_unix_time_from_system())
+	var session := GameSession.new_session(game, GameSession.Backend.ANDROID_TASK, {"emulator_id": "test_emulator"})
+	session.active_elapsed_ms = 10000
+	session.has_active_timing = true
+	session.last_resume_unix = now - 30.0
+	session.last_resume_ms = Time.get_ticks_msec() - 30000
+	session.playtime_running = true
+	session.end_unix = now - 20.0
+	var path := SessionSubManager.pending_path_for("session-android-end-test")
+	session.pending_path = path
+	_write_record(path, session.pending_record())
+	# GDScript rewrites must preserve the native annotation before recovery.
+	sessions.update_runtime(session, session.runtime)
+	_check(sessions.finalize_once(session, 0, "recovered", true), "Android native end finalizes once")
+	_check(sessions.commits.size() == 1 and sessions.commits[0][1] == 20, "Android end_unix clamps active playtime instead of recovery time: " + str(sessions.commits))
+	_check(sessions.uploads.size() == 1, "Android end recovery uploads once")
 
 func _test_steam_recovery() -> void:
 	var fixture := _fixture()

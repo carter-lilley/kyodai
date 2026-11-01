@@ -8,11 +8,14 @@ extends Control
 signal animation_completed
 signal cold_launch_ready
 signal resume_ready
+signal return_completed
+signal return_failed
 
 enum TransitionMode { COLD, RETAINED_RESUME, RETAINED_RETURN }
 var _mode: TransitionMode = TransitionMode.COLD
 var _cold_black_requested := false
 var _cold_black_ready := false
+var _aborted := false
 
 # Static variable to track if any launch transition is animating (accessible globally)
 static var is_transition_active: bool = false
@@ -136,6 +139,7 @@ func _start_transition(mode: TransitionMode = TransitionMode.COLD):
 		return
 
 	_mode = mode
+	_aborted = false
 	_cold_black_requested = false
 	_cold_black_ready = false
 	modulate.a = 1.0
@@ -251,12 +255,14 @@ func _get_focused_card_and_texture() -> Dictionary:
 		if current is GameCard:
 			var card = current as GameCard
 
-			# Get the visual container's global rect
+			# Target the actual media window, not the outer card. Using the
+			# outer rect made the fullscreen image shrink to one size and then
+			# visibly pop/crop into the smaller media panel at completion.
 			var card_rect = Rect2()
 			if card is Control:
-				var global_pos = card.global_position
-				var card_size = card.size
-				card_rect = Rect2(global_pos, card_size)
+				card_rect = card.get_global_transform() * card._media_bounds
+				if card_rect.size.x <= 0.0 or card_rect.size.y <= 0.0:
+					card_rect = card.get_global_rect()
 			else:
 				push_error("[LaunchTransitionOverlay] Card is not a Control")
 
@@ -442,24 +448,25 @@ func _animate_transition():
 
 ## Called by LaunchManager after all cold-launch preparation is complete.
 ## The process/intent is not started until this black curtain is ready.
-func finish_cold_launch() -> void:
+func finish_cold_launch() -> bool:
+	if _aborted:
+		return false
 	if _mode != TransitionMode.COLD or not visible:
-		cold_launch_ready.emit()
-		return
+		return true
 	if _cold_black_ready:
-		cold_launch_ready.emit()
-		return
+		return true
 	if _cold_black_requested:
 		await cold_launch_ready
-		return
+		return not _aborted and _cold_black_ready
 	_cold_black_requested = true
 	# Fast preparation may finish during the landing animation. Let that
 	# landing complete, then replace it with black before opening the app.
 	if _is_animating:
 		await animation_completed
+	if _aborted:
+		return false
 	if _mode != TransitionMode.COLD or not visible:
-		cold_launch_ready.emit()
-		return
+		return true
 	if _game_title_label:
 		_game_title_label.visible = false
 	_black_curtain.visible = true
@@ -469,21 +476,30 @@ func finish_cold_launch() -> void:
 	var tween := get_tree().create_tween()
 	_tween = tween
 	tween.tween_property(_black_curtain, "modulate:a", 1.0, COLD_FADE_DURATION)
-	await tween.finished
-	_tween = null
-	_is_animating = false
-	is_transition_active = false
-	_cold_black_ready = true
-	cold_launch_ready.emit()
+	tween.chain().tween_callback(func():
+		_tween = null
+		_is_animating = false
+		is_transition_active = false
+		_cold_black_ready = true
+		cold_launch_ready.emit()
+	)
+	await cold_launch_ready
+	return not _aborted and _cold_black_ready
 
 ## Plays the retained-game return: fullscreen snapshot -> focused card.
 ## The actual card then keeps displaying that snapshot while retained.
 func play_return_to_card(texture: Texture2D) -> void:
-	if _is_animating or texture == null:
+	if texture == null:
 		return
+	if _is_animating:
+		# SceneTree tweens may have been paused while the game was foreground.
+		# The retained return supersedes them instead of leaving a fullscreen
+		# screenshot stuck behind a stale _is_animating flag.
+		abort()
 	var info := _get_focused_card_and_texture()
 	if info.is_empty() or info.rect.size.x <= 0 or info.rect.size.y <= 0:
 		abort()
+		return_failed.emit()
 		return
 	_game = null
 	_mode = TransitionMode.RETAINED_RETURN
@@ -496,6 +512,8 @@ func play_return_to_card(texture: Texture2D) -> void:
 	var overshoot := 4.0
 	var start_size := viewport_size + Vector2(overshoot * 2, overshoot * 2)
 	if not _setup_effect_stack(texture, Rect2(-Vector2(overshoot, overshoot), start_size), 0.0):
+		abort()
+		return_failed.emit()
 		return
 	visible = true
 	z_index = 1000
@@ -527,6 +545,7 @@ func play_return_to_card(texture: Texture2D) -> void:
 		_is_animating = false
 		is_transition_active = false
 		_tween = null
+		return_completed.emit()
 	)
 
 ## Fallback transition used when no GameCard texture is available (e.g.
@@ -612,8 +631,15 @@ func abort() -> void:
 	_is_animating = false
 	is_transition_active = false
 	_phase1_completed = false
+	_aborted = true
+	animation_completed.emit()
+	cold_launch_ready.emit()
 	_cold_black_requested = false
 	_cold_black_ready = false
+	if _mode == TransitionMode.RETAINED_RESUME:
+		# Release the resume waiter so a newer Home retain can win instead of
+		# leaving a pending transition coroutine behind.
+		resume_ready.emit()
 	_mode = TransitionMode.COLD
 	visible = false
 	if _game_title_label:

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Keep Android's normal transition lifecycle, but make Kyodai's own
+         activity animations effectively instantaneous. @null animations left
+         the vendor BLAST transition waiting for a window that never focused. -->
+    <style name="KyodaiNoAnimation" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/kyodai_hold</item>
+        <item name="android:activityOpenExitAnimation">@anim/kyodai_hold</item>
+        <item name="android:activityCloseEnterAnimation">@anim/kyodai_hold</item>
+        <item name="android:activityCloseExitAnimation">@anim/kyodai_hold</item>
+    </style>
+</resources>

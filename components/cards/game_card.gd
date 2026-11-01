@@ -197,6 +197,11 @@ func _on_rs_items_recreated() -> void:
 func _enter_tree():
 	super._enter_tree()
 	_cached_home_view = _find_home_view()
+	# Cards are pooled: _ready runs once, but snapshot ownership changes on
+	# every removal/reinsertion. Reconnect and reapply on every tree entry.
+	if LaunchManager and not LaunchManager.session_changed.is_connected(_on_session_changed):
+		LaunchManager.session_changed.connect(_on_session_changed)
+	call_deferred("_apply_session_snapshot_if_present")
 	if not _ready_called:
 		return
 	# The media stack is rebuilt in _on_rs_items_recreated() before bounds are
@@ -230,9 +235,6 @@ func _ready():
 
 	_update_card_state_from_settings()
 	_update_display()
-
-	if LaunchManager and not LaunchManager.session_changed.is_connected(_on_session_changed):
-		LaunchManager.session_changed.connect(_on_session_changed)
 
 	# Connect M3Card signals
 	pressed.connect(_on_card_pressed)
@@ -355,6 +357,13 @@ func _build_media_stack(force_full_rebuild: bool = true):
 		# node-less stack (it has no geometry of its own to clip against).
 		_media_stack.set_clip_children(false)
 		_media_stack.update_draw_rects()
+
+	# Cached cover textures already include mipmaps. Sample them explicitly so
+	# shrinking cards and zoom changes filter through the chain instead of
+	# minifying only the base image. The silhouette shaders are unaffected.
+	var base_effect := _media_stack.get_effect("base")
+	if base_effect:
+		base_effect.set_texture_filter(RenderingServer.CANVAS_ITEM_TEXTURE_FILTER_LINEAR_WITH_MIPMAPS)
 
 	_update_media()
 	_ensure_present_wrap()
@@ -634,18 +643,20 @@ func _update_card_state_from_settings():
 	_sync_focus_container_properties()
 
 func _apply_display_mode() -> void:
-	# Map display mode to background/text visibility and edge AA
+	# Every stack layer already shares this outer-edge coverage calculation.
+	# Keep it enabled in all display modes so Standard cards don't reintroduce
+	# hard SDF cutouts. Inset and border-inner compositing is independent and
+	# intentionally unchanged; display mode only controls background and text.
+	_media_container.edge_aa_enabled = true
 	match _display_mode:
 		0: # Standard
 			show_background = true
 			show_text_margin = true
 			text_centered_overlay = false
-			_media_container.edge_aa_enabled = false
 		1: # Transparent
 			show_background = false
 			show_text_margin = true
 			text_centered_overlay = false
-			_media_container.edge_aa_enabled = true
 		2: # Media Only
 			show_background = false
 			# Cover-less games would render as blank unidentifiable panels, so
@@ -655,10 +666,8 @@ func _apply_display_mode() -> void:
 			var no_cover := game != null and not game.has_cover_art and not _is_present_wrapped()
 			show_text_margin = no_cover
 			text_centered_overlay = no_cover
-			_media_container.edge_aa_enabled = true
 
-	# Push the new AA flag to the shader immediately so the edge doesn't stay
-	# jagged when switching into transparent/media-only mode.
+	# Push the shared coverage flag immediately when switching display modes.
 	if _media_stack:
 		_media_stack.force_refresh()
 
@@ -1068,13 +1077,15 @@ static func evict_session_snapshot(path: String) -> void:
 	if not path.is_empty():
 		_session_texture_cache.erase(path)
 
-func _session_snapshot_texture() -> Texture2D:
-	if not game or not LaunchManager:
-		return null
-	var session: GameSession = LaunchManager.sessions.get_live_for_game(game.romm_id)
-	if session == null or session.state != GameSession.State.RETAINED:
-		return null
-	var path := str(session.runtime.get("snapshotPath", ""))
+static func clear_session_texture_cache() -> void:
+	_session_texture_cache.clear()
+
+func _apply_session_snapshot_if_present() -> void:
+	var snapshot := _session_snapshot_texture()
+	if snapshot:
+		_set_texture(snapshot)
+
+static func session_texture_for_path(path: String) -> Texture2D:
 	if path.is_empty():
 		return null
 	if _session_texture_cache.has(path):
@@ -1091,14 +1102,20 @@ func _session_snapshot_texture() -> Texture2D:
 	_session_texture_cache[path] = texture
 	return texture
 
+func _session_snapshot_texture() -> Texture2D:
+	if not game or not LaunchManager:
+		return null
+	var session: GameSession = LaunchManager.sessions.get_live_for_game(game.romm_id)
+	if session == null or session.state != GameSession.State.RETAINED:
+		return null
+	return session_texture_for_path(str(session.runtime.get("snapshotPath", "")))
+
 func _on_session_changed(session: GameSession) -> void:
 	if not game or session.romm_id != game.romm_id:
 		return
 	var snapshot := _session_snapshot_texture()
-	print("[GameCard] Session snapshot update: ", game.romm_id, " state=", session.state, " path=", session.runtime.get("snapshotPath", ""), " loaded=", snapshot != null)
 	if snapshot:
 		_set_texture(snapshot)
-		print("[GameCard] Snapshot applied to current texture: ", _current_texture == snapshot)
 	elif session.state != GameSession.State.RETAINED:
 		_load_cover(true)
 	# While RETAINED with capture still in flight, keep the existing texture;

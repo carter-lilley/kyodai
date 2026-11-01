@@ -18,16 +18,17 @@
  
 +	// kyodai_home_forwarding: GodotPlugin has no onNewIntent hook in 4.7.
 +	// Forward only Home intents; all other launch/deep-link behavior stays in
-+	// the engine activity.
++	// the engine activity. Start the native snapshot curtain before Godot
++	// resumes and presents its Home window.
 +	@Override
 +	protected void onNewIntent(Intent intent) {
-+		super.onNewIntent(intent);
 +		if (intent != null && intent.hasCategory(Intent.CATEGORY_HOME)) {
 +			KyodaiBridgePlugin bridge = KyodaiBridgePlugin.getInstance();
 +			if (bridge != null) {
 +				bridge.onHomeIntent();
 +			}
 +		}
++		super.onNewIntent(intent);
 +	}
 +
  	@Override

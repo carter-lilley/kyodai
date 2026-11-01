@@ -47,7 +47,7 @@
 +				getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 +						.edit()
 +						.putLong(PREF_LAST_REBIRTH_MS, nowWallMs)
-+						.apply();
++						.commit();
 +				triggerRebirth(null, getIntent());
 +			} else {
 +				Log.w(TAG, "Rapid activity recreation detected again, but rebirth is on cooldown");

@@ -2,11 +2,16 @@ package com.heckpoint.kyodai.task;
 
 import android.app.ActivityManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ColorSpace;
 import android.hardware.HardwareBuffer;
+import android.os.Binder;
+import android.os.FileObserver;
 import android.os.IBinder;
+import android.os.Parcel;
 import android.os.Process;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.SurfaceControl;
 
 import org.json.JSONArray;
@@ -19,14 +24,34 @@ import java.io.FileOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 /** Entry point executed by app_process through the vendor privilege bridge. */
 public final class PrivilegedTaskHelper {
     private static final int PROTOCOL = 1;
+    private static final String TAG = "KyodaiTaskHelper";
 
     private JSONObject request;
+    private HardwareBuffer curtainBuffer;
+    private ColorSpace curtainColorSpace;
+    private boolean curtainRealSnapshot;
+    private volatile SurfaceControl observerCurtain;
+    private Object observerRegistration;
+    private final ExecutorService observerExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "KyodaiObserverWork");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile boolean observerStopped;
     private JSONObject expected;
     private File requestDir;
     private String nonce;
@@ -34,8 +59,9 @@ public final class PrivilegedTaskHelper {
     public static void main(String[] args) {
         PrivilegedTaskHelper helper = new PrivilegedTaskHelper();
         boolean homeCurtain = args.length == 2 && "--home-curtain".equals(args[1]);
+        boolean observer = args.length == 2 && "--observe".equals(args[1]);
         try {
-            if (args.length != 1 && !homeCurtain) {
+            if (args.length != 1 && !homeCurtain && !observer) {
                 throw new Exception("invalid_request", new Exception("Expected request directory"));
             }
             helper.requestDir = new File(args[0]).getCanonicalFile();
@@ -43,6 +69,8 @@ public final class PrivilegedTaskHelper {
             helper.requirePrivileged();
             if (homeCurtain) {
                 helper.runHomeCurtain();
+            } else if (observer) {
+                helper.runObserver();
             } else {
                 helper.execute();
             }
@@ -67,11 +95,14 @@ public final class PrivilegedTaskHelper {
 
     private void requirePrivileged() throws Exception {
         int uid = Process.myUid();
-        // UID 2000 is accepted only to make direct on-device helper diagnostics
-        // possible. VendorTaskBackend still requires UID 0 for the full tier.
-        if (uid != 0 && uid != 2000) {
-            throw new Exception("denied", new Exception("Privileged helper identity required"));
+        if (uid == 0) return;
+        // Shell diagnostics are read-only; root daemon invocations still use
+        // UID 0 for the full tier.
+        if (uid == 2000) {
+            String op = request.getString("op");
+            if ("probe".equals(op) || "list".equals(op)) return;
         }
+        throw new Exception("denied", new Exception("Privileged helper identity required"));
     }
 
     private void execute() throws Exception {
@@ -84,6 +115,9 @@ public final class PrivilegedTaskHelper {
             case "force_stop": forceStop(); break;
             case "remove_task": removeTask(); break;
             case "move_display": moveDisplay(); break;
+            case "observe_start": spawnObserver(); break;
+            case "transition_scale": setTransitionScale(); break;
+            case "cleanup_helpers": cleanupHelpers(); break;
             default: throw new Exception("invalid_request", new Exception("Unknown operation"));
         }
     }
@@ -115,16 +149,29 @@ public final class PrivilegedTaskHelper {
     private void snapshot() throws Exception {
         int taskId = requireTaskId();
         ActivityManager.RunningTaskInfo info = requireTask(taskId);
-        Object snapshot = getTaskSnapshot(taskId);
-        if (snapshot == null) throw new Exception("capture_failed", new Exception("No task snapshot"));
-        HardwareBuffer buffer = (HardwareBuffer) snapshot.getClass().getMethod("getHardwareBuffer").invoke(snapshot);
-        if (buffer == null) throw new Exception("capture_failed", new Exception("Empty snapshot buffer"));
-        ColorSpace colorSpace = (ColorSpace) snapshot.getClass().getMethod("getColorSpace").invoke(snapshot);
-        boolean real = (boolean) snapshot.getClass().getMethod("isRealSnapshot").invoke(snapshot);
-        Bitmap bitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace);
-        if (bitmap == null) throw new Exception("capture_failed", new Exception("Could not wrap snapshot"));
+        // Match Cocoon's ordering: raise the SurfaceControl curtain before
+        // doing any JPEG conversion, file I/O, or launcher callbacks.
+        boolean homeCurtain = spawnHomeCurtain();
         File output = new File(requestDir, "frame.jpg");
-        writeJpeg(bitmap, output);
+        Bitmap bitmap;
+        boolean real;
+        if (homeCurtain && output.isFile()) {
+            // The curtain child already captured and published this exact
+            // frame. Reuse it instead of requesting a second task snapshot.
+            bitmap = BitmapFactory.decodeFile(output.getAbsolutePath());
+            String[] marker = readText(new File(requestDir, "frame-ready")).trim().split(" ");
+            real = marker.length < 3 || !"0".equals(marker[2]);
+        } else {
+            Object snapshot = getTaskSnapshot(taskId);
+            if (snapshot == null) throw new Exception("capture_failed", new Exception("No task snapshot"));
+            HardwareBuffer buffer = (HardwareBuffer) snapshot.getClass().getMethod("getHardwareBuffer").invoke(snapshot);
+            if (buffer == null) throw new Exception("capture_failed", new Exception("Empty snapshot buffer"));
+            ColorSpace colorSpace = (ColorSpace) snapshot.getClass().getMethod("getColorSpace").invoke(snapshot);
+            real = (boolean) snapshot.getClass().getMethod("isRealSnapshot").invoke(snapshot);
+            bitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace);
+            writeJpeg(bitmap, output);
+        }
+        if (bitmap == null) throw new Exception("capture_failed", new Exception("Could not wrap snapshot"));
         JSONObject result = baseResult();
         result.put("task", taskJson(info));
         JSONObject image = new JSONObject();
@@ -133,8 +180,29 @@ public final class PrivilegedTaskHelper {
         image.put("height", bitmap.getHeight());
         image.put("real", real);
         result.put("snapshot", image);
-        result.put("homeCurtain", spawnHomeCurtain());
+        result.put("homeCurtain", homeCurtain);
         writeResult(result);
+    }
+
+    private boolean awaitFile(File target, long timeoutMs) throws InterruptedException {
+        if (target.isFile()) return true;
+        File parent = target.getParentFile();
+        if (parent == null || !parent.isDirectory()) return false;
+        CountDownLatch latch = new CountDownLatch(1);
+        FileObserver observer = new FileObserver(parent.getAbsolutePath(),
+                FileObserver.CREATE | FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+            @Override
+            public void onEvent(int event, String path) {
+                if (target.getName().equals(path)) latch.countDown();
+            }
+        };
+        observer.startWatching();
+        try {
+            if (target.isFile()) return true;
+            return latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+        } finally {
+            observer.stopWatching();
+        }
     }
 
     private boolean spawnHomeCurtain() {
@@ -148,11 +216,7 @@ public final class PrivilegedTaskHelper {
             // Do not let GDScript start updating behind the curtain until the
             // child has a real SurfaceFlinger layer on screen.
             File ready = new File(requestDir, "curtain-ready");
-            long deadline = SystemClock.uptimeMillis() + 300;
-            while (SystemClock.uptimeMillis() < deadline) {
-                if (ready.isFile()) return true;
-                SystemClock.sleep(20);
-            }
+            if (awaitFile(ready, 300)) return true;
         } catch (Throwable ignored) {
         }
         return false;
@@ -164,16 +228,298 @@ public final class PrivilegedTaskHelper {
         SurfaceControl curtain = showResumeCurtain(taskId);
         if (curtain == null) return;
         try {
+            writeCurtainFrame();
             try (FileOutputStream ready = new FileOutputStream(new File(requestDir, "curtain-ready"))) {
                 ready.write("1".getBytes(StandardCharsets.UTF_8));
             }
             File release = new File(requestDir, "release-curtain");
-            long deadline = SystemClock.uptimeMillis() + 5000;
-            while (!release.isFile() && SystemClock.uptimeMillis() < deadline) {
-                SystemClock.sleep(40);
-            }
+            awaitFile(release, 5000);
         } finally {
             hideResumeCurtain(curtain);
+        }
+    }
+
+    private void spawnObserver() throws Exception {
+        ProcessBuilder builder = new ProcessBuilder(
+                "/system/bin/app_process", "/system/bin",
+                PrivilegedTaskHelper.class.getName(), requestDir.getAbsolutePath(), "--observe");
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(new File("/dev/null"));
+        java.lang.Process child = builder.start();
+        File ready = new File(requestDir, "observer-ready");
+        if (!awaitFile(ready, 500)) {
+            child.destroy();
+            throw new Exception("unavailable", new Exception("Task observer failed to start"));
+        }
+        JSONObject result = baseResult();
+        result.put("observer", true);
+        writeResult(result);
+    }
+
+    private void runObserver() throws Exception {
+        int gameTaskId = requireTaskId();
+        requireTask(gameTaskId);
+        String homePackage = expected.getString("homePackage");
+        int ownerPid = expected.getInt("ownerPid");
+        try {
+            registerObserver(homePackage, gameTaskId);
+            try (FileOutputStream ready = new FileOutputStream(new File(requestDir, "observer-ready"))) {
+                ready.write("1".getBytes(StandardCharsets.UTF_8));
+            }
+            File release = new File(requestDir, "release-curtain");
+            awaitObserverRelease(release, ownerPid);
+        } finally {
+            observerStopped = true;
+            stopObserverExecutor();
+            unregisterObserver();
+            hideResumeCurtain(observerCurtain);
+            observerCurtain = null;
+            try (FileOutputStream exited = new FileOutputStream(new File(requestDir, "observer-exited"))) {
+                exited.write("1".getBytes(StandardCharsets.UTF_8));
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void stopObserverExecutor() {
+        observerExecutor.shutdown();
+        try {
+            observerExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void cleanupHelpers() throws Exception {
+        int reaped = 0;
+        File[] processes = new File("/proc").listFiles();
+        if (processes != null) {
+            for (File process : processes) {
+                if (!process.getName().matches("\\d+")) continue;
+                int pid = Integer.parseInt(process.getName());
+                if (pid == Process.myPid()) continue;
+                try {
+                    String command = readTextStream(new File(process, "cmdline"));
+                    if (!command.contains(PrivilegedTaskHelper.class.getName())) continue;
+                    int ownerPid = -1;
+                    File requestDir = null;
+                    String[] args = command.split("\\u0000");
+                    for (String arg : args) {
+                        if (!arg.contains("/task-requests/")) continue;
+                        requestDir = new File(arg);
+                        File request = new File(requestDir, "request.json");
+                        if (!request.isFile()) continue;
+                        try {
+                            ownerPid = new JSONObject(readText(request))
+                                    .getJSONObject("expected").optInt("ownerPid", -1);
+                        } catch (Throwable ignored) {
+                        }
+                        break;
+                    }
+                    if (ownerPid > 0 && new File("/proc/" + ownerPid).exists()) continue;
+                    if (ownerPid < 0 && System.currentTimeMillis() - process.lastModified() < 60000) continue;
+                    Process.killProcess(pid);
+                    if (requestDir != null && new File(requestDir, "observer-ready").isFile()) {
+                        try (FileOutputStream out = new FileOutputStream(new File(requestDir, "observer-exited"))) {
+                            out.write("1\n".getBytes(StandardCharsets.UTF_8));
+                        }
+                    }
+                    reaped++;
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        JSONObject result = baseResult();
+        result.put("reaped", reaped);
+        writeResult(result);
+        Log.d(TAG, "stale helpers reaped=" + reaped);
+    }
+
+    private void setTransitionScale() throws Exception {
+        float scale = (float) expected.getDouble("scale");
+        windowManager().getClass().getMethod("setAnimationScale", int.class, float.class)
+                .invoke(windowManager(), 1, scale);
+        JSONObject result = baseResult();
+        result.put("scale", scale);
+        writeResult(result);
+        Log.d(TAG, "transition animation scale forced=" + scale);
+    }
+
+    private Object windowManager() throws Exception {
+        return binder("window", "android.view.IWindowManager$Stub");
+    }
+
+    private void awaitObserverRelease(File release, int ownerPid) throws InterruptedException {
+        CountDownLatch latch = new CountDownLatch(1);
+        FileObserver releaseObserver = new FileObserver(release.getParentFile().getAbsolutePath(),
+                FileObserver.CREATE | FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+            @Override
+            public void onEvent(int event, String path) {
+                if (release.getName().equals(path)) latch.countDown();
+            }
+        };
+        FileObserver ownerObserver = new FileObserver("/proc/" + ownerPid, FileObserver.DELETE_SELF) {
+            @Override
+            public void onEvent(int event, String path) {
+                latch.countDown();
+            }
+        };
+        releaseObserver.startWatching();
+        ownerObserver.startWatching();
+        long curtainDeadline = 0;
+        try {
+            if (release.isFile()) return;
+            while (!observerStopped && !release.isFile() && new File("/proc/" + ownerPid).exists()) {
+                if (observerCurtain != null && curtainDeadline == 0) {
+                    curtainDeadline = SystemClock.uptimeMillis() + 10000;
+                }
+                if (curtainDeadline > 0) {
+                    long remaining = curtainDeadline - SystemClock.uptimeMillis();
+                    if (remaining <= 0) return;
+                    if (latch.await(Math.min(remaining, 1000), TimeUnit.MILLISECONDS)) return;
+                } else if (latch.await(1, TimeUnit.SECONDS)) {
+                    return;
+                }
+            }
+        } finally {
+            releaseObserver.stopWatching();
+            ownerObserver.stopWatching();
+        }
+    }
+
+    private void registerObserver(String homePackage, int gameTaskId) throws Exception {
+        Class<?> listenerType = Class.forName("android.app.ITaskStackListener");
+        Class<?> stubType = Class.forName("android.app.ITaskStackListener$Stub");
+        Map<Integer, String> methods = new HashMap<>();
+        for (java.lang.reflect.Field field : stubType.getDeclaredFields()) {
+            if (!field.getName().startsWith("TRANSACTION_")) continue;
+            field.setAccessible(true);
+            methods.put(field.getInt(null), field.getName().substring("TRANSACTION_".length()));
+        }
+        Binder binder = new Binder() {
+            @Override
+            protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+                if (code == INTERFACE_TRANSACTION) {
+                    reply.writeString(listenerType.getName());
+                    return true;
+                }
+                String method = methods.get(code);
+                if (method == null) return false;
+                data.enforceInterface(listenerType.getName());
+                if ("onTaskMovedToFront".equals(method)) {
+                    ActivityManager.RunningTaskInfo moved = null;
+                    try {
+                        moved = ActivityManager.RunningTaskInfo.CREATOR.createFromParcel(data);
+                    } catch (Throwable ignored) {
+                    }
+                    final ActivityManager.RunningTaskInfo movedSnapshot = moved;
+                    enqueueObserverWork(() -> raiseForHome(homePackage, gameTaskId, movedSnapshot));
+                } else if ("onTaskStackChanged".equals(method) || "onTaskFocusChanged".equals(method)) {
+                    enqueueObserverWork(() -> raiseForHome(homePackage, gameTaskId, null));
+                }
+                if (reply != null) reply.writeNoException();
+                return true;
+            }
+        };
+        Object proxy = Proxy.newProxyInstance(listenerType.getClassLoader(), new Class<?>[]{listenerType},
+                (ignored, method, args) -> {
+                    if ("asBinder".equals(method.getName())) return binder;
+                    if ("toString".equals(method.getName())) return "Kyodai task observer";
+                    if ("hashCode".equals(method.getName())) return System.identityHashCode(this);
+                    if ("equals".equals(method.getName())) return false;
+                    return null;
+                });
+        taskManager().getClass().getMethod("registerTaskStackListener", listenerType)
+                .invoke(taskManager(), proxy);
+        observerRegistration = proxy;
+        Log.d(TAG, "observer registered task=" + gameTaskId + " home=" + homePackage);
+    }
+
+    private void enqueueObserverWork(Runnable work) {
+        if (observerStopped) return;
+        try {
+            observerExecutor.execute(work);
+        } catch (RejectedExecutionException ignored) {
+        }
+    }
+
+    private void unregisterObserver() {
+        if (observerRegistration == null) return;
+        try {
+            Class<?> listenerType = Class.forName("android.app.ITaskStackListener");
+            taskManager().getClass().getMethod("unregisterTaskStackListener", listenerType)
+                    .invoke(taskManager(), observerRegistration);
+            Log.d(TAG, "observer unregistered");
+        } catch (Throwable error) {
+            Log.w(TAG, "observer unregister failed", error);
+        } finally {
+            observerRegistration = null;
+        }
+    }
+
+    private void raiseForHome(String homePackage, int gameTaskId, ActivityManager.RunningTaskInfo moved) {
+        if (observerStopped || observerCurtain != null) return;
+        if (moved != null && (moved.taskId <= 0 || moved.topActivity == null)) moved = null;
+        try {
+            if (moved != null) {
+                String packageName = moved.topActivity == null ? "" : moved.topActivity.getPackageName();
+                if (homePackage.equals(packageName)) {
+                    // The task-move callback precedes visibility stabilization;
+                    // do not wait for isVisible and lose the first Home frames.
+                    SurfaceControl newCurtain = showResumeCurtain(gameTaskId);
+                    if (observerStopped) {
+                        hideResumeCurtain(newCurtain);
+                        return;
+                    }
+                    observerCurtain = newCurtain;
+                    publishObserverFrame(gameTaskId);
+                    Log.d(TAG, "observer raised Home curtain task=" + gameTaskId
+                            + " movedTask=" + moved.taskId + " visible=" + booleanField(moved, "isVisible", false));
+                }
+                return;
+            }
+            for (ActivityManager.RunningTaskInfo info : getTasks()) {
+                String packageName = info.topActivity == null ? "" : info.topActivity.getPackageName();
+                if (homePackage.equals(packageName) && booleanField(info, "isVisible", false)) {
+                    SurfaceControl newCurtain = showResumeCurtain(gameTaskId);
+                    if (observerStopped) {
+                        hideResumeCurtain(newCurtain);
+                        return;
+                    }
+                    observerCurtain = newCurtain;
+                    publishObserverFrame(gameTaskId);
+                    Log.d(TAG, "observer raised Home curtain task=" + gameTaskId);
+                    return;
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "observer Home check failed", error);
+        }
+    }
+
+    private void publishObserverFrame(int gameTaskId) {
+        try {
+            if (observerCurtain == null) {
+                writeFailure(new Exception("capture_failed", new Exception("Observer curtain unavailable")));
+                return;
+            }
+            File frame = writeCurtainFrame();
+            if (frame == null) {
+                writeFailure(new Exception("capture_failed", new Exception("Observer frame unavailable")));
+                return;
+            }
+            JSONObject result = baseResult();
+            result.put("task", taskJson(requireTask(gameTaskId)));
+            JSONObject image = new JSONObject();
+            image.put("path", frame.getAbsolutePath());
+            image.put("width", curtainBuffer.getWidth());
+            image.put("height", curtainBuffer.getHeight());
+            image.put("real", curtainRealSnapshot);
+            result.put("snapshot", image);
+            result.put("homeCurtain", true);
+            writeResult(result);
+        } catch (Throwable error) {
+            Log.w(TAG, "Observer result publish failed", error);
         }
     }
 
@@ -196,41 +542,85 @@ public final class PrivilegedTaskHelper {
     }
 
     private SurfaceControl showResumeCurtain(int taskId) {
+        SurfaceControl curtain = null;
         try {
             Object snapshot = getTaskSnapshot(taskId);
             if (snapshot == null) return null;
             HardwareBuffer buffer = (HardwareBuffer) snapshot.getClass().getMethod("getHardwareBuffer").invoke(snapshot);
             if (buffer == null) return null;
-            try {
-                SurfaceControl curtain = new SurfaceControl.Builder()
-                        .setName("KyodaiResumeCurtain")
-                        .setBufferSize(buffer.getWidth(), buffer.getHeight())
-                        .setOpaque(true)
-                        .build();
-                SurfaceControl.Transaction transaction = new SurfaceControl.Transaction();
+            // Keep the buffer alive until the curtain is lowered. Closing it
+            // immediately after apply() can leave a ready but empty layer.
+            curtainBuffer = buffer;
+            curtainColorSpace = (ColorSpace) snapshot.getClass().getMethod("getColorSpace").invoke(snapshot);
+            curtainRealSnapshot = (boolean) snapshot.getClass().getMethod("isRealSnapshot").invoke(snapshot);
+            curtain = new SurfaceControl.Builder()
+                    .setName("KyodaiResumeCurtain")
+                    .setBufferSize(buffer.getWidth(), buffer.getHeight())
+                    .setFormat(1)
+                    .build();
+            Integer layerStack = null;
+            try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
+                try {
+                    Object display = displayInfo(0);
+                    layerStack = display.getClass().getField("layerStack").getInt(display);
+                    transaction.getClass().getMethod("setLayerStack", SurfaceControl.class, int.class)
+                            .invoke(transaction, curtain, layerStack);
+                } catch (Throwable error) {
+                    Log.w(TAG, "Curtain layerStack fallback", error);
+                }
                 transaction.setBuffer(curtain, buffer)
                         .setPosition(curtain, 0, 0)
-                        .setLayer(curtain, Integer.MAX_VALUE)
+                        .setLayer(curtain, Integer.MAX_VALUE - 1)
                         .setVisibility(curtain, true)
                         .apply();
-                return curtain;
-            } finally {
-                buffer.close();
             }
-        } catch (Throwable ignored) {
+            Log.d(TAG, "curtain raised task=" + taskId + " layerStack=" + layerStack
+                    + " buffer=" + buffer.getWidth() + "x" + buffer.getHeight());
+            return curtain;
+        } catch (Throwable error) {
+            Log.w(TAG, "curtain raise failed task=" + taskId, error);
+            if (curtain != null) curtain.release();
+            if (curtainBuffer != null) {
+                curtainBuffer.close();
+                curtainBuffer = null;
+                curtainColorSpace = null;
+            }
             return null; // curtain is best-effort; task focus must still work
+        }
+    }
+
+    private File writeCurtainFrame() {
+        try {
+            if (curtainBuffer == null) return null;
+            Bitmap bitmap = Bitmap.wrapHardwareBuffer(curtainBuffer, curtainColorSpace);
+            if (bitmap == null) return null;
+            File output = new File(requestDir, "frame.jpg");
+            writeJpeg(bitmap, output);
+            try (FileOutputStream ready = new FileOutputStream(new File(requestDir, "frame-ready"))) {
+                String marker = bitmap.getWidth() + " " + bitmap.getHeight() + " " + (curtainRealSnapshot ? "1" : "0");
+                ready.write(marker.getBytes(StandardCharsets.UTF_8));
+            }
+            return output;
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not publish curtain frame", error);
+            return null;
         }
     }
 
     private void hideResumeCurtain(SurfaceControl curtain) {
         if (curtain == null) return;
-        try {
-            new SurfaceControl.Transaction()
-                    .setVisibility(curtain, false)
-                    .apply();
-        } catch (Throwable ignored) {
+        try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
+            transaction.setVisibility(curtain, false).apply();
+            Log.d(TAG, "curtain lowered");
+        } catch (Throwable error) {
+            Log.w(TAG, "curtain lower failed", error);
         } finally {
             curtain.release();
+            if (curtainBuffer != null) {
+                curtainBuffer.close();
+                curtainBuffer = null;
+                curtainColorSpace = null;
+            }
         }
     }
 
@@ -240,6 +630,13 @@ public final class PrivilegedTaskHelper {
         if (requiredBooleanField(info, "isVisible")) throw new Exception("unsafe_operation", new Exception("Refusing to close a visible game"));
         String packageName = expectedPackage(info);
         int userId = expected.getInt("userId");
+        for (ActivityManager.RunningTaskInfo candidate : getTasks()) {
+            if (packageName.equals(expectedPackage(candidate))
+                    && requiredIntField(candidate, "userId") == userId
+                    && requiredBooleanField(candidate, "isVisible")) {
+                throw new Exception("unsafe_operation", new Exception("Package has a visible task"));
+            }
+        }
         int taskUserId = requiredIntField(info, "userId");
         if (userId != taskUserId) {
             throw new Exception("stale_task", new Exception("Task user/profile changed"));
@@ -349,6 +746,11 @@ public final class PrivilegedTaskHelper {
                 return false;
             }
         }
+    }
+
+    private Object displayInfo(int displayId) throws Exception {
+        Object manager = binder("display", "android.hardware.display.IDisplayManager$Stub");
+        return manager.getClass().getMethod("getDisplayInfo", int.class).invoke(manager, displayId);
     }
 
     private Object taskManager() throws Exception {
@@ -496,6 +898,16 @@ public final class PrivilegedTaskHelper {
         }
         tmp.setReadable(true, false);
         if (!tmp.renameTo(output)) throw new Exception("io_error", new Exception("Could not publish frame"));
+    }
+
+    private static String readTextStream(File file) throws Exception {
+        try (FileInputStream in = new FileInputStream(file);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = in.read(buffer)) >= 0) out.write(buffer, 0, read);
+            return out.toString("UTF-8");
+        }
     }
 
     private static String readText(File file) throws Exception {

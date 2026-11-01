@@ -376,6 +376,17 @@ func _on_modal_item_selected(item_id: String, context: Dictionary) -> void:
 				DataManager.game_save.open_save_location(game)
 		"delete":
 			var game = DataManager.get_game_by_id(romm_id)
+			if LaunchManager.sessions.get_live_for_game(romm_id):
+				SystemManager.notifications.show_notification("Close the current game session before deleting it", SystemManager.notifications.Type.ERROR)
+				return
+			if game and not context.get("delete_confirmed", false):
+				UIManager.show_confirm("Delete Game", "Delete " + game.title + " and its downloaded game files? Save data is not deleted.",
+					func():
+						var confirmed := context.duplicate()
+						confirmed["delete_confirmed"] = true
+						_on_modal_item_selected("delete", confirmed)
+				, Callable(), Callable(), {"cancel_text": "Cancel", "accept_text": "Delete"})
+				return
 			if game:
 				SystemManager.notifications.show_notification("Deleting " + game.title + "...", SystemManager.notifications.Type.INFO)
 				if games_grid:
@@ -393,6 +404,10 @@ func _on_modal_item_selected(item_id: String, context: Dictionary) -> void:
 						SystemManager.notifications.show_notification(game.title + " deleted", SystemManager.notifications.Type.SUCCESS)
 						_refresh_after_delete.call()
 					else:
+						if LaunchManager.sessions.get_live_for_game(romm_id):
+							if games_grid:
+								games_grid.mouse_filter = Control.MOUSE_FILTER_PASS
+							return
 						var on_confirm = func():
 							M3Dialog.dismiss_current()
 							var on_force_delete = func(force_success: bool):

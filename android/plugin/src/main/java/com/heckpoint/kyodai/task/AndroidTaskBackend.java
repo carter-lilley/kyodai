@@ -66,6 +66,7 @@ public interface AndroidTaskBackend {
         public int snapshotWidth;
         public int snapshotHeight;
         public boolean realSnapshot;
+        public boolean observerReady;
 
         public static Result failure(String code, String error) {
             Result result = new Result();
@@ -89,6 +90,7 @@ public interface AndroidTaskBackend {
                 out.put("snapshot", snapshot);
             }
             if (!error.isEmpty()) out.put("error", error);
+            if (observerReady) out.put("observer", true);
             return out;
         }
     }
@@ -109,4 +111,17 @@ public interface AndroidTaskBackend {
     Result forceStopPackage(int taskId, String packageName, int userId) throws TaskBackendException;
     Result removeTask(int taskId, String packageName) throws TaskBackendException;
     Result moveTaskToDisplay(int taskId, String packageName, int displayId) throws TaskBackendException;
+
+    default Result startObserver(int taskId, String packageName, String topActivity,
+                                 String homePackage, int ownerPid) throws TaskBackendException {
+        return Result.failure("unsupported", "Task observer is unavailable");
+    }
+
+    default Result setTransitionScale(float scale) throws TaskBackendException {
+        return Result.failure("unsupported", "Transition scale control is unavailable");
+    }
+
+    default Result cleanupHelpers() throws TaskBackendException {
+        return Result.failure("unsupported", "Helper cleanup is unavailable");
+    }
 }

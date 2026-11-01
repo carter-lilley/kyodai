@@ -589,7 +589,7 @@ func show_game_context_menu(romm_id: int, anchor: Control, show_delete: bool = t
 	var is_steam := false
 	if game == null and romm_id < 0:
 		is_steam = not LaunchManager.steam_get_game_data(-romm_id).is_empty()
-	if show_delete and ((game and game.is_active_variant_downloaded()) or is_steam):
+	if show_delete and session == null and ((game and game.is_active_variant_downloaded()) or is_steam):
 		items.append({"id": "delete", "text": "Delete", "icon": "trash-can"})
 
 	# Add "Add to Steam" option if game is downloaded (desktop only)

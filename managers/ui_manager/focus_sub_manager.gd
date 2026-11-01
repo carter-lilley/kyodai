@@ -187,8 +187,7 @@ func _ready() -> void:
 
 	_ring_style = StyleBoxFlat.new()
 	_ring_style.bg_color = Color.TRANSPARENT
-	_ring_style.anti_aliasing = true
-	_ring_style.anti_aliasing_size = 1.0
+	M3Theme.configure_smooth_corners(_ring_style, M3Units.dp(default_radius_dp))
 	_ring_style.shadow_offset = Vector2.ZERO
 	_apply_style()
 
@@ -494,6 +493,9 @@ func _redraw_ring() -> void:
 		var center := rect.get_center()
 		rect = Rect2(center - rect.size * _pop_scale * 0.5, rect.size * _pop_scale)
 		radius *= _pop_scale
+	# Scale tessellation with the actual drawn size, not the control's DP
+	# radius. Large card rings otherwise retain Godot's coarse default arcs.
+	M3Theme.configure_smooth_corners(_ring_style, minf(rect.size.x, rect.size.y) * 0.5)
 	match _ring_shape:
 		Shape.PILL:
 			_ring_style.set_corner_radius_all(int(minf(rect.size.x, rect.size.y) * 0.5))

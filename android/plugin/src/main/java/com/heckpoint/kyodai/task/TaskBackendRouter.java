@@ -18,25 +18,43 @@ public final class TaskBackendRouter {
         void onResult(String requestId, String operation, JSONObject result);
     }
 
-    private final AndroidTaskBackend backend;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Context context;
+    private volatile AndroidTaskBackend backend;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "KyodaiTaskBackend");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final ResultListener listener;
     private volatile boolean closed;
 
     public TaskBackendRouter(Context context, ResultListener listener) {
+        this.context = context.getApplicationContext();
         this.listener = listener;
         backend = RootShell.isAvailable()
                 ? new VendorTaskBackend(context)
                 : new PublicTaskBackend();
     }
 
+    private AndroidTaskBackend backend() {
+        AndroidTaskBackend current = backend;
+        if (current instanceof VendorTaskBackend) return current;
+        if (!RootShell.isAvailable()) return current;
+        synchronized (this) {
+            if (!(backend instanceof VendorTaskBackend)) {
+                backend = new VendorTaskBackend(context);
+            }
+            return backend;
+        }
+    }
+
     public String probeCapabilities() {
-        return submit("probeCapabilities", () -> backend.probeCapabilities().toJson());
+        return submit("probeCapabilities", () -> backend().probeCapabilities().toJson());
     }
 
     public String listTasks() {
         return submit("listTasks", () -> {
-            List<AndroidTaskBackend.TaskInfo> tasks = backend.listTasks();
+            List<AndroidTaskBackend.TaskInfo> tasks = backend().listTasks();
             JSONArray array = new JSONArray();
             for (AndroidTaskBackend.TaskInfo task : tasks) array.put(task.toJson());
             JSONObject out = new JSONObject();
@@ -46,23 +64,37 @@ public final class TaskBackendRouter {
     }
 
     public String captureTaskSnapshot(int taskId, String packageName, String topActivity) {
-        return submit("captureTaskSnapshot", () -> backend.captureTaskSnapshot(taskId, packageName, topActivity).toJson());
+        return submit("captureTaskSnapshot", () -> backend().captureTaskSnapshot(taskId, packageName, topActivity).toJson());
     }
 
     public String focusTask(int taskId, String packageName, String topActivity) {
-        return submit("focusTask", () -> backend.focusTask(taskId, packageName, topActivity).toJson());
+        return submit("focusTask", () -> backend().focusTask(taskId, packageName, topActivity).toJson());
     }
 
     public String forceStopPackage(int taskId, String packageName, int userId) {
-        return submit("forceStopPackage", () -> backend.forceStopPackage(taskId, packageName, userId).toJson());
+        return submit("forceStopPackage", () -> backend().forceStopPackage(taskId, packageName, userId).toJson());
     }
 
     public String removeTask(int taskId, String packageName) {
-        return submit("removeTask", () -> backend.removeTask(taskId, packageName).toJson());
+        return submit("removeTask", () -> backend().removeTask(taskId, packageName).toJson());
     }
 
     public String moveTaskToDisplay(int taskId, String packageName, int displayId) {
-        return submit("moveTaskToDisplay", () -> backend.moveTaskToDisplay(taskId, packageName, displayId).toJson());
+        return submit("moveTaskToDisplay", () -> backend().moveTaskToDisplay(taskId, packageName, displayId).toJson());
+    }
+
+    public String startObserver(int taskId, String packageName, String topActivity,
+                                String homePackage, int ownerPid) {
+        return submit("startObserver", () -> backend().startObserver(
+                taskId, packageName, topActivity, homePackage, ownerPid).toJson());
+    }
+
+    public String setTransitionScale(float scale) {
+        return submit("setTransitionScale", () -> backend().setTransitionScale(scale).toJson());
+    }
+
+    public String cleanupHelpers() {
+        return submit("cleanupHelpers", () -> backend().cleanupHelpers().toJson());
     }
 
     public void close() {
@@ -73,11 +105,12 @@ public final class TaskBackendRouter {
     private String submit(String operation, JsonCall call) {
         if (closed) return "closed";
         String requestId = UUID.randomUUID().toString();
-        executor.execute(() -> {
-            JSONObject result;
-            try {
-                result = call.run();
-                result.put("ok", true);
+        try {
+            executor.execute(() -> {
+                JSONObject result;
+                try {
+                    result = call.run();
+                    if (!result.has("ok")) result.put("ok", true);
             } catch (AndroidTaskBackend.TaskBackendException e) {
                 result = failure(e.code, e.getMessage());
             } catch (Exception e) {
@@ -90,6 +123,9 @@ public final class TaskBackendRouter {
             if (!closed) listener.onResult(requestId, operation, result);
         });
         return requestId;
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            return "closed";
+        }
     }
 
     private static JSONObject failure(String code, String error) {

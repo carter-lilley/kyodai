@@ -72,13 +72,19 @@ public final class RootShell {
      * route refused the call. Scripts must be built from fixed strings with
      * {@link #quote(String)} for any path; never interpolate user/ROM-derived text.
      */
-    public static Result run(Context context, String body) {
+    public static Future<Result> submit(Context context, String body) {
         ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "KyodaiRootShell");
             thread.setDaemon(true);
             return thread;
         });
         Future<Result> future = executor.submit(() -> runInternal(context, body));
+        executor.shutdown();
+        return future;
+    }
+
+    public static Result run(Context context, String body) {
+        Future<Result> future = submit(context, body);
         try {
             return future.get(20, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
@@ -89,7 +95,7 @@ public final class RootShell {
             Log.w(TAG, "root shell failed: " + e.getMessage());
             return null;
         } finally {
-            executor.shutdownNow();
+            future.cancel(true);
         }
     }
 
@@ -176,9 +182,6 @@ public final class RootShell {
         private static Boolean callWorks = null;
 
         static synchronized boolean isAvailable() {
-            // A registered binder whose host process died stays listed by
-            // ServiceManager; treat dead binders as unavailable and re-resolve,
-            // so a restarted host is picked up.
             if (binder != null && !binder.isBinderAlive()) {
                 binder = null;
                 probed = false;
@@ -195,13 +198,7 @@ public final class RootShell {
                     binder = null;
                 }
             }
-            if (binder == null || !binder.isBinderAlive()) {
-                return false;
-            }
-            // A live binder is not enough: stock AYN Android 13 SELinux
-            // hard-denies untrusted_app -> pservice binder calls (the
-            // ServiceManager lookup alone is permissive). Probe with a real
-            // transaction once per process.
+            if (binder == null || !binder.isBinderAlive()) return false;
             if (callWorks == null) {
                 boolean ok = false;
                 try {
@@ -211,18 +208,14 @@ public final class RootShell {
                     ok = false;
                 }
                 callWorks = ok;
-                if (!ok) {
-                    Log.i(TAG, "PServerBinder present but calls are denied (SELinux); root daemon unusable");
-                }
+                if (!ok) Log.i(TAG, "PServerBinder present but calls are denied; root daemon unusable");
             }
             return callWorks;
         }
 
         /** The daemon returns only the first line of command output. */
         static String execute(String cmd) throws Exception {
-            if (!isAvailable()) {
-                throw new IllegalStateException("PServerBinder not available");
-            }
+            if (!isAvailable()) throw new IllegalStateException("PServerBinder not available");
             return transact(cmd);
         }
 
@@ -232,9 +225,7 @@ public final class RootShell {
             try {
                 data.writeStringArray(new String[]{cmd, "1"});
                 boolean transacted = binder.transact(0, data, reply, 0);
-                if (!transacted) {
-                    throw new IllegalStateException("PServerBinder rejected transaction");
-                }
+                if (!transacted) throw new IllegalStateException("PServerBinder rejected transaction");
                 byte[] bytes = reply.createByteArray();
                 if (bytes == null) return null;
                 String result = new String(bytes, Charset.defaultCharset()).trim();

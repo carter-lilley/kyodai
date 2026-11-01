@@ -65,6 +65,7 @@ var _initial_recovery_completed: bool = false
 signal recovery_completed
 signal android_retention_configured
 var _android_retention_configuring := false
+var _android_retention_uncertain := false
 
 var launch_manager: Node
 
@@ -330,7 +331,9 @@ func _configure_android_retention() -> void:
 	if session == null or session.backend != GameSession.Backend.ANDROID_TASK:
 		return
 	_android_retention_configuring = true
+	_android_retention_uncertain = false
 	if _android_emulator_package.is_empty() or not await launch_manager.android_tasks.retention_available():
+		_android_retention_uncertain = launch_manager.android_tasks.retention_probe_inconclusive()
 		_finish_android_retention_configuration()
 		return
 	for attempt in 10:
@@ -365,6 +368,9 @@ func _configure_android_retention() -> void:
 				return
 		# Each native list operation already has latency and a deadline. SceneTree
 		# timers do not run while Kyodai is backgrounded, so retry directly.
+	# Supported hardware with an unverified task identity is uncertain, never
+	# proof that the emulator exited or that standard finalization is safe.
+	_android_retention_uncertain = launch_manager.android_tasks.retention_available_cached()
 	_finish_android_retention_configuration()
 
 func _finish_android_retention_configuration() -> void:
@@ -387,11 +393,22 @@ func get_active_android_session() -> GameSession:
 func retain_active_android_session() -> bool:
 	if not has_retained_android_session() or _android_transition_inflight:
 		return false
+	# Home delivery can be duplicated by the intent and lifecycle callbacks.
+	# The first retain owns the transition; all duplicates are harmless no-ops.
 	_android_transition_inflight = true
 	_is_in_background_state = false
 	var session := _active_session
 	launch_manager.android_tasks.set_retained_identity(session.runtime, false)
 	launch_manager.sessions.retain_session(session, false)
+	# Returning to Kyodai is also a reconciliation point. If the user closed
+	# the emulator externally, its confirmed-missing task ends the session
+	# instead of leaving a dead retained record and capturing a stale curtain.
+	if not await _android_task_exists(session.runtime):
+		_android_transition_inflight = false
+		launch_manager.android_tasks.release_observer()
+		await _finalize_android_sessions_for_package(str(session.runtime.get("package", "")))
+		return false
+	var captured_any := false
 	if await launch_manager.android_tasks.snapshots_available():
 		for attempt in 4:
 			var captured: Dictionary = await launch_manager.android_tasks.capture_snapshot(session.runtime)
@@ -399,8 +416,12 @@ func retain_active_android_session() -> bool:
 				GameCard.evict_session_snapshot(str(session.runtime.get("snapshotPath", "")))
 				session.runtime["snapshotPath"] = str(captured.get("snapshot", {}).get("path", ""))
 				launch_manager.sessions.update_runtime(session, session.runtime)
+				captured_any = true
 				break
-			await get_tree().create_timer(0.15).timeout
+	if not captured_any:
+		GameCard.evict_session_snapshot(str(session.runtime.get("snapshotPath", "")))
+		session.runtime.erase("snapshotPath")
+		launch_manager.sessions.update_runtime(session, session.runtime)
 	_android_transition_inflight = false
 	# Publish the snapshot to cards before starting the visible return
 	# transition, so the grid cannot settle on stale cover art.
@@ -460,6 +481,9 @@ func close_retained_game(romm_id: int = -1) -> Dictionary:
 		return {"ok": false, "code": "not_found"}
 	_android_transition_inflight = true
 	session.state = GameSession.State.CLOSING
+	# Restore cover art immediately while native task-death confirmation runs.
+	# Keep the snapshot on disk so a failed close can restore retained visuals.
+	session_changed_for_android()
 	var task_exists := await _android_task_exists(session.runtime)
 	if task_exists:
 		var stopped: Dictionary = await launch_manager.android_tasks.force_stop(session.runtime)
@@ -477,7 +501,6 @@ func close_retained_game(romm_id: int = -1) -> Dictionary:
 	for attempt in 8:
 		if not await _android_task_exists(session.runtime):
 			break
-		await get_tree().create_timer(0.25).timeout
 	if await _android_task_exists(session.runtime):
 		session.state = GameSession.State.RETAINED
 		_android_transition_inflight = false
@@ -502,7 +525,12 @@ func _android_task_exists(runtime: Dictionary) -> bool:
 	return false
 
 func _finalize_android_sessions_for_package(package_name: String) -> void:
-	var affected: Array[GameSession] = launch_manager.sessions.get_live_for_package(package_name)
+	if package_name.is_empty():
+		return
+	var affected: Array[GameSession] = []
+	for session in launch_manager.sessions.get_live_for_package(package_name):
+		if session.backend == GameSession.Backend.ANDROID_TASK:
+			affected.append(session)
 	for session in affected:
 		_delete_snapshot(session)
 		launch_manager.sessions.finalize_once(session, 0, "android_closed")
@@ -574,6 +602,8 @@ func exit_background_state(exit_code: int = 0) -> void:
 ## pending record hits disk before the handoff so a mid-session process kill
 ## can be recovered on next launch.
 func _begin_game_session(game: GameResource) -> void:
+	if _active_session and _active_session.state != GameSession.State.ENDED:
+		return
 	var runtime := {
 		"pid": _background_active_pid,
 		"pgid": _background_active_pgid,
@@ -744,10 +774,10 @@ func _recover_pending_sessions() -> void:
 			await _retire_shuffler_record(record)
 		elif not _is_in_background_state and not android_recovery_handled:
 			var outcome = await _try_reattach_pending_session(record)
-			if outcome == "invalid":
+			if (outcome is String and outcome == "invalid") or (outcome is bool and not outcome):
 				launch_manager.sessions.finalize_pending_record(record, "runtime_unavailable")
 			elif outcome == "error":
-				pass # inconclusive backend failure must never become proof of death
+				_schedule_recovery_retry()
 			elif outcome == "lost" or outcome == "reattached":
 				android_recovery_handled = true
 		# Once one ordinary session is reattached, leave additional records
@@ -2170,7 +2200,9 @@ func _execute_android(intent: LaunchIntent) -> bool:
 	# Retained mode must preserve the existing Android task. Standard mode keeps
 	# the emulator's configured clear_task behavior unchanged.
 	var clear_task = intent.android_config.get("clear_task", true)
-	if await launch_manager.android_tasks.retention_available():
+	# Never hold the emulator intent behind privileged initialization. The
+	# post-handoff retention configuration performs the authoritative probe.
+	if launch_manager.android_tasks.retention_available_cached():
 		clear_task = false
 	var rom_delivery = intent.android_config.get("rom_delivery", "intent_data")
 	var mime_type = intent.android_config.get("mime_type", "application/octet-stream")
@@ -2205,7 +2237,12 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		else:
 			extras_json = json_result
 
-	# Launch using unified method
+	# The pending record exists before the external handoff. If intent delivery
+	# fails, abort it without playtime/upload instead of leaving a live phantom.
+	_background_backend = GameSession.Backend.ANDROID_TASK
+	_background_active_game = intent.game
+	_android_emulator_package = intent.android_package
+	_begin_game_session(intent.game)
 	var success = plugin.call("launchAndroidIntent",
 		intent.android_action,
 		intent.android_package,
@@ -2223,6 +2260,10 @@ func _execute_android(intent: LaunchIntent) -> bool:
 
 	if not success:
 		push_error("[ProcessManager] Failed to launch Android intent")
+		if _active_session:
+			launch_manager.sessions.abort_session(_active_session)
+			_active_session = null
+		_clear_android_background()
 		return false
 
 	# Enter background state for Android - we track the game and exit on resume

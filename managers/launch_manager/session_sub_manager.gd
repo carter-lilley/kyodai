@@ -69,21 +69,37 @@ func reattach_session(record: Dictionary, game: GameResource, runtime: Dictionar
 	session_changed.emit(session)
 	return session
 
+func abort_session(session: GameSession) -> void:
+	if session == null or session.state == GameSession.State.ENDED:
+		return
+	session.state = GameSession.State.CLOSING
+	_sessions.erase(session.session_id)
+	_stop_native_watch(session)
+	_delete_pending_record(session.pending_path)
+	session.state = GameSession.State.ENDED
+	# A failed handoff restores UI but never credits playtime or uploads saves.
+	session_finalized.emit(session, 0)
+	session_changed.emit(session)
+
 ## Terminal finalization is idempotent: repeated lifecycle notifications cannot
 ## double-credit playtime, delete another session's record, or upload twice.
 func finalize_once(session: GameSession, exit_code: int = 0, reason: String = "ended", recovered: bool = false) -> bool:
 	if session == null or session.state == GameSession.State.ENDED:
 		return false
 	session.state = GameSession.State.CLOSING
-	session.pause_playtime()
 	var record := _read_pending_record(session.pending_path)
 	var end_unix := float(record.get("end_unix", 0.0))
+	# Compute before pause clears last_resume_*: native end_unix must clamp the
+	# currently running segment instead of crediting through launcher recovery.
 	var elapsed := session.recovered_elapsed_seconds(end_unix) if recovered else session.elapsed_seconds(end_unix)
+	session.pause_playtime()
 	session.state = GameSession.State.ENDED
 	_sessions.erase(session.session_id)
 	_stop_native_watch(session)
 	_delete_pending_record(session.pending_path)
 	_commit_play_seconds(session, elapsed)
+	if session.game:
+		DataManager.set_game_user_props(session.game, {"now_playing": false}, true, false)
 	session_finalized.emit(session, exit_code)
 	session_changed.emit(session)
 	_queue_save_upload(session, reason)
@@ -138,8 +154,13 @@ func mark_lost(record: Dictionary, game: GameResource) -> GameSession:
 	var session := GameSession.from_pending(record, game)
 	if session.session_id.is_empty():
 		return null
+	var existing: GameSession = _sessions.get(session.session_id, null)
+	if existing and existing.state != GameSession.State.ENDED:
+		return existing
+	session.owner = GameSession.current_owner()
 	session.state = GameSession.State.LOST
 	session.pause_playtime()
+	_write_pending_record(session)
 	_sessions[session.session_id] = session
 	session_changed.emit(session)
 	return session
@@ -181,16 +202,26 @@ func _write_pending_record(session: GameSession) -> void:
 			session.pending_path = LEGACY_PENDING_SESSION_PATH
 		else:
 			session.pending_path = pending_path_for(session.session_id)
+	if session.end_unix <= 0.0:
+		# Preserve a native completion annotation across GDScript runtime
+		# updates instead of erasing it with a full-record rewrite.
+		var existing := _read_pending_record(session.pending_path)
+		session.end_unix = float(existing.get("end_unix", 0.0))
 	var err := DirAccess.make_dir_recursive_absolute(PENDING_SESSION_DIR)
 	if err != OK and err != ERR_ALREADY_EXISTS:
 		push_warning("[SessionManager] Could not create pending-session directory: " + error_string(err))
 		return
-	var f := FileAccess.open(session.pending_path, FileAccess.WRITE)
+	var temp_path := session.pending_path + ".tmp"
+	var f := FileAccess.open(temp_path, FileAccess.WRITE)
 	if not f:
 		push_warning("[SessionManager] Could not write pending session: " + error_string(FileAccess.get_open_error()))
 		return
 	f.store_string(JSON.stringify(session.pending_record()))
+	f.flush()
 	f.close()
+	if DirAccess.rename_absolute(temp_path, session.pending_path) != OK:
+		push_warning("[SessionManager] Could not publish pending session atomically")
+		DirAccess.remove_absolute(temp_path)
 
 static func _read_pending_record(path: String) -> Dictionary:
 	if path.is_empty() or not FileAccess.file_exists(path):
@@ -238,7 +269,7 @@ func _commit_play_seconds(session: GameSession, seconds: int) -> void:
 func _should_upload_saves(session: GameSession) -> bool:
 	# Standalone emulator sessions have no library save-sync identity. Steam's
 	# negative IDs remain valid and continue through the normal game path.
-	return not session.is_shuffler() and session.romm_id != 0 and not LaunchManager.is_session_active()
+	return not session.is_shuffler() and session.romm_id != 0
 
 func _queue_save_upload(session: GameSession, _reason: String) -> void:
 	if not _should_upload_saves(session):

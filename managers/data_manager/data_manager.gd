@@ -403,6 +403,12 @@ func delete_game_download(game: GameResource, callback: Callable = Callable(), f
 		if callback.is_valid():
 			callback.call(false)
 		return false
+	if LaunchManager and LaunchManager.sessions.get_live_for_game(game.romm_id):
+		push_warning("[DataManager] Refusing to delete a game with a live session: " + game.title)
+		SystemManager.notifications.show_notification("Close the current game session before deleting it", SystemManager.notifications.Type.ERROR)
+		if callback.is_valid():
+			callback.call(false)
+		return false
 
 	# Deleting a download changes the downloaded-games count.
 	database.invalidate_downloaded_games_count_cache()
