@@ -35,6 +35,7 @@ var _zoom_out_pressed: bool = false
 var _last_focused_index: int = -1
 var _trimmed_for_launch: bool = false
 var _rendering_suspended: bool = false
+var _android_resume_reconciling: bool = false
 var _prev_viewport_update_mode: int = -1
 var _m3_theme: Theme = null
 
@@ -168,6 +169,8 @@ func _ready():
 		var bridge = Engine.get_singleton("KyodaiBridge")
 		if bridge and not bridge.is_connected("android_home_requested", _on_android_home_requested):
 			bridge.connect("android_home_requested", _on_android_home_requested)
+		if bridge and not bridge.is_connected("android_task_event", _on_android_task_event):
+			bridge.connect("android_task_event", _on_android_task_event)
 
 	# Android memory-pressure escalation (plugin forwards onTrimMemory levels)
 	if SystemManager and SystemManager.platform:
@@ -858,34 +861,18 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_RESUMED:
 		print("[Main] NOTIFICATION_APPLICATION_RESUMED received, _last_focused_index = ", _last_focused_index)
 
-		# Retained sessions pause instead of finalizing. Standard Android keeps
-		# the original resume-to-end behavior, including save upload.
+		# Reconciliation is asynchronous. Android must never hold the resumed
+		# activity on a privileged probe before presenting Kyodai.
 		if LaunchManager and LaunchManager.is_in_background_state():
-			if LaunchManager.process._android_retention_configuring:
-				await LaunchManager.process.android_retention_configured
-			if LaunchManager.process.has_retained_android_session():
-				LaunchManager.process.retain_active_android_session()
-			elif LaunchManager.process._android_retention_uncertain and LaunchManager.process.get_active_android_session():
-				# A backend timeout is not task-death evidence. Preserve an
-				# unfinalized recovery record instead of silently ending/uploading.
-				LaunchManager.process.mark_android_session_lost(LaunchManager.process.get_active_android_session())
-				_restore_after_launch()
-				SystemManager.notifications.show_notification("Could not verify the retained game. It has been left running for recovery.", SystemManager.notifications.Type.ERROR)
-			else:
-				print("[Main] In background state on resume, exiting to trigger save upload")
-				LaunchManager.force_exit_background_state()
+			_reconcile_android_resume()
 
-		# Defensive: the renderer must never stay disabled while the app is
-		# foregrounded outside a game. Lifecycle races (e.g. an activity
-		# recreation landing mid-resume) can strand the viewport with updates
-		# disabled - a black, unresponsive screen that survives everything
-		# short of process death. Both restores are no-ops when nothing is wrong.
-		if not LaunchManager or not LaunchManager.is_in_background_state():
-			_resume_rendering()
-			var root_rid := get_tree().root.get_viewport_rid()
-			if RenderingServer.viewport_get_update_mode(root_rid) == RenderingServer.VIEWPORT_UPDATE_DISABLED:
-				push_warning("[Main] Viewport was left disabled on resume; force re-enabling")
-				RenderingServer.viewport_set_update_mode(root_rid, RenderingServer.VIEWPORT_UPDATE_ALWAYS)
+		# RESUMED belongs to Kyodai's activity, so rendering is always safe to
+		# restore even while session reconciliation continues in the background.
+		_resume_rendering()
+		var root_rid := get_tree().root.get_viewport_rid()
+		if RenderingServer.viewport_get_update_mode(root_rid) == RenderingServer.VIEWPORT_UPDATE_DISABLED:
+			push_warning("[Main] Viewport was left disabled on resume; force re-enabling")
+			RenderingServer.viewport_set_update_mode(root_rid, RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 
 		# The heavy refresh work below is idempotent, so skip burst duplicates
 		# (RESUMED arrives in pairs on Android, and activity churn can produce
@@ -1186,6 +1173,38 @@ func _on_game_launch_initiated(_game: GameResource, focus_index: int) -> void:
 
 	# Note: Pre-launch save sync is now handled inside LaunchManager.launch_game()
 
+func _reconcile_android_resume() -> void:
+	if _android_resume_reconciling or not LaunchManager or not LaunchManager.is_in_background_state():
+		return
+	_android_resume_reconciling = true
+	if LaunchManager.process._android_retention_configuring:
+		await LaunchManager.process.android_retention_configured
+	if not LaunchManager.is_in_background_state():
+		_android_resume_reconciling = false
+		return
+	if LaunchManager.process.has_retained_android_session():
+		await LaunchManager.process.retain_active_android_session()
+	elif LaunchManager.process._android_retention_uncertain and LaunchManager.process.get_active_android_session():
+		# A backend timeout is not task-death evidence. Preserve an
+		# unfinalized recovery record instead of silently ending/uploading.
+		LaunchManager.process.mark_android_session_lost(LaunchManager.process.get_active_android_session())
+		_restore_after_launch()
+		SystemManager.notifications.show_notification("Could not verify the retained game. It has been left running for recovery.", SystemManager.notifications.Type.ERROR)
+	else:
+		print("[Main] In background state on resume, exiting to trigger save upload")
+		LaunchManager.force_exit_background_state()
+	_android_resume_reconciling = false
+
+func _on_android_task_event(event: String, task_id: int, package_name: String) -> void:
+	if event != "task_removed" or not LaunchManager:
+		return
+	var session := LaunchManager.process.get_active_android_session()
+	if session == null or int(session.runtime.get("taskId", -1)) != task_id:
+		return
+	if not package_name.is_empty() and str(session.runtime.get("package", "")) != package_name:
+		return
+	LaunchManager.process.reconcile_android_task_removed(session)
+
 func _on_android_home_requested() -> void:
 	if not LaunchManager or not SystemManager.platform.is_android():
 		return
@@ -1311,5 +1330,12 @@ func _exit_tree() -> void:
 			LaunchManager.session_resumed.disconnect(_on_session_resumed)
 		if LaunchManager.is_connected("session_finalized", _on_session_finalized):
 			LaunchManager.session_finalized.disconnect(_on_session_finalized)
+	if Engine.has_singleton("KyodaiBridge"):
+		var bridge = Engine.get_singleton("KyodaiBridge")
+		if bridge:
+			if bridge.is_connected("android_home_requested", _on_android_home_requested):
+				bridge.disconnect("android_home_requested", _on_android_home_requested)
+			if bridge.is_connected("android_task_event", _on_android_task_event):
+				bridge.disconnect("android_task_event", _on_android_task_event)
 	if UIManager and UIManager.dual_screen:
 		UIManager.dual_screen.teardown_swap_persistence()

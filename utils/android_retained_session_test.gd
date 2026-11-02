@@ -15,6 +15,9 @@ class SpySessions:
 		uploads.append([session.romm_id, reason])
 	func _start_native_watch(_session: GameSession) -> void: pass
 	func _stop_native_watch(_session: GameSession) -> void: pass
+	func _start_activity_reporting(_session: GameSession) -> void: pass
+	func _stop_activity_reporting(_session: GameSession) -> void: pass
+	func _queue_play_session_ingest(_session: GameSession, _end_unix: float, _elapsed_seconds: int) -> bool: return true
 
 class FakeAndroidTasks:
 	extends AndroidTaskSubManager
@@ -135,6 +138,7 @@ func _run() -> void:
 	await _test_retain_resume_close()
 	await _test_repeated_home_during_resume_is_idempotent()
 	await _test_external_close_reconciles()
+	await _test_task_removed_event_reconciles()
 	await _test_lost_task()
 	if _failures == 0:
 		print("ANDROID RETAINED SESSION TEST PASSED")
@@ -308,6 +312,25 @@ func _test_external_close_reconciles() -> void:
 	_check(process.get_active_android_session() == null, "external close clears active session ownership")
 	_check(facade.sessions.commits.size() == 1, "external close credits playtime once")
 	_check(facade.sessions.uploads.size() == 1, "external close uploads saves once")
+	process.queue_free()
+	await get_tree().process_frame
+
+func _test_task_removed_event_reconciles() -> void:
+	var fixture := _fixture()
+	var facade: FakeFacade = fixture[0]
+	var process: ProcessDouble = fixture[1]
+	var game := _game()
+	facade.android_tasks.tasks = [_task()]
+	process.enter_background_state_android(game, "example.emulator")
+	await _wait_for_registration(process)
+	var session := process.get_active_android_session()
+	await process.retain_active_android_session()
+	facade.android_tasks.tasks.clear()
+	await process.reconcile_android_task_removed(session)
+	_check(session.state == GameSession.State.ENDED, "native task removal finalizes a confirmed dead retained task")
+	_check(process.get_active_android_session() == null, "task removal releases active ownership")
+	_check(facade.sessions.commits.size() == 1, "task removal commits playtime once")
+	_check(facade.sessions.uploads.size() == 1, "task removal uploads saves once")
 	process.queue_free()
 	await get_tree().process_frame
 

@@ -305,19 +305,28 @@ func reset_settings() -> void:
 	_is_dirty = true
 	save_settings()
 
+## XORs the UTF-8 BYTES, never String characters. The old char-wise version
+## emitted embedded NUL codepoints whenever a plaintext char matched the key
+## char at its aligned position, and the String<->UTF-8 roundtrip then mangled
+## everything after the first NUL. That corrupted paired rmm_ tokens: 68
+## random hex chars almost always contain an aligned match (~98% chance).
+## Byte-wise XOR never roundtrips through String mid-cycle, so NULs and
+## non-ASCII survive; legacy char-wise values decrypt identically for ASCII.
 func _xor_encrypt(text: String, key: String) -> String:
-	var result = ""
-	for i in range(text.length()):
-		result += char(text.unicode_at(i) ^ key.unicode_at(i % key.length()))
-	return Marshalls.raw_to_base64(result.to_utf8_buffer())
+	var plain := text.to_utf8_buffer()
+	var key_bytes := key.to_utf8_buffer()
+	var result := PackedByteArray()
+	result.resize(plain.size())
+	for i in range(plain.size()):
+		result[i] = plain[i] ^ key_bytes[i % key_bytes.size()]
+	return Marshalls.raw_to_base64(result)
 
 func _xor_decrypt(encrypted: String, key: String) -> String:
 	var bytes = Marshalls.base64_to_raw(encrypted)
-	var text = bytes.get_string_from_utf8()
-	var result = ""
-	for i in range(text.length()):
-		result += char(text.unicode_at(i) ^ key.unicode_at(i % key.length()))
-	return result
+	var key_bytes := key.to_utf8_buffer()
+	for i in range(bytes.size()):
+		bytes[i] = bytes[i] ^ key_bytes[i % key_bytes.size()]
+	return bytes.get_string_from_utf8()
 
 ## === Theme Preset Management ===
 

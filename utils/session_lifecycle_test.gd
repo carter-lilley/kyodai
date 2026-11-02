@@ -13,6 +13,9 @@ class SpySessions:
 	var uploads: Array = []
 	var native_starts: Array = []
 	var native_stops: Array = []
+	var activity_starts: Array = []
+	var activity_stops: Array = []
+	var play_session_ingests: Array = []
 
 	func _ready() -> void:
 		pass
@@ -32,6 +35,20 @@ class SpySessions:
 
 	func _stop_native_watch(session: GameSession) -> void:
 		native_stops.append(session.session_id)
+
+	func _start_activity_reporting(session: GameSession) -> void:
+		if _should_report_play_session(session):
+			activity_starts.append(session.session_id)
+
+	func _stop_activity_reporting(session: GameSession) -> void:
+		if _should_report_play_session(session):
+			activity_stops.append(session.session_id)
+
+	func _queue_play_session_ingest(session: GameSession, end_unix: float, elapsed_seconds: int) -> bool:
+		if not _should_report_play_session(session) or elapsed_seconds <= 0:
+			return true
+		play_session_ingests.append([session.romm_id, session.start_unix, end_unix, elapsed_seconds])
+		return true
 
 class UnsupportedAndroidTasks:
 	extends AndroidTaskSubManager
@@ -146,6 +163,7 @@ func _run() -> void:
 	await _test_android_resume_is_terminal()
 	await _test_playtime_annotation_and_recovery()
 	await _test_android_end_annotation()
+	await _test_play_session_outbox_payload()
 	await _test_steam_recovery()
 	await _test_recovery_claim()
 	await _test_desktop_reattach()
@@ -194,6 +212,8 @@ func _test_desktop_launch_exit_and_duplicates() -> void:
 	_check(facade.exited.size() == 1 and facade.exited[0][1] == 7, "legacy exit signal preserves exit code")
 	_check(not FileAccess.file_exists(session.pending_path), "desktop finalization removes only its own pending record")
 	_check(session.state == GameSession.State.ENDED, "desktop process exit becomes ENDED")
+	_check(sessions.activity_starts.has(session.session_id) and sessions.activity_stops.has(session.session_id), "owned desktop session starts and stops live activity")
+	_check(sessions.play_session_ingests.size() == 1, "owned desktop session queues one completed play session")
 	process.exit_background_state(0)
 	_check(sessions.commits.size() == 1 and sessions.uploads.size() == 1, "duplicate process-exit notification is idempotent")
 
@@ -237,6 +257,7 @@ func _test_playtime_annotation_and_recovery() -> void:
 	var session := GameSession.from_pending(record, game)
 	_check(sessions.finalize_once(session, 0, "recovered", true), "pending recovery finalizes once")
 	_check(sessions.commits.size() == 1 and sessions.commits[0][1] == 60, "recovery uses exact native end timestamp")
+	_check(sessions.play_session_ingests.size() == 1 and sessions.play_session_ingests[0][3] == 60, "recovered play session preserves native end and active duration")
 	_check(sessions.uploads.size() == 1, "recovery queues one save upload")
 	_check(not sessions.finalize_once(session, 0, "duplicate", true), "duplicate recovery finalization is rejected")
 	_check(sessions.commits.size() == 1 and sessions.uploads.size() == 1, "duplicate recovery cannot double-credit or double-upload")
@@ -271,7 +292,32 @@ func _test_android_end_annotation() -> void:
 	sessions.update_runtime(session, session.runtime)
 	_check(sessions.finalize_once(session, 0, "recovered", true), "Android native end finalizes once")
 	_check(sessions.commits.size() == 1 and sessions.commits[0][1] == 20, "Android end_unix clamps active playtime instead of recovery time: " + str(sessions.commits))
+	_check(sessions.play_session_ingests.size() == 1 and sessions.play_session_ingests[0][3] == 20, "Android play session uses active time and native end")
 	_check(sessions.uploads.size() == 1, "Android end recovery uploads once")
+
+func _test_play_session_outbox_payload() -> void:
+	var sessions := SessionSubManager.new()
+	add_child(sessions)
+	_fixtures.append(sessions)
+	var game := _game(108, "Play Session Outbox")
+	var session := GameSession.new_session(game, GameSession.Backend.DESKTOP_PROCESS, {"emulator_id": "test_emulator"})
+	var now: float = floor(Time.get_unix_time_from_system())
+	session.start_unix = now - 100.0
+	_check(sessions._queue_play_session_ingest(session, now - 40.0, 60), "completed play session persists its outbox record")
+	var path := SessionSubManager.PLAY_SESSION_OUTBOX_DIR.path_join(session.session_id + ".json")
+	var file := FileAccess.open(path, FileAccess.READ)
+	_check(file != null, "play-session outbox file exists")
+	if file:
+		var record = JSON.parse_string(file.get_as_text())
+		file.close()
+		var entry: Dictionary = record.get("payload", {}).get("sessions", [{}])[0]
+		_check(entry.get("rom_id", 0) == 108, "outbox preserves RomM ROM identity")
+		_check(entry.get("duration_ms", 0) == 60000, "outbox stores active duration in milliseconds")
+		_check(entry.get("start_time", "") == Time.get_datetime_string_from_unix_time(int(now - 100.0)) + "Z", "outbox preserves original UTC start time")
+		_check(entry.get("end_time", "") == Time.get_datetime_string_from_unix_time(int(now - 40.0)) + "Z", "outbox preserves confirmed UTC end time")
+	DirAccess.remove_absolute(path)
+	sessions.queue_free()
+	await get_tree().process_frame
 
 func _test_steam_recovery() -> void:
 	var fixture := _fixture()
@@ -293,6 +339,7 @@ func _test_steam_recovery() -> void:
 	_write_record(path, record)
 	_check(sessions.finalize_pending_record(record, "recovered"), "negative Steam IDs remain valid recovery records")
 	_check(sessions.uploads.size() == 1, "Steam recovery reaches save policy once")
+	_check(sessions.play_session_ingests.is_empty() and sessions.activity_starts.is_empty(), "external Steam sessions do not report Kyodai play activity")
 	_check(not FileAccess.file_exists(path), "Steam recovery record is finalized and removed")
 
 func _test_recovery_claim() -> void:

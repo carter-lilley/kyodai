@@ -199,7 +199,7 @@ func _build_romm_connection_page() -> VBoxContainer:
 	_romm_connection_panel = RommConnectionPanel.new()
 	_romm_connection_panel.show_description = true
 	_romm_connection_panel.description_text = "Connect to your RomM server to browse and download games. You can skip this and configure it later in Settings."
-	_romm_connection_panel.test_button_text = "Test Connection"
+	_romm_connection_panel.test_button_text = "Pair with RomM"
 	vbox.add_child(_romm_connection_panel)
 
 	return vbox

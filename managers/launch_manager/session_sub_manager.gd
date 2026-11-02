@@ -12,8 +12,20 @@ signal session_finalized(session: GameSession, exit_code: int)
 
 const PENDING_SESSION_DIR := "user://pending_game_sessions"
 const LEGACY_PENDING_SESSION_PATH := "user://pending_game_session.json"
+const PLAY_SESSION_OUTBOX_DIR := "user://pending_play_sessions"
 
 var _sessions: Dictionary = {}  # session_id -> GameSession
+var _activity_session_id := ""
+var _activity_romm_id := 0
+var _play_session_inflight: Dictionary = {}
+var _device_registration_inflight := false
+var _device_waiters: Array[Callable] = []
+
+func _ready() -> void:
+	DirAccess.make_dir_recursive_absolute(PLAY_SESSION_OUTBOX_DIR)
+	if SystemManager.network:
+		SystemManager.network.network_status_changed.connect(_on_reporting_network_changed)
+	call_deferred("_retry_play_session_outbox")
 
 func begin_session(game: GameResource, backend: GameSession.Backend, metadata: Dictionary = {}) -> GameSession:
 	var session := GameSession.new_session(game, backend, metadata)
@@ -29,6 +41,7 @@ func activate_session(session: GameSession, legacy_pid: int) -> void:
 	session.resume_playtime()
 	_write_pending_record(session)
 	_start_native_watch(session)
+	_start_activity_reporting(session)
 	session_activated.emit(session, legacy_pid)
 	session_changed.emit(session)
 
@@ -39,6 +52,7 @@ func retain_session(session: GameSession, emit_signal: bool = true) -> void:
 	session.pause_playtime()
 	_write_pending_record(session)
 	_start_native_watch(session)
+	_stop_activity_reporting(session)
 	if emit_signal:
 		session_retained.emit(session)
 	session_changed.emit(session)
@@ -49,6 +63,7 @@ func resume_session(session: GameSession) -> void:
 	session.state = GameSession.State.ACTIVE
 	session.resume_playtime()
 	_write_pending_record(session)
+	_start_activity_reporting(session)
 	session_resumed.emit(session)
 	session_changed.emit(session)
 
@@ -65,6 +80,7 @@ func reattach_session(record: Dictionary, game: GameResource, runtime: Dictionar
 	_sessions[session.session_id] = session
 	_write_pending_record(session)
 	_start_native_watch(session)
+	_start_activity_reporting(session)
 	session_activated.emit(session, int(runtime.get("pid", -1)))
 	session_changed.emit(session)
 	return session
@@ -75,6 +91,7 @@ func abort_session(session: GameSession) -> void:
 	session.state = GameSession.State.CLOSING
 	_sessions.erase(session.session_id)
 	_stop_native_watch(session)
+	_stop_activity_reporting(session)
 	_delete_pending_record(session.pending_path)
 	session.state = GameSession.State.ENDED
 	# A failed handoff restores UI but never credits playtime or uploads saves.
@@ -96,7 +113,13 @@ func finalize_once(session: GameSession, exit_code: int = 0, reason: String = "e
 	session.state = GameSession.State.ENDED
 	_sessions.erase(session.session_id)
 	_stop_native_watch(session)
-	_delete_pending_record(session.pending_path)
+	_stop_activity_reporting(session)
+	if not _queue_play_session_ingest(session, end_unix, elapsed):
+		# Keep the original recovery record if the durable outbox cannot be
+		# written; a later recovery is preferable to silently losing playtime.
+		push_warning("[SessionManager] Could not persist completed play-session outbox")
+	else:
+		_delete_pending_record(session.pending_path)
 	_commit_play_seconds(session, elapsed)
 	if session.game:
 		DataManager.set_game_user_props(session.game, {"now_playing": false}, true, false)
@@ -159,6 +182,7 @@ func mark_lost(record: Dictionary, game: GameResource) -> GameSession:
 		return existing
 	session.owner = GameSession.current_owner()
 	session.state = GameSession.State.LOST
+	_stop_activity_reporting(session)
 	session.pause_playtime()
 	_write_pending_record(session)
 	_sessions[session.session_id] = session
@@ -252,6 +276,173 @@ func _start_native_watch(session: GameSession) -> void:
 func _stop_native_watch(_session: GameSession) -> void:
 	if SystemManager.platform.is_android():
 		SystemManager.platform.stop_game_session_foreground_service()
+
+func _queue_play_session_ingest(session: GameSession, end_unix: float, elapsed_seconds: int) -> bool:
+	if not _should_report_play_session(session) or elapsed_seconds <= 0 or session.start_unix <= 0.0:
+		return true
+	var duration_ms := maxi(0, elapsed_seconds * 1000)
+	var confirmed_end := end_unix if end_unix > session.start_unix else Time.get_unix_time_from_system()
+	confirmed_end = maxf(confirmed_end, session.start_unix + maxf(1.0, float(elapsed_seconds)))
+	var entry := {
+		"rom_id": session.romm_id,
+		"start_time": Time.get_datetime_string_from_unix_time(int(session.start_unix)) + "Z",
+		"end_time": Time.get_datetime_string_from_unix_time(int(confirmed_end)) + "Z",
+		"duration_ms": duration_ms,
+	}
+	var record := {
+		"session_id": session.session_id,
+		"attempts": 0,
+		"payload": {"device_id": "", "sessions": [entry]},
+	}
+	var path := PLAY_SESSION_OUTBOX_DIR.path_join(session.session_id + ".json")
+	if not _write_play_session_record(path, record):
+		return false
+	call_deferred("_send_play_session_outbox", path)
+	return true
+
+func _write_play_session_record(path: String, record: Dictionary) -> bool:
+	var directory_error := DirAccess.make_dir_recursive_absolute(PLAY_SESSION_OUTBOX_DIR)
+	if directory_error != OK and directory_error != ERR_ALREADY_EXISTS:
+		return false
+	var temp := path + ".tmp"
+	var file := FileAccess.open(temp, FileAccess.WRITE)
+	if not file:
+		return false
+	file.store_string(JSON.stringify(record))
+	file.flush()
+	file.close()
+	if DirAccess.rename_absolute(temp, path) != OK:
+		DirAccess.remove_absolute(temp)
+		return false
+	return true
+
+func _on_reporting_network_changed(online: bool) -> void:
+	if not online:
+		return
+	if not _activity_session_id.is_empty():
+		_with_reporting_device(func(device_id: String):
+			if not device_id.is_empty() and not _activity_session_id.is_empty():
+				SystemManager.network.start_activity_reporting(_activity_romm_id, device_id)
+		)
+	_retry_play_session_outbox()
+
+func _retry_play_session_outbox() -> void:
+	if not SystemManager.network or not SystemManager.network.is_online():
+		return
+	var directory := DirAccess.open(PLAY_SESSION_OUTBOX_DIR)
+	if directory == null:
+		return
+	directory.list_dir_begin()
+	var entry := directory.get_next()
+	while not entry.is_empty():
+		if not directory.current_is_dir() and entry.ends_with(".json"):
+			_send_play_session_outbox(PLAY_SESSION_OUTBOX_DIR.path_join(entry))
+		entry = directory.get_next()
+	directory.list_dir_end()
+
+func _send_play_session_outbox(path: String) -> void:
+	if _play_session_inflight.has(path) or not SystemManager.network or not SystemManager.network.is_online():
+		return
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return
+	var record = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not (record is Dictionary) or not (record.get("payload", {}) is Dictionary):
+		return
+	_play_session_inflight[path] = true
+	_with_reporting_device(func(device_id: String):
+		if device_id.is_empty():
+			_play_session_inflight.erase(path)
+			return
+		var payload: Dictionary = record.payload.duplicate(true)
+		payload["device_id"] = device_id
+		SystemManager.network.ingest_play_sessions(device_id, payload.get("sessions", []), func(data: Variant, error: String):
+			_play_session_inflight.erase(path)
+			if not error.is_empty():
+				_record_play_session_error(path, error)
+				return
+			var accepted := false
+			if data is Dictionary:
+				var results: Array = data.get("results", [])
+				accepted = not results.is_empty()
+				for result in results:
+					if not (result is Dictionary) or str(result.get("status", "")) not in ["created", "duplicate"]:
+						accepted = false
+						break
+			if accepted:
+				DirAccess.remove_absolute(path)
+			else:
+				_record_play_session_error(path, "RomM rejected completed play-session ingestion")
+		)
+	)
+
+func _record_play_session_error(path: String, error: String) -> void:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return
+	var record = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not (record is Dictionary):
+		return
+	record["attempts"] = int(record.get("attempts", 0)) + 1
+	record["last_error"] = error
+	_write_play_session_record(path, record)
+
+func _should_report_play_session(session: GameSession) -> bool:
+	if session == null or session.romm_id <= 0 or session.backend == GameSession.Backend.UNKNOWN:
+		return false
+	if session.is_shuffler():
+		return false
+	# Steam/GameNative/DroidDeck sessions are externally owned and do not map
+	# cleanly to Kyodai's emulator session identity or RomM ROM IDs.
+	if session.game and session.game.source == "steam":
+		return false
+	return true
+
+func _start_activity_reporting(session: GameSession) -> void:
+	if not _should_report_play_session(session) or not SystemManager.network:
+		return
+	if _activity_session_id == session.session_id:
+		return
+	if not _activity_session_id.is_empty():
+		SystemManager.network.stop_activity_reporting()
+	_activity_session_id = session.session_id
+	_activity_romm_id = session.romm_id
+	_with_reporting_device(func(device_id: String):
+		if device_id.is_empty() or _activity_session_id != session.session_id or session.state != GameSession.State.ACTIVE:
+			return
+		SystemManager.network.start_activity_reporting(session.romm_id, device_id)
+	)
+
+func _stop_activity_reporting(session: GameSession) -> void:
+	if session == null or _activity_session_id != session.session_id:
+		return
+	_activity_session_id = ""
+	_activity_romm_id = 0
+	if SystemManager.network:
+		SystemManager.network.stop_activity_reporting()
+
+func _with_reporting_device(callback: Callable) -> void:
+	var device_id := DataManager.get_romm_device_id()
+	if not device_id.is_empty():
+		callback.call(device_id)
+		return
+	if not DataManager.game_save:
+		callback.call("")
+		return
+	_device_waiters.append(callback)
+	if _device_registration_inflight:
+		return
+	_device_registration_inflight = true
+	DataManager.game_save._ensure_device_registered(func(success: bool, _error: String):
+		var resolved := DataManager.get_romm_device_id() if success else ""
+		var waiters := _device_waiters.duplicate()
+		_device_waiters.clear()
+		_device_registration_inflight = false
+		for waiter in waiters:
+			waiter.call(resolved)
+	)
 
 func _should_credit_playtime(session: GameSession) -> bool:
 	# Shuffler has always bypassed ordinary play-session accounting.

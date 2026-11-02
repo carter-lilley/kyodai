@@ -14,8 +14,16 @@ signal api_request_completed(endpoint: String, success: bool, data: Variant)
 var _base_url: String = ""
 var _username: String = ""
 var _password: String = ""
+var _token: String = ""
 var _is_online: bool = false
 var _is_configured: bool = false
+
+# Live RomM activity reporting. Android uses the native background executor;
+# desktop uses a SceneTree timer because its main loop remains active.
+var _activity_reporting := false
+var _activity_romm_id := 0
+var _activity_device_id := ""
+var _activity_timer: Timer = null
 
 # HTTP Request Pool for efficient reuse during batch operations
 # Note: Pooling is disabled on Android to save memory, enabled on desktop for performance
@@ -41,6 +49,7 @@ func _use_pooling() -> bool:
 func _ready():
 	DataManager.setting_changed.connect(_on_setting_changed)
 	authentication_failed.connect(_on_authentication_failed)
+	network_status_changed.connect(_on_activity_network_changed)
 	_load_credentials()
 
 ## Show one auth-failure snackbar per cooldown window rather than one per
@@ -54,9 +63,17 @@ func _on_authentication_failed() -> void:
 		return
 	_last_auth_notification_msec = now
 	if SystemManager.notifications:
-		SystemManager.notifications.show_notification("RomM authentication failed - check your credentials", SystemManager.notifications.Type.ERROR)
+		if _token != "":
+			SystemManager.notifications.show_notification("RomM rejected the pairing token - re-pair this device in Settings", SystemManager.notifications.Type.ERROR)
+		else:
+			SystemManager.notifications.show_notification("RomM authentication failed - check your credentials", SystemManager.notifications.Type.ERROR)
 
 func _on_setting_changed(value, setting):
+	if setting.property_name in ["romm_url", "romm_username", "romm_password", "romm_token"]:
+		_activity_reporting = false
+		_activity_romm_id = 0
+		_activity_device_id = ""
+		_stop_activity_transport()
 	match setting.property_name:
 		"romm_url":
 			_base_url = value if value else ""
@@ -68,6 +85,10 @@ func _on_setting_changed(value, setting):
 			_load_credentials()
 		"romm_password":
 			_password = value if value else ""
+			_clear_current_user()
+			_load_credentials()
+		"romm_token":
+			_token = value if value else ""
 			_clear_current_user()
 			_load_credentials()
 
@@ -93,10 +114,25 @@ func _load_credentials():
 		if pass_setting:
 			_password = pass_setting.value if pass_setting.value else ""
 
+	var token_setting = DataManager.get_setting("romm_token")
+	_token = token_setting.value if token_setting and token_setting.value else ""
+	if _token != "" and not is_valid_client_token(_token):
+		# Settings saved by the old char-wise settings encryption could come
+		# back corrupted (NUL-mangling); such a token can never authenticate,
+		# so drop it and let the user re-pair (cheap: the stable device
+		# identifier makes the server reuse the same device).
+		push_warning("[SystemManager.network] Stored RomM token is malformed - discarding; re-pair this device")
+		_token = ""
+		if token_setting:
+			DataManager.set_setting("", token_setting)
+			DataManager.save_settings()
+
 	_check_configuration()
 
 func _check_configuration():
-	_is_configured = _base_url != "" and _username != "" and _password != ""
+	# A paired Client API Token is sufficient on its own; username/password is
+	# the legacy path for RomM servers without device auth (< 5.0).
+	_is_configured = _base_url != "" and (_token != "" or (_username != "" and _password != ""))
 	if _is_configured:
 		# Warm up the host first (wakes sleeping servers, establishes CSRF
 		# cache, and orders the startup request burst), then verify as before.
@@ -108,6 +144,218 @@ func _check_configuration():
 ## Used to warm up the host at startup before real API calls.
 func fetch_heartbeat(callback: Callable) -> void:
 	make_request("/heartbeat", callback, true, false)
+
+# ==================== DEVICE PAIRING / CLIENT API TOKENS ====================
+# RomM 5.0+ device authorization flow (RFC 8628-style). Endpoints are
+# unauthenticated by design (the device has no credentials yet) but
+# rate-limited server-side; pending codes have a hard 10-minute TTL.
+# A successful pairing yields a Client API Token (rmm_...) used as a Bearer
+# credential from then on. See docs.romm.app -> Client API Tokens.
+
+## Scopes requested when pairing. Mirrors Argosy's set: library, saves/states,
+## firmware, ratings and device management in one grant, so unlocking a
+## feature later never requires re-pairing.
+const PAIRING_SCOPES := [
+	"me.read", "me.write",
+	"platforms.read", "platforms.write",
+	"roms.read", "roms.write",
+	"roms.user.read", "roms.user.write",
+	"assets.read", "assets.write",
+	"firmware.read", "firmware.write",
+	"collections.read", "collections.write",
+	"devices.read", "devices.write",
+]
+
+## Minimum RomM version with the /api/auth/device flow.
+const DEVICE_AUTH_MIN_VERSION := "5.0.0"
+
+## Client API Tokens are "rmm_" + 64 hex chars. Anything else (e.g. a value
+## mangled by a settings-serialization bug) is rejected before use.
+static func is_valid_client_token(token: String) -> bool:
+	if token.length() != 68 or not token.begins_with("rmm_"):
+		return false
+	var body := token.substr(4)
+	var re := RegEx.new()
+	re.compile("^[0-9a-f]{64}$")
+	return re.search(body) != null
+
+## Compares dotted versions, tolerating suffixes ("5.1.0-beta.1") and a leading
+## "v". "development" builds are treated as supporting everything.
+static func version_at_least(version: String, minimum: String) -> bool:
+	var v := version.strip_edges()
+	if v == "":
+		return false
+	if v == "development":
+		return true
+	v = v.trim_prefix("v").split("-")[0].split("+")[0]
+	var v_parts := v.split(".")
+	var m_parts := minimum.split(".")
+	for i in range(m_parts.size()):
+		var have := int(v_parts[i]) if i < v_parts.size() and v_parts[i].is_valid_int() else 0
+		var want := int(m_parts[i])
+		if have != want:
+			return have > want
+	return true
+
+## Stable per-install identifier sent on every pairing. RomM dedupes devices
+## on (user, client_device_identifier), so re-pairing after token loss or
+## revocation reuses the same server device instead of piling up duplicates.
+func get_client_device_identifier() -> String:
+	var setting = DataManager.get_setting("romm_client_device_identifier")
+	if setting and str(setting.value) != "":
+		return str(setting.value)
+	var bytes := Crypto.new().generate_random_bytes(16)
+	# UUID v4 layout (version + variant bits); only stability matters here.
+	bytes[6] = (bytes[6] & 0x0F) | 0x40
+	bytes[8] = (bytes[8] & 0x3F) | 0x80
+	var hex := bytes.hex_encode()
+	var uuid := "%s-%s-%s-%s-%s" % [
+		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
+		hex.substr(16, 4), hex.substr(20, 12)]
+	if setting:
+		DataManager.set_setting(uuid, setting)
+		DataManager.save_settings()
+	return uuid
+
+## POSTs JSON to {base_url}/api{path} WITHOUT any Authorization header.
+## Used only for the pairing endpoints, which are open by design.
+## callback(result: Dictionary): {status: int, data: Variant, error: String}
+## status is 0 on transport failure (error set), otherwise the HTTP code and
+## data is the parsed JSON body ({} when unparseable/empty).
+func _post_json_unauthenticated(base_url: String, path: String, payload: Dictionary, callback: Callable) -> void:
+	var http = _create_http_request()
+	_active_request_count += 1
+	http.timeout = 30.0
+	var url = base_url.rstrip("/") + "/api" + path
+	var headers = ["Content-Type: application/json"]
+	var error = http.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(payload))
+	if error != OK:
+		_finish_pooled_request(http)
+		callback.call({"status": 0, "data": {}, "error": "Failed to start request: " + str(error)})
+		return
+	http.request_completed.connect(func(result, response_code, _response_headers, body):
+		_finish_pooled_request(http)
+		if result != HTTPRequest.RESULT_SUCCESS:
+			callback.call({"status": 0, "data": {}, "error": "Request failed with result: " + str(result)})
+			return
+		var parsed: Variant = {}
+		if body.size() > 0:
+			var json = JSON.new()
+			if json.parse(body.get_string_from_utf8()) == OK:
+				parsed = json.data
+		callback.call({"status": response_code, "data": parsed, "error": ""})
+	)
+
+## Unauthenticated heartbeat against an arbitrary server URL (the settings
+## may not point there yet during first-run pairing).
+## callback(version: String, error: String) - version is "" when unknown.
+func fetch_server_version(base_url: String, callback: Callable) -> void:
+	var http = _create_http_request()
+	_active_request_count += 1
+	http.timeout = 15.0
+	var error = http.request(base_url.rstrip("/") + "/api/heartbeat", [], HTTPClient.METHOD_GET)
+	if error != OK:
+		_finish_pooled_request(http)
+		callback.call("", "Failed to start request: " + str(error))
+		return
+	http.request_completed.connect(func(result, response_code, _response_headers, body):
+		_finish_pooled_request(http)
+		if result != HTTPRequest.RESULT_SUCCESS:
+			callback.call("", "Server unreachable (result " + str(result) + ")")
+			return
+		if response_code != 200:
+			callback.call("", "Server returned HTTP " + str(response_code))
+			return
+		var json = JSON.new()
+		if json.parse(body.get_string_from_utf8()) != OK or not json.data is Dictionary:
+			callback.call("", "Not a RomM server (unexpected heartbeat response)")
+			return
+		callback.call(heartbeat_version(json.data), "")
+	)
+
+## Extracts the server version from a heartbeat response. RomM nests it under
+## SYSTEM.VERSION; flat VERSION/version keys are accepted as a fallback.
+static func heartbeat_version(data: Dictionary) -> String:
+	var system_dict: Variant = data.get("SYSTEM", {})
+	if system_dict is Dictionary:
+		var v := str(system_dict.get("VERSION", system_dict.get("version", "")))
+		if v != "":
+			return v
+	return str(data.get("VERSION", data.get("version", "")))
+
+## Step 1 of device pairing. callback(result) as above; on HTTP 201 data holds
+## {device_code, user_code, verification_path, verification_path_complete,
+## expires_in, interval}.
+func device_auth_init(base_url: String, callback: Callable) -> void:
+	var device_name = "Kyodai (" + OS.get_name().capitalize() + ")"
+	_post_json_unauthenticated(base_url, "/auth/device/init", {
+		"client_device_identifier": get_client_device_identifier(),
+		"name": device_name,
+		"client": "kyodai",
+		"platform": OS.get_name(),
+		"client_version": ProjectSettings.get_setting("application/config/version", ""),
+		"requested_scopes": PAIRING_SCOPES,
+	}, callback)
+
+## Single poll of the pairing flow. On approval (HTTP 200) data holds
+## {access_token, device_id, scopes, expires_at}; pending states come back as
+## HTTP 400 with data.detail = authorization_pending / slow_down /
+## access_denied / expired_token.
+func device_auth_token(base_url: String, device_code: String, callback: Callable) -> void:
+	_post_json_unauthenticated(base_url, "/auth/device/token", {"device_code": device_code}, callback)
+
+## Exchanges an 8-digit code generated in the RomM web UI (Administration ->
+## Client API Tokens) for the full token. On success data.raw_token holds the
+## rmm_... token; data.device_id is set only for device-bound tokens.
+func exchange_pairing_code(base_url: String, code: String, callback: Callable) -> void:
+	_post_json_unauthenticated(base_url, "/client-tokens/exchange", {"code": code.strip_edges()}, callback)
+
+## Persists a freshly paired token and switches this client to Bearer auth.
+## Legacy username/password are wiped: the token replaces them and they should
+## not linger on disk (migration path for existing Basic-auth users).
+func store_paired_credentials(base_url: String, token: String, bound_device_id: String) -> void:
+	_base_url = base_url.rstrip("/")
+	_token = token
+	_username = ""
+	_password = ""
+	var url_setting = DataManager.get_setting("romm_url")
+	var token_setting = DataManager.get_setting("romm_token")
+	var bound_setting = DataManager.get_setting("romm_bound_device_id")
+	if url_setting:
+		DataManager.set_setting(_base_url, url_setting)
+	if token_setting:
+		DataManager.set_setting(token, token_setting)
+	if bound_setting:
+		DataManager.set_setting(bound_device_id, bound_setting)
+	# Fresh installs have no legacy save-sync device yet: adopt the paired
+	# bound device so save sync doesn't register a second, duplicate device.
+	# Existing users keep their legacy device_id and its sync history.
+	if bound_device_id != "" and DataManager.get_romm_device_id() == "":
+		DataManager.set_romm_device_id(bound_device_id)
+	for key in ["romm_username", "romm_password"]:
+		var legacy = DataManager.get_setting(key)
+		if legacy:
+			DataManager.set_setting("", legacy)
+	DataManager.save_settings()
+	_load_credentials()
+
+## Forgets the paired token (user-initiated "Disconnect"/re-pair). The server
+## token itself is revoked from the RomM web UI; the legacy device registration
+## used by save sync is intentionally left untouched.
+func clear_paired_credentials() -> void:
+	_token = ""
+	var token_setting = DataManager.get_setting("romm_token")
+	var bound_setting = DataManager.get_setting("romm_bound_device_id")
+	if token_setting:
+		DataManager.set_setting("", token_setting)
+	if bound_setting:
+		DataManager.set_setting("", bound_setting)
+	DataManager.save_settings()
+	_clear_current_user()
+	_load_credentials()
+	if _is_online:
+		_is_online = false
+		network_status_changed.emit(false)
 
 # ==================== CURRENT USER ====================
 
@@ -189,9 +437,15 @@ func _finish_pooled_request(http: HTTPRequest) -> void:
 	_cleanup_http_request(http)
 
 func _get_auth_header() -> String:
+	if _token != "":
+		return "Bearer " + _token
 	var credentials = _username + ":" + _password
 	var encoded = Marshalls.utf8_to_base64(credentials)
 	return "Basic " + encoded
+
+## True when a paired Client API Token is configured (Bearer auth).
+func has_token() -> bool:
+	return _token != ""
 
 func get_base_url() -> String:
 	if _base_url.is_empty():
@@ -1735,6 +1989,68 @@ func update_rom_user_props(romm_id: int, props: Dictionary, update_last_played: 
 		endpoint += "?update_last_played=true"
 	_make_json_request(endpoint, HTTPClient.METHOD_PUT, props, callback)
 
+func start_activity_reporting(romm_id: int, device_id: String) -> void:
+	if romm_id <= 0 or device_id.is_empty():
+		return
+	_activity_romm_id = romm_id
+	_activity_device_id = device_id
+	_activity_reporting = true
+	_restart_activity_transport()
+
+func stop_activity_reporting(device_id: String = "", clear_remote: bool = true) -> void:
+	if not device_id.is_empty() and not _activity_device_id.is_empty() and device_id != _activity_device_id:
+		return
+	var old_device_id := _activity_device_id
+	_activity_reporting = false
+	_activity_romm_id = 0
+	_activity_device_id = ""
+	_stop_activity_transport()
+	if clear_remote and not old_device_id.is_empty():
+		clear_activity(old_device_id)
+
+func _on_activity_network_changed(online: bool) -> void:
+	if online and _activity_reporting:
+		_restart_activity_transport()
+	else:
+		_stop_activity_transport()
+
+func _restart_activity_transport() -> void:
+	_stop_activity_transport()
+	if not _activity_reporting or not _is_online:
+		return
+	if SystemManager.platform.is_android() and Engine.has_singleton("KyodaiBridge"):
+		var plugin = Engine.get_singleton("KyodaiBridge")
+		plugin.startActivityHeartbeat(_base_url.rstrip("/"), _get_auth_header(), _activity_romm_id, _activity_device_id)
+		return
+	if _activity_timer == null:
+		_activity_timer = Timer.new()
+		_activity_timer.wait_time = 30.0
+		_activity_timer.timeout.connect(func():
+			report_activity_heartbeat(_activity_romm_id, _activity_device_id)
+		)
+		add_child(_activity_timer)
+	_activity_timer.start()
+	report_activity_heartbeat(_activity_romm_id, _activity_device_id)
+
+func _stop_activity_transport() -> void:
+	if _activity_timer:
+		_activity_timer.stop()
+	if SystemManager.platform.is_android() and Engine.has_singleton("KyodaiBridge"):
+		Engine.get_singleton("KyodaiBridge").stopActivityHeartbeat()
+
+func report_activity_heartbeat(romm_id: int, device_id: String, callback: Callable = Callable()) -> void:
+	if romm_id <= 0 or device_id.is_empty():
+		return
+	_make_json_request("/activity/heartbeat", HTTPClient.METHOD_POST, {"rom_id": romm_id, "device_id": device_id}, callback)
+
+func clear_activity(device_id: String, callback: Callable = Callable()) -> void:
+	if device_id.is_empty():
+		return
+	_make_json_request("/activity/heartbeat?device_id=" + device_id.uri_encode(), HTTPClient.METHOD_DELETE, {}, callback)
+
+func ingest_play_sessions(device_id: String, sessions: Array, callback: Callable = Callable()) -> void:
+	_make_json_request("/play-sessions", HTTPClient.METHOD_POST, {"device_id": device_id, "sessions": sessions}, callback)
+
 ## Generic urlencoded-form request helper (for RomM endpoints that take Form()
 ## params instead of a JSON body). callback(data: Variant, error: String)
 func _make_form_request(endpoint: String, method: HTTPClient.Method, fields: Dictionary, callback: Callable = Callable()) -> void:
@@ -2022,6 +2338,8 @@ func shutdown() -> void:
 
 	Called during app shutdown so pending requests don't stall tree teardown.
 	"""
+	_activity_reporting = false
+	_stop_activity_transport()
 	# Cancel and release any HTTPRequest nodes currently in flight.
 	for child in get_children():
 		if child is HTTPRequest:

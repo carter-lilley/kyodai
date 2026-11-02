@@ -77,6 +77,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private WindowFocusGuard windowFocusGuard;
     private ComponentCallbacks2 trimMemoryCallbacks;
     private TaskBackendRouter taskBackend;
+    private java.util.concurrent.ScheduledExecutorService activityHeartbeatExecutor;
     private String lastSessionId = "";
     private volatile boolean destroyed;
     private volatile int retainedTaskId = -1;
@@ -87,6 +88,8 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     private volatile String homeSnapshotRequestId = "";
     private volatile String homeSnapshotJson;
     private FileObserver homeResultObserver;
+    private FileObserver taskEventObserver;
+    private String taskEventObserverNonce = "";
     private volatile int observerRequestedTaskId = -1;
     private volatile String observerNonce = "";
     private volatile boolean observerReleasePending;
@@ -167,6 +170,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         signals.add(new SignalInfo("saf_grant_result", Boolean.class));
         signals.add(new SignalInfo("trim_memory", Integer.class));
         signals.add(new SignalInfo("android_task_result", String.class, String.class, String.class));
+        signals.add(new SignalInfo("android_task_event", String.class, Integer.class, String.class));
         signals.add(new SignalInfo("android_home_requested"));
         return signals;
     }
@@ -295,6 +299,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
             taskBackend = null;
         }
         androidTaskClearRetainedIdentity();
+        stopActivityHeartbeat();
         if (chunkFlushExecutor != null) {
             chunkFlushExecutor.shutdownNow();
             chunkFlushExecutor = null;
@@ -3818,6 +3823,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
 
     @UsedByGodot
     public void androidTaskReleaseObserver() {
+        stopObserverEvents();
         observerRequestedTaskId = -1;
         String nonce = observerNonce;
         observerNonce = "";
@@ -3909,6 +3915,47 @@ public class KyodaiBridgePlugin extends GodotPlugin {
         }
     }
 
+    private void watchObserverEvents(String nonce) {
+        stopObserverEvents();
+        if (activity == null || nonce.isEmpty()) return;
+        File directory = new File(activity.getFilesDir(), "task-requests/" + nonce);
+        File eventFile = new File(directory, "task-event.json");
+        taskEventObserverNonce = nonce;
+        taskEventObserver = new FileObserver(directory.getAbsolutePath(),
+                FileObserver.CREATE | FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+            @Override
+            public void onEvent(int event, String path) {
+                if ("task-event.json".equals(path)) publishObserverEventIfReady(eventFile, nonce);
+            }
+        };
+        taskEventObserver.startWatching();
+        publishObserverEventIfReady(eventFile, nonce);
+    }
+
+    private void publishObserverEventIfReady(File eventFile, String nonce) {
+        if (!nonce.equals(observerNonce) || !nonce.equals(taskEventObserverNonce)) return;
+        try {
+            org.json.JSONObject event = new org.json.JSONObject(readTaskResult(eventFile));
+            if (!nonce.equals(event.optString("nonce", ""))) return;
+            String name = event.optString("event", "");
+            int taskId = event.optInt("taskId", -1);
+            String packageName = event.optString("packageName", "");
+            if (name.isEmpty() || taskId < 0) return;
+            if (eventFile.delete()) {
+                activity.runOnUiThread(() -> emitSignal("android_task_event", name, taskId, packageName));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void stopObserverEvents() {
+        if (taskEventObserver != null) {
+            taskEventObserver.stopWatching();
+            taskEventObserver = null;
+        }
+        taskEventObserverNonce = "";
+    }
+
     private void writeObserverRelease(String nonce) {
         if (activity == null || nonce.isEmpty()) return;
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(
@@ -3939,6 +3986,7 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                 observerReleasePending = false;
             } else if (result.optBoolean("ok", false) && result.optBoolean("observer", false) && !nonce.isEmpty()) {
                 observerNonce = nonce;
+                watchObserverEvents(nonce);
             } else {
                 observerRequestedTaskId = -1;
             }
@@ -3993,6 +4041,64 @@ public class KyodaiBridgePlugin extends GodotPlugin {
                     .put("error", "Android task backend unavailable"));
         } catch (org.json.JSONException ignored) {}
         return "unsupported";
+    }
+
+    // ==================== ROMM ACTIVITY HEARTBEAT ====================
+
+    @UsedByGodot
+    public synchronized void startActivityHeartbeat(String baseUrl, String authorization, int rommId, String deviceId) {
+        stopActivityHeartbeat();
+        if (destroyed || baseUrl == null || baseUrl.isEmpty() || authorization == null
+                || authorization.isEmpty() || rommId <= 0 || deviceId == null || deviceId.isEmpty()) {
+            return;
+        }
+        final String endpoint = baseUrl + "/api/activity/heartbeat";
+        activityHeartbeatExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "KyodaiActivityHeartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
+        activityHeartbeatExecutor.scheduleWithFixedDelay(
+                () -> sendActivityHeartbeat(endpoint, authorization, rommId, deviceId),
+                0, 30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    @UsedByGodot
+    public synchronized void stopActivityHeartbeat() {
+        if (activityHeartbeatExecutor != null) {
+            activityHeartbeatExecutor.shutdownNow();
+            activityHeartbeatExecutor = null;
+        }
+    }
+
+    private void sendActivityHeartbeat(String endpoint, String authorization, int rommId, String deviceId) {
+        if (destroyed) return;
+        java.net.HttpURLConnection connection = null;
+        try {
+            connection = (java.net.HttpURLConnection) new java.net.URL(endpoint).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", authorization);
+            connection.setDoOutput(true);
+            org.json.JSONObject body = new org.json.JSONObject();
+            body.put("rom_id", rommId);
+            body.put("device_id", deviceId);
+            byte[] bytes = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(bytes.length);
+            try (java.io.OutputStream output = connection.getOutputStream()) {
+                output.write(bytes);
+            }
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) {
+                Log.w(TAG, "RomM activity heartbeat returned HTTP " + status);
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "RomM activity heartbeat failed: " + error.getMessage());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
     }
 
     // ==================== FOREGROUND SERVICE FOR GAME SESSIONS ====================

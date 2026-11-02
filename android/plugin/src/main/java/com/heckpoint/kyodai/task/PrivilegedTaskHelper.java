@@ -414,6 +414,11 @@ public final class PrivilegedTaskHelper {
                     }
                     final ActivityManager.RunningTaskInfo movedSnapshot = moved;
                     enqueueObserverWork(() -> raiseForHome(homePackage, gameTaskId, movedSnapshot));
+                } else if ("onTaskRemoved".equals(method)) {
+                    int removedTaskId = data.readInt();
+                    if (removedTaskId == gameTaskId) {
+                        enqueueObserverWork(() -> publishObserverEvent("task_removed", removedTaskId));
+                    }
                 } else if ("onTaskStackChanged".equals(method) || "onTaskFocusChanged".equals(method)) {
                     enqueueObserverWork(() -> raiseForHome(homePackage, gameTaskId, null));
                 }
@@ -454,6 +459,19 @@ public final class PrivilegedTaskHelper {
             Log.w(TAG, "observer unregister failed", error);
         } finally {
             observerRegistration = null;
+        }
+    }
+
+    private void publishObserverEvent(String event, int taskId) {
+        if (observerStopped) return;
+        try {
+            JSONObject value = baseResult();
+            value.put("event", event);
+            value.put("taskId", taskId);
+            value.put("packageName", expected.optString("package", ""));
+            writeJsonAtomic(new File(requestDir, "task-event.json"), value);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not publish task event", error);
         }
     }
 

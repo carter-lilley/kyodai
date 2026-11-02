@@ -52,6 +52,18 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 @export var romm_url := SettingsVar.new(Type.STRING, "", State.ENABLED, "RomM URL")
 @export var romm_username := SettingsVar.new(Type.STRING, "", State.ENABLED, "Username")
 @export var romm_password := SettingsVar.new(Type.STRING, "", State.ENABLED, "Password", "", 0.0, 1.0, 0.1, [], true)
+# Internal: Client API Token (rmm_...) obtained via device pairing or code
+# exchange. When set, all requests authenticate as Bearer instead of Basic
+# and the username/password fields are unused (kept only for pre-5.0 servers).
+@export var romm_token := SettingsVar.new(Type.STRING, "", State.INTERNAL, "RomM Client API Token", "", 0.0, 1.0, 0.1, [], true)
+# Internal: device bound 1:1 to the paired token by /api/auth/device. Save
+# sync deliberately keeps using the legacy romm_device_id (see
+# game_save_sub_manager) so existing devices keep their sync history.
+@export var romm_bound_device_id := SettingsVar.new(Type.STRING, "", State.INTERNAL, "RomM Paired Device ID")
+# Internal: stable random UUID sent as client_device_identifier on pairing.
+# RomM dedupes devices on (user, identifier), so re-pairing after token loss
+# reuses the same server device instead of creating duplicates.
+@export var romm_client_device_identifier := SettingsVar.new(Type.STRING, "", State.INTERNAL, "RomM Client Device Identifier")
 # Internal: the http:// origin the user acknowledged as insecure-but-accepted
 # (KYD-07). Pre-ticks the connection panel's acknowledgment checkbox when the
 # current URL matches; a different http origin must be re-acknowledged.

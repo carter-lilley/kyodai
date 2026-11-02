@@ -146,7 +146,8 @@ public class GameSessionForegroundService extends Service {
                         sessionCap = null;
                     }
                     if (isRunning) {
-                        isRunning = false;
+                        // Keep the same foreground-service lifecycle. Repeated
+                        // identity updates must not race stop/start timeouts.
                         releaseSessionLocks();
                     }
                 }
@@ -179,12 +180,10 @@ public class GameSessionForegroundService extends Service {
                 break;
         }
 
-        // Resurrection: if LMK (or a vendor killer) takes this process
-        // mid-game, Android restarts the service with the original
-        // START_SESSION intent; notification, locks and the presence watch
-        // re-arm. The watch's time-based grace still lets it terminate when
-        // the game has long ended.
-        return START_REDELIVER_INTENT;
+        // Explicitly stopped sessions must not be resurrected with stale
+        // intents. Genuine launcher/process recovery starts a fresh service
+        // after validating the pending record and runtime identity.
+        return START_NOT_STICKY;
     }
 
     private void createNotificationChannel() {
@@ -207,7 +206,14 @@ public class GameSessionForegroundService extends Service {
 
     private void startForegroundService(String gameName, long startTimeMs) {
         if (isRunning) {
-            Log.d(TAG, "Service already running");
+            // Update identity in place rather than cycling foreground state.
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(gameName, startTimeMs));
+            startPresenceWatch();
+            if (sessionCap != null) handler.removeCallbacks(sessionCap);
+            sessionCap = this::stopForegroundService;
+            handler.postDelayed(sessionCap, MAX_SESSION_MS);
+            Log.d(TAG, "Foreground service session updated");
             return;
         }
 

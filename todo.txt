@@ -5,15 +5,12 @@ ship w music
 Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 - universal extraction normalizer (walk down for expected files...saves & games)
 maybe make cores on demand
-also the oobe permissions page didnt fit horizontally into the screen, the buttons were pushed off screen right, we should fix that.
-x game screen transition/loads - transition to black after cover transition ends, screengrab and transition back when resuming?
-x cocoon seamless game switch?
+oobe GUI sorta broken
 in-built steam library?
 emufii rooms?
 playtime?
 flex-grid sizes and card widgets (random, etc..)
 manuals..
-x proper api client onboarding/pairing with token/qr like argosy does
 
 ## configs
 	- user/identity profile resolver for emulator installs and saves

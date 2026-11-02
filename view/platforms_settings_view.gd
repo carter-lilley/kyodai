@@ -78,7 +78,7 @@ func _build_sections() -> void:
 	# --- Connection ---
 	var connection_section := SettingsSection.new("Connection", "cloud-sync")
 	_romm_connection_panel = RommConnectionPanel.new()
-	_romm_connection_panel.test_button_text = "Test"
+	_romm_connection_panel.test_button_text = "Pair"
 	_romm_connection_panel.test_button_size = M3Button.Size.SMALL
 	_romm_connection_panel.show_separator = false
 	_romm_connection_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL

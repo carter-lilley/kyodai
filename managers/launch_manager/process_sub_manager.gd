@@ -422,6 +422,13 @@ func retain_active_android_session() -> bool:
 		GameCard.evict_session_snapshot(str(session.runtime.get("snapshotPath", "")))
 		session.runtime.erase("snapshotPath")
 		launch_manager.sessions.update_runtime(session, session.runtime)
+	if _android_task_removal_pending:
+		_android_task_removal_pending = false
+		if not await _android_task_exists(session.runtime):
+			_android_transition_inflight = false
+			launch_manager.android_tasks.release_observer()
+			await _finalize_android_sessions_for_package(str(session.runtime.get("package", "")))
+			return false
 	_android_transition_inflight = false
 	# Publish the snapshot to cards before starting the visible return
 	# transition, so the grid cannot settle on stale cover art.
@@ -463,9 +470,26 @@ func resume_retained_game(romm_id: int = -1) -> Dictionary:
 		mark_android_session_lost(session)
 	return {"ok": false, "code": focused.get("code", "focus_failed"), "error": focused.get("error", "")}
 
+func reconcile_android_task_removed(session: GameSession) -> void:
+	if session == null or session != _active_session:
+		return
+	if session.state != GameSession.State.ACTIVE and session.state != GameSession.State.RETAINED:
+		return
+	if _android_transition_inflight:
+		_android_task_removal_pending = true
+		return
+	# Native task events are hints to revalidate, not standalone finalization
+	# permission. Backend uncertainty still preserves the recovery record.
+	if await _android_task_exists(session.runtime):
+		return
+	if session != _active_session or (session.state != GameSession.State.ACTIVE and session.state != GameSession.State.RETAINED):
+		return
+	await _finalize_android_sessions_for_package(str(session.runtime.get("package", "")))
+
 func mark_android_session_lost(session: GameSession) -> void:
 	if session == null:
 		return
+	_android_task_removal_pending = false
 	session.state = GameSession.State.LOST
 	launch_manager.android_tasks.clear_retained_identity()
 	session.pause_playtime()
@@ -527,6 +551,7 @@ func _android_task_exists(runtime: Dictionary) -> bool:
 func _finalize_android_sessions_for_package(package_name: String) -> void:
 	if package_name.is_empty():
 		return
+	_android_task_removal_pending = false
 	var affected: Array[GameSession] = []
 	for session in launch_manager.sessions.get_live_for_package(package_name):
 		if session.backend == GameSession.Backend.ANDROID_TASK:
@@ -558,6 +583,7 @@ func session_changed_for_android() -> void:
 		launch_manager.sessions.session_changed.emit(_active_session)
 
 var _android_transition_inflight := false
+var _android_task_removal_pending := false
 
 ## Exit background state
 func exit_background_state(exit_code: int = 0) -> void:
