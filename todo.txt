@@ -6,11 +6,11 @@ Docs: there is no docs/ folder and no AGENTS.md; todo.txt
 - universal extraction normalizer (walk down for expected files...saves & games)
 maybe make cores on demand
 oobe GUI sorta broken
-in-built steam library?
 emufii rooms?
 playtime?
 flex-grid sizes and card widgets (random, etc..)
 manuals..
+guides, hl2b, playtime in gui
 
 ## configs
 	- user/identity profile resolver for emulator installs and saves
@@ -23,9 +23,6 @@ manuals..
 	- all: optional hotkeys, x graphics settings, confirm on exit, etc?
 	- installer: android - hakux,x1box, & azahar unskippable OOBE & bios selection (no drop bios)
 	- resolver: android - melonds private path, uneditable/readable pref file
-	
-## romm
- - xtra romm metadata - HL2B, guides, logos..
 
 ## general UI
 	widgets (snap to screen regions? snap to grid?)

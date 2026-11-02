@@ -752,8 +752,9 @@ func _on_android_window_focus_out() -> void:
 	rendering is suspended and the engine drops to low-power CPU pacing."""
 	var display_off := false
 	if Engine.has_singleton("KyodaiBridge"):
+		# NB: call directly — has_method() is unreliable on the Java plugin bridge.
 		var plugin = Engine.get_singleton("KyodaiBridge")
-		if plugin and plugin.has_method("isDisplayInteractive"):
+		if plugin:
 			display_off = not bool(plugin.isDisplayInteractive())
 	if not display_off:
 		return

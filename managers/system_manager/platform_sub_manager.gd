@@ -29,9 +29,6 @@ func _setup_platform_specific_behavior():
 		var first_run_completed = DataManager.get_setting("first_run_completed")
 		if first_run_completed and first_run_completed.value:
 			_request_android_permissions()
-		# Defer: SystemManager autoloads before DataManager, so settings reads
-		# must wait a frame.
-		call_deferred("_setup_sleep_savers")
 		# Startup leg of the install-grant session check (see below).
 		call_deferred("_startup_install_grant_check")
 
@@ -54,40 +51,6 @@ func _connect_trim_memory_signal() -> void:
 
 func _on_plugin_trim_memory(level: int) -> void:
 	trim_memory.emit(level)
-
-# ============================================================================
-# SLEEP SAVERS (screen-off Wi-Fi / CPU governor — vendor root daemon required)
-# ============================================================================
-
-## True when the sleep savers can work: Android + vendor root daemon.
-func is_sleep_saver_supported() -> bool:
-	if not is_android():
-		return false
-	var plugin = _get_android_plugin()
-	return plugin != null and plugin.has_method("isSleepSaverSupported") \
-			and bool(plugin.isSleepSaverSupported())
-
-func _setup_sleep_savers() -> void:
-	if not is_sleep_saver_supported():
-		return
-	if not DataManager.setting_changed.is_connected(_on_sleep_saver_setting_changed):
-		DataManager.setting_changed.connect(_on_sleep_saver_setting_changed)
-	_apply_sleep_saver_settings()
-
-func _apply_sleep_saver_settings() -> void:
-	var plugin = _get_android_plugin()
-	if plugin == null:
-		return
-	var wifi_setting = DataManager.get_setting("sleep_wifi_off")
-	if wifi_setting and plugin.has_method("setSleepWifiSaverEnabled"):
-		plugin.setSleepWifiSaverEnabled(bool(wifi_setting.value))
-	var cpu_setting = DataManager.get_setting("sleep_powersave_cpu")
-	if cpu_setting and plugin.has_method("setSleepGovernorSaverEnabled"):
-		plugin.setSleepGovernorSaverEnabled(bool(cpu_setting.value))
-
-func _on_sleep_saver_setting_changed(_value: Variant, setting: SettingsVar) -> void:
-	if setting.property_name in ["sleep_wifi_off", "sleep_powersave_cpu"]:
-		_apply_sleep_saver_settings()
 
 func _notification(what: int) -> void:
 	if not is_android():

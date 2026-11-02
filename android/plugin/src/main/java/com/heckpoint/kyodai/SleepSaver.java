@@ -1,14 +1,16 @@
 package com.heckpoint.kyodai;
 
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.net.wifi.WifiManager;
-import android.os.Handler;
-import android.os.Looper;
+import android.os.BatteryManager;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.core.content.ContextCompat;
@@ -20,19 +22,31 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Battery savers that act while the display is off:
+ * Always-on battery savers that act while the display is off (no settings UI):
  *
  *  - Wi-Fi saver: 30 s after the screen turns off, disable Wi-Fi via root
  *    ({@code svc wifi disable}) and re-enable it when the screen wakes.
- *    Skipped while a download/sync/extraction foreground service is active —
- *    killing Wi-Fi mid-download would break the job those services protect.
+ *  - Bluetooth saver: same 30 s mark, {@code svc bluetooth disable} when BT
+ *    was on; re-enabled on wake. State is read via root
+ *    ({@code settings get global bluetooth_on}) so no BT permissions are needed.
  *  - Governor saver: at the same 30 s mark, drop every cpufreq policy to
  *    "powersave" (or "schedutil" when powersave is unavailable) and restore
  *    the previous governor on wake. Vendor performance modes can otherwise
  *    keep clocks boosted through sleep.
  *
- * Both require a vendor root daemon (see {@link RootShell}); on devices
- * without one the savers silently no-op and the Godot side hides the toggles.
+ * While a download/sync/extraction foreground service is active, NOTHING is
+ * cut (radios or governor) — those jobs hold the shared wake lock anyway and
+ * slowing them via powersave would only cost time. A retained game session
+ * vetoes only the radios: a suspended game does no CPU work, so the governor
+ * drop remains safe savings there.
+ *
+ * Docked/charging devices are left alone: nothing is cut while charging, and
+ * plugging in mid-sleep restores anything the saver had disabled (a docked
+ * sleeping device stays reachable). Unplugging mid-sleep starts a fresh 30 s
+ * countdown.
+ *
+ * All of this requires a vendor root daemon (see {@link RootShell}); on
+ * devices without one the receiver is never armed and everything no-ops.
  *
  * What Kyodai disabled is persisted in SharedPreferences so a process death
  * while asleep can't leave radios/governors stranded: {@link #init(Context)}
@@ -51,9 +65,8 @@ public final class SleepSaver {
 
     private static final String TAG = "KyodaiSleepSaver";
     private static final String PREFS = "kyodai_sleep_saver";
-    private static final String KEY_WIFI_ENABLED = "wifi_saver_enabled";
-    private static final String KEY_GOVERNOR_ENABLED = "governor_saver_enabled";
     private static final String KEY_WIFI_DISABLED = "wifi_disabled_by_saver";
+    private static final String KEY_BT_DISABLED = "bt_disabled_by_saver";
     private static final String KEY_GOVERNOR_SAVED = "governor_saved"; // "path=governor;path=governor"
     // Cross-process job flag: the game-session service lives in its own
     // process (:session), where the AtomicInteger below is invisible. It
@@ -62,6 +75,14 @@ public final class SleepSaver {
 
     private static final long DELAY_MS = 30_000L;
     private static final String CPUFREQ_ROOT = "/sys/devices/system/cpu/cpufreq";
+    // Delay is delivered by AlarmManager, NOT a Handler timer: on battery the
+    // kernel suspends seconds after screen-off and Handler (uptime-based)
+    // timers freeze until the next wakeup — the apply would never run.
+    // setAndAllowWhileIdle fires even in doze and needs no permission.
+    private static final String ACTION_SLEEP_CHECK = "com.heckpoint.kyodai.SLEEP_CHECK";
+    // Partial wake lock held while apply/restore root calls run on the worker:
+    // the alarm's own wake lock only covers onReceive.
+    private static final long APPLY_WAKE_LOCK_MS = 20_000L;
     // Safety timeout for the background-job wake lock; mirrors the session
     // service's cap. Released when the last job finishes in the normal path.
     private static final long JOB_WAKE_LOCK_TIMEOUT_MS = 12L * 60 * 60 * 1000;
@@ -71,9 +92,10 @@ public final class SleepSaver {
     private static final ExecutorService worker = Executors.newSingleThreadExecutor();
 
     private static Context appContext;
-    private static Handler mainHandler;
     private static BroadcastReceiver screenReceiver;
-    private static Runnable pendingSleep;
+    private static PendingIntent sleepAlarm;
+    // Last plugged-in state from ACTION_BATTERY_CHANGED; -1 = not yet known.
+    private static int lastPlugged = -1;
     // Held (process-locally) while activeJobs > 0. Guarded by LOCK.
     private static PowerManager.WakeLock jobWakeLock;
     private static WifiManager.WifiLock jobWifiLock;
@@ -215,101 +237,140 @@ public final class SleepSaver {
         if (context == null) return;
         synchronized (LOCK) {
             appContext = context.getApplicationContext();
-            if (mainHandler == null) {
-                mainHandler = new Handler(Looper.getMainLooper());
-            }
-            updateReceiverLocked();
+            armReceiverLocked();
         }
         // Every app launch implies the screen is on: restore anything a
         // previous process left disabled (e.g. we were killed while asleep).
         worker.execute(SleepSaver::restoreAll);
     }
 
-    public static void setWifiSaverEnabled(Context context, boolean enabled) {
-        synchronized (LOCK) {
-            if (context != null) appContext = context.getApplicationContext();
-            if (appContext == null) return;
-            prefs().edit().putBoolean(KEY_WIFI_ENABLED, enabled).apply();
-            updateReceiverLocked();
-        }
-        if (!enabled) {
-            // Turning the feature off while asleep must not strand Wi-Fi off.
-            worker.execute(SleepSaver::restoreWifi);
-        }
-    }
-
-    public static void setGovernorSaverEnabled(Context context, boolean enabled) {
-        synchronized (LOCK) {
-            if (context != null) appContext = context.getApplicationContext();
-            if (appContext == null) return;
-            prefs().edit().putBoolean(KEY_GOVERNOR_ENABLED, enabled).apply();
-            updateReceiverLocked();
-        }
-        if (!enabled) {
-            worker.execute(SleepSaver::restoreGovernors);
-        }
-    }
-
     // ------------------------------------------------------------------
     // Receiver management
     // ------------------------------------------------------------------
 
-    private static void updateReceiverLocked() {
-        boolean wanted = prefs().getBoolean(KEY_WIFI_ENABLED, false)
-                || prefs().getBoolean(KEY_GOVERNOR_ENABLED, false);
-        if (wanted && screenReceiver == null) {
-            screenReceiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    if (intent == null || intent.getAction() == null) return;
-                    switch (intent.getAction()) {
-                        case Intent.ACTION_SCREEN_OFF:
-                            onScreenOff();
-                            break;
-                        case Intent.ACTION_SCREEN_ON:
-                            onScreenOn();
-                            break;
-                    }
+    /** Always-on: armed whenever a vendor root daemon exists. */
+    private static void armReceiverLocked() {
+        if (screenReceiver != null || !isSupported()) return;
+        screenReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || intent.getAction() == null) return;
+                switch (intent.getAction()) {
+                    case Intent.ACTION_SCREEN_OFF:
+                        onScreenOff();
+                        break;
+                    case Intent.ACTION_SCREEN_ON:
+                        onScreenOn();
+                        break;
+                    case ACTION_SLEEP_CHECK:
+                        onSleepAlarm();
+                        break;
+                    case Intent.ACTION_BATTERY_CHANGED:
+                        onBatteryChanged(intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0));
+                        break;
                 }
-            };
-            IntentFilter filter = new IntentFilter();
-            filter.addAction(Intent.ACTION_SCREEN_OFF);
-            filter.addAction(Intent.ACTION_SCREEN_ON);
-            ContextCompat.registerReceiver(appContext, screenReceiver, filter,
-                    ContextCompat.RECEIVER_NOT_EXPORTED);
-            Log.d(TAG, "Screen receiver armed");
-        } else if (!wanted && screenReceiver != null) {
-            try {
-                appContext.unregisterReceiver(screenReceiver);
-            } catch (Exception e) {
-                Log.w(TAG, "unregisterReceiver failed: " + e.getMessage());
             }
-            screenReceiver = null;
-            cancelPendingLocked();
-            Log.d(TAG, "Screen receiver disarmed");
-        }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(ACTION_SLEEP_CHECK);
+        // Sticky: registration immediately replays the current battery state.
+        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
+        ContextCompat.registerReceiver(appContext, screenReceiver, filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED);
+        Log.d(TAG, "Screen/battery receiver armed (always-on savers)");
     }
 
     private static void onScreenOff() {
         synchronized (LOCK) {
-            cancelPendingLocked();
-            pendingSleep = () -> worker.execute(SleepSaver::applySleepState);
-            mainHandler.postDelayed(pendingSleep, DELAY_MS);
+            scheduleAlarmLocked();
         }
         Log.d(TAG, "Screen off; sleep savers scheduled in " + DELAY_MS + "ms");
     }
 
     private static void onScreenOn() {
         synchronized (LOCK) {
-            cancelPendingLocked();
+            cancelAlarmLocked();
         }
-        worker.execute(SleepSaver::restoreAll);
+        runWithWakeLock(SleepSaver::restoreAll);
     }
 
-    private static void cancelPendingLocked() {
-        if (pendingSleep != null) {
-            mainHandler.removeCallbacks(pendingSleep);
-            pendingSleep = null;
+    /** Alarm-fired entry point (system wakes the device/process to deliver). */
+    private static void onSleepAlarm() {
+        Log.d(TAG, "Sleep alarm fired");
+        runWithWakeLock(SleepSaver::applySleepState);
+    }
+
+    private static void scheduleAlarmLocked() {
+        cancelAlarmLocked();
+        AlarmManager am = (AlarmManager) appContext.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        sleepAlarm = PendingIntent.getBroadcast(appContext, 0,
+                new Intent(ACTION_SLEEP_CHECK).setPackage(appContext.getPackageName()),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + DELAY_MS, sleepAlarm);
+    }
+
+    private static void cancelAlarmLocked() {
+        if (sleepAlarm == null) return;
+        AlarmManager am = (AlarmManager) appContext.getSystemService(Context.ALARM_SERVICE);
+        if (am != null) am.cancel(sleepAlarm);
+        sleepAlarm.cancel();
+        sleepAlarm = null;
+    }
+
+    /** Runs work on the worker under a short partial wake lock. */
+    private static void runWithWakeLock(Runnable work) {
+        Context ctx = appContext;
+        if (ctx == null) return;
+        PowerManager.WakeLock lock = null;
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kyodai:sleep_saver");
+                lock.setReferenceCounted(false);
+                lock.acquire(APPLY_WAKE_LOCK_MS);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "apply wake lock failed: " + e.getMessage());
+        }
+        final PowerManager.WakeLock held = lock;
+        worker.execute(() -> {
+            try {
+                work.run();
+            } finally {
+                if (held != null) {
+                    try {
+                        if (held.isHeld()) held.release();
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
+
+    /** Dock semantics: charging == docked on these handhelds. */
+    private static void onBatteryChanged(int plugged) {
+        int previous;
+        synchronized (LOCK) {
+            previous = lastPlugged;
+            lastPlugged = plugged;
+        }
+        if (previous == -1 || previous == plugged) return; // initial sticky replay / no change
+        if (plugged != 0) {
+            // Docked mid-sleep: cancel any pending cut and restore whatever
+            // the saver disabled, so the device stays reachable on the dock.
+            synchronized (LOCK) {
+                cancelAlarmLocked();
+            }
+            Log.d(TAG, "Charging started; restoring sleep-saver state");
+            runWithWakeLock(SleepSaver::restoreAll);
+        } else if (!isDisplayInteractive(appContext)) {
+            // Undocked while asleep: nothing has been cut yet (charging skips
+            // apply), so start a fresh countdown.
+            Log.d(TAG, "Charging stopped while asleep; rescheduling savers");
+            onScreenOff();
         }
     }
 
@@ -324,12 +385,25 @@ public final class SleepSaver {
             // Screen came back on without a SCREEN_ON broadcast (rare) — bail.
             return;
         }
+        if (isCharging(ctx)) {
+            Log.d(TAG, "Charging/docked; sleep savers skipped");
+            return;
+        }
         SharedPreferences p = prefs();
 
-        if (p.getBoolean(KEY_WIFI_ENABLED, false)) {
-            if (hasActiveJobs()) {
-                Log.d(TAG, "Skipping Wi-Fi saver: background job active");
-            } else if (isWifiOn(ctx)) {
+        // Download/sync/extraction jobs: skip EVERYTHING (radios + governor).
+        // These jobs hold the shared wake lock anyway, so the device isn't
+        // truly deep-sleeping; dropping to powersave would just slow the job.
+        if (activeJobs.get() > 0) {
+            Log.d(TAG, "Skipping sleep savers: background job active");
+            return;
+        }
+        // Retained game sessions veto the radios only: a suspended game does
+        // no CPU work, so the governor drop below is safe savings.
+        if (hasActiveJobs()) {
+            Log.d(TAG, "Skipping radio savers: game session active");
+        } else {
+            if (isWifiOn(ctx)) {
                 RootShell.Result r = RootShell.run(ctx, "svc wifi disable");
                 if (r != null && r.succeeded()) {
                     p.edit().putBoolean(KEY_WIFI_DISABLED, true).apply();
@@ -338,15 +412,23 @@ public final class SleepSaver {
                     Log.w(TAG, "svc wifi disable failed (root route unavailable?)");
                 }
             }
+            if (isBluetoothOn(ctx)) {
+                RootShell.Result r = RootShell.run(ctx, "svc bluetooth disable");
+                if (r != null && r.succeeded()) {
+                    p.edit().putBoolean(KEY_BT_DISABLED, true).apply();
+                    Log.d(TAG, "Bluetooth disabled for sleep");
+                } else {
+                    Log.w(TAG, "svc bluetooth disable failed (root route unavailable?)");
+                }
+            }
         }
 
-        if (p.getBoolean(KEY_GOVERNOR_ENABLED, false)) {
-            dropGovernors(ctx);
-        }
+        dropGovernors(ctx);
     }
 
     private static void restoreAll() {
         restoreWifi();
+        restoreBluetooth();
         restoreGovernors();
     }
 
@@ -362,6 +444,21 @@ public final class SleepSaver {
             Log.d(TAG, "Wi-Fi restored after sleep");
         } else {
             Log.w(TAG, "svc wifi enable failed");
+        }
+    }
+
+    private static void restoreBluetooth() {
+        Context ctx = appContext;
+        if (ctx == null) return;
+        SharedPreferences p = prefs();
+        if (!p.getBoolean(KEY_BT_DISABLED, false)) return;
+        // Clear first: a failed restore must not retry forever on every launch.
+        p.edit().putBoolean(KEY_BT_DISABLED, false).apply();
+        RootShell.Result r = RootShell.run(ctx, "svc bluetooth enable");
+        if (r != null && r.succeeded()) {
+            Log.d(TAG, "Bluetooth restored after sleep");
+        } else {
+            Log.w(TAG, "svc bluetooth enable failed");
         }
     }
 
@@ -469,6 +566,16 @@ public final class SleepSaver {
         return appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    private static boolean isCharging(Context ctx) {
+        try {
+            Intent battery = ctx.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery == null) return false;
+            return battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private static boolean isWifiOn(Context ctx) {
         try {
             WifiManager wm = (WifiManager) ctx.getApplicationContext()
@@ -478,5 +585,18 @@ public final class SleepSaver {
             Log.w(TAG, "isWifiOn failed: " + e.getMessage());
             return false;
         }
+    }
+
+    /** Read via root so no BLUETOOTH/BLUETOOTH_CONNECT permission is needed. */
+    private static boolean isBluetoothOn(Context ctx) {
+        RootShell.Result r = RootShell.run(ctx, "settings get global bluetooth_on");
+        if (r == null || r.output == null) return false;
+        for (String line : r.output.split("\n")) {
+            String value = line.trim();
+            if (value.equals("1") || value.equals("0")) {
+                return value.equals("1");
+            }
+        }
+        return false;
     }
 }

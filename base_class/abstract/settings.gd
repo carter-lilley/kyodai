@@ -186,7 +186,3 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 # Default Experimental while the app is in alpha: every release is currently a
 # prerelease, so Stable would never notify. Flip the default to 0 at 1.0.
 @export var release_channel := SettingsVar.new(Type.ARRAY, 1, State.ENABLED, "Release Channel", "Stable only notifies about full releases; Experimental also includes alpha/beta prereleases", 0.0, 1.0, 1.0, ["Stable", "Experimental"])
-
-@export_subgroup("Power")
-@export var sleep_wifi_off := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Wi-Fi off when screen sleeps", "Turn Wi-Fi off 30 seconds after the screen turns off and back on when it wakes. Paused during downloads/syncs. Requires handheld vendor root access (AYN, Retroid, Ayaneo)")
-@export var sleep_powersave_cpu := SettingsVar.new(Type.BOOL, false, State.ENABLED, "Lower CPU speed when screen sleeps", "Drop the CPU governor to powersave while the screen is off and restore it on wake. Requires handheld vendor root access (AYN, Retroid, Ayaneo)")

@@ -220,28 +220,9 @@ public class KyodaiBridgePlugin extends GodotPlugin {
     }
 
     // ------------------------------------------------------------------
-    // Sleep savers (screen-off Wi-Fi / CPU governor, via vendor root daemons)
+    // Sleep savers (always-on; see SleepSaver). No on/off bridge methods:
+    // arming happens in SleepSaver.init() whenever a vendor root daemon exists.
     // ------------------------------------------------------------------
-
-    /// True when a vendor root daemon exists (AYN/Retroid PServer, Ayaneo xsu),
-    /// which the sleep savers need for svc/cpufreq writes.
-    @UsedByGodot
-    public boolean isSleepSaverSupported() {
-        return SleepSaver.isSupported();
-    }
-
-    /// Arm/disarm the screen-off Wi-Fi saver (30 s delay, restores on wake).
-    @UsedByGodot
-    public void setSleepWifiSaverEnabled(boolean enabled) {
-        SleepSaver.setWifiSaverEnabled(activity, enabled);
-    }
-
-    /// Arm/disarm the screen-off CPU governor saver (drops to powersave,
-    /// restores the previous governor on wake).
-    @UsedByGodot
-    public void setSleepGovernorSaverEnabled(boolean enabled) {
-        SleepSaver.setGovernorSaverEnabled(activity, enabled);
-    }
 
     /// True while the display is on/interactive. Used by GDScript to tell
     /// "screen off" apart from "another app took focus" (e.g. game launch).

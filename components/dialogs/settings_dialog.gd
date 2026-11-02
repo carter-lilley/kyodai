@@ -12,7 +12,6 @@ const SUBGROUP_ICONS: Dictionary[String, String] = {
 	"Storage": "harddisk",
 	"Library Appearance": "palette",
 	"Updates": "update",
-	"Power": "power-sleep",
 }
 
 var _left_pane: VBoxContainer
@@ -201,11 +200,6 @@ func _build_categories() -> void:
 		elif subgroup_name == "Display":
 			if SystemManager.platform.is_android():
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
-		elif subgroup_name == "Power":
-			# Sleep savers need Android + a vendor root daemon (AYN/Retroid/
-			# Ayaneo); hide the whole category everywhere else.
-			if not SystemManager.platform.is_sleep_saver_supported():
-				continue
 		_add_category_button(id, subgroup_name, icon)
 
 		var build_start_us := Time.get_ticks_usec()

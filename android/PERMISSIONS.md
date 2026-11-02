@@ -45,18 +45,29 @@ declaration.
 
 ## Sleep savers (root, no permissions)
 
-`SleepSaver.java` implements the optional screen-off battery savers (Settings
-→ Power): Wi-Fi off and CPU-governor drop, both 30 s after screen-off and
-restored on wake. Both run as root through the vendor daemons in
-`RootShell.java` (`svc wifi …`, `echo … > cpufreq/policy*/scaling_governor`),
-so they need **no manifest permissions** — only the pre-existing
-`ACCESS_WIFI_STATE` to read Wi-Fi state. The screen on/off receiver is
-registered dynamically (these broadcasts cannot be manifest-registered).
+`SleepSaver.java` implements the **always-on** screen-off battery savers (no
+settings UI): Wi-Fi off, Bluetooth off, and CPU-governor drop, all 30 s after
+screen-off and restored on wake. All run as root through the vendor daemons
+in `RootShell.java` (`svc wifi …`, `svc bluetooth …`, `settings get global
+bluetooth_on`, `echo … > cpufreq/policy*/scaling_governor`), so they need
+**no manifest permissions** — no BT permissions either, since Bluetooth state
+is read/toggled via root rather than the BluetoothAdapter APIs. Only the
+pre-existing `ACCESS_WIFI_STATE` is used, to read Wi-Fi state. The savers arm
+automatically in the plugin constructor (`SleepSaver.init()`) whenever a
+vendor root daemon exists, and silently no-op on other devices. The screen
+on/off and battery receivers are registered dynamically (these broadcasts
+cannot be manifest-registered). Charging devices are treated as docked:
+nothing is cut while charging, and docking mid-sleep restores the radios.
 State disabled by the saver is persisted in SharedPreferences
-(`kyodai_sleep_saver`) so a process death while asleep cannot leave Wi-Fi off
-or governors stuck at powersave; the plugin constructor's `SleepSaver.init()`
-restores on next launch. The Wi-Fi saver is skipped while a download/sync/
-extraction foreground service is active (`SleepSaver.jobStarted/Finished`).
+(`kyodai_sleep_saver`) so a process death while asleep cannot leave radios
+off or governors stuck at powersave; `init()` restores on next launch. While
+a download/sync/extraction foreground service is active, NOTHING is cut
+(radios or governor); a retained game session vetoes only the radios
+(`SleepSaver.jobStarted/Finished`, `sessionJobStarted/Finished`). While jobs
+are active the class also holds a shared partial wake lock + WifiLock so jobs
+survive screen-off. The 30 s delay is delivered by
+`AlarmManager.setAndAllowWhileIdle` (Handler timers freeze when the kernel
+suspends on battery), with a short partial wake lock around the root calls.
 
 ## Network security (cleartext HTTP)
 
