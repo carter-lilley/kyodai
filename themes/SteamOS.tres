@@ -21,6 +21,7 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.0,
 "effects": [{
+"layer_id": "steam_shadow",
 "effect_id": "drop_shadow",
 "settings": {
 "shadow_color": Color(0, 0, 0, 0.5),
@@ -32,6 +33,7 @@ values = {
 }
 }],
 "focus_effects": [{
+"layer_id": "steam_focus_glow",
 "effect_id": "glow",
 "settings": {
 "blur_amount": 6.5,
@@ -41,6 +43,7 @@ values = {
 "threshold": 0.48
 }
 }, {
+"layer_id": "steam_focus_shine",
 "effect_id": "shine",
 "settings": {
 "angle_degrees": 30.0,

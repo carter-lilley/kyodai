@@ -65,7 +65,6 @@ const BAKED_SHADER_PATHS: Array[String] = [
 	"res://shaders/card/badge.gdshader",
 	"res://shaders/card/base_card.gdshader",
 	"res://shaders/card/blur.gdshader",
-	"res://shaders/card/border.gdshader",
 	"res://shaders/card/case_wrap.gdshader",
 	"res://shaders/card/distort.gdshader",
 	"res://shaders/card/drop_shadow.gdshader",
@@ -76,8 +75,8 @@ const BAKED_SHADER_PATHS: Array[String] = [
 	"res://shaders/card/hsl.gdshader",
 	"res://shaders/card/present_wrap.gdshader",
 	"res://shaders/card/shine.gdshader",
+	"res://shaders/card/stroke.gdshader",
 	"res://shaders/frosted_backdrop.gdshader",
-	"res://shaders/hero_image.gdshader",
 	"res://shaders/skeleton_shimmer.gdshader",
 ]
 

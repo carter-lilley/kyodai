@@ -54,6 +54,7 @@ rework hero to also accept effect stacks
 ## performance & sync:
 	cache image colors on sync
 
+## features:
 	auto m3us
 	emulator repo downloads & updates, config resolvers
 	flexible user profile & emu config support

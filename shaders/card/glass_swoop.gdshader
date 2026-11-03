@@ -2,8 +2,6 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float border_inset_ratio = 0.0;
-
 // Swoop parameters
 uniform vec4 glass_color : source_color = vec4(0.2, 0.4, 1.0, 0.3);
 uniform vec4 swoop_color : source_color = vec4(0.06, 0.12, 0.3, 1.0);
@@ -11,6 +9,7 @@ uniform float swoop_intensity : hint_range(0.0, 1.0) = 0.3;
 uniform float swoop_height : hint_range(0.0, 0.8) = 0.5;  // Y position of the line (0 = bottom, 1 = top)
 uniform float swoop_curve : hint_range(0.0, 1.0) = 0.3;  // Curve amount: 0 = flat, 1 = maximum dip
 uniform float swoop_tilt : hint_range(-1.0, 1.0) = 0.0;   // Tilt: raises one side, lowers the other
+uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
@@ -84,7 +83,7 @@ void fragment() {
 	
 	// Output the configured swoop color
 	vec3 final_color = swoop_color.rgb;
-	float final_alpha = alpha * edge_alpha * swoop_color.a;
+	float final_alpha = alpha * edge_alpha * swoop_color.a * effect_alpha;
 
 	COLOR = vec4(final_color, final_alpha);
 }

@@ -99,7 +99,7 @@ func _ready() -> void:
 	for i in 6:
 		await get_tree().process_frame
 	var list_stops := _grid.get_scroll_stop_lines()
-	_check(list_stops.size() >= 2, "list stops exist (%s)" % list_stops)
+	_check(list_stops.size() >= 2, "list stops exist (%s)" % [list_stops])
 	var list_ok := true
 	for k in list_stops:
 		if _grid._scroll_stop_size(k).y > _grid._get_available_size().y + 0.5:
@@ -121,7 +121,7 @@ func _ready() -> void:
 	for i in 6:
 		await get_tree().process_frame
 	var car_stops := _grid.get_scroll_stop_lines()
-	_check(car_stops.size() >= 2, "carousel stops exist (%s)" % car_stops)
+	_check(car_stops.size() >= 2, "carousel stops exist (%s)" % [car_stops])
 	var car_ok := true
 	for k in car_stops:
 		if _grid._scroll_stop_size(k).x > _grid._get_available_size().x + 0.5:

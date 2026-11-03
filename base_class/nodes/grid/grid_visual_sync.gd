@@ -37,6 +37,9 @@ var _last_stamp_margin: int = -1
 var _last_stamp_first: int = -1
 var _last_stamp_count: int = -1
 var _last_stamp_generation: int = -1
+var _last_stamp_scroll_origin := Vector2.INF
+var _last_stamp_layer_origin := Vector2.INF
+var _last_stamp_chain := Vector2.INF
 
 # Reveal-on-sort gate: cards stay hidden until the FlowContainer sort commits
 # their positions, then are stamped + marked exactly once (at pre-draw, after
@@ -115,10 +118,11 @@ func on_scroll_completed() -> void:
 	_last_stamp_first = _grid._active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_grid._active_cards[0]) else -1
 	_last_stamp_count = _grid._active_cards.size()
 	_last_stamp_generation = _grid._layout_generation
+	var context := _capture_offset_context()
 	for card in _grid._active_cards:
 		if not is_instance_valid(card) or not card.is_node_ready():
 			continue
-		card.sync_visual_transform_with_offset(compute_offset(card))
+		card.sync_visual_transform_with_offset(compute_offset(card, context))
 
 func _on_frame_pre_draw() -> void:
 	if _frame_probe_enabled and _grid:
@@ -145,7 +149,11 @@ func _on_frame_pre_draw() -> void:
 	var scroll_now: float = _grid._scroll_container.get_scroll_float()
 	var margin_now: int = _grid._last_margin_top if _grid.vertical else _grid._last_margin_left
 	var first_now: int = _grid._active_cards[0].get_meta("virtual_index", -1) if is_instance_valid(_grid._active_cards[0]) else -1
-	if not _reveal_pending and scroll_now == _last_stamp_scroll and margin_now == _last_stamp_margin and first_now == _last_stamp_first and _grid._active_cards.size() == _last_stamp_count and _grid._layout_generation == _last_stamp_generation:
+	var context := _capture_offset_context()
+	var origins_unchanged: bool = context.scroll_origin.is_equal_approx(_last_stamp_scroll_origin) \
+		and context.layer_origin.is_equal_approx(_last_stamp_layer_origin) \
+		and context.chain.is_equal_approx(_last_stamp_chain)
+	if not _reveal_pending and origins_unchanged and scroll_now == _last_stamp_scroll and margin_now == _last_stamp_margin and first_now == _last_stamp_first and _grid._active_cards.size() == _last_stamp_count and _grid._layout_generation == _last_stamp_generation:
 		return
 	# A pending reveal means a sort cascade is (or was) in flight. Pre-draw runs
 	# after the ENTIRE cascade (margin -> center -> flow), so positions and the
@@ -160,15 +168,32 @@ func _on_frame_pre_draw() -> void:
 	_last_stamp_first = first_now
 	_last_stamp_count = _grid._active_cards.size()
 	_last_stamp_generation = _grid._layout_generation
+	_last_stamp_scroll_origin = context.scroll_origin
+	_last_stamp_layer_origin = context.layer_origin
+	_last_stamp_chain = context.chain
 	for card in _grid._active_cards:
 		if not is_instance_valid(card) or not card.is_node_ready():
 			continue
-		var expected_offset := compute_offset(card)
+		var expected_offset := compute_offset(card, context)
 		card.sync_visual_transform_with_offset(expected_offset)
 		if do_reveal and _grid._card_has_mark_visuals_position_synced:
 			card._mark_visuals_position_synced()
 
-func compute_offset(card: Control) -> Vector2:
+func _capture_offset_context() -> Dictionary:
+	# Loop-invariant inputs are captured once per stamp, not queried again for
+	# every card. They are also part of the dirty key so ancestor-only motion
+	# invalidates the cache even when no scroll/layout event occurs.
+	var chain := _content_chain_offset
+	if _grid._center_container and _grid._flow_container:
+		chain = _grid._center_container.position + _grid._flow_container.position
+	return {
+		"scroll_origin": _grid._scroll_container.get_global_rect().position if _grid._scroll_container else Vector2.ZERO,
+		"scroll_float": _grid._scroll_container.get_scroll_float() if _grid._scroll_container else 0.0,
+		"chain": chain,
+		"layer_origin": layer.global_position,
+	}
+
+func compute_offset(card: Control, context: Dictionary = {}) -> Vector2:
 	"""Layer-space offset for a card — ONE deterministic source of truth.
 
 	Composed entirely from Godot's own layout results plus the precisely
@@ -180,24 +205,19 @@ func compute_offset(card: Control) -> Vector2:
 	column can diverge, and reading it never depends on mid-frame transform
 	flushes (only the scroll float moves during scrolling, and we track it).
 	"""
-	var layer_origin := layer.global_position
+	if context.is_empty():
+		context = _capture_offset_context()
+	var layer_origin: Vector2 = context.layer_origin
 	var vidx: int = card.get_meta("virtual_index", -1)
 	if vidx < 0 or not _grid._scroll_container or not _grid._flow_container:
 		return card.global_position - layer_origin
-	var scroll_f := _grid._scroll_container.get_scroll_float()
+	var scroll_f: float = context.scroll_float
 	var scroll_vec := Vector2(scroll_f, 0.0) if not _grid.vertical else Vector2(0.0, scroll_f)
-	# Read the container chain LIVE rather than from the sort-captured snapshot:
-	# center/flow positions only change on layout (never during scroll), and in
-	# the hidden pre-sort window a stale read is harmless because the card is
-	# not visible yet. Live reads make the offset immune to sort ordering.
-	var chain := _content_chain_offset
-	if _grid._center_container and _grid._flow_container:
-		chain = _grid._center_container.position + _grid._flow_container.position
-	return _grid._scroll_container.get_global_rect().position - scroll_vec \
-		+ chain + card.position - layer_origin
+	return context.scroll_origin - scroll_vec + context.chain + card.position - layer_origin
 
 func stamp_and_mark(_tag: String = "", mark: bool = true) -> void:
 	var use_offsets: bool = _grid._card_has_sync_visual_offset and _grid._scroll_container and layer
+	var context := _capture_offset_context() if use_offsets else {}
 	for card in _grid._active_cards:
 		if not is_instance_valid(card):
 			continue
@@ -206,7 +226,7 @@ func stamp_and_mark(_tag: String = "", mark: bool = true) -> void:
 		if not card.is_node_ready():
 			continue
 		if use_offsets:
-			card.sync_visual_transform_with_offset(compute_offset(card))
+			card.sync_visual_transform_with_offset(compute_offset(card, context))
 		elif _grid._card_has_sync_visual_transform:
 			card.sync_visual_transform()
 		# When mark=false (pre-sort passes), newly added cards keep their RS
@@ -253,12 +273,10 @@ func check_reveal_fallback() -> void:
 		stamp_and_mark("reveal-fallback", true)
 
 func update_draw_order() -> void:
-	var focused_idx = _grid._focus.focused_virtual_index()
+	# The grid owns only slot order. M3Card exclusively owns the focused-card
+	# boost, and FocusSubManager derives the ring position from that same value.
 	for card in _grid._active_cards:
 		if not card.has_method("set_visual_draw_index"):
 			continue
 		var idx = card.get_meta("virtual_index", 0)
-		var base_index = idx * 10
-		if idx == focused_idx:
-			base_index += 1000000
-		card.set_visual_draw_index(base_index)
+		card.set_visual_draw_index(idx * 10)

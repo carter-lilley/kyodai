@@ -35,6 +35,7 @@ var _is_animating: bool = false
 var _tween: Tween = null
 var _phase1_completed: bool = false
 var _original_card_rect: Rect2
+var _source_aperture: Dictionary = {}
 var _game: GameResource
 
 # Optional explicit source (e.g., the cover art in the details sheet).
@@ -217,7 +218,7 @@ func _start_transition(mode: TransitionMode = TransitionMode.COLD):
 		_game_title_label.visible = false
 
 	# Setup the EffectStack at the card's position
-	if not _setup_effect_stack(texture, card_rect, start_corner_radius):
+	if not _setup_effect_stack(texture, card_rect, start_corner_radius, card_info.get("geometry", {})):
 		_is_animating = false
 		is_transition_active = false
 		return
@@ -259,8 +260,10 @@ func _get_focused_card_and_texture() -> Dictionary:
 			# outer rect made the fullscreen image shrink to one size and then
 			# visibly pop/crop into the smaller media panel at completion.
 			var card_rect = Rect2()
+			var geometry: Dictionary = {}
 			if card is Control:
-				card_rect = card.get_global_transform() * card._media_bounds
+				geometry = card.m3_get_media_render_geometry()
+				card_rect = geometry.rect
 				if card_rect.size.x <= 0.0 or card_rect.size.y <= 0.0:
 					card_rect = card.get_global_rect()
 			else:
@@ -273,14 +276,14 @@ func _get_focused_card_and_texture() -> Dictionary:
 			var card_state = card.get_card_state()
 			var corner_radius = card_state.corner_radius_ratio if card_state else 0.06
 
-			return {"card": card, "texture": texture, "rect": card_rect, "corner_radius": corner_radius}
+			return {"card": card, "texture": texture, "rect": card_rect, "corner_radius": corner_radius, "geometry": geometry}
 
 		current = current.get_parent()
 
 	# No focused GameCard is expected for non-library launches (e.g. shuffler).
 	return {"card": null, "texture": null, "rect": Rect2(), "corner_radius": 0.0}
 
-func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float) -> bool:
+func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radius: float, source_geometry: Dictionary = {}) -> bool:
 
 	if not _effect_stack:
 		push_error("[LaunchTransitionOverlay] _effect_stack is null")
@@ -293,12 +296,25 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	media_container.texture = texture
 	media_container.bounds = Rect2(Vector2.ZERO, card_rect.size + Vector2(4, 4))
 	media_container.corner_radius_ratio = start_corner_radius
+	_source_aperture = source_geometry
 
 	# Disable smart crop for launch transition (scale from center, not bottom).
 	# Retained resume/return gets a base-texture-only stack: no HSL or gradient
 	# instances can survive from a previous cold landing. Cold launch alone
 	# owns those effects.
 	var effect_configs: Array = [{"effect_id": "base", "settings": {}}]
+	if not _source_aperture.is_empty():
+		var initial_factor := 0.0 if _mode == TransitionMode.RETAINED_RETURN else 1.0
+		var source_width: float = maxf(_source_aperture.local_bounds.size.x, 1.0)
+		effect_configs.append({
+			"layer_id": "launch_aperture",
+			"effect_id": "inset",
+			"settings": {
+				"inset_ratio": (_source_aperture.content_inset_pixels / source_width) * initial_factor,
+				"top_inset_ratio": _source_aperture.wrap_inset_top_ratio * initial_factor,
+				"left_inset_ratio": _source_aperture.wrap_inset_left_ratio * initial_factor,
+			},
+		})
 	if _mode == TransitionMode.COLD:
 		var initial_gradient = Gradient.new()
 		initial_gradient.offsets = [0.0, 1.0]
@@ -307,12 +323,6 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 		effect_configs.append({"effect_id": "gradient_overlay", "settings": {"gradient": initial_gradient, "gradient_angle": 180.0}})
 
 	_effect_stack.initialize(media_container, effect_configs)
-	_effect_stack.update_draw_rects()
-
-	# Set the game texture on the base effect
-	var base_effect = _effect_stack.get_effect("base") as BaseCardEffect
-	if base_effect and texture:
-		base_effect.set_game_texture(texture)
 
 	# Gradient starts fully faded out (phase 2 fades effect_alpha 0 -> 1)
 	var gradient_effect = _effect_stack.get_effect("gradient_overlay") as GradientOverlayEffect
@@ -325,6 +335,20 @@ func _setup_effect_stack(texture: Texture2D, card_rect: Rect2, start_corner_radi
 	if ci.is_valid():
 		RenderingServer.canvas_item_set_transform(ci, Transform2D(0.0, card_rect.position - Vector2(2, 2)))
 	return true
+
+func _update_launch_aperture(t: float, from_source: bool) -> void:
+	if _source_aperture.is_empty():
+		return
+	var aperture := _effect_stack.get_layer("launch_aperture") as InsetEffect
+	if not aperture:
+		return
+	var factor := lerpf(1.0, 0.0, t) if from_source else lerpf(0.0, 1.0, t)
+	var source_width: float = maxf(_source_aperture.local_bounds.size.x, 1.0)
+	aperture.update_settings({
+		"inset_ratio": (_source_aperture.content_inset_pixels / source_width) * factor,
+		"top_inset_ratio": _source_aperture.wrap_inset_top_ratio * factor,
+		"left_inset_ratio": _source_aperture.wrap_inset_left_ratio * factor,
+	})
 
 func _animate_transition():
 	if not _effect_stack:
@@ -383,6 +407,7 @@ func _animate_transition():
 				else:
 					media_container.vertical_offset = 0.0
 			media_container.corner_radius_ratio = lerpf(start_corner_radius, 0.0, t)
+			_update_launch_aperture(t, true)
 			_effect_stack.update_draw_rects()
 			_effect_stack.force_refresh(),
 		0.0, 1.0, PHASE1_DURATION
@@ -537,6 +562,7 @@ func play_return_to_card(texture: Texture2D) -> void:
 		if ci.is_valid():
 			RenderingServer.canvas_item_set_transform(ci, Transform2D(0.0, current_pos))
 		media_container.corner_radius_ratio = lerpf(0.0, target_radius, t)
+		_update_launch_aperture(t, false)
 		_effect_stack.update_draw_rects()
 		_effect_stack.force_refresh(), 0.0, 1.0, 0.35
 	)

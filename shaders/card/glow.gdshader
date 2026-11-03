@@ -99,6 +99,14 @@ void fragment() {
 	// Convert to normalized UV (0-1 within card bounds)
 	vec2 card_uv = card_local_pos / card_size;
 	
+	// Calculate distance from card edge before doing any texture work. Most of
+	// the quad is interior and can never contribute glow.
+	float dist = rounded_rect_sdf_pixels(card_local_pos, card_size, corner_radius_pixels);
+	float effective_radius = glow_radius * (1.0 - glow_spread);
+	if (dist <= 0.0 || effective_radius <= 0.0) {
+		discard;
+	}
+
 	vec2 tex_size = vec2(textureSize(game_texture, 0));
 	
 	// The base card image lives in the inner media area (after insets). Match it
@@ -107,14 +115,8 @@ void fragment() {
 	vec2 inner_uv = (card_uv * card_size - vec2(total_inset_pixels)) / max(inner_size, vec2(1.0));
 	vec2 tex_uv = inner_uv * uv_transform_scale + uv_transform_offset;
 	
-	// Get blurred texture
+	// Get blurred texture only for exterior fragments.
 	vec3 blurred = sample_glow_blur(tex_uv, tex_size);
-
-	// Calculate distance from card edge
-	float dist = rounded_rect_sdf_pixels(card_local_pos, card_size, corner_radius_pixels);
-
-	// Apply glow_spread - insets the fade from the outer edge
-	float effective_radius = glow_radius * (1.0 - glow_spread);
 
 	// Only show glow outside the card
 	float glow_alpha = 0.0;

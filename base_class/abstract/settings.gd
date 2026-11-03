@@ -107,6 +107,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 	"card_orientation": 2,
 	"card_rounding": 0.24,
 	"effects": [{
+		"layer_id": "default_shadow",
 		"effect_id": "drop_shadow",
 		"settings": {
 			"shadow_color": Color(0, 0, 0, 0.5),
@@ -118,6 +119,7 @@ static func _preset(s: SettingsVar) -> SettingsVar:
 		}
 	}],
 	"focus_effects": [{
+		"layer_id": "default_focus_glow",
 		"effect_id": "glow",
 		"settings": {
 			"blur_amount": 6.5,

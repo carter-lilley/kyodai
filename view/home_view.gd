@@ -502,18 +502,11 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 	data model changed (filter, search, game add/remove)."""
 	_update_grid_orientation()
 	
-	# Apply zoom from centralized card settings state (per-mode).
-	if UIManager and UIManager.card_settings_state and games_grid:
-		if games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
-		else:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_list_ratio
-	
 	if refresh_effects:
 		# Effect configuration changed.
 		if preserve_data:
 			_refresh_grid_dimensions()
-			games_grid.refresh_all_card_effects(true)
+			games_grid.refresh_all_card_effects()
 		elif _total_count_load_pending:
 			# A count load is already in flight; just refresh dimensions for now.
 			_refresh_grid_dimensions()
@@ -522,14 +515,15 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 			# effects, so cards are rebuilt against final bounds.
 			_load_total_count(false, false, func():
 				_refresh_grid_dimensions()
-				games_grid.refresh_all_card_effects(true)
+				games_grid.refresh_all_card_effects()
 			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance
 		_refresh_grid_dimensions()
 		if preserve_data:
-			if not _total_count_load_pending:
-				_load_total_count(true, true)
+			# Layout/data identity is unchanged; only fill missing visible data
+			# instead of issuing another count/layout reload.
+			games_grid._request_missing_data()
 		else:
 			if not _total_count_load_pending:
 				_load_total_count(false, false)

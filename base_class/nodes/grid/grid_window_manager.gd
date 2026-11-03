@@ -269,9 +269,9 @@ func reassign_to_window() -> bool:
 		recycle_card_at_index(cards.size() - 1)
 		structure_changed = true
 
-	# Re-index survivors. Data for the new index is applied by the pending
-	# visual-setup flush later in this same scroll pass, so a stale cover
-	# never reaches the screen.
+	# Re-index survivors through the same identity-reset contract as pool
+	# reuse, while retaining their nodes/effect resources and flow positions.
+	# Data for the new index is applied by the pending visual-setup flush.
 	for i in range(cards.size()):
 		var card = cards[i]
 		if not is_instance_valid(card):
@@ -280,14 +280,20 @@ func reassign_to_window() -> bool:
 		var old_idx: int = card.get_meta("virtual_index", -1)
 		if old_idx == new_idx:
 			continue
+		_grid._focus.release_focus_if_inside(card)
 		if old_idx >= 0:
 			by_index.erase(old_idx)
 			pending_setup.erase(old_idx)
 			_grid._effect_queue.remove_card(card)
+		if _grid._card_has_reset:
+			card.reset(true)
+		elif _grid._card_has_game_prop:
+			card.game = null
 		card.set_meta("virtual_index", new_idx)
 		by_index[new_idx] = card
 		card.set_meta("needs_visual_setup", true)
 		pending_setup[new_idx] = card
+		_grid._show_skeleton_if_unloaded(card, new_idx)
 		structure_changed = true
 
 	# Grow the tail from the pool if the new window is larger.
@@ -653,6 +659,10 @@ func apply_card_visual_setup(card: Control, virtual_index: int) -> bool:
 		_grid._show_skeleton_if_unloaded(card, virtual_index)
 		return false
 	card.remove_meta("needs_visual_setup")
+	# Real data always clears placeholder state, including survivors of an
+	# in-place window reassignment that previously padded the grid.
+	if card.has_method("set_placeholder"):
+		card.set_placeholder(false)
 
 	if _grid._card_has_refresh_settings:
 		card.refresh_settings()

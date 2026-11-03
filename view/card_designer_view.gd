@@ -126,16 +126,20 @@ func _setup_ui():
 	# Base effects designer
 	_base_effect_designer = EffectDesignerUI.new()
 	_base_effect_designer.use_internal_scroll = false
-	_base_effect_designer.hide_disabled_effects = true
 	_base_effect_designer.custom_kind = "card"
+	_base_effect_designer.allow_multiple = true
+	_base_effect_designer.allow_reorder = true
 	_base_effect_designer.setup("Effects", "base_card", "effects", false)
 	_base_effect_designer.config_changed.connect(_on_base_config_changed)
+	_base_effect_designer.focus_override_requested.connect(_on_focus_override_requested)
 	left_vbox.add_child(_base_effect_designer)
 
 	# Focus effects designer
 	_focus_effect_designer = EffectDesignerUI.new()
 	_focus_effect_designer.use_internal_scroll = false
 	_focus_effect_designer.custom_kind = "card"
+	_focus_effect_designer.allow_multiple = true
+	_focus_effect_designer.allow_reorder = true
 	_focus_effect_designer.setup("Focus Effects", "focus_card", "focus_effects", true)
 	_focus_effect_designer.config_changed.connect(_on_focus_config_changed)
 	left_vbox.add_child(_focus_effect_designer)
@@ -194,6 +198,7 @@ func _load_current_config():
 	# Remove stale keys
 	_current_config.erase("corner_radius")
 	_current_config.erase("art_rounding")
+	EffectDesignerUI.ensure_card_layer_ids(_current_config)
 	
 	var rounding_value = _current_config.get("card_rounding", 0.12)
 	_card_rounding_slider.value = rounding_value
@@ -209,6 +214,7 @@ func _load_current_config():
 	if _focus_effect_designer:
 		_focus_effect_designer.set_config(_current_config)
 		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
+	_sync_focus_override_targets()
 
 	_config_loaded = true
 
@@ -242,16 +248,61 @@ func _setup_preview_card():
 
 func _on_base_config_changed(config: Dictionary):
 	_current_config["effects"] = config.get("effects", []).duplicate(true)
+	EffectDesignerUI.ensure_card_layer_ids(_current_config)
 	# Refresh focus designer's base reference so overlap labels stay current
 	if _focus_effect_designer:
 		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
+	_sync_focus_override_targets()
 	_update_preview()
 	_save_to_settings()
 
 func _on_focus_config_changed(config: Dictionary):
 	_current_config["focus_effects"] = config.get("focus_effects", []).duplicate(true)
+	EffectDesignerUI.ensure_card_layer_ids(_current_config)
+	_sync_focus_override_targets()
 	_update_preview()
 	_save_to_settings()
+
+func _on_focus_override_requested(effect_data: Dictionary) -> void:
+	var base_layer_id = effect_data.get("layer_id", "")
+	if not base_layer_id is String or base_layer_id.is_empty():
+		return
+
+	var focus_effects: Array = _current_config.get("focus_effects", []).duplicate(true)
+	var has_override := false
+	for focus_effect in focus_effects:
+		if focus_effect is Dictionary and focus_effect.get("target_layer_id", "") == base_layer_id:
+			has_override = true
+			break
+
+	if not has_override:
+		var focus_entry := effect_data.duplicate(true)
+		focus_entry["layer_id"] = EffectDesignerUI.generate_layer_id()
+		focus_entry["target_layer_id"] = base_layer_id
+		focus_effects.append(focus_entry)
+
+	_current_config["focus_effects"] = focus_effects
+	EffectDesignerUI.ensure_card_layer_ids(_current_config)
+	if _base_effect_designer:
+		_base_effect_designer.set_config(_current_config)
+	if _focus_effect_designer:
+		_focus_effect_designer.set_config(_current_config)
+		_focus_effect_designer.set_base_effects(_current_config.get("effects", []))
+	_sync_focus_override_targets()
+	_update_preview()
+	_save_to_settings()
+
+func _sync_focus_override_targets() -> void:
+	if not _base_effect_designer:
+		return
+	var target_layer_ids: Array = []
+	for focus_effect in _current_config.get("focus_effects", []):
+		if not focus_effect is Dictionary:
+			continue
+		var target_layer_id = focus_effect.get("target_layer_id", "")
+		if target_layer_id is String and not target_layer_id.is_empty() and not target_layer_id in target_layer_ids:
+			target_layer_ids.append(target_layer_id)
+	_base_effect_designer.set_focus_override_targets(target_layer_ids)
 
 func _on_card_rounding_changed(value: float):
 	_current_config["card_rounding"] = value
@@ -276,6 +327,7 @@ func _save_to_settings() -> void:
 	if not _config_loaded:
 		return
 	
+	EffectDesignerUI.ensure_card_layer_ids(_current_config)
 	var config_setting = DataManager.get_setting("card_effect_config")
 	if config_setting:
 		var effects_count := 0

@@ -53,6 +53,8 @@ func _ready():
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED:
 		_update_layer_viewport_activity()
+	elif what == NOTIFICATION_PREDELETE:
+		_clear_layers()
 
 func _update_layer_viewport_activity() -> void:
 	"""Pause scaled background SubViewports when the background itself is hidden
@@ -134,6 +136,7 @@ func _clear_layers() -> void:
 	if _base_rect:
 		_base_rect.queue_free()
 		_base_rect = null
+
 
 func _build_base() -> void:
 	_base_rect = ColorRect.new()

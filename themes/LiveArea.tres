@@ -19,9 +19,9 @@ values = {
 "card_orientation": 2,
 "card_rounding": 1.0,
 "effects": [{
+"layer_id": "live_glass",
 "effect_id": "glass",
 "settings": {
-"additional_inset_ratio": 0.0,
 "bounce_intensity": 0.38,
 "bounce_softness": 2.5,
 "distortion": 0.5,
@@ -38,14 +38,17 @@ values = {
 "swoop_tilt": -0.01
 }
 }, {
-"effect_id": "border",
+"layer_id": "live_fade_stroke",
+"effect_id": "stroke",
 "settings": {
-"border_color": Color(1, 1, 1, 1),
-"border_fade_in": 0.33,
-"border_gradient": SubResource("Gradient_rgwmd"),
-"border_size": 0.0
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_rgwmd"),
+"stroke_width_ratio": 0.33,
+"fade_in": true,
+"advance": true
 }
 }, {
+"layer_id": "live_distort",
 "effect_id": "distort",
 "settings": {
 "distortion": 0.05,

@@ -2,15 +2,13 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float inner_corner_radius_pixels = 0.0;  // Radius after total inset (border + glass)
-uniform float glass_inset_ratio = 0.0;  // For calculating inner size
+uniform float inner_corner_radius_pixels = 0.0;  // Radius after total inset
 
 uniform bool hide_background = false;
 uniform float badge_size_ratio = 0.16;
 uniform vec2 badge_aspect_ratio = vec2(1.0, 1.0);
 uniform float badge_inner_radius = 0.0;
 uniform vec4 badge_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform float border_width_ratio = 0.0;
 uniform float border_inset_pixels = 0.0;
 uniform int badge_type = 0; // 0 = corner badge, 1 = top bar
 
@@ -38,7 +36,6 @@ void fragment() {
 	vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 	
 	float badge_size_pixels = badge_size_ratio * card_size.x;
-	float border_width_pixels = border_width_ratio * card_size.x;
 	
 	float badge_width = badge_size_pixels * badge_aspect_ratio.x;
 	float badge_height = badge_size_pixels * badge_aspect_ratio.y;

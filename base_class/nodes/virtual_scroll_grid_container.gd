@@ -209,7 +209,6 @@ const BASE_LIST_HEIGHT_DP: float = 120.0
 const BASE_CAROUSEL_WIDTH_DP: float = 280.0
 
 const _MEDIA_BASE_WIDTH_DP: float = 200.0
-const _TEXT_AREA_RATIO: float = 0.20
 
 const _RATIO_LOOKUP: Array[float] = [
 	-1.0,        # 0 = Fill
@@ -382,7 +381,6 @@ var card_size: Vector2 = Vector2(212.0, 280.0)
 var focused_card_size: Vector2 = Vector2(228.96, 302.4)
 
 # Currently focused virtual index for dynamic stride math
-var _focused_virtual_index: int = -1
 
 # Cached focus-centering mode (synced from CardSettingsState)
 var _focus_centering_mode: int = FocusCentering.MARGIN
@@ -693,13 +691,6 @@ func _get_slot_position_for_index(idx: int, items_per_line: int = -1, stride: fl
 	_sync_geometry()
 	return _geometry.slot_position(idx, items_per_line, stride)
 
-func set_focused_card(virtual_index: int) -> void:
-	if _focused_virtual_index == virtual_index:
-		return
-	_focused_virtual_index = virtual_index
-	_update_layout()
-	_update_margin()
-
 ## Captures the current scroll position as a three-slot anchor (index,
 ## intra-line fraction, viewport edge — see GridScrollAnchor). The anchor is
 ## the focused card when there is one, else the first slot of the top visible
@@ -968,16 +959,15 @@ func _on_card_settings_state_changed(mask: int) -> void:
 	# Display mode / content alignment / media aspect ratio
 	if mask & (CardSettingsState.ChangeMask.DISPLAY | CardSettingsState.ChangeMask.MEDIA_SHAPE):
 		refresh_all_card_configs()
-		# Queue effect rebuilds for the whole grid so cards outside the visible
-		# buffer pick up new effects/geometry when they scroll back in.
-		refresh_all_card_effects(true)
+		# Effects are rebuilt only after the final display/media layout exists.
+		_effect_queue.request_after_layout()
 		_schedule_layout_recalc()
 
 	# Card effect configuration changed. Defer the effect refresh until after the
 	# layout recalc so cards are rebuilt against final bounds and newly added cards
 	# are included in the refresh snapshot.
 	if mask & CardSettingsState.ChangeMask.EFFECTS:
-		_effect_queue.request_after_layout(true)
+		_effect_queue.request_after_layout()
 		_schedule_layout_recalc()
 
 func _schedule_layout_recalc() -> void:
@@ -2401,20 +2391,26 @@ func _update_layout():
 				_center_container.custom_minimum_size.y = card_size.y
 
 
-func _compute_visible_and_buffer_ranges(scroll_pos: int, items_per_line: int, stride: float, viewport_size: float) -> void:
-	"""Compute visible range and buffer target range for the current scroll position.
-	Writes directly to member variables to avoid Dictionary allocation."""
-	var line = _get_line_for_scroll_pos(scroll_pos) if _is_pagination_active() else (int(floor(scroll_pos / stride)) if stride > 0 else 0)
-	# Use the actual viewport end position so a partially-visible row at the
-	# far edge is always counted, preventing on-screen cards from missing data
-	# or image priority.
+func _calculate_visible_index_range(scroll_pos: float, items_per_line: int, stride: float, viewport_size: float) -> Vector2i:
+	# One pagination-aware visible-range formula for windowing, data binding,
+	# effect queues, status, and prefetch. Partial trailing lines are included.
+	var line := _get_line_for_scroll_pos(scroll_pos) if _is_pagination_active() else (int(floor(scroll_pos / stride)) if stride > 0 else 0)
 	var end_line: int
 	if _is_pagination_active():
 		end_line = _get_line_for_scroll_pos(scroll_pos + viewport_size) + 1
 	else:
 		end_line = int(ceil((scroll_pos + viewport_size) / stride)) if stride > 0 else 1
-	_visible_start_idx = _get_first_index_for_line(line, items_per_line)
-	_visible_end_idx = min(_get_first_index_for_line(end_line, items_per_line), _total_items)
+	return Vector2i(
+		_get_first_index_for_line(line, items_per_line),
+		mini(_get_first_index_for_line(end_line, items_per_line), _total_items)
+	)
+
+func _compute_visible_and_buffer_ranges(scroll_pos: float, items_per_line: int, stride: float, viewport_size: float) -> void:
+	"""Compute visible range and buffer target range for the current scroll position.
+	Writes directly to member variables to avoid Dictionary allocation."""
+	var visible_range := _calculate_visible_index_range(scroll_pos, items_per_line, stride, viewport_size)
+	_visible_start_idx = visible_range.x
+	_visible_end_idx = visible_range.y
 
 	var visible_count = _visible_end_idx - _visible_start_idx
 	# When paginated, a page jump moves the visible window by a whole page;
@@ -2627,24 +2623,14 @@ func _show_skeleton_if_unloaded(card: Control, virtual_index: int) -> void:
 
 
 func _get_visible_range() -> void:
-	var items_per_line = _get_items_per_line()
-	var eff = _get_normal_stride()
+	var items_per_line := _get_items_per_line()
+	var eff := _get_normal_stride()
 	var available := _get_available_size()
-
-	if vertical:
-		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
-		var viewport_height = available.y
-		var first_line = int(floor(scroll_pos / eff)) if eff > 0 else 0
-		var last_line = int(ceil((scroll_pos + viewport_height) / eff)) if eff > 0 else 1
-		_visible_start_idx = _get_first_index_for_line(first_line, items_per_line)
-		_visible_end_idx = min(_get_first_index_for_line(last_line, items_per_line), _total_items)
-	else:
-		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
-		var viewport_width = available.x
-		var first_line = int(floor(scroll_pos / eff)) if eff > 0 else 0
-		var last_line = int(ceil((scroll_pos + viewport_width) / eff)) if eff > 0 else 1
-		_visible_start_idx = _get_first_index_for_line(first_line, items_per_line)
-		_visible_end_idx = min(_get_first_index_for_line(last_line, items_per_line), _total_items)
+	var scroll_pos: float = (_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal) if _scroll_container else 0.0
+	var viewport_size := available.y if vertical else available.x
+	var visible_range := _calculate_visible_index_range(scroll_pos, items_per_line, eff, viewport_size)
+	_visible_start_idx = visible_range.x
+	_visible_end_idx = visible_range.y
 
 
 func _update_margin():
@@ -3162,43 +3148,21 @@ func get_target_scroll() -> float:
 	return _scroll_container.get_target_scroll() if _scroll_container else 0.0
 
 func get_visible_range() -> Dictionary:
-	var items_per_line = _get_items_per_line()
-	var eff = _get_normal_stride()
+	var items_per_line := _get_items_per_line()
+	var eff := _get_normal_stride()
 	var available := _get_available_size()
-
-	if vertical:
-		var scroll_pos = _scroll_container.scroll_vertical if _scroll_container else 0
-		var viewport_height = available.y
-		var visible_rows = ceili(viewport_height / eff) if eff > 0 else 1
-		var first_line = int(scroll_pos / eff) if eff > 0 else 0
-		var visible_start = _get_first_index_for_line(first_line, items_per_line)
-		var visible_end = min(_get_first_index_for_line(first_line + visible_rows, items_per_line), _total_items)
-
-		return {
-			"start": visible_start,
-			"end": visible_end,
-			"total": _total_items,
-			"source_total": _source_total_items,
-			"buffer_start": _virtual_start,
-			"buffer_size": _active_cards.size(),
-			"active_cards_count": _active_cards.size()
-		}
-	else:
-		var scroll_pos = _scroll_container.scroll_horizontal if _scroll_container else 0
-		var viewport_width = available.x
-		var visible_cols = ceili(viewport_width / eff) if eff > 0 else 1
-		var visible_start = int(scroll_pos / eff) * items_per_line if eff > 0 else 0
-		var visible_end = min(visible_start + (visible_cols * items_per_line), _total_items)
-
-		return {
-			"start": visible_start,
-			"end": visible_end,
-			"total": _total_items,
-			"source_total": _source_total_items,
-			"buffer_start": _virtual_start,
-			"buffer_size": _active_cards.size(),
-			"active_cards_count": _active_cards.size()
-		}
+	var scroll_pos: float = (_scroll_container.scroll_vertical if vertical else _scroll_container.scroll_horizontal) if _scroll_container else 0.0
+	var viewport_size := available.y if vertical else available.x
+	var visible_range := _calculate_visible_index_range(scroll_pos, items_per_line, eff, viewport_size)
+	return {
+		"start": visible_range.x,
+		"end": visible_range.y,
+		"total": _total_items,
+		"source_total": _source_total_items,
+		"buffer_start": _virtual_start,
+		"buffer_size": _active_cards.size(),
+		"active_cards_count": _active_cards.size()
+	}
 
 func get_card_at_index(index: int) -> Control:
 	return _window.get_card_at_index(index)
@@ -3369,11 +3333,11 @@ func _update_debug_mode():
 	if _debug_overlay:
 		_debug_overlay.set_enabled(debug_mode)
 
-func refresh_all_card_effects(force_full_rebuild: bool = false) -> void:
+func refresh_all_card_effects() -> void:
 	"""Refresh effects on active cards. Cards in the visible zone plus a small
 	buffer are rebuilt immediately; the rest are queued and drained over frames
 	to avoid stalling on large grids."""
-	_effect_queue.refresh_all(force_full_rebuild)
+	_effect_queue.refresh_all()
 
 func refresh_all_card_configs() -> void:
 	"""Re-apply size flags, alignment, aspect ratio, and display mode to all active cards.
@@ -3382,13 +3346,13 @@ func refresh_all_card_configs() -> void:
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
+		# Display state determines text/background reservation, so it is applied
+		# before size flags and media bounds are recomputed.
+		if _card_has_update_card_state_from_settings:
+			card._update_card_state_from_settings()
 		_configure_card_size_flags(card)
 		if _card_has_update_media_panel_size:
 			card._update_media_panel_size(true)
-		# Display mode affects text/background visibility and card geometry, so
-		# re-apply card state whenever cached config changes.
-		if _card_has_update_card_state_from_settings:
-			card._update_card_state_from_settings()
 
 func refresh_all_card_displays() -> void:
 	"""Refresh text/display state on all active cards without rebuilding effects.

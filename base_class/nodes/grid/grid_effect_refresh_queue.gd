@@ -16,19 +16,15 @@ var _grid: VirtualScrollGridContainer = null
 
 var _pending: Array[Control] = []
 var _pending_set: Dictionary = {}  # card -> true (dedup)
-var _pending_force_full: bool = false
-
 var _refresh_after_layout: bool = false
-var _refresh_after_layout_force_full: bool = false
 
 func _init(grid: VirtualScrollGridContainer) -> void:
 	_grid = grid
 
 ## Defer an effect refresh until after the next layout recalc so cards are
 ## rebuilt against final bounds and newly added cards are included.
-func request_after_layout(force_full: bool) -> void:
+func request_after_layout() -> void:
 	_refresh_after_layout = true
-	_refresh_after_layout_force_full = force_full
 
 ## Called after a settled layout recalc; applies a deferred refresh if one
 ## was requested.
@@ -36,26 +32,25 @@ func apply_after_layout() -> void:
 	if not _refresh_after_layout:
 		return
 	_refresh_after_layout = false
-	refresh_all(_refresh_after_layout_force_full)
+	refresh_all()
 
 ## Single helper for the card visual refresh used by effect/config refresh
 ## and pending drains. Media bounds are updated inside the card's refresh path.
-func refresh_card_visuals(card: Control, force_full_rebuild: bool = false) -> void:
+func refresh_card_visuals(card: Control) -> void:
 	if not is_instance_valid(card):
 		return
 	if _grid._card_has_refresh_effects:
-		card.refresh_effects(force_full_rebuild)
+		card.refresh_effects()
 	elif _grid._card_has_refresh_settings:
 		card.refresh_settings()
 
 ## Refresh effects on active cards. Cards in the visible zone plus a small
 ## buffer are rebuilt immediately; the rest are queued and drained over frames
 ## to avoid stalling on large grids.
-func refresh_all(force_full_rebuild: bool = false) -> void:
+func refresh_all() -> void:
 	# A new full-grid refresh supersedes any still-pending queue.
 	_pending.clear()
 	_pending_set.clear()
-	_pending_force_full = force_full_rebuild
 
 	_grid._get_visible_range()
 
@@ -75,7 +70,7 @@ func refresh_all(force_full_rebuild: bool = false) -> void:
 		var idx = card.get_meta("virtual_index", -1)
 		var in_sync_zone = idx >= sync_start and idx < sync_end
 		if in_sync_zone:
-			refresh_card_visuals(card, force_full_rebuild)
+			refresh_card_visuals(card)
 		else:
 			if not _pending_set.has(card):
 				_pending.append(card)
@@ -85,7 +80,6 @@ func drain_pending() -> void:
 	if _pending.is_empty():
 		return
 
-	var force_full_rebuild: bool = _pending_force_full
 	var processed: int = 0
 	# Not budget-gated: pending effect rebuilds belong to active cards;
 	# starving the queue leaves stale/missing effect stacks on screen.
@@ -101,7 +95,7 @@ func drain_pending() -> void:
 		# Make sure bounds and stack parenting are current before rebuilding;
 		# cards that were queued during a layout change can otherwise rebuild
 		# against stale/zero media bounds and stay blank.
-		refresh_card_visuals(card, force_full_rebuild)
+		refresh_card_visuals(card)
 		processed += 1
 
 func flush_for_visible_zone() -> void:
@@ -135,7 +129,7 @@ func flush_for_visible_zone() -> void:
 		if idx >= sync_start and idx < sync_end:
 			_pending.remove_at(i)
 			_pending_set.erase(card)
-			refresh_card_visuals(card, _pending_force_full)
+			refresh_card_visuals(card)
 			continue
 		i += 1
 

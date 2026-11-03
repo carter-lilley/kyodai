@@ -855,19 +855,12 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 	
 	_update_grid_orientation()
 	
-	# Apply zoom from centralized card settings state (per-mode).
-	if UIManager and UIManager.card_settings_state and games_grid:
-		if games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
-		else:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_list_ratio
-	
 	if refresh_effects:
 		# Effect configuration changed: reload data if we're also clearing the cache,
 		# then refresh dimensions and effects.
 		if preserve_data:
 			_refresh_grid_dimensions()
-			games_grid.refresh_all_card_effects(true)
+			games_grid.refresh_all_card_effects()
 		else:
 			# Use callback version to ensure dimensions refresh BEFORE rebuilding
 			# effects, so cards are rebuilt against final bounds.
@@ -875,7 +868,7 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 				# Refresh dimensions first to establish final card bounds.
 				_refresh_grid_dimensions()
 				# Then refresh existing cards.
-				games_grid.refresh_all_card_effects(true)
+				games_grid.refresh_all_card_effects()
 			)
 	else:
 		# Force grid to recalculate layout, preserve cache for performance

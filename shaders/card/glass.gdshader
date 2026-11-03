@@ -3,8 +3,6 @@ render_mode blend_add;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float border_inset_ratio = 0.0;  // Inherited from border effect
-
 // Glass parameters  
 uniform vec4 glass_color : source_color = vec4(0.2, 0.4, 1.0, 0.3);
 
@@ -22,8 +20,6 @@ uniform float bounce_softness : hint_range(1.0, 8.0) = 3.0;
 uniform float rim_intensity : hint_range(0.0, 2.0) = 1.0;
 uniform float rim_sharpness : hint_range(2.0, 10.0) = 5.0;
 
-// Additional inset to push underlying image inward
-uniform float additional_inset_ratio : hint_range(0.0, 0.5) = 0.0;
 uniform float effect_alpha : hint_range(0.0, 1.0) = 1.0;
 
 // Simple and correct: spherical dome using SDF distance
@@ -91,9 +87,8 @@ void fragment() {
 		if (edge_alpha <= 0.0) { discard; }
 	}
 	
-	// Calculate the inner "image area" with border + additional inset
-	// This pushes the underlying image inward from the glass edge
-	float total_image_inset = (border_inset_ratio + additional_inset_ratio) * card_size.x;
+	// The ordered geometry pass assigns the inset visible at this layer.
+	float total_image_inset = total_inset_pixels;
 	vec2 image_area_size = card_size - vec2(total_image_inset * 2.0);
 	vec2 image_area_offset = vec2(total_image_inset);
 	

@@ -13,7 +13,6 @@ uniform float wrap_inset_left_pixels = 0.0;
 // UV transform chain precomputed by BaseCardEffect (avoids re-deriving aspect math)
 uniform vec2 uv_transform_scale = vec2(1.0, 1.0);
 uniform vec2 uv_transform_offset = vec2(0.0, 0.0);
-uniform float vertical_offset = 0.0;
 
 // Edge AA mode: 0 = hard discard (Standard), 1 = smoothstep AA (Transparent/Media Only)
 uniform int display_mode = 0;

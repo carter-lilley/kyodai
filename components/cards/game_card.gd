@@ -82,6 +82,7 @@ var _media_layout_sig := PackedFloat32Array()
 # Media effect stack rendered inside M3Card's media panel
 var _media_stack: EffectStack = null
 var _focus_stack: EffectStack = null
+var _focus_override_configs: Array = []
 var _focus_effect_tweens: Array[Tween] = []
 
 # Focus stack needs its own bounds (full card vs media panel) independent of
@@ -163,7 +164,7 @@ func _sync_focus_state_from_viewport() -> void:
 	# If this card is focused but has no focus stack yet, build it now so the
 	# subsequent media-stack rebuild can see the correct focus state.
 	if _is_focused and not _focus_stack:
-		_build_focus_stack(false)
+		_build_focus_stack()
 		_update_platform_badge()
 	if _is_focused:
 		_try_unwrap_present()
@@ -190,9 +191,9 @@ func _on_rs_items_recreated() -> void:
 	# and the card renders with zero-sized media.
 	_last_refreshed_media_bounds = Rect2()
 	if not _media_stack:
-		_build_media_stack(false)
+		_build_media_stack()
 	if _focus_stack:
-		_build_focus_stack(false)
+		_build_focus_stack()
 
 func _enter_tree():
 	super._enter_tree()
@@ -270,13 +271,6 @@ func _exit_tree():
 func get_card_state() -> MediaContainer:
 	return _media_container
 
-func get_focus_shape_params() -> Dictionary:
-	return {
-		"shape_size": _media_container.size,
-		"corner_radius_ratio": _media_container.corner_radius_ratio,
-		"corner_radius_pixels": _media_container.get_corner_radius_pixels()
-	}
-
 func get_current_texture() -> Texture2D:
 	return _current_texture
 
@@ -307,7 +301,7 @@ func _update_texture_pin_state() -> void:
 
 func _setup_preview_mode():
 	_update_card_state_from_settings()
-	_build_media_stack(false)
+	_build_media_stack()
 
 	if DataManager:
 		var random_game = DataManager.get_random_game()
@@ -324,7 +318,7 @@ func _setup_preview_mode():
 	# Ensure focus effects match preview_show_focus after all setup
 	_show_focus_effects(preview_show_focus)
 
-func _build_media_stack(force_full_rebuild: bool = true):
+func _build_media_stack():
 	if not _media_container:
 		return
 	var effect_settings := []
@@ -338,7 +332,7 @@ func _build_media_stack(force_full_rebuild: bool = true):
 
 	if _media_stack:
 		# Hot-reload: update configs in-place instead of rebuilding
-		_media_stack.update_effect_configs(effect_settings, force_full_rebuild)
+		_media_stack.update_effect_configs(effect_settings)
 		# The media canvas item may have been recreated by a layout change, so
 		# always re-parent the existing stack canvas item to the current item.
 		if _media_canvas_item.is_valid():
@@ -376,10 +370,19 @@ func _build_media_stack(force_full_rebuild: bool = true):
 	# Cards that already have a focus stack (previously focused) still need their
 	# configs hot-reloaded so stale settings don't resurface on the next focus.
 	if preview_mode or _is_focused or _focus_stack:
-		_build_focus_stack(force_full_rebuild)
+		_build_focus_stack()
 
 
-func _build_focus_stack(force_full_rebuild: bool = true) -> void:
+static func _partition_focus_configs(focus_settings: Array) -> Dictionary:
+	var result := {"overrides": [], "overlays": []}
+	for entry in focus_settings:
+		if entry is Dictionary and not entry.get("target_layer_id", "").is_empty():
+			result.overrides.append(entry)
+		else:
+			result.overlays.append(entry)
+	return result
+
+func _build_focus_stack() -> void:
 	if not _focus_media_container:
 		return
 	_kill_focus_tweens()
@@ -394,17 +397,28 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		if config_setting and config_setting.value is Dictionary:
 			focus_effect_settings = config_setting.value.get("focus_effects", [])
 
-	# If no focus effects configured, clear and hide existing stack
+	# Linked overrides are settings documents, not render layers. Only
+	# independent focus additions instantiate a stack or affect its geometry.
+	var partition := _partition_focus_configs(focus_effect_settings)
+	_focus_override_configs = partition.overrides
+	var overlay_settings: Array = partition.overlays
+
 	if focus_effect_settings.is_empty():
 		if _focus_stack:
-			_focus_stack.update_effect_configs([], force_full_rebuild)
+			_focus_stack.update_effect_configs([])
+			_focus_stack.set_visible(false)
+		return
+
+	if overlay_settings.is_empty():
+		if _focus_stack:
+			_focus_stack.update_effect_configs([])
 			_focus_stack.set_visible(false)
 		return
 
 	if _focus_stack:
 		# Hot-reload: update configs in-place
 		_focus_stack.set_visible(false)
-		_focus_stack.update_effect_configs(focus_effect_settings, force_full_rebuild)
+		_focus_stack.update_effect_configs(overlay_settings)
 
 		# Re-apply focus state setup after config update
 		var focus_base_node = _focus_stack.get_effect("base")
@@ -416,15 +430,14 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 		# Otherwise start from zero so _show_focus_effects can tween from the correct state.
 		var target_focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
 		for effect in _focus_stack.get_effects():
-			if effect is EffectBase and effect._material is ShaderMaterial:
-				effect._material.set_shader_parameter("effect_alpha", target_focus_alpha)
+			if effect is EffectBase:
+				effect.set_effect_alpha(target_focus_alpha)
 
 		if preview_mode:
 			_focus_stack.set_visible(preview_show_focus)
 
 		if _current_texture:
 			_focus_stack.set_game_texture(_current_texture)
-		_link_overlapping_effects()
 		return
 
 	_focus_stack = EffectStack.new()
@@ -436,7 +449,7 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	_focus_stack.set_visible(false)
 
 	_sync_focus_container_properties()
-	_focus_stack.initialize(_focus_media_container, focus_effect_settings, "focus_card")
+	_focus_stack.initialize(_focus_media_container, overlay_settings, "focus_card")
 	_update_effect_transforms()
 	_update_focus_stack_bounds()
 	if _current_texture:
@@ -451,31 +464,11 @@ func _build_focus_stack(force_full_rebuild: bool = true) -> void:
 	# Initialize focus effects with effect_alpha based on preview_show_focus
 	var focus_alpha = 1.0 if (preview_mode and preview_show_focus) else 0.0
 	for effect in _focus_stack.get_effects():
-		if effect is EffectBase and effect._material is ShaderMaterial:
-			effect._material.set_shader_parameter("effect_alpha", focus_alpha)
+		if effect is EffectBase:
+			effect.set_effect_alpha(focus_alpha)
 
 	if preview_mode:
 		_focus_stack.set_visible(preview_show_focus)
-
-	_link_overlapping_effects()
-
-func _link_overlapping_effects() -> void:
-	if not _media_stack or not _focus_stack:
-		return
-
-	var base_effect_ids: Array[String] = []
-	for effect in _media_stack.get_effects():
-		if effect is EffectBase:
-			base_effect_ids.append(effect.effect_id)
-
-	for effect in _focus_stack.get_effects():
-		if not (effect is EffectBase):
-			continue
-		var focus_effect = effect as EffectBase
-		if focus_effect.effect_id in base_effect_ids:
-			var base_effect = _media_stack.get_effect(focus_effect.effect_id)
-			if base_effect:
-				focus_effect.set_base_effect(base_effect)
 
 var preview_show_focus: bool = false
 
@@ -488,95 +481,77 @@ func _show_focus_effects(p_show: bool) -> void:
 
 	if preview_mode:
 		p_show = preview_show_focus
-
-	if not _focus_stack or not _media_stack:
+	if not _media_stack:
 		return
 
-	var overlapping_effects: Array[EffectBase] = []
-	var non_overlapping_effects: Array[EffectBase] = []
-
-	for effect in _focus_stack.get_effects():
-		if not (effect is EffectBase):
+	# Data-only overrides tween their explicit target. No focus render instance
+	# is allocated for these entries, and their type must match the target.
+	for config in _focus_override_configs:
+		var base_effect := _media_stack.get_layer(config.get("target_layer_id", ""))
+		if not base_effect or base_effect.effect_id != config.get("effect_id", ""):
 			continue
-		var focus_effect = effect as EffectBase
-		if focus_effect._base_effect != null:
-			overlapping_effects.append(focus_effect)
-		else:
-			non_overlapping_effects.append(focus_effect)
-
-	# Overlapping effects: tween the base effect's shader settings directly
-	for focus_effect in overlapping_effects:
-		var base_effect = focus_effect._base_effect
-		if not base_effect:
-			continue
-
-		var base_settings = base_effect._base_settings
-		var focus_settings = focus_effect._settings
-		var base_copy = base_settings.duplicate(true)
-		var focus_copy = focus_settings.duplicate(true)
-
+		var base_copy = base_effect._base_settings.duplicate(true)
+		var focus_copy: Dictionary = config.get("settings", {}).duplicate(true)
 		var base_effect_ref = weakref(base_effect)
+		var settings_tween = create_tween()
+		_focus_effect_tweens.append(settings_tween)
+		settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
+		settings_tween.set_trans(Tween.TRANS_QUAD)
+		settings_tween.set_ease(Tween.EASE_OUT)
 		if p_show:
-			var settings_tween = create_tween()
-			_focus_effect_tweens.append(settings_tween)
-			settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
-			settings_tween.set_trans(Tween.TRANS_QUAD)
-			settings_tween.set_ease(Tween.EASE_OUT)
-			var tween_callable = func(t: float):
+			settings_tween.tween_method(func(t: float):
 				var eff = base_effect_ref.get_ref()
 				if eff:
-					eff.tween_settings(base_copy, focus_copy, t)
-			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+					eff.tween_settings(base_copy, focus_copy, t),
+			0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 		else:
-			# Animate from the base effect's current visual state back to base
-			# settings. This avoids imposing the focus config on an unfocused card
-			# (which produces a transient "stuck focused" flash) while still
-			# correctly tweening a previously-focused card back to its base look.
-			var settings_tween = create_tween()
-			_focus_effect_tweens.append(settings_tween)
-			settings_tween.finished.connect(_remove_focus_tween.bind(settings_tween))
-			settings_tween.set_trans(Tween.TRANS_QUAD)
-			settings_tween.set_ease(Tween.EASE_OUT)
-			var tween_callable = func(t: float):
+			settings_tween.tween_method(func(t: float):
 				var eff = base_effect_ref.get_ref()
 				if eff:
-					eff.tween_settings(eff._settings, base_copy, t)
-			settings_tween.tween_method(tween_callable, 0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
+					eff.tween_settings(eff._settings, base_copy, t),
+			0.0, 1.0, FOCUS_EFFECT_FADE_DURATION)
 
-	# Non-overlapping effects: fade in/out via alpha overlay
-	if non_overlapping_effects.size() > 0:
-		if p_show:
-			_focus_stack.set_visible(true)
+	# Independent focus additions fade as overlays. The auto base and
+	# geometry-only layers never participate in these alpha tweens.
+	var overlay_effects: Array[EffectBase] = []
+	if _focus_stack:
+		for effect in _focus_stack.get_effects():
+			if effect is EffectBase and effect.layer_id != "base" and not effect.is_geometry_only():
+				overlay_effects.append(effect)
 
-		for focus_effect in non_overlapping_effects:
-			if focus_effect._material is ShaderMaterial:
-				var start_alpha = 0.0 if p_show else 1.0
-				var target_alpha = 1.0 if p_show else 0.0
-				focus_effect._material.set_shader_parameter("effect_alpha", 0.0)
+	if overlay_effects.is_empty():
+		return
+	if p_show:
+		_focus_stack.set_visible(true)
 
-				var fade_tween = create_tween()
-				_focus_effect_tweens.append(fade_tween)
-				fade_tween.finished.connect(_remove_focus_tween.bind(fade_tween))
-				fade_tween.set_trans(Tween.TRANS_QUAD)
-				fade_tween.set_ease(Tween.EASE_OUT)
-				fade_tween.tween_method(
-					func(t: float, eff: EffectBase = focus_effect):
-						if eff and eff._material is ShaderMaterial:
-							eff._material.set_shader_parameter("effect_alpha", t),
-					start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
-				)
+	for focus_effect in overlay_effects:
+		if not focus_effect._material is ShaderMaterial:
+			continue
+		var start_alpha := float(focus_effect._material.get_shader_parameter("effect_alpha"))
+		var target_alpha := 1.0 if p_show else 0.0
+		var fade_tween = create_tween()
+		_focus_effect_tweens.append(fade_tween)
+		fade_tween.finished.connect(_remove_focus_tween.bind(fade_tween))
+		fade_tween.set_trans(Tween.TRANS_QUAD)
+		fade_tween.set_ease(Tween.EASE_OUT)
+		fade_tween.tween_method(
+			func(t: float, eff: EffectBase = focus_effect):
+				if eff:
+					eff.set_effect_alpha(t),
+			start_alpha, target_alpha, FOCUS_EFFECT_FADE_DURATION
+		)
 
-		if not p_show:
-			var hide_tween = create_tween()
-			_focus_effect_tweens.append(hide_tween)
-			hide_tween.finished.connect(_remove_focus_tween.bind(hide_tween))
-			hide_tween.set_trans(Tween.TRANS_QUAD)
-			hide_tween.set_ease(Tween.EASE_OUT)
-			hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
-			hide_tween.finished.connect(func():
-				if _focus_stack:
-					_focus_stack.set_visible(false)
-			)
+	if not p_show:
+		var hide_tween = create_tween()
+		_focus_effect_tweens.append(hide_tween)
+		hide_tween.finished.connect(_remove_focus_tween.bind(hide_tween))
+		hide_tween.set_trans(Tween.TRANS_QUAD)
+		hide_tween.set_ease(Tween.EASE_OUT)
+		hide_tween.tween_interval(FOCUS_EFFECT_FADE_DURATION)
+		hide_tween.finished.connect(func():
+			if _focus_stack:
+				_focus_stack.set_visible(false)
+		)
 
 var _display_mode: int = 0
 
@@ -609,10 +584,6 @@ func _update_card_state_from_settings():
 		# Apply the same rounding to the M3Card background clip
 		card_rounding_ratio = _media_container.corner_radius_ratio
 
-		# Apply insets immediately so the base card shader pushes the image inward
-		# even if the effect-stack rebuild is delayed or skipped.
-		EffectStack.apply_insets_from_configs(_media_container, _media_container.effect_settings)
-
 		_display_mode = state.display_mode
 	elif DataManager:
 		# Fallback if UIManager state is not yet available
@@ -633,8 +604,6 @@ func _update_card_state_from_settings():
 			else:
 				_media_container.corner_radius_ratio = corner_value
 			card_rounding_ratio = _media_container.corner_radius_ratio
-			EffectStack.apply_insets_from_configs(_media_container, _media_container.effect_settings)
-
 		var display_setting = DataManager.get_setting("library_card_display_mode")
 		if display_setting and display_setting.value is int:
 			_display_mode = display_setting.value
@@ -643,6 +612,7 @@ func _update_card_state_from_settings():
 	_sync_focus_container_properties()
 
 func _apply_display_mode() -> void:
+	begin_bulk_layout()
 	# Every stack layer already shares this outer-edge coverage calculation.
 	# Keep it enabled in all display modes so Standard cards don't reintroduce
 	# hard SDF cutouts. Inset and border-inner compositing is independent and
@@ -667,9 +637,7 @@ func _apply_display_mode() -> void:
 			show_text_margin = no_cover
 			text_centered_overlay = no_cover
 
-	# Push the shared coverage flag immediately when switching display modes.
-	if _media_stack:
-		_media_stack.force_refresh()
+	end_bulk_layout()
 
 	# Update text immediately so shadow state reflects the new display mode
 	_update_text()
@@ -690,12 +658,12 @@ func set_focus_scale(value: float) -> void:
 	_sync_focus_visuals()
 
 func refresh_settings() -> void:
-	_refresh_card_visuals(false)
+	_refresh_card_visuals()
 
-func refresh_effects(force_full_rebuild: bool = false) -> void:
-	_refresh_card_visuals(force_full_rebuild)
+func refresh_effects() -> void:
+	_refresh_card_visuals()
 
-func _refresh_card_visuals(force_full_effects_rebuild: bool) -> void:
+func _refresh_card_visuals() -> void:
 	"""Single card-refresh path: state -> focus sync -> media bounds -> effects ->
 	badge/text -> focus tween -> cover safety net."""
 	if not _ready_called:
@@ -710,7 +678,7 @@ func _refresh_card_visuals(force_full_effects_rebuild: bool) -> void:
 	_update_media_panel_size(true)
 	# Hot-reload configs when possible; full rebuild only when the caller forces
 	# it or the effect ID set actually changed.
-	_build_media_stack(force_full_effects_rebuild)
+	_build_media_stack()
 	_update_platform_badge()
 	_update_card_text()
 	# Now that both media and focus stacks exist, run the focus tween.
@@ -1006,15 +974,16 @@ func _update_platform_badge():
 	if not _media_stack:
 		return
 
-	var normal_badge = _media_stack.get_effect("badge") as BadgeEffect
-	if not normal_badge:
+	var normal_badges := _media_stack.get_effects_of_type("badge")
+	var focus_badges: Array[EffectBase] = []
+	if _focus_stack:
+		focus_badges = _focus_stack.get_effects_of_type("badge")
+	if normal_badges.is_empty() and focus_badges.is_empty():
 		return
 
 	if not game:
-		normal_badge.set_icon_texture(null)
-		var focus_badge_clear = _focus_stack.get_effect("badge") as BadgeEffect if _focus_stack else null
-		if focus_badge_clear:
-			focus_badge_clear.set_icon_texture(null)
+		for badge in normal_badges + focus_badges:
+			badge.set_icon_texture(null)
 		return
 
 	var platform_slug = game.platform_slug
@@ -1041,11 +1010,10 @@ func _update_platform_badge():
 			_platform_icon_missing_warnings[platform_slug] = true
 			push_warning("GameCard: No platform icon found for slug '%s' (looked in %s)" % [platform_slug, PLATFORM_ICON_DIR])
 
-	_apply_badge_settings(normal_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
-
-	var focus_badge = _focus_stack.get_effect("badge") as BadgeEffect if _focus_stack else null
-	if focus_badge:
-		_apply_badge_settings(focus_badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
+	for badge in normal_badges:
+		_apply_badge_settings(badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
+	for badge in focus_badges:
+		_apply_badge_settings(badge, badge_type, icon_texture, badge_size_setting, inner_radius_setting, _media_container)
 
 func _load_cover(high_priority: bool = false) -> void:
 	if _media_loader:
@@ -1143,7 +1111,7 @@ func _set_texture(tex: Texture2D) -> void:
 	# Safety net: if the stack was freed (e.g. pooled card re-entered the tree),
 	# rebuild it now so the texture actually has somewhere to render.
 	if not _media_stack:
-		_build_media_stack(false)
+		_build_media_stack()
 	if _media_stack:
 		_media_stack.set_loading(is_loading)
 		_media_stack.set_game_texture(resolved_tex)
@@ -1417,16 +1385,14 @@ func _update_effect_transforms() -> void:
 		return
 
 	var t := Transform2D()
-	if not show_background and _focus_media_container:
-		t = Transform2D().translated(_focus_media_container.bounds.position)
+	if not show_background:
+		t = Transform2D().translated(_media_bounds.position)
 	RenderingServer.canvas_item_set_transform(ci, t)
 
 func _sync_focus_container_properties() -> void:
 	if not _focus_media_container or not _media_container:
 		return
 	_focus_media_container.corner_radius_ratio = _media_container.corner_radius_ratio
-	_focus_media_container.border_inset_ratio = _media_container.border_inset_ratio
-	_focus_media_container.glass_inset_ratio = _media_container.glass_inset_ratio
 	_focus_media_container.edge_aa_enabled = _media_container.edge_aa_enabled
 	_focus_media_container.vertical_offset = _media_container.vertical_offset
 	_focus_media_container.effect_settings = _media_container.effect_settings
@@ -1449,7 +1415,7 @@ func _on_focus_entered():
 
 	# Build the focus stack lazily the first time this card is focused.
 	if not _focus_stack:
-		_build_focus_stack(false)
+		_build_focus_stack()
 		_update_platform_badge()
 
 	if SystemManager.audio:
@@ -1505,20 +1471,9 @@ func _on_focus_exited():
 func _update_focus_stack_bounds() -> void:
 	if not _focus_media_container or not _focus_stack:
 		return
-	# Use the authoritative media targets.
-	var target_w := _focus_target_w
-	var target_h := _focus_target_h
-	if target_w <= 0.0:
-		target_w = size.x
-	if target_h <= 0.0:
-		target_h = size.y
-
-	var new_bounds: Rect2
-	if not show_background:
-		# Transparent / Media Only: shrink focus stack to match media bounds
-		new_bounds = Rect2(_media_bounds.position.x, _media_bounds.position.y, target_w, target_h)
-	else:
-		new_bounds = Rect2(0.0, 0.0, size.x, size.y)
+	# Effect geometry is always local to its surface. Media offset belongs only
+	# to the shared render transform, not to the bounds themselves.
+	var new_bounds := Rect2(Vector2.ZERO, _media_bounds.size) if not show_background else Rect2(Vector2.ZERO, _get_content_size())
 
 	var bounds_changed := not _focus_media_container.bounds.is_equal_approx(new_bounds)
 	_focus_media_container.bounds = new_bounds

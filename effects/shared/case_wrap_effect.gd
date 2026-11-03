@@ -20,28 +20,6 @@ func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/case_wrap.gdshader")
 
-func _apply_settings() -> void:
-	if not media_container:
-		return
-	var wrap_type = int(_settings.get("wrap_type", 0))
-	media_container.wrap_inset_top_ratio = 0.0
-	media_container.wrap_inset_left_ratio = 0.0
-	match wrap_type:
-		0:
-			media_container.wrap_inset_top_ratio = _settings.get("banner_height_ratio", 0.10)
-		1:
-			media_container.wrap_inset_left_ratio = _settings.get("spine_width_ratio", 0.12)
-		2:
-			media_container.wrap_inset_top_ratio = _settings.get("swoop_edge_ratio", 0.03)
-		3:
-			media_container.wrap_inset_top_ratio = _settings.get("wii_header_ratio", 0.08)
-
-func free_rid() -> void:
-	if media_container:
-		media_container.wrap_inset_top_ratio = 0.0
-		media_container.wrap_inset_left_ratio = 0.0
-	super.free_rid()
-
 func _update_shader_params() -> void:
 	if not media_container:
 		return

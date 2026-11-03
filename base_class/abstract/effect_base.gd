@@ -2,14 +2,21 @@ class_name EffectBase
 extends RefCounted
 
 var effect_id: String = ""
+var layer_id: String = ""
+var target_layer_id: String = ""
+
+# Geometry assigned by EffectStack's ordered geometry pass. Most effects use
+# the shared MediaContainer directly; geometric primitives and inset-aware
+# effects consume these per-layer values.
+var layer_inset_pixels: float = 0.0
+var stroke_offset_pixels: float = 0.0
+var stroke_width_pixels: float = 0.0
 
 var _settings: Dictionary = {}
 var media_container: MediaContainer = null
 
-var _base_effect: EffectBase = null
 var effect_stack: EffectStack = null
 
-var enabled: bool = true
 
 var _canvas_item_rid: RID = RID()
 var _last_parent_rid: RID = RID()
@@ -78,6 +85,11 @@ static func clear_shared_caches() -> void:
 static func is_material_shareable() -> bool:
 	return false
 
+## Geometry-only layers (Inset) modify later geometry without drawing a canvas
+## item of their own.
+static func is_geometry_only() -> bool:
+	return false
+
 ## Whether EffectThemeAdapter converts this effect's settings when dark mode
 ## toggles. Theme-independent effects — shine's highlight band, which must
 ## stay bright on any background — override this to return false; their
@@ -101,7 +113,6 @@ func free_rid() -> void:
 		media_container.changed.disconnect(_on_media_changed)
 	media_container = null
 	effect_stack = null
-	_base_effect = null
 
 	if _canvas_item_rid.is_valid():
 		RenderingServer.free_rid(_canvas_item_rid)
@@ -134,9 +145,6 @@ func set_texture_filter(filter: RenderingServer.CanvasItemTextureFilter) -> void
 	ensure_canvas_item(RID())
 	RenderingServer.canvas_item_set_default_texture_filter(_canvas_item_rid, filter)
 
-func get_z_index() -> int:
-	return _z_index
-
 func set_visible(value: bool) -> void:
 	_visible = value
 	if _canvas_item_rid.is_valid():
@@ -161,6 +169,17 @@ func set_offset_rect(rect: Rect2) -> void:
 
 var _base_settings: Dictionary = {}
 
+func rebind_media_container(container: MediaContainer) -> void:
+	if media_container == container:
+		return
+	if media_container and media_container.changed.is_connected(_on_media_changed):
+		media_container.changed.disconnect(_on_media_changed)
+	media_container = container
+	_apply_settings()
+	if media_container:
+		media_container.changed.connect(_on_media_changed)
+	_mark_shader_params_dirty()
+
 func initialize(container: MediaContainer, settings: Dictionary) -> void:
 	if media_container and media_container.changed.is_connected(_on_media_changed):
 		media_container.changed.disconnect(_on_media_changed)
@@ -174,9 +193,6 @@ func initialize(container: MediaContainer, settings: Dictionary) -> void:
 	if media_container:
 		media_container.changed.connect(_on_media_changed)
 	_update_shader_params()
-
-func set_base_effect(base: EffectBase) -> void:
-	_base_effect = base
 
 func update_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
@@ -249,9 +265,6 @@ func _interpolate_value(from_val: Variant, to_val: Variant, progress: float) -> 
 	else:
 		return to_val if progress >= 0.5 else from_val
 
-func compute_pipeline() -> void:
-	pass
-
 func _setup_shader() -> void:
 	pass
 
@@ -274,23 +287,17 @@ func _apply_tweened_settings(temp_settings: Dictionary) -> void:
 	if media_container:
 		var needs_refresh = false
 		match effect_id:
-			"border":
-				var new_inset = temp_settings.get("border_size", media_container.border_inset_ratio)
-				if not is_equal_approx(new_inset, media_container.border_inset_ratio):
-					media_container.border_inset_ratio = new_inset
-					needs_refresh = true
-			"glass":
-				var new_inset = temp_settings.get("additional_inset_ratio", media_container.glass_inset_ratio)
-				if not is_equal_approx(new_inset, media_container.glass_inset_ratio):
-					media_container.glass_inset_ratio = new_inset
-					needs_refresh = true
+			"stroke", "inset":
+				# Geometry is derived from the ordered stack, so focus tweens must
+				# recompute layer depths and the final media aperture.
+				needs_refresh = true
 			"glow", "drop_shadow":
 				# These effects change their canvas draw rect with their settings,
 				# so refresh geometry during the tween to keep alignment.
 				needs_refresh = true
 
 		if needs_refresh and effect_stack:
-			effect_stack.force_refresh()
+			effect_stack.request_refresh()
 
 func _update_shader_params() -> void:
 	pass
@@ -312,7 +319,7 @@ var _material_share_key: String = ""
 func _ensure_shared_material() -> void:
 	if not is_material_shareable():
 		return
-	var shareable_here = effect_stack != null and effect_stack._context == "base_card"
+	var shareable_here = effect_stack != null and effect_stack._context == "base_card" and not _is_tweening
 	var key := ""
 	if shareable_here:
 		key = _compute_material_share_key()
@@ -350,11 +357,14 @@ func _compute_material_share_key() -> String:
 		else:
 			parts.append(str(k) + "=" + str(v))
 	if media_container:
-		# Round geometry to the nearest pixel so sub-pixel differences between
-		# otherwise-identical cards don't fragment the shared material cache.
-		parts.append(str(media_container.size.round()))
-		parts.append(str(round(media_container.get_corner_radius_pixels())))
-		parts.append(str(round(media_container.get_total_inset_pixels())))
+		# The key must match the actual uniforms exactly. Rounded keys with
+		# unrounded uniforms can make different cards overwrite shared geometry.
+		parts.append(str(media_container.size))
+		parts.append(str(media_container.get_corner_radius_pixels()))
+		parts.append(str(media_container.get_total_inset_pixels()))
+		parts.append(str(layer_inset_pixels))
+		parts.append(str(stroke_offset_pixels))
+		parts.append(str(stroke_width_pixels))
 		parts.append(str(media_container.edge_aa_enabled))
 	return "|".join(parts)
 
@@ -390,8 +400,8 @@ func _flush_shader_params() -> void:
 	_shader_params_dirty = false
 	_update_shader_params()
 
-func set_game_texture(_texture: Texture2D) -> void:
-	pass
-
 func set_alpha(value: float) -> void:
 	_set_shader_param("alpha", value)
+
+func set_effect_alpha(value: float) -> void:
+	_set_shader_param("effect_alpha", value)

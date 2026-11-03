@@ -28,11 +28,9 @@ const DEBUG_LOG: bool = false
 ## CanvasLayer-equivalent stacking layer for the ring canvas (max is 128).
 const CANVAS_LAYER: int = 128
 
-## Draw index used when the ring is parented into a grid's visual layer.
-## Cards max out at virtual_index*10 + 1_000_000 (focus boost) + 3, so this
-## parks the ring above every card and effect but still below chrome (the
-## visual layer lives in the TabContainer subtree; navbar/mask draw later).
-const GRID_DRAW_INDEX: int = 2_000_000
+## Fallback draw index when a grid card does not expose its own stacking
+## geometry. M3Card supplies the focused position dynamically instead.
+const DEFAULT_GRID_DRAW_INDEX: int = 2_000_000
 
 enum Shape { BOX, PILL, CIRCLE, CORNERS }
 enum ColorMode { PRIMARY, MIRROR, CUSTOM }
@@ -330,6 +328,7 @@ func _on_target_moved() -> void:
 		_update_ring_parent(t)
 	var geo := _resolve_geometry(t)
 	# Dedupe: pre-draw stampers push every frame; only react to real change.
+	_update_ring_draw_index(t)
 	if geo.rect.is_equal_approx(_dest_rect) and is_equal_approx(geo.radius, _dest_radius) and geo.shape == _dest_shape:
 		return
 	_dest_rect = geo.rect
@@ -438,10 +437,18 @@ func _update_ring_parent(control: Control) -> void:
 		return
 	if _ring_parent_grid.is_valid():
 		RenderingServer.canvas_item_set_parent(_ring_item, _ring_parent_grid)
-		RenderingServer.canvas_item_set_draw_index(_ring_item, GRID_DRAW_INDEX)
+		_update_ring_draw_index(control)
 	else:
 		RenderingServer.canvas_item_set_parent(_ring_item, _canvas)
 		RenderingServer.canvas_item_set_draw_index(_ring_item, 0)
+
+func _update_ring_draw_index(control: Control) -> void:
+	if not _ring_parent_grid.is_valid() or not _ring_item.is_valid():
+		return
+	var draw_index := DEFAULT_GRID_DRAW_INDEX
+	if control.has_method("m3_get_focus_draw_index"):
+		draw_index = control.m3_get_focus_draw_index()
+	RenderingServer.canvas_item_set_draw_index(_ring_item, draw_index)
 
 ## Walks ancestors for a VirtualScrollGridContainer (duck-typed via its public
 ## visual layer accessor). Returns an invalid RID when not inside a grid.

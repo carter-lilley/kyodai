@@ -4,7 +4,6 @@ extends EffectBase
 static func get_allowed_contexts() -> Array[String]:
 	return ["hero", "base_card", "focus_card"]
 
-var _border_width: float = 0.0
 var _border_inset_pixels: float = 0.0
 var _badge_width: float = 0.0
 var _badge_height: float = 0.0
@@ -39,7 +38,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
 	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
 	_set_shader_param("inner_corner_radius_pixels", media_container.get_inner_corner_radius_pixels())
-	_set_shader_param("glass_inset_ratio", media_container.glass_inset_ratio)
 	_set_shader_param("hide_background", hide_background)
 	_set_shader_param("badge_type", badge_type)
 
@@ -58,7 +56,6 @@ func _update_shader_params() -> void:
 
 	_set_shader_param("badge_inner_radius", badge_inner_radius)
 	_set_shader_param("badge_color", badge_color)
-	_set_shader_param("border_width_ratio", _border_width)
 	_set_shader_param("border_inset_pixels", _border_inset_pixels)
 	_set_shader_param("show_safe_zone", _show_safe_zone)
 	_set_shader_param("safe_zone", Vector4(_safe_zone.x, _safe_zone.y, _safe_zone.z, _safe_zone.w))
@@ -69,10 +66,6 @@ func _update_shader_params() -> void:
 	_set_shader_param("icon_color", icon_color)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 
-func set_border_width(width: float) -> void:
-	_border_width = width
-	_update_shader_params()
-
 func set_border_inset_pixels(pixels: float) -> void:
 	_border_inset_pixels = pixels
 	_update_shader_params()
@@ -81,9 +74,6 @@ func set_badge_dimensions(dimensions: Vector2) -> void:
 	_badge_width = dimensions.x
 	_badge_height = dimensions.y
 
-	var max_dim = max(dimensions.x, dimensions.y)
-	if max_dim > 0:
-		_settings["badge_aspect"] = Vector2(dimensions.x / max_dim, dimensions.y / max_dim)
 	_update_shader_params()
 
 func set_safe_zone(safe_x: float, safe_y: float, safe_width: float, safe_height: float, show_debug: bool = false) -> void:

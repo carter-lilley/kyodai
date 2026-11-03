@@ -2,7 +2,6 @@ shader_type canvas_item;
 
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
-uniform float border_inset_ratio = 0.0;
 uniform sampler2D game_texture : source_color, filter_linear, repeat_disable;
 
 // Distortion parameters
@@ -40,10 +39,8 @@ vec2 spherical_distort(vec2 uv, float raw_distortion, vec2 size) {
 void fragment() {
 	vec2 pixel_pos = UV * card_size;
 	
-	// Calculate border inset
-	float border_inset_pixels = border_inset_ratio * card_size.x;
-	
-	float effective_border_inset = border_inset_pixels;
+	// Use the aperture assigned by the ordered geometry pass.
+	float effective_border_inset = total_inset_pixels;
 	
 	vec2 inner_size = card_size - vec2(effective_border_inset * 2.0);
 	vec2 inner_offset = vec2(effective_border_inset);
@@ -81,7 +78,6 @@ void fragment() {
 	// Apply precomputed UV transforms from MediaContainer so the distorted texture
 	// aligns with the base image's visible crop.
 	warped_uv = warped_uv * uv_transform_scale + uv_transform_offset;
-	warped_uv.y -= vertical_offset;
 	
 	// Sample the distorted texture
 	vec4 tex_color = texture(game_texture, warped_uv);

@@ -3,6 +3,7 @@ extends VBoxContainer
 
 signal config_changed(config: Dictionary)
 signal save_requested(config: Dictionary)
+signal focus_override_requested(effect_data: Dictionary)
 
 # Configuration
 var title: String = "Effects":
@@ -13,7 +14,6 @@ var title: String = "Effects":
 var context: String = "hero"  # "hero", "base_card", "focus_card", or "" to skip context filtering
 var inherit_from_base: bool = false  # For focus effects - copy defaults from base effects
 var config_key: String = "effects"  # Key in config dict ("effects" or "focus_effects")
-var hide_disabled_effects: bool = false  # If true, dropdown omits already-active effects entirely
 @export var use_internal_scroll: bool = true  # If false, no internal ScrollContainer is created (useful when parent provides scrolling)
 ## Custom effect registry (effect_id -> script path). Empty = EffectStack.EFFECT_REGISTRY.
 var effect_registry: Dictionary = {}
@@ -24,10 +24,13 @@ var display_names: Dictionary = {}
 var custom_kind: String = ""
 ## When true, per-effect rows get up/down buttons (config order = draw order).
 var allow_reorder: bool = false
+## When true, each selection appends another layer instead of toggling effect types.
+var allow_multiple: bool = false
 
 # State
 var _current_config: Dictionary = {}
 var _base_effects: Array = []  # For focus effect inheritance
+var _focus_override_target_layer_ids: Dictionary = {}
 var _effects_list: VBoxContainer
 var _add_effect_button: M3OptionButton
 var _scroll_container: ScrollContainer
@@ -51,6 +54,18 @@ func set_base_effects(base_effects: Array):
 	_base_effects = base_effects.duplicate(true)
 	if inherit_from_base:
 		_populate_option_button()  # Update to show overlap labels
+
+## Update which base layers already have a linked focus override.
+func set_focus_override_targets(target_layer_ids: Array) -> void:
+	var updated_targets: Dictionary = {}
+	for layer_id in target_layer_ids:
+		if layer_id is String and not layer_id.is_empty():
+			updated_targets[layer_id] = true
+	if updated_targets == _focus_override_target_layer_ids:
+		return
+	_focus_override_target_layer_ids = updated_targets
+	if is_instance_valid(_effects_list):
+		_rebuild_effects_ui()
 
 ## Re-runs effect discovery, e.g. after EffectRegistry.rescan() picks up
 ## newly added (or removed) custom shaders.
@@ -163,7 +178,7 @@ func _setup_ui():
 	_apply_focus_styling()
 	
 	_add_effect_button = M3OptionButton.new()
-	_add_effect_button.multi_select = true
+	_add_effect_button.multi_select = not allow_multiple
 	_add_effect_button.text = "Add Effect"
 	_add_effect_button.placeholder_text = "Add Effect"
 	_add_effect_button.fit_to_longest_item = false
@@ -196,10 +211,43 @@ func reconnect_viewport() -> void:
 
 func set_config(config: Dictionary):
 	_current_config = config.duplicate(true)
+	_ensure_layer_ids()
 	_rebuild_effects_ui()
 
 func get_config() -> Dictionary:
 	return _current_config.duplicate(true)
+
+static func generate_layer_id() -> String:
+	var bytes := Crypto.new().generate_random_bytes(16)
+	# UUID v4 layout; only stable uniqueness matters for designer layer IDs.
+	bytes[6] = (bytes[6] & 0x0F) | 0x40
+	bytes[8] = (bytes[8] & 0x3F) | 0x80
+	var hex := bytes.hex_encode()
+	return "%s-%s-%s-%s-%s" % [
+		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
+		hex.substr(16, 4), hex.substr(20, 12)]
+
+## Add missing card layer IDs and repair duplicates without changing valid IDs.
+static func ensure_card_layer_ids(config: Dictionary) -> void:
+	var used_layer_ids: Dictionary = {}
+	for key in ["effects", "focus_effects"]:
+		var effects = config.get(key, [])
+		if not effects is Array:
+			continue
+		for effect in effects:
+			if not effect is Dictionary:
+				continue
+			var layer_id = effect.get("layer_id", "")
+			if not layer_id is String or layer_id.is_empty() or used_layer_ids.has(layer_id):
+				layer_id = generate_layer_id()
+				while used_layer_ids.has(layer_id):
+					layer_id = generate_layer_id()
+				effect["layer_id"] = layer_id
+			used_layer_ids[layer_id] = true
+
+func _ensure_layer_ids() -> void:
+	if context == "base_card" or context == "focus_card":
+		ensure_card_layer_ids(_current_config)
 
 func _rebuild_effects_ui():
 	if not _effects_list:
@@ -252,7 +300,7 @@ func _populate_option_button() -> void:
 					in_base = true
 					break
 			if in_base:
-				display_name += " (overrides base)"
+				display_name += " (shared type)"
 		_add_effect_button.add_item(display_name, dropdown_id)
 	_sync_option_button()
 
@@ -260,6 +308,9 @@ func _sync_option_button() -> void:
 	if not _add_effect_button:
 		return
 	_add_effect_button.clear_selection()
+	if allow_multiple:
+		_add_effect_button.text = "Add Effect"
+		return
 	var effects = _current_config.get(config_key, [])
 	var active_ids: Array[String] = []
 	for effect in effects:
@@ -303,6 +354,18 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.header_variant = M3Button.Variant.TONAL if _is_focus_designer() else M3Button.Variant.TEXT
 	_effects_list.add_child(container)
+
+	if context == "base_card" and effect_data.get("effect_id", "") != "base":
+		var has_focus_override := _focus_override_target_layer_ids.has(effect_data.get("layer_id", ""))
+		var focus_override_btn = M3IconButton.new()
+		focus_override_btn.icon_name = "link-variant" if has_focus_override else "link-variant-plus"
+		focus_override_btn.icon_button_variant = M3IconButton.IconVariant.TONAL if has_focus_override else M3IconButton.IconVariant.STANDARD
+		focus_override_btn.icon_button_size = M3IconButton.IconSize.EXTRA_SMALL
+		focus_override_btn.tooltip_text = "Edit focus override" if has_focus_override else "Add focus override"
+		focus_override_btn.pressed.connect(func():
+			focus_override_requested.emit(effect_data.duplicate(true))
+		)
+		container.add_header_button(focus_override_btn)
 	
 	var remove_btn = M3IconButton.new()
 	remove_btn.icon_name = "close"
@@ -405,7 +468,25 @@ func _get_default_settings(effect_id: String) -> Dictionary:
 
 	return defaults
 
-func _on_effect_toggled(_index: int):
+func _on_effect_toggled(index: int):
+	if allow_multiple:
+		var effect_id = _effect_id_map.get(index, "")
+		if effect_id == "":
+			return
+		var effects = _current_config.get(config_key, [])
+		effects.append({
+			"effect_id": effect_id,
+			"settings": _get_default_settings(effect_id)
+		})
+		_current_config[config_key] = effects
+		_ensure_layer_ids()
+		_rebuild_effects_ui()
+		# M3OptionButton restores its text after this signal returns; keep the
+		# single-select control reset to its Add Effect placeholder as well.
+		call_deferred("_sync_option_button")
+		config_changed.emit(_current_config.duplicate(true))
+		return
+
 	var selected_indices = _add_effect_button.get_selected_indices()
 	var selected_ids: Dictionary = {}
 	for idx in selected_indices:
@@ -435,6 +516,7 @@ func _on_effect_toggled(_index: int):
 			added_ids[effect_id] = true
 	
 	_current_config[config_key] = new_effects
+	_ensure_layer_ids()
 	_rebuild_effects_ui()
 	config_changed.emit(_current_config.duplicate(true))
 
@@ -466,6 +548,7 @@ func _on_effect_setting_changed(effect_index: int, setting_name: String, value: 
 		config_changed.emit(_current_config.duplicate(true))
 
 func save_config():
+	_ensure_layer_ids()
 	save_requested.emit(_current_config.duplicate(true))
 
 func _on_focus_changed(control: Control) -> void:

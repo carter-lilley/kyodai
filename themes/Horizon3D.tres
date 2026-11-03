@@ -27,21 +27,38 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.38,
 "effects": [{
-"effect_id": "border",
+"layer_id": "horizon_main_stroke",
+"effect_id": "stroke",
 "settings": {
-"border_color": Color(1, 1, 1, 1),
-"border_fade_in": 0.0,
-"border_gradient": SubResource("Gradient_rgwmd"),
-"border_gradient_angle": 180.0,
-"border_size": 0.14,
-"inner_stroke_gradient": SubResource("Gradient_5arxv"),
-"inner_stroke_gradient_angle": 180.0,
-"inner_stroke_width": 0.055,
-"outer_stroke_gradient": SubResource("Gradient_hjtwh"),
-"outer_stroke_gradient_angle": 180.0,
-"outer_stroke_width": 0.013
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_rgwmd"),
+"stroke_width_ratio": 0.14,
+"gradient_angle": 180.0,
+"advance": true
 }
 }, {
+"layer_id": "horizon_outer_detail",
+"effect_id": "stroke",
+"settings": {
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_hjtwh"),
+"stroke_width_ratio": 0.013,
+"gradient_angle": 180.0,
+"depth_offset_ratio": -0.14,
+"advance": false
+}
+}, {
+"layer_id": "horizon_inner_stroke",
+"effect_id": "stroke",
+"settings": {
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_5arxv"),
+"stroke_width_ratio": 0.055,
+"gradient_angle": 180.0,
+"advance": false
+}
+}, {
+"layer_id": "horizon_shadow",
 "effect_id": "drop_shadow",
 "settings": {
 "shadow_color": Color(0, 0, 0, 0.19607843),
@@ -53,19 +70,38 @@ values = {
 }
 }],
 "focus_effects": [{
-"effect_id": "border",
+"layer_id": "horizon_focus_main_stroke",
+"effect_id": "stroke",
+"target_layer_id": "horizon_main_stroke",
 "settings": {
-"border_color": Color(1, 1, 1, 1),
-"border_fade_in": 0.0,
-"border_gradient": SubResource("Gradient_rgwmd"),
-"border_gradient_angle": 180.0,
-"border_size": 0.09,
-"inner_stroke_gradient": SubResource("Gradient_5arxv"),
-"inner_stroke_gradient_angle": 180.0,
-"inner_stroke_width": 0.01,
-"outer_stroke_gradient": SubResource("Gradient_hjtwh"),
-"outer_stroke_gradient_angle": 180.0,
-"outer_stroke_width": 0.013
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_rgwmd"),
+"stroke_width_ratio": 0.09,
+"gradient_angle": 180.0,
+"advance": true
+}
+}, {
+"layer_id": "horizon_focus_outer_detail",
+"effect_id": "stroke",
+"target_layer_id": "horizon_outer_detail",
+"settings": {
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_hjtwh"),
+"stroke_width_ratio": 0.013,
+"gradient_angle": 180.0,
+"depth_offset_ratio": -0.09,
+"advance": false
+}
+}, {
+"layer_id": "horizon_focus_inner_stroke",
+"effect_id": "stroke",
+"target_layer_id": "horizon_inner_stroke",
+"settings": {
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_5arxv"),
+"stroke_width_ratio": 0.01,
+"gradient_angle": 180.0,
+"advance": false
 }
 }],
 "hero_height": 4

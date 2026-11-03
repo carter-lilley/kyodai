@@ -18,6 +18,7 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.0,
 "effects": [{
+"layer_id": "nso_hsl",
 "effect_id": "hsl",
 "settings": {
 "hue_shift": 0.0,
@@ -26,7 +27,9 @@ values = {
 }
 }],
 "focus_effects": [{
+"layer_id": "nso_focus_hsl",
 "effect_id": "hsl",
+"target_layer_id": "nso_hsl",
 "settings": {
 "hue_shift": 0.0,
 "lightness_scale": 0.99,

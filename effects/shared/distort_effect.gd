@@ -24,14 +24,13 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
-	_set_shader_param("border_inset_ratio", media_container.border_inset_ratio)
+	_set_shader_param("total_inset_pixels", layer_inset_pixels)
 	_set_shader_param("distortion", distortion)
 	_set_shader_param("opacity", opacity)
 	_set_shader_param("uv_transform_scale", uv["uv_transform_scale"])
 	_set_shader_param("uv_transform_offset", uv["uv_transform_offset"])
 	_set_shader_param("game_texture", media_container.texture)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
-	_set_shader_param("vertical_offset", media_container.vertical_offset)
 
 func get_settings_schema() -> Array[SettingsVar]:
 	var schema: Array[SettingsVar] = []

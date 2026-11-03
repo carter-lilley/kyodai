@@ -21,8 +21,46 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.32,
 "effects": [{
+"layer_id": "cafe_shadow",
+"effect_id": "drop_shadow",
+"settings": {
+"shadow_color": Color(0, 0, 0, 0.23529412),
+"shadow_expand": 0.012,
+"shadow_offset_x": -0.001,
+"shadow_offset_y": 0.05499999999999999,
+"shadow_softness": 0.15,
+"shadow_spread": 0.08
+}
+}, {
+"layer_id": "cafe_stroke",
+"effect_id": "stroke",
+"settings": {
+"stroke_color": Color(1, 1, 1, 1),
+"stroke_gradient": SubResource("Gradient_3yjc8"),
+"stroke_width_ratio": 0.02,
+"gradient_angle": 90.0,
+"advance": true
+}
+}, {
+"layer_id": "cafe_distort",
 "dark_settings": {
-"additional_inset_ratio": 0.05,
+"distortion": 0.87,
+"opacity": 0.05
+},
+"effect_id": "distort",
+"settings": {
+"distortion": 0.87,
+"opacity": 0.03
+}
+}, {
+"layer_id": "cafe_glass_inset",
+"effect_id": "inset",
+"settings": {
+"inset_ratio": 0.05
+}
+}, {
+"layer_id": "cafe_glass",
+"dark_settings": {
 "bounce_intensity": 0.44,
 "bounce_softness": 7.4,
 "distortion": 0.5,
@@ -42,7 +80,6 @@ values = {
 },
 "effect_id": "glass",
 "settings": {
-"additional_inset_ratio": 0.05,
 "bounce_intensity": 0.2,
 "bounce_softness": 7.4,
 "distortion": 0.5,
@@ -59,35 +96,6 @@ values = {
 "swoop_height": 0.29,
 "swoop_intensity": 0.31,
 "swoop_tilt": 0.01
-}
-}, {
-"dark_settings": {
-"distortion": 0.87,
-"opacity": 0.05
-},
-"effect_id": "distort",
-"settings": {
-"distortion": 0.87,
-"opacity": 0.03
-}
-}, {
-"effect_id": "border",
-"settings": {
-"border_color": Color(1, 1, 1, 1),
-"border_fade_in": 0.0,
-"border_gradient": SubResource("Gradient_3yjc8"),
-"border_size": 0.02,
-"border_gradient_angle": 90.0
-}
-}, {
-"effect_id": "drop_shadow",
-"settings": {
-"shadow_color": Color(0, 0, 0, 0.23529412),
-"shadow_expand": 0.012,
-"shadow_offset_x": -0.001,
-"shadow_offset_y": 0.05499999999999999,
-"shadow_softness": 0.15,
-"shadow_spread": 0.08
 }
 }],
 "focus_effects": [],

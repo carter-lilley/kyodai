@@ -51,7 +51,6 @@ func _load_effect_config():
 	_media_container.effect_settings = config.get("effects", [])
 	_effect_stack.initialize(_media_container, _media_container.effect_settings, "hero")
 	_effect_stack.set_loading(_is_loading)
-	_effect_stack.update_draw_rects()
 
 func _notification(what: int) -> void:
 	# Update size when resized
@@ -59,7 +58,7 @@ func _notification(what: int) -> void:
 		if _media_container and size.x > 0 and size.y > 0:
 			_media_container.bounds = Rect2(Vector2.ZERO, size)
 			if _effect_stack:
-				_effect_stack.update_draw_rects()
+				_effect_stack.force_refresh()
 	elif what == NOTIFICATION_PARENTED:
 		# When the hero is reparented (e.g., desktop dual screen moves it into a
 		# secondary Window), the EffectStack must be reattached to the new CanvasItem.
@@ -69,13 +68,13 @@ func _notification(what: int) -> void:
 			_setup_effect_stack()
 			if _media_container and size.x > 0 and size.y > 0:
 				_media_container.bounds = Rect2(Vector2.ZERO, size)
-				_effect_stack.update_draw_rects()
+				_effect_stack.force_refresh()
 			if _current_texture:
 				_effect_stack.set_game_texture(_current_texture)
 			_effect_stack.set_loading(_is_loading)
 		elif _effect_stack:
 			_effect_stack.set_parent_rid(get_canvas_item())
-			_effect_stack.update_draw_rects()
+			_effect_stack.force_refresh()
 
 func _exit_tree() -> void:
 	if _effect_stack:

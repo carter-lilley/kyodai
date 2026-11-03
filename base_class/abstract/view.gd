@@ -125,50 +125,13 @@ func _update_grid_orientation() -> void:
 	if not state:
 		print("[View._update_grid_orientation] no card_settings_state for ", view_name)
 		return
-
-	var layout_mode_val = state.layout_mode
-
-	var new_mode: VirtualScrollGridContainer.ViewMode
-	match layout_mode_val:
-		0:
-			new_mode = VirtualScrollGridContainer.ViewMode.GRID
-		1:
-			new_mode = VirtualScrollGridContainer.ViewMode.LIST
-		2:
-			new_mode = VirtualScrollGridContainer.ViewMode.CAROUSEL
-		_:
-			new_mode = VirtualScrollGridContainer.ViewMode.GRID
-
-	var new_grid_vertical = state.grid_vertical
-	var new_focus_scale = 1.0 + state.focus_scale_ratio
-
-	# Apply the saved zoom level (grid) or ratio (list/carousel) before any cards
-	# are created so the first visible layout uses the user's setting instead of
-	# the default 0.15.
-	if games_grid:
-		print("[View._update_grid_orientation] view_name=", view_name, " level=", state.card_zoom_level, " ratio=", state.card_zoom_ratio, " grid_target_before=", games_grid.target_card_width_ratio)
-		if new_mode == VirtualScrollGridContainer.ViewMode.GRID:
-			var level: int = state.card_zoom_level
-			if level < 0:
-				# Derive level from the legacy saved ratio for migration. If the
-				# grid has no valid size yet, leave the level unset — the settle
-				# paths derive N from the ratio once the size is final.
-				var derived: int = games_grid.get_zoom_level(state.card_zoom_ratio)
-				if derived >= 0:
-					level = derived
-					state.card_zoom_level = level
-			if level >= 0:
-				games_grid.set_zoom_level(level)
-				state.card_zoom_ratio = games_grid.target_card_width_ratio
-		else:
-			# LIST/CAROUSEL: use the per-mode saved ratio.
-			if not is_equal_approx(games_grid.target_card_width_ratio, state.card_zoom_list_ratio):
-				games_grid.target_card_width_ratio = state.card_zoom_list_ratio
-	else:
+	if not games_grid:
 		print("[View._update_grid_orientation] no games_grid for ", view_name)
+		return
 
-	# Batch-apply to avoid redundant rebuilds from individual setters
-	games_grid.set_grid_orientation(new_mode, new_grid_vertical, new_focus_scale)
+	# The grid exclusively owns structure -> padding -> zoom -> focus-scale.
+	# Views only request the transaction; they never write zoom independently.
+	games_grid._batch_apply_layout_state()
 
 func _on_focus_changed(control: Control):
 	# Traverse up the tree to find if focused control is inside a GameCard

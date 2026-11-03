@@ -28,18 +28,14 @@ var corner_radius_ratio: float = 0.12:
 		if not is_equal_approx(corner_radius_ratio, value):
 			corner_radius_ratio = value
 			_shape_cache_valid = false
-var border_inset_ratio: float = 0.0:
+## Final content aperture computed by EffectStack's ordered geometry pass.
+var content_inset_pixels: float = 0.0:
 	set(value):
-		if not is_equal_approx(border_inset_ratio, value):
-			border_inset_ratio = value
+		var clamped := maxf(0.0, value)
+		if not is_equal_approx(content_inset_pixels, clamped):
+			content_inset_pixels = clamped
 			_shape_cache_valid = false
-			changed.emit()
-var glass_inset_ratio: float = 0.0:
-	set(value):
-		if not is_equal_approx(glass_inset_ratio, value):
-			glass_inset_ratio = value
-			_shape_cache_valid = false
-			changed.emit()
+			_uv_cache_valid = false
 var wrap_inset_top_ratio: float = 0.0:
 	set(value):
 		if not is_equal_approx(wrap_inset_top_ratio, value):
@@ -75,12 +71,6 @@ var focus_effect_settings: Array = []
 
 signal changed
 
-func run_pipeline(layers: Array) -> void:
-	"""Execute compute_pipeline() on all registered layers in order."""
-	for layer in layers:
-		if layer is EffectBase and layer.enabled:
-			layer.compute_pipeline()
-
 # --- Convenience accessors ---
 var size: Vector2:
 	get: return bounds.size
@@ -100,7 +90,7 @@ func _recompute_shape_cache() -> void:
 	var w = bounds.size.x
 	var h = bounds.size.y
 	_corner_radius_px = round(corner_radius_ratio * min(w, h) / 2.0)
-	_total_inset_px = (border_inset_ratio + glass_inset_ratio) * w
+	_total_inset_px = content_inset_pixels
 	_inner_corner_radius_px = max(0.0, _corner_radius_px - _total_inset_px)
 	_wrap_inset_top_px = wrap_inset_top_ratio * h
 	_wrap_inset_left_px = wrap_inset_left_ratio * w
@@ -150,25 +140,20 @@ func _recompute_uv_cache() -> void:
 		# Same: leave the cache invalid so a later valid state recomputes.
 		return
 
-	# Case wrap insets shrink the media panel asymmetrically; crop against the
-	# inner panel so the art center-crops into the remaining space.
-	var panel_size = card_size
-	var wrap_left = get_wrap_inset_left_pixels()
-	var wrap_top = get_wrap_inset_top_pixels()
-	if wrap_left > 0.0 or wrap_top > 0.0:
-		panel_size = card_size - Vector2(get_total_inset_pixels() * 2.0 + wrap_left, get_total_inset_pixels() * 2.0 + wrap_top)
-		if panel_size.x <= 0 or panel_size.y <= 0:
-			return
+	# Always crop against the final content aperture. Symmetric depth applies
+	# on every side; directional wrap claims reduce only their own axes.
+	var total_inset := get_total_inset_pixels()
+	var panel_size: Vector2 = card_size - Vector2(
+		total_inset * 2.0 + get_wrap_inset_left_pixels(),
+		total_inset * 2.0 + get_wrap_inset_top_pixels()
+	)
+	if panel_size.x <= 0 or panel_size.y <= 0:
+		return
 
-	var card_aspect = panel_size.x / panel_size.y
-	var tex_aspect = tex_size.x / tex_size.y
-
-	# Plain center crop: scale so the texture covers the panel, center it.
-	if card_aspect > tex_aspect:
-		_uv_scale.y = tex_aspect / card_aspect
-	else:
-		_uv_scale.x = card_aspect / tex_aspect
-	_uv_offset = (Vector2.ONE - _uv_scale) * 0.5
+	var uv := compute_cover_uv(panel_size, tex_size)
+	_uv_scale = uv.scale
+	_uv_offset = uv.offset
+	_uv_offset.y -= vertical_offset
 
 	_uv_cache_valid = true
 
@@ -187,3 +172,19 @@ func get_uv_transforms() -> Dictionary:
 		"uv_transform_scale": get_uv_scale(),
 		"uv_transform_offset": get_uv_offset(),
 	}
+
+## Shared center-cover calculation for both EffectStack media and the simple
+## M3Card fast path. Input is always the actual visible content aperture.
+static func compute_cover_uv(target_size: Vector2, tex_size: Vector2) -> Dictionary:
+	var scale := Vector2.ONE
+	var offset := Vector2.ZERO
+	if target_size.x <= 0.0 or target_size.y <= 0.0 or tex_size.x <= 0.0 or tex_size.y <= 0.0:
+		return {"scale": scale, "offset": offset}
+	var card_aspect := target_size.x / target_size.y
+	var tex_aspect := tex_size.x / tex_size.y
+	if card_aspect > tex_aspect:
+		scale.y = tex_aspect / card_aspect
+	else:
+		scale.x = card_aspect / tex_aspect
+	offset = (Vector2.ONE - scale) * 0.5
+	return {"scale": scale, "offset": offset}

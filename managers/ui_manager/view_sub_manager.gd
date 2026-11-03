@@ -23,7 +23,6 @@ func _ready():
 enum RefreshType { STRUCTURE = 1, EFFECTS = 2 }
 
 var _pending_refresh_mask: int = 0
-var _pending_effects_full_rebuild: bool = false
 var _skip_next_dialog_dismiss_flush: bool = false
 var _effects_refresh_was_deferred: bool = false
 
@@ -443,26 +442,23 @@ func update_structure() -> void:
 		return
 	_apply_structure_refresh()
 
-func refresh_effects(force_full_rebuild: bool = false) -> void:
-	"""Refresh card effects on both views. If only parameters changed, pass false
-	to avoid rebuilding the effect node tree. Deferred while settings dialog is open."""
+func refresh_effects() -> void:
+	"""Refresh card effects on both views. Deferred while settings dialog is open."""
 	if ui_manager.overlay.is_settings_dialog_open():
 		_pending_refresh_mask |= RefreshType.EFFECTS
 		_effects_refresh_was_deferred = true
-		if force_full_rebuild:
-			_pending_effects_full_rebuild = true
 		return
-	_apply_effects_refresh(force_full_rebuild)
+	_apply_effects_refresh()
 
 func _apply_structure_refresh() -> void:
 	for view_name in _views.keys():
 		_views[view_name]._update_grid_orientation()
 
-func _apply_effects_refresh(force_full_rebuild: bool = false) -> void:
+func _apply_effects_refresh() -> void:
 	for view_name in _views.keys():
 		var view = _views[view_name]
 		if view.games_grid:
-			view.games_grid.refresh_all_card_effects(force_full_rebuild)
+			view.games_grid.refresh_all_card_effects()
 
 func _on_settings_dialog_dismissed() -> void:
 	if _skip_next_dialog_dismiss_flush:
@@ -492,16 +488,15 @@ func flush_pending_rebuilds_if_no_dialog() -> void:
 	# deferred while the dialog was open. Otherwise opening/closing settings
 	# with no changes rebuilds every card for no reason.
 	if _effects_refresh_was_deferred and current_view and current_view.games_grid:
-		current_view.games_grid.refresh_all_card_effects(true)
+		current_view.games_grid.refresh_all_card_effects()
 	_effects_refresh_was_deferred = false
 
 func _apply_pending_refresh() -> void:
 	if _pending_refresh_mask & RefreshType.STRUCTURE:
 		_apply_structure_refresh()
 	if _pending_refresh_mask & RefreshType.EFFECTS:
-		_apply_effects_refresh(_pending_effects_full_rebuild)
+		_apply_effects_refresh()
 	_pending_refresh_mask = 0
-	_pending_effects_full_rebuild = false
 	_effects_refresh_was_deferred = false
 
 func _rebuild_views(reason: String, use_true: bool = false) -> void:

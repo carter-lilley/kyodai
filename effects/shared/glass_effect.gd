@@ -39,7 +39,6 @@ func _update_shader_params() -> void:
 	var bounce_softness = _settings.get("bounce_softness", 3.0)
 	var rim_intensity = _settings.get("rim_intensity", 1.0)
 	var rim_sharpness = _settings.get("rim_sharpness", 5.0)
-	var additional_inset = _settings.get("additional_inset_ratio", 0.0)
 	var swoop_intensity = _settings.get("swoop_intensity", 0.3)
 	var swoop_height = _settings.get("swoop_height", 0.25)
 	var swoop_curve = _settings.get("swoop_curve", 0.5)
@@ -51,7 +50,7 @@ func _update_shader_params() -> void:
 	_set_shader_param("card_size", media_container.size)
 	_set_shader_param("corner_radius_ratio", media_container.corner_radius_ratio)
 	_set_shader_param("corner_radius_pixels", media_container.get_corner_radius_pixels())
-	_set_shader_param("border_inset_ratio", media_container.border_inset_ratio)
+	_set_shader_param("total_inset_pixels", media_container.get_total_inset_pixels())
 	_set_shader_param("glass_color", glass_color)
 	_set_shader_param("display_mode", 1 if media_container.edge_aa_enabled else 0)
 	_set_shader_param("specular_power", specular_power)
@@ -62,14 +61,12 @@ func _update_shader_params() -> void:
 	_set_shader_param("bounce_softness", bounce_softness)
 	_set_shader_param("rim_intensity", rim_intensity)
 	_set_shader_param("rim_sharpness", rim_sharpness)
-	_set_shader_param("additional_inset_ratio", additional_inset)
 
 	if _swoop_renderer and _swoop_renderer._material:
 		var swoop_mat = _swoop_renderer._material as ShaderMaterial
 		swoop_mat.set_shader_parameter("card_size", media_container.size)
 		swoop_mat.set_shader_parameter("corner_radius_ratio", media_container.corner_radius_ratio)
 		swoop_mat.set_shader_parameter("corner_radius_pixels", media_container.get_corner_radius_pixels())
-		swoop_mat.set_shader_parameter("border_inset_ratio", media_container.border_inset_ratio)
 		swoop_mat.set_shader_parameter("glass_color", glass_color)
 		swoop_mat.set_shader_parameter("swoop_color", swoop_color)
 		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)
@@ -77,6 +74,11 @@ func _update_shader_params() -> void:
 		swoop_mat.set_shader_parameter("swoop_curve", swoop_curve)
 		swoop_mat.set_shader_parameter("swoop_tilt", swoop_tilt)
 		swoop_mat.set_shader_parameter("display_mode", 1 if media_container.edge_aa_enabled else 0)
+
+func set_effect_alpha(value: float) -> void:
+	super.set_effect_alpha(value)
+	if _swoop_renderer and _swoop_renderer._material:
+		_swoop_renderer._material.set_shader_parameter("effect_alpha", value)
 
 func set_parent_rid(parent_rid: RID) -> void:
 	super.set_parent_rid(parent_rid)
@@ -118,10 +120,6 @@ func get_settings_schema() -> Array[SettingsVar]:
 	var color_var = SettingsVar.new(Type.COLOR, Color(0.2, 0.4, 1.0, 0.3), State.ENABLED, "Glass Color")
 	color_var.property_name = "glass_color"
 	schema.append(color_var)
-
-	var additional_inset_var = SettingsVar.new(Type.FLOAT, 0.0, State.ENABLED, "Additional Inset", "Push underlying image inward", 0.0, 0.5, 0.01)
-	additional_inset_var.property_name = "additional_inset_ratio"
-	schema.append(additional_inset_var)
 
 	var swoop_color_var = SettingsVar.new(Type.COLOR, Color(0.06, 0.12, 0.3, 1.0), State.ENABLED, "Swoop Color", "Color of the curved swoop band")
 	swoop_color_var.property_name = "swoop_color"

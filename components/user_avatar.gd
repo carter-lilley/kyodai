@@ -88,12 +88,15 @@ func _ready() -> void:
 	_stack = EffectStack.new()
 	_stack.set_parent_rid(get_canvas_item())
 	_stack.set_clip_children(false)
-	_stack.initialize(_media_container, [], "base_card")
+	_stack.initialize(_media_container, [{
+		"layer_id": "avatar_ring_inset",
+		"effect_id": "inset",
+		"settings": {"inset_ratio": BORDER_RATIO},
+	}], "base_card")
 	# The stack renders via raw RenderingServer canvas items; without an
 	# explicit draw index the backing disc node can draw on top of it.
 	_stack.set_draw_index(1)
 	# Inset the media by the ring width so the backing disc shows as the ring.
-	_media_container.border_inset_ratio = BORDER_RATIO
 	_stack.force_refresh()
 	# Hidden until an avatar image arrives; the fallback icon shows instead.
 	_stack.set_visible(false)
@@ -111,7 +114,7 @@ func _on_resized() -> void:
 	if _media_container:
 		_media_container.bounds = Rect2(Vector2.ZERO, size)
 	if _stack:
-		_stack.update_draw_rects()
+		_stack.force_refresh()
 		_reapply_texture_filter()
 
 func set_avatar_image(image: Image) -> void:
@@ -129,6 +132,11 @@ func clear_avatar() -> void:
 	if _stack:
 		_stack.set_visible(false)
 	_fallback_icon.visible = true
+
+func _exit_tree() -> void:
+	if _stack:
+		_stack.free_rids()
+		_stack = null
 
 var _pixel_art: bool = false
 

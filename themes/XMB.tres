@@ -18,6 +18,7 @@ values = {
 "card_orientation": 2,
 "card_rounding": 0.0,
 "effects": [{
+"layer_id": "xmb_shadow",
 "effect_id": "drop_shadow",
 "settings": {
 "shadow_color": Color(0, 0, 0, 0.25490198),
@@ -29,7 +30,9 @@ values = {
 }
 }],
 "focus_effects": [{
+"layer_id": "xmb_focus_shadow",
 "effect_id": "drop_shadow",
+"target_layer_id": "xmb_shadow",
 "settings": {
 "shadow_color": Color(0, 0, 0, 0.11764706),
 "shadow_expand": 0.014,

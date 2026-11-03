@@ -320,17 +320,10 @@ func on_view_hide() -> void:
 func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
 	_update_grid_orientation()
 	
-	# Apply zoom from centralized card settings state (per-mode).
-	if UIManager and UIManager.card_settings_state and games_grid:
-		if games_grid.view_mode == VirtualScrollGridContainer.ViewMode.GRID:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_ratio
-		else:
-			games_grid.target_card_width_ratio = UIManager.card_settings_state.card_zoom_list_ratio
-	
 	if refresh_effects:
 		if preserve_data:
 			_refresh_grid_dimensions()
-			games_grid.refresh_all_card_effects(true)
+			games_grid.refresh_all_card_effects()
 		else:
 			_load_total_count(false)
 	else:
