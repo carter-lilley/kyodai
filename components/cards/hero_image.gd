@@ -139,32 +139,9 @@ func set_game(game: GameResource):
 			_effect_stack.set_loading(true)
 
 	var load_callable = func() -> Image:
-		var buffer = FSM.read_file_bytes(cache_path)
-		if buffer.is_empty():
-			return null
-
-		var img = Image.new()
-		var err = FAILED
-		if buffer.size() >= 2:
-			if buffer[0] == 0xFF and buffer[1] == 0xD8:
-				err = img.load_jpg_from_buffer(buffer)
-			elif buffer[0] == 0x89 and buffer[1] == 0x50:
-				err = img.load_png_from_buffer(buffer)
-			else:
-				err = img.load_webp_from_buffer(buffer)
-
-		if err == OK:
-			if img.is_empty():
-				return null
-			# Downscale large images to save GPU memory
-			var max_dim = max(img.get_width(), img.get_height())
-			if max_dim > MAX_HERO_TEXTURE_SIZE:
-				var tex_scale = float(MAX_HERO_TEXTURE_SIZE) / max_dim
-				var new_width = max(1, int(img.get_width() * tex_scale))
-				var new_height = max(1, int(img.get_height() * tex_scale))
-				img.resize(new_width, new_height, Image.INTERPOLATE_LANCZOS)
-			return MemorySubManager.prepare_image_for_texture(img)
-		return null
+		return MemorySubManager.prepare_image_for_texture(
+			CardMediaLoader._load_image_from_buffer(FSM.read_file_bytes(cache_path), MAX_HERO_TEXTURE_SIZE)
+		)
 
 	var callback_callable = func(image: Image):
 		_current_image_task_id = -1

@@ -35,9 +35,6 @@ var _sidebar_built_compact: bool = false
 # _reconnect_focus_follow and keep a manual ensure_control_visible fallback.
 var _focus_follow_viewport: Viewport = null
 
-const DEBUG_LAYOUT: bool = false
-const DEBUG_FOCUS_GUARD: bool = false
-
 # Snapshot of all SettingsVar values at dialog open, used to revert on Cancel.
 var _snapshot: Dictionary = {}
 var _cancelled: bool = false
@@ -60,7 +57,6 @@ func _init():
 
 func _ready():
 	super._ready()
-	var phase_start_us := Time.get_ticks_usec()
 	# Fullscreen variant has an outer scroll; BASIC does not. Each category page
 	# already scrolls independently, so only touch fullscreen-specific nodes.
 	if dialog_variant == Variant.FULL_SCREEN:
@@ -70,10 +66,7 @@ func _ready():
 		if _bottom_actions:
 			_bottom_actions.visible = false
 	_build_two_pane_layout()
-	print("[SettingsDialog] two-pane layout elapsed_us=", Time.get_ticks_usec() - phase_start_us)
-	phase_start_us = Time.get_ticks_usec()
 	await _build_categories()
-	print("[SettingsDialog] _build_categories (first burst) elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 
 	# Hide default body label; keep the title label as the popup title.
 	if _body_label:
@@ -202,14 +195,12 @@ func _build_categories() -> void:
 				settings_vars = settings_vars.filter(func(sv): return sv.display_name not in ["Windowed", "Windowed Resolution:"])
 		_add_category_button(id, subgroup_name, icon)
 
-		var build_start_us := Time.get_ticks_usec()
 		if subgroup_name == "Library Appearance":
 			# Library Appearance has complex custom UI — build it directly.
 			_category_contents[id] = preload("res://view/library_appearance_settings_view.gd").new()
 		else:
 			# Regular subgroup: SettingsMenu in a scrollable wrapper
 			_category_contents[id] = _create_settings_menu_content(subgroup_name, settings_vars, icon)
-		print("[SettingsDialog] category '", id, "' build elapsed_us=", Time.get_ticks_usec() - build_start_us)
 
 		# The dialog is pre-created at startup; spread category builds over
 		# frames so the whole dialog doesn't land in one synchronous burst.
@@ -217,32 +208,26 @@ func _build_categories() -> void:
 		await _await_build_budget()
 
 	# RomM — platform settings scene
-	var cat_start_us := Time.get_ticks_usec()
 	_add_category_button("romm", "RomM", "cloud-sync")
 	var platforms_view = preload("res://view/platforms_settings_view.tscn").instantiate()
 	platforms_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["romm"] = platforms_view
-	print("[SettingsDialog] category 'romm' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
 	await _await_build_budget()
 
 	# Card Designer
-	cat_start_us = Time.get_ticks_usec()
 	_add_category_button("card_designer", "Card Designer", "cards-outline")
 	var card_designer = preload("res://view/card_designer_view.tscn").instantiate()
 	card_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["card_designer"] = card_designer
-	print("[SettingsDialog] category 'card_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
 	await _await_build_budget()
 
 	# Background Designer
-	cat_start_us = Time.get_ticks_usec()
 	_add_category_button("background_designer", "Background Designer", "image-outline")
 	var background_designer = BackgroundDesignerView.new()
 	background_designer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_category_contents["background_designer"] = background_designer
-	print("[SettingsDialog] category 'background_designer' build elapsed_us=", Time.get_ticks_usec() - cat_start_us)
 	await get_tree().process_frame
 	await _await_build_budget()
 
@@ -389,40 +374,6 @@ func select_category(id: String) -> void:
 		_right_scroll.scroll_vertical = 0
 		if _right_content.has_method("on_view_show"):
 			_right_content.on_view_show()
-		if DEBUG_LAYOUT:
-			_dump_layout_metrics.call_deferred(id)
-
-func _dump_layout_metrics(id: String) -> void:
-	await get_tree().create_timer(0.5).timeout
-	var viewport_size := Vector2.ZERO
-	if get_viewport():
-		viewport_size = get_viewport().get_visible_rect().size
-	var window_size := Vector2i.ZERO
-	if get_window():
-		window_size = get_window().size
-	print("[SettingsDialog] layout dump for category '%s': viewport=%s window=%s dp_scale=%.2f" % [id, viewport_size, window_size, M3Units.dp(1.0)])
-	var hbox_node: Control = null
-	if content_slot and content_slot.get_child_count() > 0:
-		hbox_node = content_slot.get_child(0) as Control
-	var layers: Array = [
-		["dialog_container", _dialog_container],
-		["content_slot", content_slot],
-		["hbox", hbox_node],
-		["right_pane", _right_pane],
-		["right_scroll", _right_scroll],
-		["right_content", _right_content],
-	]
-	for layer_info in layers:
-		var c: Control = layer_info[1]
-		if not is_instance_valid(c):
-			print("  %s: <invalid>" % layer_info[0])
-			continue
-		print("  %s: size.y=%.1f min_size.y=%.1f" % [layer_info[0], c.size.y, c.get_combined_minimum_size().y])
-	if is_instance_valid(_right_content) and _right_content.get_child_count() > 0:
-		var inner = _right_content.get_child(0)
-		if inner is Control:
-			print("  right_content[0]: size.y=%.1f min_size.y=%.1f" % [inner.size.y, inner.get_combined_minimum_size().y])
-
 func get_current_category() -> String:
 	return _current_category
 
@@ -555,12 +506,6 @@ func _input(event: InputEvent) -> void:
 	# long settings page.
 	var active_scroll := _get_active_scroll_container()
 	var is_dir := visible and active_scroll and _right_content and (event.is_action_pressed("ui_down") or event.is_action_pressed("ui_up"))
-	if DEBUG_FOCUS_GUARD and is_dir:
-		var focused := get_viewport().gui_get_focus_owner()
-		print("[SettingsDialogFocus] RAW ", "down" if event.is_action_pressed("ui_down") else "up",
-			" focused=", str(focused.name) if focused else "<null>",
-			" inside_content=", focused != null and _right_content.is_ancestor_of(focused),
-			" handled_already=", get_viewport().is_input_handled())
 	if is_dir:
 		var focused := get_viewport().gui_get_focus_owner()
 		if focused and _right_content.is_ancestor_of(focused):
@@ -579,22 +524,6 @@ func _handle_settings_focus_direction(focused: Control, dir: int, active_scroll:
 	var boundary_idx := focusables.size() - 1 if dir == 1 else 0
 	var at_boundary := idx >= 0 and idx == boundary_idx
 
-	if DEBUG_FOCUS_GUARD:
-		var v_scroll_bar := active_scroll.get_v_scroll_bar()
-		var max_scroll := int(v_scroll_bar.max_value - v_scroll_bar.page) if v_scroll_bar else 0
-		print("[SettingsDialogFocus] dir=%d focused=%s candidate=%s inside_scroll=%s idx=%d boundary=%d at_boundary=%s scroll=%d/%d page=%d" % [
-			dir,
-			str(focused.name) if focused else "<null>",
-			str(candidate.name) if candidate else "<null>",
-			candidate != null and active_scroll.is_ancestor_of(candidate),
-			idx,
-			boundary_idx,
-			at_boundary,
-			active_scroll.scroll_vertical,
-			max_scroll,
-			int(v_scroll_bar.page) if v_scroll_bar else 0
-		])
-
 	if candidate and active_scroll.is_ancestor_of(candidate) and not candidate is ScrollBar:
 		# Godot's next target is still inside the scrollable content: let it go.
 		return false
@@ -608,20 +537,14 @@ func _handle_settings_focus_direction(focused: Control, dir: int, active_scroll:
 		# otherwise keep focus and scroll so non-focusable content below/above
 		# can still be viewed.
 		if dir == 1 and not _is_scroll_at_bottom(active_scroll):
-			if DEBUG_FOCUS_GUARD:
-				print("[SettingsDialogFocus] at last setting but not scrolled to bottom; scrolling instead")
 			_scroll_content_by(active_scroll, int(M3Units.dp(120)))
 			return true
 		if dir == -1 and not _is_scroll_at_top(active_scroll):
-			if DEBUG_FOCUS_GUARD:
-				print("[SettingsDialogFocus] at first setting but not scrolled to top; scrolling instead")
 			_scroll_content_by(active_scroll, -int(M3Units.dp(120)))
 			return true
 		# Reached the end of the page while scrolled to the edge: unlock the
 		# bottom action row and move focus to the first action.
 		if dir == 1 and not _actions.is_empty():
-			if DEBUG_FOCUS_GUARD:
-				print("[SettingsDialogFocus] at bottom; moving focus to bottom actions")
 			for btn in _actions:
 				btn.focus_mode = Control.FOCUS_ALL
 			var first_action: Control = _actions[0]

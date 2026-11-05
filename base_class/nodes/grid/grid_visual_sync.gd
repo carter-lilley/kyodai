@@ -10,13 +10,6 @@ extends Node
 ## Connects/disconnects its own RenderingServer.frame_pre_draw connection
 ## (children _exit_tree before the parent, so teardown is safe).
 
-## TEMP DIAGNOSTIC (remove after flicker hunt): env-gated per-frame dump of the
-## window bookkeeping that feeds both the content layout and the visual stamps.
-## Enabled with KYODAI_FRAME_PROBE=1. One row per drawn frame so a one-frame
-## spike in any shared input (window first index, margins, stride, flow width)
-## shows up as a single anomalous row.
-var _frame_probe_enabled: bool = OS.get_environment("KYODAI_FRAME_PROBE") == "1"
-
 var _grid: VirtualScrollGridContainer = null
 
 ## Top-level layer the cards' RS items render into (draws outside the grid's
@@ -125,8 +118,6 @@ func on_scroll_completed() -> void:
 		card.sync_visual_transform_with_offset(compute_offset(card, context))
 
 func _on_frame_pre_draw() -> void:
-	if _frame_probe_enabled and _grid:
-		_grid._frame_probe_log()
 	# Stamp visual offsets at the last moment before render, from pure
 	# container arithmetic. At pre-draw time the scroll value, margin cache and
 	# window membership are all final for the frame, so the stamps are

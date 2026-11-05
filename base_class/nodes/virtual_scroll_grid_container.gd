@@ -2548,10 +2548,6 @@ func _configure_card_size_flags(card: Control) -> void:
 	if _card_has_end_bulk_layout:
 		card.end_bulk_layout()
 
-func _frame_probe_log() -> void:
-	if _debug_overlay:
-		_debug_overlay.frame_probe_log()
-
 func _on_center_sorted() -> void:
 	_layout_generation += 1
 	_visual_sync.on_content_sorted()

@@ -1882,30 +1882,7 @@ func _set_cover_texture(texture: Texture2D) -> void:
 	cover_texture.texture = texture
 
 static func _decode_cover_downscaled(path: String) -> Image:
-	# Decode by content, not extension: RomM serves covers whose bytes don't
-	# always match the URL extension (e.g. JPEG/WebP in a .png-named file),
-	# and Image.load() picks its decoder by file extension.
-	var bytes := FSM.read_file_bytes(path)
-	if bytes.size() < 16:
-		return null
-	var img := Image.new()
-	var err := FAILED
-	match FSM.detect_image_format(bytes):
-		FSM.ImageFormat.JPEG:
-			err = img.load_jpg_from_buffer(bytes)
-		FSM.ImageFormat.PNG:
-			err = img.load_png_from_buffer(bytes)
-		FSM.ImageFormat.WEBP:
-			err = img.load_webp_from_buffer(bytes)
-		_:
-			return null
-	if err != OK or img.is_empty():
-		return null
-	var max_dim: int = max(img.get_width(), img.get_height())
-	if max_dim > MAX_DETAILS_TEXTURE_SIZE:
-		var tex_scale := float(MAX_DETAILS_TEXTURE_SIZE) / max_dim
-		img.resize(maxi(1, int(img.get_width() * tex_scale)), maxi(1, int(img.get_height() * tex_scale)), Image.INTERPOLATE_LANCZOS)
-	return img
+	return CardMediaLoader._load_image_from_buffer(FSM.read_file_bytes(path), MAX_DETAILS_TEXTURE_SIZE)
 
 func _format_file_size(bytes: int) -> String:
 	if bytes < 1024:

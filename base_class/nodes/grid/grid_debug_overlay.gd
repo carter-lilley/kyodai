@@ -182,47 +182,6 @@ func update_flow_panel_position():
 	_debug_flow_panel.position = flow_pos - parent_pos
 	_debug_flow_panel.size = _grid._flow_container.size
 
-func frame_probe_log() -> void:
-	if not _grid._scroll_container:
-		return
-	var first_idx := -1
-	var last_idx := -1
-	if _grid._active_cards.size() > 0:
-		if is_instance_valid(_grid._active_cards[0]):
-			first_idx = _grid._active_cards[0].get_meta("virtual_index", -1)
-		if is_instance_valid(_grid._active_cards[_grid._active_cards.size() - 1]):
-			last_idx = _grid._active_cards[_grid._active_cards.size() - 1].get_meta("virtual_index", -1)
-	var ref_pos := Vector2.INF
-	var ref_glob := Vector2.INF
-	var ref_min := Vector2.INF
-	var ref_card: Control = _grid._active_cards_by_index.get(first_idx + 2, null) if first_idx >= 0 else null
-	if ref_card and is_instance_valid(ref_card):
-		ref_pos = ref_card.position
-		ref_glob = ref_card.global_position
-		ref_min = ref_card.custom_minimum_size
-	print("[FrameProbe] f=", Engine.get_process_frames(),
-		" sf=", snappedf(_grid._scroll_container.get_scroll_float(), 0.01),
-		" si=", _grid._scroll_container.scroll_vertical if _grid.vertical else _grid._scroll_container.scroll_horizontal,
-		" buf=", _grid._buffer_target_start, "-", _grid._buffer_target_end,
-		" act=", first_idx, "-", last_idx, " n=", _grid._active_cards.size(),
-		" vis=", _grid._visible_start_idx, "-", _grid._visible_end_idx,
-		" ml=", _grid._last_margin_left, " mr=", _grid._last_margin_right,
-		" mt=", _grid._last_margin_top, " mb=", _grid._last_margin_bottom,
-		" fw=", snappedf(_grid._last_flow_width, 0.01), " fh=", snappedf(_grid._last_flow_height, 0.01),
-		" stride=", snappedf(_grid._get_normal_stride(), 0.01),
-		" bl=", _grid._current_buffer_lines,
-		" tot=", _grid._total_items, " src=", _grid._source_total_items,
-		" ctr=", _grid._center_container.position if _grid._center_container else Vector2.INF,
-		" flw=", _grid._flow_container.position if _grid._flow_container else Vector2.INF,
-		" ref=", ref_pos, " refg=", ref_glob, " refmin=", ref_min,
-		" fsz=", _grid._flow_container.size if _grid._flow_container else Vector2.INF,
-		" fmin=", _grid._flow_container.get_combined_minimum_size() if _grid._flow_container else Vector2.INF,
-		" fcnt=", _grid._flow_container.get_child_count() if _grid._flow_container else -1,
-		" csz=", _grid._center_container.size if _grid._center_container else Vector2.INF,
-		" msz=", _grid._margin_container.size if _grid._margin_container else Vector2.INF,
-		" ssz=", _grid._scroll_container.size if _grid._scroll_container else Vector2.INF,
-		" g=", _grid._layout_generation)
-
 func _on_frame_post_draw_audit() -> void:
 	# Render-time truth check: after the frame was drawn, the stamped origins
 	# must equal the arithmetic offsets computed from the final frame state.
