@@ -2,6 +2,7 @@ extends Manager
 class_name CoverSubManager
 
 const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CoverTrace = preload("res://utils/cover_trace.gd")
 
 var data_manager: Node
 
@@ -53,6 +54,20 @@ func _ready():
 	# Own the fold_duplicate_covers reaction so DataManager._on_setting_changed
 	# doesn't reach into cover internals.
 	DataManager.setting_changed.connect(_on_setting_changed)
+	# Cache maintenance is startup work, not a folding-setting side effect.
+	# Keeping it in _on_setting_changed left byte accounting at -1 and disabled
+	# validation/eviction unless the user happened to toggle cover folding.
+	_ensure_cache_folder()
+	_load_lru_sidecar()
+	_lru_flush_timer = Timer.new()
+	_lru_flush_timer.wait_time = LRU_FLUSH_INTERVAL_SECONDS
+	_lru_flush_timer.autostart = true
+	_lru_flush_timer.timeout.connect(_flush_lru_sidecar)
+	add_child(_lru_flush_timer)
+	# Read the cap on the main thread; the worker must not touch autoloads.
+	var cap := get_max_cache_bytes()
+	_eviction_running = true
+	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap, _lru_map.duplicate()))
 
 func _on_setting_changed(value, setting: SettingsVar) -> void:
 	if setting.property_name != "fold_duplicate_covers":
@@ -67,17 +82,6 @@ func _on_setting_changed(value, setting: SettingsVar) -> void:
 	else:
 		print("[CoverFolding] Setting disabled - removing cover-based siblings...")
 		_remove_cover_based_siblings()
-	_ensure_cache_folder()
-	_load_lru_sidecar()
-	_lru_flush_timer = Timer.new()
-	_lru_flush_timer.wait_time = LRU_FLUSH_INTERVAL_SECONDS
-	_lru_flush_timer.autostart = true
-	_lru_flush_timer.timeout.connect(_flush_lru_sidecar)
-	add_child(_lru_flush_timer)
-	# Read the cap on the main thread; the worker must not touch autoloads.
-	var cap := get_max_cache_bytes()
-	_eviction_running = true
-	WorkerThreadPool.add_task(_cache_maintenance.bind(_cache_validation_needed(), cap, _lru_map.duplicate()))
 
 
 func _exit_tree() -> void:
@@ -149,10 +153,21 @@ func has_cache_headroom() -> bool:
 	return _cache_bytes_total < int(get_max_cache_bytes() * CACHE_HEADROOM_FRACTION)
 
 
+func get_cover_trace_snapshot() -> Dictionary:
+	return {
+		"cache_bytes": _cache_bytes_total,
+		"cache_files": _cache_file_sizes.size(),
+		"cache_eviction": _eviction_running,
+		"cache_headroom": has_cache_headroom(),
+	}
+
+
 func enforce_cache_limit_async() -> void:
 	if _eviction_running:
+		CoverTrace.event("cache", "eviction_already_running", {"bytes": _cache_bytes_total, "files": _cache_file_sizes.size()})
 		return
 	_eviction_running = true
+	CoverTrace.event("cache", "eviction_start", {"bytes": _cache_bytes_total, "files": _cache_file_sizes.size()})
 	# Steady-state passes run from the live size accounting instead of
 	# rescanning the directory (O(sort + delete) rather than O(open every
 	# file)). -1/empty means the startup pass hasn't built the accounting
@@ -255,6 +270,13 @@ func _report_cache_eviction(deleted_count: int, freed_bytes: int, deleted_names:
 	_cache_bytes_total = remaining_bytes
 	for file_name in deleted_names:
 		_lru_dirty = _lru_map.erase(file_name) or _lru_dirty
+	CoverTrace.event("cache", "eviction_complete", {
+		"deleted": deleted_count,
+		"freed_bytes": freed_bytes,
+		"remaining_bytes": remaining_bytes,
+		"remaining_files": remaining_sizes.size(),
+		"over_cap": remaining_bytes > get_max_cache_bytes() if CoverTrace.enabled else false,
+	})
 	if deleted_count > 0:
 		print("[CoverCache] Evicted %d covers (%d MB) to enforce the cache size limit" % [deleted_count, int(freed_bytes / (1024.0 * 1024.0))])
 		# More covers were written while the pass ran and we're still over:
@@ -324,6 +346,7 @@ func _scan_cover_cache():
 func _report_cover_cache_scan(total: int, deleted: Array[String]) -> void:
 	for path in deleted:
 		print("[CoverCache] Deleted invalid cached cover: ", path)
+	CoverTrace.event("cache", "startup_validation", {"scanned": total, "deleted_invalid": deleted.size()})
 	print("[CoverCache] Startup cache check: %d files, %d deleted as invalid" % [total, deleted.size()])
 
 
@@ -375,6 +398,15 @@ func _note_cover_write(cache_path: String) -> void:
 			_cache_file_sizes[file_name] = size
 			if _cache_bytes_total >= 0:
 				_cache_bytes_total += size
+	if CoverTrace.enabled:
+		CoverTrace.event("cache", "cover_write", {
+			"cover": CoverTrace.trace_id(cache_path),
+			"bytes": _cache_file_sizes.get(file_name, 0),
+			"total_bytes": _cache_bytes_total,
+			"files": _cache_file_sizes.size(),
+			"cap_bytes": get_max_cache_bytes(),
+			"eviction_running": _eviction_running,
+		})
 	if _cache_bytes_total >= 0 and _cache_bytes_total > get_max_cache_bytes():
 		enforce_cache_limit_async()
 
@@ -421,10 +453,12 @@ func load_image(url: String, callback: Callable = Callable(), high_priority: boo
 	# Try cache first - using background thread
 	if FSM.file_exists(cache_path):
 		note_cover_access(cache_path)
+		CoverTrace.event("cache", "cached_full_decode_request", {"cover": CoverTrace.trace_id(url), "priority": high_priority})
 		MemorySubManager.queue_image_task(
 			func():
 				return MemorySubManager.prepare_image_for_texture(_load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path)),
 		func(image):
+			CoverTrace.event("cache", "cached_full_decode_result", {"cover": CoverTrace.trace_id(url), "ok": image != null and not image.is_empty()})
 			if image and not image.is_empty():
 				var texture = MemorySubManager.create_texture_from_image(image)
 				if texture:
@@ -453,13 +487,16 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				# OK-but-missing means the file was evicted between write and
 				# read: transient, so report DROPPED (retryable) not FAILED.
 				var out_result: int = result if result != DownloadSubManager.ImageResult.OK else DownloadSubManager.ImageResult.DROPPED
+				CoverTrace.event("cache", "missing_after_download", {"cover": CoverTrace.trace_id(url), "download_result": result, "out_result": out_result, "eviction_running": _eviction_running})
 				callback.call(null, out_result)
 			return
 
+		CoverTrace.event("cache", "downloaded_full_decode_request", {"cover": CoverTrace.trace_id(url), "download_result": result, "priority": high_priority})
 		MemorySubManager.queue_image_task(
 			func():
 				return MemorySubManager.prepare_image_for_texture(_load_image_from_memory(FSM.read_file_bytes(cache_path), cache_path)),
 		func(image):
+			CoverTrace.event("cache", "downloaded_full_decode_result", {"cover": CoverTrace.trace_id(url), "ok": image != null and not image.is_empty()})
 			if image and not image.is_empty():
 				var texture = MemorySubManager.create_texture_from_image(image)
 				if texture:
@@ -479,6 +516,7 @@ func _load_image_from_network(url: String, cache_path: String, callback: Callabl
 				# (the download path reports "already cached" and would loop
 				# straight back here), and answer with FAILED so callers
 				# apply their normal retry/backoff policy.
+				CoverTrace.event("cache", "delete_undecodable", {"cover": CoverTrace.trace_id(url)})
 				FSM.delete_file(cache_path)
 				if callback.is_valid():
 					callback.call(null, DownloadSubManager.ImageResult.FAILED)

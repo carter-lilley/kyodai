@@ -2,6 +2,7 @@ class_name VirtualScrollGridContainer
 extends Control
 
 const DEBUG_LOG: bool = false
+const CoverTrace = preload("res://utils/cover_trace.gd")
 
 # Global startup guard: suppresses all layout work until Main is ready for the
 # single final settle. This prevents visible "jank" from layout passes before
@@ -330,6 +331,7 @@ const FAST_SCROLL_SUPPRESS_STRIDES: float = 4.0  # px/s threshold = 4 row pitche
 var _scrub_cover_suppressed: bool = false   # external: A-Z carousel drag
 var _cover_dl_suppressed: bool = false      # effective state last applied
 var _lp_gate_held: bool = false             # this grid holds the (refcounted) low-priority decode gate
+var _cover_trace_last_mismatch_ms: int = 0
 ## Incremented on every completed full layout pass and every FlowContainer
 ## sort. Part of the visual sync's pre-draw stamp gate so stamps always
 ## follow layout changes even when scroll/margin/window didn't move.
@@ -851,6 +853,15 @@ func _exit_tree():
 	if is_queued_for_deletion():
 		_active_cards.clear()
 		_active_cards_by_index.clear()
+	if _lp_gate_held or _cover_dl_suppressed or _scrub_cover_suppressed or CardMediaLoader.downloads_suppressed:
+		CoverTrace.event("grid", "exit_with_cover_state", {
+			"grid": get_instance_id(),
+			"queued_for_deletion": is_queued_for_deletion(),
+			"gate_held": _lp_gate_held,
+			"local_suppressed": _cover_dl_suppressed,
+			"scrub_suppressed": _scrub_cover_suppressed,
+			"global_suppressed": CardMediaLoader.downloads_suppressed,
+		})
 	# The low-priority decode gate is process-global (owner-refcounted): never
 	# leave it held when this grid leaves the tree or other screens starve.
 	if _lp_gate_held:
@@ -1862,6 +1873,14 @@ func _recalculate_layout():
 	# target so the view never rests mid-gap after zoom/resize/orientation changes.
 	_spacers.reconcile()
 	_update_page_snap_state()
+	# Commit the flow rect explicitly before sorting. Anchors alone allow the
+	# FlowContainer to expand to its content width, which prevents wrapping and
+	# leaves every card on the first line during cold startup.
+	_flow_container.size = _center_container.size
+	# Queue one final sort after every extent/margin/page-composition write.
+	# The early sort can commit a pre-layout height and otherwise leave every
+	# child on the first line until an unrelated resize forces another pass.
+	_flow_container.queue_sort()
 	# Geometry/spacers changed: reveal after the sort commits new positions
 	# (the reveal runs in _on_flow_sorted, post-sort, at committed offsets).
 	_visual_sync.request_reveal()
@@ -2483,6 +2502,7 @@ func _update_cover_dl_suppression() -> void:
 	var stride := _get_normal_stride()
 	var fast := stride > 0.0 and absf(velocity) > stride * FAST_SCROLL_SUPPRESS_STRIDES
 	var want := _scrub_cover_suppressed or fast
+	var global_before := CardMediaLoader.downloads_suppressed
 	# Scroll-idle gate: while scrolling fast, buffer-card decodes wait so the
 	# thread pool's full throughput serves visible covers (they un-gate here on
 	# settle and resume behind the visible cards already in the high queue).
@@ -2494,14 +2514,43 @@ func _update_cover_dl_suppression() -> void:
 		else:
 			MemorySubManager.release_low_priority_gate(get_instance_id())
 	if want == _cover_dl_suppressed:
+		# Another live grid can overwrite the process-global flag while this
+		# grid's local state remains unchanged. Report that mismatch at rest
+		# instead of silently repairing it and hiding the diagnostic evidence.
+		if CoverTrace.enabled and global_before != want:
+			var now := Time.get_ticks_msec()
+			if now - _cover_trace_last_mismatch_ms >= 5000:
+				_cover_trace_last_mismatch_ms = now
+				CoverTrace.event("grid", "suppression_mismatch", {
+					"grid": get_instance_id(),
+					"want": want,
+					"global": global_before,
+					"fast": fast,
+					"scrub": _scrub_cover_suppressed,
+					"velocity": velocity,
+					"gate_held": _lp_gate_held,
+				})
 		return
+	var previous := _cover_dl_suppressed
 	_cover_dl_suppressed = want
 	CardMediaLoader.downloads_suppressed = want
+	CoverTrace.event("grid", "suppression_transition", {
+		"grid": get_instance_id(),
+		"previous": previous,
+		"current": want,
+		"global_before": global_before,
+		"fast": fast,
+		"scrub": _scrub_cover_suppressed,
+		"velocity": velocity,
+		"threshold": stride * FAST_SCROLL_SUPPRESS_STRIDES,
+		"gate_held": _lp_gate_held,
+	})
 	if not want:
 		_retry_visible_placeholder_covers()
 
 
 func _retry_visible_placeholder_covers() -> void:
+	var retried := 0
 	for card in _active_cards:
 		if not is_instance_valid(card):
 			continue
@@ -2509,7 +2558,14 @@ func _retry_visible_placeholder_covers() -> void:
 		if idx < _visible_start_idx or idx >= _visible_end_idx:
 			continue
 		if card.has_method("retry_cover_if_placeholder"):
+			retried += 1
 			card.retry_cover_if_placeholder()
+	CoverTrace.event("grid", "visible_cover_retry", {
+		"grid": get_instance_id(),
+		"cards": retried,
+		"visible_start": _visible_start_idx,
+		"visible_end": _visible_end_idx,
+	})
 
 
 

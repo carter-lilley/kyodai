@@ -218,6 +218,10 @@ func _enter_tree():
 	_update_media()
 
 func _ready():
+	# Grid cell geometry is authoritative for GameCards, including media-only
+	# and compact-ratio layouts. M3Card's generic 80/240dp minimum would
+	# otherwise override the computed cell and collapse the grid to one line.
+	enforce_min_height = false
 	super._ready()
 
 	# Focus effects need a separate container so their bounds (full card or
@@ -351,6 +355,8 @@ func _build_media_stack():
 		# node-less stack (it has no geometry of its own to clip against).
 		_media_stack.set_clip_children(false)
 		_media_stack.update_draw_rects()
+
+	_sync_compositor_enabled()
 
 	# Cached cover textures already include mipmaps. Sample them explicitly so
 	# shrinking cards and zoom changes filter through the chain instead of
@@ -689,6 +695,29 @@ func _refresh_card_visuals() -> void:
 	if game and (not _current_texture or _current_texture_game_id != game.id):
 		_load_cover(false)
 
+func _sync_compositor_enabled() -> void:
+	if not _media_stack:
+		return
+	if _media_stack.has_multiple_interior_layers():
+		_media_stack.set_compositor_enabled(true, self)
+	else:
+		_media_stack.set_compositor_enabled(false, self)
+	_sync_compositor_transform()
+
+func _sync_compositor_transform() -> void:
+	if not _media_stack or not _media_stack.is_compositor_enabled():
+		return
+	var parent := _visual_layer_rid if _uses_visual_layer() else _media_canvas_item
+	_media_stack.sync_compositor(_last_media_transform, parent, m3_get_compositor_draw_index())
+
+func sync_visual_transform_with_offset(base_offset: Vector2) -> void:
+	super.sync_visual_transform_with_offset(base_offset)
+	_sync_compositor_transform()
+
+func _apply_visual_draw_index() -> void:
+	super._apply_visual_draw_index()
+	_sync_compositor_transform()
+
 func _ensure_media_stack_parent() -> void:
 	if _media_stack and _media_canvas_item.is_valid():
 		_media_stack.set_parent_rid(_media_canvas_item)
@@ -781,7 +810,8 @@ func _sync_present_wrap_geometry() -> void:
 	if not _present_wrap:
 		return
 	if _media_canvas_item.is_valid():
-		_present_wrap.set_parent_rid(_media_canvas_item)
+		var parent := _media_stack.get_composition_parent_rid(_media_canvas_item) if _media_stack else _media_canvas_item
+		_present_wrap.set_parent_rid(parent)
 	_present_wrap.set_z_index(PRESENT_WRAP_DRAW_INDEX)
 	_present_wrap.set_offset_rect(Rect2(Vector2.ZERO, _media_container.size))
 

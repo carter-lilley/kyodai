@@ -14,6 +14,9 @@ var _stack_canvas_item: RID = RID()
 var _clip_children: bool = true
 var _visible: bool = true
 var _refresh_pending: bool = false
+var _compositor: EffectCompositor = null
+var _compositor_enabled: bool = false
+var _compositor_host: CanvasItem = null
 
 var _base_layer: Dictionary = {}
 var _layers: Array[Dictionary] = []
@@ -45,6 +48,11 @@ func free_rids() -> void:
 		if is_instance_valid(effect):
 			effect.free_rid()
 	_layers.clear()
+	if _compositor:
+		_compositor.free_rids()
+		_compositor = null
+		_compositor_host = null
+		_compositor_enabled = false
 	if _stack_canvas_item.is_valid():
 		RenderingServer.free_rid(_stack_canvas_item)
 		_stack_canvas_item = RID()
@@ -65,6 +73,42 @@ func set_clip_children(value: bool) -> void:
 	if _stack_canvas_item.is_valid():
 		RenderingServer.canvas_item_set_clip(_stack_canvas_item, value)
 
+func set_compositor_enabled(value: bool, host: CanvasItem) -> void:
+	if value and not host:
+		push_warning("EffectStack: compositor requires a CanvasItem host")
+		return
+	if value:
+		_compositor_host = host
+		if not _compositor:
+			_compositor = EffectCompositor.new()
+		_compositor.attach(host)
+	_compositor_enabled = value
+	if _compositor:
+		_compositor.set_visible(value)
+	_update_effect_draw_rects()
+
+func is_compositor_enabled() -> bool:
+	return _compositor_enabled
+
+func sync_compositor(transform: Transform2D, parent_rid: RID, draw_index: int) -> void:
+	if _compositor_enabled and _compositor:
+		_compositor.sync(transform, parent_rid, media_container.size, media_container.get_corner_radius_pixels(), draw_index)
+
+func get_composition_parent_rid(fallback: RID) -> RID:
+	if _compositor_enabled and _compositor:
+		return _compositor.get_canvas_item()
+	return fallback
+
+func has_multiple_interior_layers() -> bool:
+	var count := 0
+	for effect in get_effects():
+		if effect and effect.is_visible() and not effect.is_geometry_only() and not _is_exterior(effect):
+			count += 1
+	return count > 1
+
+func _is_exterior(effect: EffectBase) -> bool:
+	return effect.effect_id in ["glow", "drop_shadow"]
+
 func set_draw_index(idx: int) -> void:
 	_ensure_stack_canvas_item()
 	RenderingServer.canvas_item_set_draw_index(_stack_canvas_item, idx)
@@ -73,6 +117,8 @@ func set_visible(value: bool) -> void:
 	_visible = value
 	if _stack_canvas_item.is_valid():
 		RenderingServer.canvas_item_set_visible(_stack_canvas_item, value)
+	if _compositor:
+		_compositor.set_visible(value)
 
 func is_visible() -> bool:
 	return _visible
@@ -195,6 +241,8 @@ func _update_effect_draw_rects() -> void:
 	_ensure_stack_canvas_item()
 	var base_rect = Rect2(Vector2.ZERO, media_container.size)
 	var interior_parent := _stack_canvas_item
+	if _compositor_enabled and _compositor:
+		interior_parent = _compositor.get_canvas_item()
 	if not _base_layer.is_empty():
 		var base_effect: EffectBase = _base_layer.get("effect")
 		base_effect.set_parent_rid(interior_parent)
@@ -206,7 +254,8 @@ func _update_effect_draw_rects() -> void:
 		var draw_rect: Rect2 = base_rect
 		if effect.has_method("get_draw_rect"):
 			draw_rect = effect.get_draw_rect()
-		effect.set_parent_rid(interior_parent)
+		var parent := _stack_canvas_item if _is_exterior(effect) else interior_parent
+		effect.set_parent_rid(parent)
 		effect.set_offset_rect(draw_rect)
 
 func _recompute_geometry() -> void:
@@ -247,6 +296,10 @@ func _run_pipeline() -> void:
 		if effect and effect.is_visible():
 			effect._shader_params_dirty = false
 			effect._update_shader_params()
+			if _compositor_enabled and not _is_exterior(effect):
+				# Interior cutouts stay hard; the final compositor supplies the
+				# only outer coverage after all layers have blended.
+				effect._set_shader_param("display_mode", 0)
 
 func get_effects() -> Array:
 	var result: Array = []

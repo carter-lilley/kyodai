@@ -66,6 +66,7 @@ const BAKED_SHADER_PATHS: Array[String] = [
 	"res://shaders/card/base_card.gdshader",
 	"res://shaders/card/blur.gdshader",
 	"res://shaders/card/case_wrap.gdshader",
+	"res://shaders/card/compositor_mask.gdshader",
 	"res://shaders/card/distort.gdshader",
 	"res://shaders/card/drop_shadow.gdshader",
 	"res://shaders/card/glass.gdshader",

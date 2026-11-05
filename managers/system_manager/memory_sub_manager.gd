@@ -2,6 +2,9 @@
 extends Node
 class_name MemorySubManager
 
+const CoverTrace = preload("res://utils/cover_trace.gd")
+const COVER_TRACE_SNAPSHOT_INTERVAL_MS: int = 5000
+
 # ============================================================================
 # THREAD MANAGEMENT (from thread_manager.gd)
 # ============================================================================
@@ -76,6 +79,12 @@ var _low_priority_gated: bool = false
 ## Owners currently holding the low-priority decode gate (owner_id -> true).
 var _low_priority_gate_holders: Dictionary = {}
 
+# Main-thread, rate-limited cover pipeline snapshots. These observe state only;
+# no queue, gate, retry, or cancellation behavior changes with tracing enabled.
+var _cover_trace_next_snapshot_ms: int = 0
+var _cover_trace_initial_snapshot_sent: bool = false
+var _cover_trace_last_active: bool = false
+
 # Thread-safe main-thread hops ({"callback": Callable, "args": Array}) from
 # workers that must reach the main thread reliably; call_deferred from threads
 # is unreliable on Android (silently dropped). Drained every frame in _process.
@@ -83,7 +92,7 @@ var _mt_callbacks: Array = []
 var _mt_callback_mutex: Mutex
 
 const IMAGE_THREAD_COUNT: int = 6
-const MAX_IMAGE_QUEUE_SIZE = 600
+const MAX_IMAGE_QUEUE_SIZE = 768
 const MAX_DB_QUEUE_SIZE = 500
 ## Extra headroom main-thread producers get past the soft cap before tasks
 ## are dropped (with a null callback) instead of growing the queue forever.
@@ -256,6 +265,7 @@ func _ready():
 	Performance.add_custom_monitor("memory/lp_callback_backlog", _get_lp_callback_backlog)
 	Performance.add_custom_monitor("memory/texture_cache_count", _get_texture_cache_count)
 	Performance.add_custom_monitor("memory/texture_cache_mb", _get_texture_cache_mb)
+	CoverTrace.event("trace", "enabled", {"snapshot_interval_ms": COVER_TRACE_SNAPSHOT_INTERVAL_MS})
 
 func _connect_network_invalidation() -> void:
 	if SystemManager.network and SystemManager.network.has_signal("network_status_changed"):
@@ -305,6 +315,148 @@ func _get_texture_cache_mb() -> float:
 	_texture_cache_mutex.unlock()
 	return mb
 
+## Return a coherent decode-side diagnostic snapshot. The caller prints after
+## all locks have been released; queue workers never block on file logging.
+func get_cover_trace_snapshot() -> Dictionary:
+	_image_mutex.lock()
+	var dedup := _analyze_cover_trace_dedup(_image_tasks, _dedup_task_ids, _inflight_image_callbacks)
+	var high := _image_high_priority_queue.size()
+	var low := _image_low_priority_queue.size()
+	var tasks := _image_tasks.size()
+	var gated := _low_priority_gated
+	var gate_holders := _low_priority_gate_holders.keys()
+	_image_mutex.unlock()
+
+	_lp_callback_mutex.lock()
+	var callback_backlog := _lp_callbacks.size() - _lp_callback_head
+	_lp_callback_mutex.unlock()
+
+	return {
+		"decode_high": high,
+		"decode_low": low,
+		"decode_tasks": tasks,
+		"decode_executing": maxi(0, tasks - high - low),
+		"decode_callbacks": callback_backlog,
+		"decode_gated": gated,
+		"decode_gate_holders": gate_holders,
+		"decode_dedup": dedup.dedup_keys,
+		"decode_waiters": dedup.dedup_waiters,
+		"stale_dedup": dedup.stale_dedup,
+		"stale_dedup_sample": dedup.stale_sample,
+		"dedup_mismatch": dedup.dedup_mismatch,
+		"dedup_mismatch_sample": dedup.mismatch_sample,
+	}
+
+## Pure analysis kept separate from the live mutex snapshot so the diagnostic
+## invariants can be tested with synthetic queue-full/cancellation states.
+static func _analyze_cover_trace_dedup(image_tasks: Dictionary, dedup_task_ids: Dictionary, inflight_callbacks: Dictionary) -> Dictionary:
+	var stale_sample: Array = []
+	var mismatch_sample: Array = []
+	var stale := 0
+	var mismatch := 0
+	var waiters := 0
+	for key in dedup_task_ids:
+		if not inflight_callbacks.has(key):
+			mismatch += 1
+			if mismatch_sample.size() < 8:
+				mismatch_sample.append(CoverTrace.id_for(str(key)))
+		if not image_tasks.has(dedup_task_ids[key]):
+			stale += 1
+			if stale_sample.size() < 8:
+				stale_sample.append(CoverTrace.id_for(str(key)))
+	for key in inflight_callbacks:
+		waiters += inflight_callbacks[key].size()
+		if not dedup_task_ids.has(key):
+			mismatch += 1
+			if mismatch_sample.size() < 8:
+				mismatch_sample.append(CoverTrace.id_for(str(key)))
+	return {
+		"dedup_keys": dedup_task_ids.size(),
+		"dedup_waiters": waiters,
+		"stale_dedup": stale,
+		"stale_sample": stale_sample,
+		"dedup_mismatch": mismatch,
+		"mismatch_sample": mismatch_sample,
+	}
+
+func _trace_cover_pipeline() -> void:
+	if not CoverTrace.enabled:
+		return
+	var now := Time.get_ticks_msec()
+	if now < _cover_trace_next_snapshot_ms:
+		return
+	_cover_trace_next_snapshot_ms = now + COVER_TRACE_SNAPSHOT_INTERVAL_MS
+
+	var decode := get_cover_trace_snapshot()
+	var network: Dictionary = {}
+	if SystemManager.download:
+		network = SystemManager.download.get_cover_trace_snapshot(now)
+	var cache: Dictionary = {}
+	if DataManager and DataManager.cover:
+		cache = DataManager.cover.get_cover_trace_snapshot()
+	var card := CardMediaLoader.get_cover_trace_state()
+	var sync_active: bool = DataManager != null and DataManager.is_sync_in_progress()
+
+	var http_active: int = network.get("http_active", 0)
+	var http_pending: int = network.get("http_pending", 0)
+	var active: bool = http_active > 0 or http_pending > 0 \
+		or decode.decode_high > 0 or decode.decode_low > 0 or decode.decode_tasks > 0 \
+		or decode.decode_callbacks > 0 or decode.decode_gated or card.downloads_suppressed \
+		or sync_active or cache.get("cache_eviction", false)
+	# Always emit one baseline, then snapshots while active and one final idle
+	# snapshot. A stuck suppression/gate counts as active and remains visible.
+	if active or _cover_trace_last_active or not _cover_trace_initial_snapshot_sent:
+		CoverTrace.state({
+			"http_active": http_active,
+			"http_pending": http_pending,
+			"http_oldest_ms": network.get("http_oldest_active_ms", 0),
+			"http_pending_oldest_ms": network.get("http_oldest_pending_ms", 0),
+			"http_count_mismatch": network.get("http_count_mismatch", 0),
+			"decode_high": decode.decode_high,
+			"decode_low": decode.decode_low,
+			"decode_tasks": decode.decode_tasks,
+			"decode_executing": decode.decode_executing,
+			"decode_callbacks": decode.decode_callbacks,
+			"decode_gated": decode.decode_gated,
+			"decode_gate_holders": decode.decode_gate_holders,
+			"decode_dedup": decode.decode_dedup,
+			"decode_waiters": decode.decode_waiters,
+			"stale_dedup": decode.stale_dedup,
+			"dedup_mismatch": decode.dedup_mismatch,
+			"downloads_suppressed": card.downloads_suppressed,
+			"failed_urls": card.failed_urls,
+			"sync_active": sync_active,
+			"db_queue": _get_db_queue_size(),
+			"texture_cache_count": _get_texture_cache_count(),
+			"texture_cache_mb": _get_texture_cache_mb(),
+			"cache_bytes": cache.get("cache_bytes", -1),
+			"cache_files": cache.get("cache_files", -1),
+			"cache_eviction": cache.get("cache_eviction", false),
+			"cache_headroom": cache.get("cache_headroom", true),
+			"idle": not active,
+		})
+		_cover_trace_initial_snapshot_sent = true
+	_cover_trace_last_active = active
+
+	if decode.stale_dedup > 0 or decode.dedup_mismatch > 0:
+		CoverTrace.event("decode", "dedup_invariant", {
+			"stale": decode.stale_dedup,
+			"mismatch": decode.dedup_mismatch,
+			"stale_sample": decode.stale_dedup_sample,
+			"mismatch_sample": decode.dedup_mismatch_sample,
+		})
+	if network.get("http_count_mismatch", 0) > 0:
+		CoverTrace.event("network", "active_count_invariant", {
+			"count": http_active,
+			"entries": network.get("http_active_entries", 0),
+		})
+	if network.get("http_stalled_active", 0) > 0:
+		CoverTrace.event("network", "requests_over_timeout", {
+			"stalled": network.http_stalled_active,
+			"oldest_ms": network.http_oldest_active_ms,
+			"request_ids": network.get("http_stalled_ids", []),
+		})
+
 func _exit_tree():
 	FrameWorkScheduler.unregister(self)
 	Performance.remove_custom_monitor("memory/image_queue_high")
@@ -318,6 +470,7 @@ func _exit_tree():
 
 func _process(delta):
 	FrameWorkScheduler.drain(delta)
+	_trace_cover_pipeline()
 
 func _run_memory_frame_work(_delta):
 	_drain_mt_callbacks()
@@ -425,6 +578,7 @@ static func _db_worker():
 
 static func _image_worker():
 	var high_count = 0
+	var last_no_task_trace_ms := 0
 	while not _instance._exit_flag:
 		_instance._image_semaphore.wait()
 
@@ -437,53 +591,112 @@ static func _image_worker():
 		var high_size = _instance._image_high_priority_queue.size()
 		var low_size = _instance._image_low_priority_queue.size()
 
-		if high_size > 0 and (low_size == 0 or high_count < 2):
+		# While low-priority work is gated, high-priority work must always win.
+		# Applying the normal two-high fairness budget when low work cannot be
+		# selected consumes wakeups without a task and can strand both queues.
+		if high_size > 0 and (low_size == 0 or high_count < 2 or _instance._low_priority_gated):
 			task = _instance._image_high_priority_queue.pop_front()
 			high_count += 1
 		elif low_size > 0 and not _instance._low_priority_gated:
 			task = _instance._image_low_priority_queue.pop_front()
 			high_count = 0
 
+		var trace_gated := _instance._low_priority_gated
+		var trace_gate_holders := _instance._low_priority_gate_holders.size()
 		if task and task.has("cancelled") and task.cancelled:
 			_instance._image_tasks.erase(task.id)
+			var cancelled_waiters: Array = []
+			if task.dedup_key != "":
+				if _instance._inflight_image_callbacks.has(task.dedup_key):
+					cancelled_waiters = _instance._inflight_image_callbacks[task.dedup_key].duplicate()
+					_instance._inflight_image_callbacks.erase(task.dedup_key)
+				_instance._dedup_task_ids.erase(task.dedup_key)
 			_instance._image_mutex.unlock()
+			for waiting in cancelled_waiters:
+				if waiting.callback.is_valid():
+					_instance.call_deferred("_execute_callback", waiting.callback, null)
+			CoverTrace.event("decode", "cancelled_task_popped", {"task": task.id, "waiters": cancelled_waiters.size()})
 			continue
 
 		_instance._image_mutex.unlock()
 
-		if task:
-			var result = task.callable.call()
+		if not task:
+			# Consuming a wakeup without selecting queued work is a critical
+			# forward-progress clue. Rate limit per worker because a gated pool
+			# can otherwise emit this once per semaphore post.
+			if CoverTrace.enabled and (high_size > 0 or (low_size > 0 and not trace_gated)):
+				var now := Time.get_ticks_msec()
+				if now - last_no_task_trace_ms >= 5000:
+					last_no_task_trace_ms = now
+					CoverTrace.event("decode", "worker_no_task", {
+						"high": high_size,
+						"low": low_size,
+						"high_count": high_count,
+						"gated": trace_gated,
+						"gate_holders": trace_gate_holders,
+					})
+			continue
 
-			_instance._image_mutex.lock()
-			_instance._image_tasks.erase(task.id)
-			# Collect any coalesced callbacks waiting on this dedup_key
-			var coalesced = []
-			if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
+		var started_ms := Time.get_ticks_msec()
+		CoverTrace.event("decode", "task_start", {
+			"task": task.id,
+			"cover": CoverTrace.trace_id(task.dedup_key),
+			"priority": "high" if task.high_priority else "low",
+			"queue_wait_ms": started_ms - int(task.get("trace_enqueued_ms", started_ms)),
+			"high": high_size,
+			"low": low_size,
+		})
+		var result = task.callable.call()
+		var duration_ms := Time.get_ticks_msec() - started_ms
+
+		_instance._image_mutex.lock()
+		_instance._image_tasks.erase(task.id)
+		# Collect any coalesced callbacks waiting on this dedup_key
+		var coalesced = []
+		if task.dedup_key != "":
+			if _instance._inflight_image_callbacks.has(task.dedup_key):
 				coalesced = _instance._inflight_image_callbacks[task.dedup_key].duplicate()
 				_instance._inflight_image_callbacks.erase(task.dedup_key)
-				_instance._dedup_task_ids.erase(task.dedup_key)
-			_instance._image_mutex.unlock()
+			_instance._dedup_task_ids.erase(task.dedup_key)
+		var remaining_high := _instance._image_high_priority_queue.size()
+		var remaining_low := _instance._image_low_priority_queue.size()
+		_instance._image_mutex.unlock()
 
-			if task.callback.is_valid() and not task.cancelled:
-				if task.high_priority:
-					# High priority: immediate callback
-					_instance.call_deferred("_execute_callback", task.callback, result)
+		var result_ok: bool = result != null
+		if result is Image:
+			result_ok = not result.is_empty()
+		CoverTrace.event("decode", "task_complete", {
+			"task": task.id,
+			"cover": CoverTrace.trace_id(task.dedup_key),
+			"priority": "high" if task.high_priority else "low",
+			"duration_ms": duration_ms,
+			"ok": result_ok,
+			"cancelled": task.cancelled,
+			"waiters": coalesced.size(),
+			"high": remaining_high,
+			"low": remaining_low,
+		})
+
+		if task.callback.is_valid() and not task.cancelled:
+			if task.high_priority:
+				# High priority: immediate callback
+				_instance.call_deferred("_execute_callback", task.callback, result)
+			else:
+				# Low priority: batch for smooth processing
+				_instance._lp_callback_mutex.lock()
+				_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+				_instance._lp_callback_mutex.unlock()
+
+		# Fire coalesced callbacks with the same result
+		for waiting in coalesced:
+			var cb = waiting.callback
+			if cb.is_valid():
+				if waiting.high_priority:
+					_instance.call_deferred("_execute_callback", cb, result)
 				else:
-					# Low priority: batch for smooth processing
 					_instance._lp_callback_mutex.lock()
-					_instance._lp_callbacks.append({"callback": task.callback, "result": result})
+					_instance._lp_callbacks.append({"callback": cb, "result": result})
 					_instance._lp_callback_mutex.unlock()
-
-			# Fire coalesced callbacks with the same result
-			for waiting in coalesced:
-				var cb = waiting.callback
-				if cb.is_valid():
-					if waiting.high_priority:
-						_instance.call_deferred("_execute_callback", cb, result)
-					else:
-						_instance._lp_callback_mutex.lock()
-						_instance._lp_callbacks.append({"callback": cb, "result": result})
-						_instance._lp_callback_mutex.unlock()
 
 static func _extraction_worker():
 	while not _instance._exit_flag:
@@ -644,33 +857,92 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 
 	# If dedup_key provided and an identical task is already in flight, queue callback for coalescing
 	if dedup_key != "" and _instance._inflight_image_callbacks.has(dedup_key):
-		_instance._inflight_image_callbacks[dedup_key].append({"callback": callback, "high_priority": high_priority})
-		# Promote the underlying task if a high-priority waiter arrived for low-priority work
-		if high_priority and _instance._dedup_task_ids.has(dedup_key):
-			var existing_id: int = _instance._dedup_task_ids[dedup_key]
-			if _instance._image_tasks.has(existing_id):
+		var existing_id := int(_instance._dedup_task_ids.get(dedup_key, -1))
+		var existing_found := _instance._image_tasks.has(existing_id)
+		var mapping_found := _instance._dedup_task_ids.has(dedup_key)
+		if existing_found and mapping_found:
+			_instance._inflight_image_callbacks[dedup_key].append({"callback": callback, "high_priority": high_priority})
+			var promoted := false
+			# Promote the underlying task if a high-priority waiter arrived for low-priority work
+			if high_priority:
 				var existing_task = _instance._image_tasks[existing_id]
 				if not existing_task.cancelled and not existing_task.high_priority:
 					_move_task_between_queues_locked(existing_task, true)
+					promoted = true
+			var waiter_count: int = _instance._inflight_image_callbacks[dedup_key].size()
+			_instance._image_mutex.unlock()
+			CoverTrace.event("decode", "dedup_waiter", {
+				"cover": CoverTrace.trace_id(dedup_key),
+				"task": existing_id,
+				"waiters": waiter_count,
+				"promoted": promoted,
+				"priority": "high" if high_priority else "low",
+			})
+			return -1
+
+		# A dedup record without its task can never complete. Answer every old
+		# waiter, remove both ledger entries, and retry as a fresh task instead
+		# of attaching another permanent waiter to the stale record.
+		var orphaned = _instance._inflight_image_callbacks[dedup_key].duplicate()
+		_instance._inflight_image_callbacks.erase(dedup_key)
+		_instance._dedup_task_ids.erase(dedup_key)
 		_instance._image_mutex.unlock()
-		return -1
+		for waiting in orphaned:
+			if waiting.callback.is_valid():
+				_instance.call_deferred("_execute_callback", waiting.callback, null)
+		CoverTrace.event("decode", "dedup_stale_recovered", {
+			"cover": CoverTrace.trace_id(dedup_key),
+			"task": existing_id,
+			"mapping_existed": mapping_found,
+			"waiters": orphaned.size(),
+		})
+		return queue_image_task(callable, callback, high_priority, dedup_key)
 
 	var total_size = _instance._image_high_priority_queue.size() + _instance._image_low_priority_queue.size()
+	var evicted_task := -1
+	var evicted_cover := ""
+	var evicted_waiters := 0
+	var evicted_callback := false
+	var evicted_callbacks: Array = []
+	var evicted_dedup_remaining := false
 
 	if total_size >= MAX_IMAGE_QUEUE_SIZE:
 		if _instance._image_low_priority_queue.size() > 0 and high_priority:
 			var evicted = _instance._image_low_priority_queue.pop_front()
+			evicted_task = evicted.id
+			evicted_cover = evicted.dedup_key
 			if _instance._image_tasks.has(evicted.id):
 				evicted.cancelled = true
 				_instance._image_tasks.erase(evicted.id)
 				if evicted.callback.is_valid():
-					_instance.call_deferred("_execute_callback", evicted.callback, null)
+					evicted_callback = true
+					evicted_callbacks.append(evicted.callback)
+			# Eviction must retire the whole dedup generation, not only the
+			# primary task. Leaving either map entry makes later requests wait
+			# forever, and every coalesced waiter needs the same null completion
+			# contract as the primary callback so its retry/fallback can run.
+			if evicted.dedup_key != "":
+				evicted_waiters = _instance._inflight_image_callbacks.get(evicted.dedup_key, []).size()
+				if _instance._inflight_image_callbacks.has(evicted.dedup_key):
+					for waiting in _instance._inflight_image_callbacks[evicted.dedup_key]:
+						if waiting.callback.is_valid():
+							evicted_callbacks.append(waiting.callback)
+					_instance._inflight_image_callbacks.erase(evicted.dedup_key)
+				_instance._dedup_task_ids.erase(evicted.dedup_key)
 		else:
 			# Never drop silently: fire a null callback (same as the eviction
 			# path above) so callers run their retry/fallback logic instead of
 			# waiting on a callback that would never arrive.
+			var high := _instance._image_high_priority_queue.size()
+			var low := _instance._image_low_priority_queue.size()
 			_instance._image_mutex.unlock()
 			_instance.call_deferred("_execute_callback", callback, null)
+			CoverTrace.event("decode", "queue_full_drop", {
+				"cover": CoverTrace.trace_id(dedup_key),
+				"priority": "high" if high_priority else "low",
+				"high": high,
+				"low": low,
+			})
 			return -1
 
 	_instance._image_task_counter += 1
@@ -682,7 +954,8 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 		"callback": callback,
 		"cancelled": false,
 		"high_priority": high_priority,
-		"dedup_key": dedup_key
+		"dedup_key": dedup_key,
+		"trace_enqueued_ms": Time.get_ticks_msec() if CoverTrace.enabled else 0,
 	}
 
 	_instance._image_tasks[task_id] = task
@@ -696,8 +969,32 @@ static func queue_image_task(callable: Callable, callback: Callable = Callable()
 	else:
 		_instance._image_low_priority_queue.append(task)
 
+	if evicted_task > 0 and evicted_cover != "":
+		evicted_dedup_remaining = _instance._inflight_image_callbacks.has(evicted_cover) or _instance._dedup_task_ids.has(evicted_cover)
+	var high_after := _instance._image_high_priority_queue.size()
+	var low_after := _instance._image_low_priority_queue.size()
 	_instance._image_mutex.unlock()
+	for evicted_cb in evicted_callbacks:
+		_instance.call_deferred("_execute_callback", evicted_cb, null)
 	_instance._image_semaphore.post()
+
+	if evicted_task > 0:
+		CoverTrace.event("decode", "queue_full_evict", {
+			"task": evicted_task,
+			"cover": CoverTrace.trace_id(evicted_cover),
+			"waiters": evicted_waiters,
+			"callback": evicted_callback,
+			"callbacks": evicted_callbacks.size(),
+			"dedup_remaining": evicted_dedup_remaining,
+			"new_task": task_id,
+		})
+	CoverTrace.event("decode", "task_queued", {
+		"task": task_id,
+		"cover": CoverTrace.trace_id(dedup_key),
+		"priority": "high" if high_priority else "low",
+		"high": high_after,
+		"low": low_after,
+	})
 
 	return task_id
 
@@ -713,9 +1010,10 @@ static func cancel_image_task(task_id: int) -> bool:
 		_instance._image_tasks.erase(task_id)
 		# Drain coalesced callbacks for this dedup_key so waiters aren't dropped silently
 		var coalesced = []
-		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
-			coalesced = _instance._inflight_image_callbacks[task.dedup_key]
-			_instance._inflight_image_callbacks.erase(task.dedup_key)
+		if task.dedup_key != "":
+			if _instance._inflight_image_callbacks.has(task.dedup_key):
+				coalesced = _instance._inflight_image_callbacks[task.dedup_key]
+				_instance._inflight_image_callbacks.erase(task.dedup_key)
 			_instance._dedup_task_ids.erase(task.dedup_key)
 
 		var queue = _instance._image_high_priority_queue if task.high_priority else _instance._image_low_priority_queue
@@ -726,6 +1024,12 @@ static func cancel_image_task(task_id: int) -> bool:
 
 		_instance._image_mutex.unlock()
 
+		CoverTrace.event("decode", "task_cancelled", {
+			"task": task_id,
+			"cover": CoverTrace.trace_id(task.dedup_key),
+			"priority": "high" if task.high_priority else "low",
+			"waiters": coalesced.size(),
+		})
 		for waiting in coalesced:
 			if waiting.callback.is_valid():
 				_instance.call_deferred("_execute_callback", waiting.callback, null)
@@ -755,17 +1059,20 @@ static func clear_pending_image_tasks(fire_callbacks: bool = true) -> int:
 			if task.callback.is_valid():
 				drained_callbacks.append(task.callback)
 			# Drain coalesced waiters on this dedup_key so they aren't dropped silently
-			if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
-				for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
-					if waiting.callback.is_valid():
-						drained_callbacks.append(waiting.callback)
-				_instance._inflight_image_callbacks.erase(task.dedup_key)
+			if task.dedup_key != "":
+				if _instance._inflight_image_callbacks.has(task.dedup_key):
+					for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
+						if waiting.callback.is_valid():
+							drained_callbacks.append(waiting.callback)
+					_instance._inflight_image_callbacks.erase(task.dedup_key)
 				_instance._dedup_task_ids.erase(task.dedup_key)
 			drained_count += 1
 		queue.clear()
 
 	_instance._image_mutex.unlock()
 
+	if drained_count > 0:
+		CoverTrace.event("decode", "pending_tasks_cleared", {"count": drained_count, "callbacks": drained_callbacks.size()})
 	if fire_callbacks:
 		for cb in drained_callbacks:
 			_instance.call_deferred("_execute_callback", cb, null)
@@ -793,17 +1100,20 @@ static func clear_pending_low_priority_image_tasks(fire_callbacks: bool = true) 
 		if task.callback.is_valid():
 			drained_callbacks.append(task.callback)
 		# Drain coalesced waiters on this dedup_key so they aren't dropped silently
-		if task.dedup_key != "" and _instance._inflight_image_callbacks.has(task.dedup_key):
-			for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
-				if waiting.callback.is_valid():
-					drained_callbacks.append(waiting.callback)
-			_instance._inflight_image_callbacks.erase(task.dedup_key)
+		if task.dedup_key != "":
+			if _instance._inflight_image_callbacks.has(task.dedup_key):
+				for waiting in _instance._inflight_image_callbacks[task.dedup_key]:
+					if waiting.callback.is_valid():
+						drained_callbacks.append(waiting.callback)
+				_instance._inflight_image_callbacks.erase(task.dedup_key)
 			_instance._dedup_task_ids.erase(task.dedup_key)
 		drained_count += 1
 	_instance._image_low_priority_queue.clear()
 
 	_instance._image_mutex.unlock()
 
+	if drained_count > 0:
+		CoverTrace.event("decode", "low_tasks_cleared", {"count": drained_count, "callbacks": drained_callbacks.size()})
 	if fire_callbacks:
 		for cb in drained_callbacks:
 			_instance.call_deferred("_execute_callback", cb, null)
@@ -813,9 +1123,9 @@ static func clear_pending_low_priority_image_tasks(fire_callbacks: bool = true) 
 ## image workers only pull high-priority tasks. Previously a bare bool two
 ## live grids could fight over (whichever grid's scroll pass ran last won);
 ## now each holder acquires/releases by owner id and _exit_tree releases its
-## own id. On un-gate, re-post one semaphore wake per queued low-priority
-## task: their original posts were consumed by workers that (correctly)
-## refused to pop them while the gate was closed.
+## own id. On un-gate, re-post one semaphore wake per queued task in BOTH
+## queues. Low-priority posts were consumed by workers refusing gated work;
+## high-priority posts may also have been consumed during priority transitions.
 static func acquire_low_priority_gate(owner_id: int) -> void:
 	if _instance == null:
 		return
@@ -840,10 +1150,21 @@ static func _refresh_low_priority_gate() -> void:
 	var gated := not _instance._low_priority_gate_holders.is_empty()
 	var was_gated := _instance._low_priority_gated
 	_instance._low_priority_gated = gated
-	var pending := _instance._image_low_priority_queue.size() if (was_gated and not gated) else 0
+	var pending_low := _instance._image_low_priority_queue.size()
+	var pending_high := _instance._image_high_priority_queue.size()
+	var pending := pending_low + pending_high if (was_gated and not gated) else 0
+	var holder_count := _instance._low_priority_gate_holders.size()
 	_instance._image_mutex.unlock()
 	for i in pending:
 		_instance._image_semaphore.post()
+	if was_gated != gated:
+		CoverTrace.event("decode", "gate_transition", {
+			"gated": gated,
+			"holders": holder_count,
+			"high": pending_high,
+			"low": pending_low,
+			"wakeups": pending,
+		})
 
 static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	if _instance == null or task_id <= 0:
@@ -868,6 +1189,11 @@ static func update_image_priority(task_id: int, high_priority: bool) -> bool:
 	_move_task_between_queues_locked(task, high_priority)
 
 	_instance._image_mutex.unlock()
+	CoverTrace.event("decode", "priority_changed", {
+		"task": task_id,
+		"cover": CoverTrace.trace_id(task.dedup_key),
+		"priority": "high" if high_priority else "low",
+	})
 	return true
 
 # Moves a task between the high/low priority queues.

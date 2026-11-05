@@ -6,6 +6,7 @@ class_name DownloadSubManager
 # Also handles archive extraction with progress notifications
 
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
+const CoverTrace = preload("res://utils/cover_trace.gd")
 
 const DEBUG_LOG: bool = false
 
@@ -3745,10 +3746,13 @@ func _cleanup_item(item: QueueItem):
 var _active_image_downloads: Dictionary = {}  # url -> {callbacks: [], completed: bool, success: bool}
 
 # Cap concurrent image HTTP requests to avoid exhausting the OS DNS resolver.
-const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 16
+const MAX_CONCURRENT_IMAGE_DOWNLOADS: int = 24
 # Bound the pending queue: an unbounded backlog pins recycled cards via
 # captured callbacks and delays fresh covers behind long-irrelevant ones.
-const MAX_PENDING_IMAGE_DOWNLOADS: int = 256
+const MAX_PENDING_IMAGE_DOWNLOADS: int = 384
+## Diagnostic age threshold; deliberately longer than NetworkSubManager's
+## 45-second generic GET timeout so slow requests are not flagged prematurely.
+const IMAGE_REQUEST_STALL_TRACE_MS: int = 60000
 ## Result passed to image download callbacks. DROPPED means the request never
 ## reached the network (queue-full backpressure or a teleport pruning stale
 ## work) - callers must NOT treat it as a content failure (no retry TTLs).
@@ -3756,6 +3760,7 @@ enum ImageResult { OK, FAILED, DROPPED }
 var _active_image_download_count: int = 0
 var _pending_image_downloads: Array = []
 var _pending_image_downloads_mutex: Mutex = Mutex.new()
+var _image_request_serial: int = 0
 
 # Rate-limited logging for dropped image downloads: mass drops (e.g. a sync
 # flooding the queue) must not spam thousands of warnings, but must not be
@@ -3765,6 +3770,63 @@ const IMAGE_DROP_LOG_LIMIT: int = 5
 const IMAGE_DROP_SUMMARY_EVERY: int = 250
 var _image_drop_logged: int = 0
 var _image_drops_suppressed: int = 0
+
+func _next_image_request_id() -> int:
+	_image_request_serial += 1
+	return _image_request_serial
+
+func _make_active_image_state(callback: Callable, request_id: int, enqueued_ms: int, started_ms: int) -> Dictionary:
+	return {
+		"callbacks": [callback],
+		"completed": false,
+		"success": false,
+		"trace_request_id": request_id,
+		"trace_enqueued_ms": enqueued_ms,
+		"trace_started_ms": started_ms,
+	}
+
+## Main-thread diagnostic snapshot. Ages are computed under the same mutex as
+## the queue bookkeeping, but returned for logging after the lock is released.
+func get_cover_trace_snapshot(now_ms: int = 0) -> Dictionary:
+	if now_ms <= 0:
+		now_ms = Time.get_ticks_msec()
+	_pending_image_downloads_mutex.lock()
+	var active_entries := _active_image_downloads.size()
+	var pending := _pending_image_downloads.size()
+	var pending_high := 0
+	var active_callbacks := 0
+	var oldest_active := 0
+	var oldest_pending := 0
+	var stalled := 0
+	var stalled_ids: Array = []
+	for url in _active_image_downloads:
+		var state: Dictionary = _active_image_downloads[url]
+		active_callbacks += state.callbacks.size()
+		var started := int(state.get("trace_started_ms", state.get("trace_enqueued_ms", now_ms)))
+		var age := maxi(0, now_ms - started)
+		oldest_active = maxi(oldest_active, age)
+		if age >= IMAGE_REQUEST_STALL_TRACE_MS:
+			stalled += 1
+			stalled_ids.append(int(state.get("trace_request_id", 0)))
+	for item in _pending_image_downloads:
+		if item.get("high_priority", false):
+			pending_high += 1
+		var enqueued := int(item.get("trace_enqueued_ms", now_ms))
+		oldest_pending = maxi(oldest_pending, maxi(0, now_ms - enqueued))
+	var result := {
+		"http_active": _active_image_download_count,
+		"http_active_entries": active_entries,
+		"http_count_mismatch": absi(_active_image_download_count - active_entries),
+		"http_active_callbacks": active_callbacks,
+		"http_pending": pending,
+		"http_pending_high": pending_high,
+		"http_oldest_active_ms": oldest_active,
+		"http_oldest_pending_ms": oldest_pending,
+		"http_stalled_active": stalled,
+		"http_stalled_ids": stalled_ids,
+	}
+	_pending_image_downloads_mutex.unlock()
+	return result
 
 func _log_image_drop(url: String) -> void:
 	if _image_drop_logged < IMAGE_DROP_LOG_LIMIT:
@@ -3784,24 +3846,40 @@ func _log_image_drop(url: String) -> void:
 func download_image(url: String, cache_path: String, callback: Callable, high_priority: bool = false, bulk: bool = false) -> bool:
 	# Check if already cached
 	if FSM.file_exists(cache_path):
+		CoverTrace.event("network", "cache_hit", {"cover": CoverTrace.trace_id(url), "priority": "high" if high_priority else "low"})
 		callback.call(ImageResult.OK)
 		return true
 
+	var now_ms := Time.get_ticks_msec()
 	_pending_image_downloads_mutex.lock()
+	var request_id := _next_image_request_id()
 
 	# Check if already downloading (deduplication)
 	if _active_image_downloads.has(url):
 		var state = _active_image_downloads[url]
+		var active_request := int(state.get("trace_request_id", 0))
 		if state.completed:
+			var completed_result := ImageResult.OK if state.success else ImageResult.FAILED
 			_pending_image_downloads_mutex.unlock()
-			callback.call(ImageResult.OK if state.success else ImageResult.FAILED)
+			CoverTrace.event("network", "dedup_completed", {"cover": CoverTrace.trace_id(url), "request": request_id, "active_request": active_request, "result": completed_result})
+			callback.call(completed_result)
 		else:
 			state.callbacks.append(callback)
+			var waiters: int = state.callbacks.size()
 			_pending_image_downloads_mutex.unlock()
+			CoverTrace.event("network", "dedup_waiter", {
+				"cover": CoverTrace.trace_id(url),
+				"request": request_id,
+				"active_request": active_request,
+				"waiters": waiters,
+				"priority": "high" if high_priority else "low",
+			})
 		return true
 
 	# Throttle: queue if too many downloads are in flight.
 	if _active_image_download_count >= MAX_CONCURRENT_IMAGE_DOWNLOADS:
+		var throttled_active := _active_image_download_count
+		var throttled_pending := _pending_image_downloads.size()
 		if _pending_image_downloads.size() >= MAX_PENDING_IMAGE_DOWNLOADS:
 			if high_priority:
 				# Make room by evicting the oldest low-priority item (tail).
@@ -3813,14 +3891,23 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 				if evicted_idx >= 0:
 					var evicted = _pending_image_downloads[evicted_idx]
 					_pending_image_downloads.remove_at(evicted_idx)
+					var pending_after := _pending_image_downloads.size()
 					_pending_image_downloads_mutex.unlock()
 					_log_image_drop(evicted.url)
+					CoverTrace.event("network", "pending_evicted", {
+						"cover": CoverTrace.trace_id(evicted.url),
+						"request": int(evicted.get("trace_request_id", 0)),
+						"evicted_for": request_id,
+						"active": throttled_active,
+						"pending": pending_after,
+					})
 					if evicted.callback.is_valid():
 						evicted.callback.call(ImageResult.DROPPED)
 					# Retry now that a slot freed up.
 					return download_image(url, cache_path, callback, high_priority, bulk)
 				_pending_image_downloads_mutex.unlock()
 				_log_image_drop(url)
+				CoverTrace.event("network", "request_dropped", {"cover": CoverTrace.trace_id(url), "request": request_id, "reason": "queue_full_high", "active": throttled_active, "pending": throttled_pending})
 				callback.call(ImageResult.DROPPED)
 				return true
 			_pending_image_downloads_mutex.unlock()
@@ -3828,6 +3915,7 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 			# failure) so the caller doesn't record a retry-suppressing
 			# failure TTL for what was really a full queue.
 			_log_image_drop(url)
+			CoverTrace.event("network", "request_dropped", {"cover": CoverTrace.trace_id(url), "request": request_id, "reason": "queue_full_low", "active": throttled_active, "pending": throttled_pending})
 			callback.call(ImageResult.DROPPED)
 			return true
 		var item = {
@@ -3835,7 +3923,9 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 			"cache_path": cache_path,
 			"callback": callback,
 			"high_priority": high_priority,
-			"bulk": bulk
+			"bulk": bulk,
+			"trace_request_id": request_id,
+			"trace_enqueued_ms": now_ms,
 		}
 		if high_priority:
 			# Insert after the last queued high-priority item
@@ -3846,17 +3936,33 @@ func download_image(url: String, cache_path: String, callback: Callable, high_pr
 			_pending_image_downloads.insert(insert_idx, item)
 		else:
 			_pending_image_downloads.append(item)
+		var pending_after := _pending_image_downloads.size()
 		_pending_image_downloads_mutex.unlock()
+		CoverTrace.event("network", "request_queued", {
+			"cover": CoverTrace.trace_id(url),
+			"request": request_id,
+			"priority": "high" if high_priority else "low",
+			"bulk": bulk,
+			"active": throttled_active,
+			"pending": pending_after,
+		})
 		return true
 
 	_active_image_download_count += 1
-	_active_image_downloads[url] = {
-		"callbacks": [callback],
-		"completed": false,
-		"success": false
-	}
+	_active_image_downloads[url] = _make_active_image_state(callback, request_id, now_ms, now_ms)
+	var active_after := _active_image_download_count
+	var pending_after_start := _pending_image_downloads.size()
 	_pending_image_downloads_mutex.unlock()
-	_start_image_download(url, cache_path)
+	CoverTrace.event("network", "request_start", {
+		"cover": CoverTrace.trace_id(url),
+		"request": request_id,
+		"priority": "high" if high_priority else "low",
+		"bulk": bulk,
+		"queue_wait_ms": 0,
+		"active": active_after,
+		"pending": pending_after_start,
+	})
+	_start_image_download(url, cache_path, request_id, now_ms, now_ms)
 	return true
 
 
@@ -3871,23 +3977,37 @@ func _process_image_download_queue() -> void:
 		# A download for this URL may have started or finished while the item was queued.
 		if _active_image_downloads.has(item.url):
 			var state = _active_image_downloads[item.url]
+			var active_request := int(state.get("trace_request_id", 0))
 			if state.completed:
 				var queued_success = state.success
 				_pending_image_downloads_mutex.unlock()
+				CoverTrace.event("network", "queued_dedup_completed", {"cover": CoverTrace.trace_id(item.url), "request": int(item.get("trace_request_id", 0)), "active_request": active_request, "success": queued_success})
 				item.callback.call(ImageResult.OK if queued_success else ImageResult.FAILED)
 			else:
 				state.callbacks.append(item.callback)
+				var waiters: int = state.callbacks.size()
 				_pending_image_downloads_mutex.unlock()
+				CoverTrace.event("network", "queued_dedup_waiter", {"cover": CoverTrace.trace_id(item.url), "request": int(item.get("trace_request_id", 0)), "active_request": active_request, "waiters": waiters})
 			continue
 
 		_active_image_download_count += 1
-		_active_image_downloads[item.url] = {
-			"callbacks": [item.callback],
-			"completed": false,
-			"success": false
-		}
+		var started_ms := Time.get_ticks_msec()
+		var enqueued_ms := int(item.get("trace_enqueued_ms", started_ms))
+		var request_id := int(item.get("trace_request_id", 0))
+		_active_image_downloads[item.url] = _make_active_image_state(item.callback, request_id, enqueued_ms, started_ms)
+		var active_after := _active_image_download_count
+		var pending_after := _pending_image_downloads.size()
 		_pending_image_downloads_mutex.unlock()
-		_start_image_download(item.url, item.cache_path)
+		CoverTrace.event("network", "request_start", {
+			"cover": CoverTrace.trace_id(item.url),
+			"request": request_id,
+			"priority": "high" if item.get("high_priority", false) else "low",
+			"bulk": item.get("bulk", false),
+			"queue_wait_ms": maxi(0, started_ms - enqueued_ms),
+			"active": active_after,
+			"pending": pending_after,
+		})
+		_start_image_download(item.url, item.cache_path, request_id, enqueued_ms, started_ms)
 
 
 ## Drop queued (not in-flight) low-priority image downloads, sparing bulk work
@@ -3907,9 +4027,13 @@ func clear_pending_low_priority_image_downloads() -> int:
 		else:
 			dropped.append(item)
 	_pending_image_downloads = kept
+	var active_count := _active_image_download_count
 	_pending_image_downloads_mutex.unlock()
+	if not dropped.is_empty():
+		CoverTrace.event("network", "pending_low_cleared", {"dropped": dropped.size(), "kept": kept.size(), "active": active_count})
 	for item in dropped:
 		_log_image_drop(item.url)
+		CoverTrace.event("network", "pending_pruned", {"cover": CoverTrace.trace_id(item.url), "request": int(item.get("trace_request_id", 0)), "active": active_count, "pending": kept.size()})
 		if item.callback.is_valid():
 			item.callback.call(ImageResult.DROPPED)
 	return dropped.size()
@@ -3924,7 +4048,7 @@ static func _redact_url(url: String) -> String:
 		_redact_regex.compile("(devid|devpassword|ssid|sspassword)=[^&]*")
 	return _redact_regex.sub(url, "$1=***", true)
 
-func _start_image_download(url: String, cache_path: String) -> void:
+func _start_image_download(url: String, cache_path: String, request_id: int, enqueued_ms: int, started_ms: int) -> void:
 	# Start new HTTP request (auth headers only for URLs on the RomM host)
 	SystemManager.network.http_get(url, SystemManager.network.get_auth_headers_for_url(url), func(success: bool, body: PackedByteArray, status_code: int, error_msg: String):
 		if not is_instance_valid(self):
@@ -3935,11 +4059,23 @@ func _start_image_download(url: String, cache_path: String) -> void:
 		# The entry may have been cleaned up or overwritten by a concurrent/follow-up request.
 		if not _active_image_downloads.has(url):
 			_active_image_download_count = maxi(0, _active_image_download_count - 1)
+			var orphan_active := _active_image_download_count
+			var orphan_pending := _pending_image_downloads.size()
 			_pending_image_downloads_mutex.unlock()
+			CoverTrace.event("network", "completion_without_active", {
+				"cover": CoverTrace.trace_id(url),
+				"request": request_id,
+				"status": status_code,
+				"success": success,
+				"duration_ms": Time.get_ticks_msec() - started_ms,
+				"active": orphan_active,
+				"pending": orphan_pending,
+			})
 			_process_image_download_queue()
 			return
 
 		var state = _active_image_downloads[url]
+		var state_request := int(state.get("trace_request_id", 0))
 		var image_ok: bool = success and not body.is_empty() and FSM.is_image_buffer(body)
 		state.completed = true
 		state.success = image_ok
@@ -3947,8 +4083,27 @@ func _start_image_download(url: String, cache_path: String) -> void:
 		var callbacks = state.callbacks.duplicate()
 		_active_image_download_count = maxi(0, _active_image_download_count - 1)
 		_active_image_downloads.erase(url)
+		var active_after := _active_image_download_count
+		var pending_after := _pending_image_downloads.size()
 		_pending_image_downloads_mutex.unlock()
 
+		var completed_ms := Time.get_ticks_msec()
+		CoverTrace.event("network", "request_complete", {
+			"cover": CoverTrace.trace_id(url),
+			"request": request_id,
+			"state_request": state_request,
+			"result": ImageResult.OK if image_ok else ImageResult.FAILED,
+			"success": success,
+			"image_ok": image_ok,
+			"status": status_code,
+			"bytes": body.size(),
+			"queue_wait_ms": maxi(0, started_ms - enqueued_ms),
+			"duration_ms": maxi(0, completed_ms - started_ms),
+			"total_ms": maxi(0, completed_ms - enqueued_ms),
+			"waiters": callbacks.size(),
+			"active": active_after,
+			"pending": pending_after,
+		})
 		if image_ok:
 			FSM.write_file_bytes(cache_path, body)
 		elif not success:
