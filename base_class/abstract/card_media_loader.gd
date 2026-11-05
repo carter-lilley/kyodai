@@ -16,12 +16,10 @@ var _card: GameCard = null
 var _loading_game_id: String = ""
 var _image_retry_count: int = 0
 var _current_image_task_id: int = -1
-var _download_retry_count: int = 0
 var _drop_retry_count: int = 0
 var _current_download_id: int = 0
 
 const MAX_IMAGE_RETRIES: int = 3
-const MAX_DOWNLOAD_RETRIES: int = 2
 # Backpressure (DROPPED) retries: bounded with a short delay so a viewport
 # settled after a scroll storm self-heals once the queue drains, without
 # hammering a full queue forever.
@@ -187,7 +185,6 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 		_drop_retry_count = 0
 	_loading_game_id = game.id
 	_image_retry_count = 0
-	_download_retry_count = 0
 
 	var cache_path = ""
 	var cover_url = ""
@@ -216,7 +213,7 @@ func load_cover(game: GameResource, high_priority: bool = false) -> void:
 					_set_loading_texture()
 					return
 				_trace("network_request", game, {"cover": CoverTrace.trace_id(cover_url), "priority": high_priority})
-				_download_cover_and_retry(cover_url, cache_path, high_priority)
+				_start_cover_download(cover_url, cache_path, high_priority)
 				return
 
 	if cache_path == "":
@@ -246,7 +243,6 @@ func cancel() -> void:
 		})
 	_loading_game_id = ""
 	_image_retry_count = 0
-	_download_retry_count = 0
 	_drop_retry_count = 0
 	_current_download_id += 1
 	if _current_image_task_id > 0 and SystemManager.memory:
@@ -324,17 +320,6 @@ func _load_cached_cover(cache_path: String, high_priority: bool = false) -> void
 		"task": _current_image_task_id,
 		"priority": high_priority,
 	})
-
-func _download_cover_and_retry(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
-	_download_retry_count += 1
-	if _download_retry_count > MAX_DOWNLOAD_RETRIES:
-		_trace("download_retry_exhausted", _card.game if is_instance_valid(_card) else null, {
-			"cover": CoverTrace.trace_id(cover_url),
-			"retries": _download_retry_count - 1,
-		})
-		_set_loading_texture()
-		return
-	_start_cover_download(cover_url, cache_path, high_priority)
 
 func _start_cover_download(cover_url: String, cache_path: String, high_priority: bool = false) -> void:
 	var target_game_id = _loading_game_id

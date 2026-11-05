@@ -168,14 +168,7 @@ func _update_zoom_slider_stops(games_grid: VirtualScrollGridContainer) -> void:
 	else:
 		# List/Carousel mode: fall back to uniform float steps
 		_zoom_slider.custom_stop_values = []
-		var max_zoom: float
-		match games_grid.view_mode:
-			VirtualScrollGridContainer.ViewMode.GRID:
-				max_zoom = 0.5
-			VirtualScrollGridContainer.ViewMode.CAROUSEL:
-				max_zoom = 0.5
-			VirtualScrollGridContainer.ViewMode.LIST:
-				max_zoom = 0.5
+		var max_zoom := 0.5
 		_zoom_slider.min_value = 0.15
 		_zoom_slider.max_value = max_zoom
 		_zoom_slider.step = 0.05

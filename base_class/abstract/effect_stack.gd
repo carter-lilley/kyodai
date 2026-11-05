@@ -11,7 +11,6 @@ var _context: String = "base_card"
 
 var _parent_rid: RID = RID()
 var _stack_canvas_item: RID = RID()
-var _clip_children: bool = true
 var _visible: bool = true
 var _refresh_pending: bool = false
 var _compositor: EffectCompositor = null
@@ -69,7 +68,6 @@ func _ensure_stack_canvas_item() -> void:
 		RenderingServer.canvas_item_set_parent(_stack_canvas_item, _parent_rid)
 
 func set_clip_children(value: bool) -> void:
-	_clip_children = value
 	if _stack_canvas_item.is_valid():
 		RenderingServer.canvas_item_set_clip(_stack_canvas_item, value)
 

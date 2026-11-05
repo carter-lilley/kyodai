@@ -1,18 +1,8 @@
 extends Manager
 
-## Coordinates multi-emulator update sessions ("update all" flow).
-##
-## Instead of every install step firing its own snackbar, a session shows one
-## pinned aggregate progress snackbar (0-100%, equal weight per emulator) that
-## lists the emulators still working and their current step. Per-step
-## download/extraction notifications are suppressed while a session is active.
-##
-## On Android, updates are serialized: APK installs need user interaction in
-## the system package installer, so only one emulator update runs at a time
-## and the session waits for the user to return to the app before continuing.
-## On desktop, updates run in parallel but bounded: the extraction pipeline
-## has a small single-threaded queue, so unlimited parallelism overflows it
-## and gets extraction tasks rejected outright.
+## Coordinates update-all sessions with one aggregate snackbar.
+## Android updates are serialized because APK installs need system UI; desktop
+## concurrency is bounded to avoid overflowing the extraction queue.
 
 ## Emitted once when every emulator in a session has settled (done or failed).
 ## succeeded/failed contain emulator display names; failed entries include the

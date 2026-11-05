@@ -17,8 +17,6 @@ var games_grid: VirtualScrollGridContainer = null
 # Lazy rebuild pattern - views marked for rebuild when hidden, rebuilt when shown
 var needs_rebuild: bool = false
 var needs_rebuild_reason: String = ""
-var _rebuild_attempts: int = 0
-const MAX_REBUILD_ATTEMPTS: int = 5
 
 # Deferred rebuild guard
 var _deferred_rebuild_attempts: int = 0
@@ -87,8 +85,6 @@ func check_and_rebuild_if_needed() -> void:
 		_pending_refresh_effects = false
 		# Pass the captured reason to the deferred rebuild
 		call_deferred("_do_rebuild", reason, refresh_effects)
-	else:
-		_rebuild_attempts = 0
 
 func _do_rebuild(reason: String = "", refresh_effects: bool = false) -> void:
 	# Ensure we have valid dimensions before rebuilding
@@ -132,6 +128,16 @@ func _update_grid_orientation() -> void:
 	# The grid exclusively owns structure -> padding -> zoom -> focus-scale.
 	# Views only request the transaction; they never write zoom independently.
 	games_grid._batch_apply_layout_state()
+
+func _refresh_grid_dimensions() -> void:
+	"""Recalculate grid layout using the deterministic available size."""
+	if not games_grid:
+		return
+	if UIManager:
+		var available_size = UIManager.compute_grid_available_size(games_grid, self)
+		games_grid.recalculate_layout_with_size(available_size)
+	else:
+		games_grid.refresh_dimensions()
 
 func _on_focus_changed(control: Control):
 	# Traverse up the tree to find if focused control is inside a GameCard
@@ -198,10 +204,6 @@ func _on_card_created(card: Control, _index: int):
 
 func _on_download_requested(game: GameResource):
 	SystemManager.download.queue_game_download(game)
-
-# Status bar removed — kept as no-op so subclasses don't need to override
-func _update_status(_text: String = "") -> void:
-	pass
 
 func _on_setting_changed(_value: Variant, _setting: SettingsVar) -> void:
 	"""Handle settings changes.

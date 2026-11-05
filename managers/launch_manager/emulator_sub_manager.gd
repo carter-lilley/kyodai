@@ -697,7 +697,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 	var base_url = batch_config.get("base_url", "")
 	var url_pattern = batch_config.get("url_pattern", "{name}")
 	var cores = batch_config.get("cores", [])
-	var extract_to = batch_config.get("extract_to", ".")
 	var dynamic_cores = batch_config.get("dynamic_cores", false)
 	
 	# Generate the default-core list from the registry so it
@@ -707,9 +706,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		if cores.is_empty():
 			push_error("[EmulatorManager] No default cores found in registry for RetroArch")
 			return false
-	
-	# Resolve {emulator_dir} templates
-	extract_to = FSM.resolve_emulator_path(extract_to, emulator_id)
 	
 	if base_url == "":
 		push_error("[EmulatorManager] No base_url specified for batch_url_download")
@@ -761,12 +757,6 @@ func _execute_batch_url_download_step(emulator_id: String, step_index: int, batc
 		# Construct URL from pattern
 		var filename = url_pattern.replace("{name}", core_name)
 		var full_url = base_url + filename
-		
-		# Resolve extract directory using universal path resolver
-		var extract_dir = FSM.resolve_emulator_path(extract_to, emulator_id)
-		
-		# Normalize the path to remove "." and ".." components
-		extract_dir = FSM.normalize_path(extract_dir)
 		
 		# Download to emulator directory (for extraction, then delete)
 		var destination_path = FSM.join_paths(launch_manager.registry._get_emulator_directory(emulator_id), filename)
@@ -1243,12 +1233,7 @@ func _handle_download_repo_step(emulator_id: String, emulator_name: String, step
 			if version_to_save == "":
 				version_to_save = tag
 			if version_to_save != "" and not _pending_emulator_version.has(emulator_id):
-				# First download step wins: emulators with multiple download steps
-				# (e.g. shadPS4 core + Qt launcher) must store the first step's
-				# version, since update checks compare against that step's source.
-				# Defer persistence until the entire install succeeds. Stashing it here
-				# and saving it only after all steps complete prevents a failed download
-				# or extraction from leaving a falsely "up to date" stored version.
+				# First download step wins; defer persistence so failed installs don't appear up to date.
 				_pending_emulator_version[emulator_id] = version_to_save
 				print("[EmulatorManager] Resolved emulator version for " + emulator_id + ": " + version_to_save)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config, file_size, asset_sha256),
@@ -1292,12 +1277,7 @@ func _handle_download_scrape_step(emulator_id: String, emulator_name: String, st
 				launch_manager.emulator_extraction_completed.emit(emulator_id, false)
 				return
 			if version != "" and not _pending_emulator_version.has(emulator_id):
-				# First download step wins: emulators with multiple download steps
-				# (e.g. shadPS4 core + Qt launcher) must store the first step's
-				# version, since update checks compare against that step's source.
-				# Defer persistence until the entire install succeeds. Stashing it here
-				# and saving it only after all steps complete prevents a failed download
-				# or extraction from leaving a falsely "up to date" stored version.
+				# First download step wins; defer persistence so failed installs don't appear up to date.
 				_pending_emulator_version[emulator_id] = version
 				print("[EmulatorManager] Resolved emulator version for " + emulator_id + ": " + version)
 			_queue_emulator_download(emulator_id, emulator_name, step_display_name, url, step_index, platform_config),
@@ -2487,7 +2467,6 @@ func _compute_install_progress(emulator_id: String) -> Dictionary:
 	for i in range(install_steps.size()):
 		var step = install_steps[i]
 		var step_name = step.get("step", "")
-		var _step_display_name = _get_step_display_name(step_name, emulator_name)
 		if _validate_install_step(emulator_id, i, install_steps):
 			result["completed_steps"] += 1
 		else:

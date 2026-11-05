@@ -88,8 +88,6 @@ static func normalize_path(path: String) -> String:
 		result = "/".join(resolved)
 		if has_leading_slash:
 			result = "/" + result
-		if result.length() > 1 and result.ends_with("/"):
-			result = result.substr(0, result.length() - 1)
 		
 		return prefix + result
 	
@@ -114,10 +112,6 @@ static func normalize_path(path: String) -> String:
 	# Restore leading slash for absolute paths
 	if has_leading_slash:
 		result = "/" + result
-	
-	# Remove trailing "/" (except for root "/")
-	if result.length() > 1 and result.ends_with("/"):
-		result = result.substr(0, result.length() - 1)
 	
 	return result
 
@@ -1601,18 +1595,6 @@ static func _count_files_in_7z_archive(binary_path: String, archive_path: String
 				if DEBUG_LOG: print("[SystemManager.filesystem] Found total files from summary: " + num_str)
 				return int(num_str)
 			
-			# Fallback: manual parse - find " files" and backtrack to the number
-			var idx = line.find(" files")
-			if idx != -1:
-				var num_start = idx - 1
-				while num_start >= 0 and line[num_start].is_digit():
-					num_start -= 1
-				num_start += 1
-				if num_start < idx:
-					var num_str = line.substr(num_start, idx - num_start)
-					if DEBUG_LOG: print("[SystemManager.filesystem] Found total files from summary (manual): " + num_str)
-					return int(num_str)
-		
 		# Only check last 5 non-empty lines for summary
 		var checked = 0
 		for j in range(i, -1, -1):

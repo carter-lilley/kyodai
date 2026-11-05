@@ -547,14 +547,8 @@ func _prepare_xenia_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 
 	if DEBUG_LOG: print("[GameManager] Xenia: TitleID from ISO: " + title_id)
 
-	var active_title_id = game.get_active_title_id()
-	if active_title_id != "" and active_title_id != title_id:
-		print("[GameManager] Xenia: WARNING - Stored TitleID " + active_title_id + " doesn't match ISO TitleID " + title_id)
-		print("[GameManager] Xenia: Updating to correct TitleID from ISO")
-
-	if active_title_id != title_id:
-		_store_title_id(game, title_id)
-		print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
+	_store_title_id(game, title_id)
+	print("[GameManager] Xenia: Updated database with TitleID: " + title_id)
 
 	return true
 
@@ -960,19 +954,6 @@ func _ensure_vita3k_license(rom_path: String, emulator_dir: String, title_id: St
 	zr.close()
 
 
-## Checks whether the given RPCS3 game path contains actual game files
-func _rpcs3_game_has_files(game_path: String) -> bool:
-	if not FSM.dir_exists(game_path):
-		return false
-	var files = FSM.list_dir(game_path)
-	var actual_files = 0
-	for f in files:
-		if f != "." and f != "..":
-			actual_files += 1
-	if DEBUG_LOG: print("[GameManager] RPCS3: _rpcs3_game_has_files: found " + str(actual_files) + " actual files in " + game_path)
-	return actual_files > 0
-
-
 ## Prepares a PS3 game for launch by extracting ZIP to a folder next to the ZIP
 ## The extracted folder path is passed to aPS3e via the game_dir intent extra
 ## Works on both desktop and Android
@@ -1025,12 +1006,6 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 					var title_id_from_sfo = TitleIDParser.get_title_id_from_sfo_bytes(sfo_bytes)
 					if title_id_from_sfo != "":
 						if DEBUG_LOG: print("[GameManager] RPCS3: Got TitleID from PARAM.SFO: " + title_id_from_sfo)
-						
-						# Verify this matches the folder name or update if needed
-						var folder_name = rom_path.get_file()
-						if folder_name != title_id_from_sfo and folder_name.to_upper() == folder_name:
-							# Folder is named after TitleID, all good
-							pass
 						
 						# Update intent and game file_path
 						intent.rom_path = rom_path
@@ -1137,7 +1112,6 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 				SystemManager.notifications.show_notification("Game files missing - please re-download", SystemManager.notifications.Type.ERROR)
 				return false
 	
-	# Step 1: Extract TitleID from ZIP
 	if DEBUG_LOG: print("[GameManager] RPCS3: Extracting TitleID from ZIP: " + zip_path)
 	var zip_title_id = TitleIDParser.extract_ps3_title_id(zip_path)
 	if zip_title_id == "":
@@ -1194,14 +1168,11 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		print("[GameManager] RPCS3: Emulator disc path: " + emu_disc_path)
 		print("[GameManager] RPCS3: Emulator digital path: " + emu_digital_path)
 	
-	# Step 2: Determine final extraction path (next to the ZIP)
 	var rom_parent_dir = zip_path.get_base_dir()
 	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
 	if DEBUG_LOG: print("[GameManager] RPCS3: Extraction path: " + extract_path)
 	
-	# Step 3: Check if already extracted
-	# Check the emulator-managed locations first (desktop install dir or the
-	# Android resolution anchor), then the legacy library-adjacent folder.
+	# Prefer emulator-managed installs, then the legacy library-adjacent folder.
 	if to_emu_dir:
 		if _ps3_game_has_files(emu_disc_path):
 			if DEBUG_LOG: print("[GameManager] RPCS3: Game already extracted at disc path: " + emu_disc_path)
@@ -1258,7 +1229,6 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 	
 	if DEBUG_LOG: print("[GameManager] RPCS3: Game not extracted, will extract to: " + extract_path)
 	
-	# Step 4: Extract ZIP
 	var rpcs3_notify_id = SystemManager.notifications.show_notification(
 		"Extracting " + game.get_display_name() + "...",
 		SystemManager.notifications.Type.INFO,
@@ -1307,7 +1277,6 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		push_error("[GameManager] RPCS3: Failed to extract PS3 game ZIP: " + zip_path)
 		return false
 	
-	# Step 5: Find PARAM.SFO and determine format
 	var sfo_path = _find_ps3_param_sfo(extract_target)
 	
 	if sfo_path == "":
@@ -1328,7 +1297,6 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		final_extract_path = emu_disc_path if is_disc_format else emu_digital_path
 		if DEBUG_LOG: print("[GameManager] RPCS3: Emulator-managed final path: " + final_extract_path)
 	
-	# Step 6: Handle wrapper folder (e.g., "Soulcalibur IV/PS3_GAME/" -> "PS3_GAME/")
 	var game_root = sfo_dir.get_base_dir() if is_disc_format else sfo_dir
 	if to_emu_dir and game_root != final_extract_path:
 		if is_disc_format:
@@ -1371,17 +1339,14 @@ func _prepare_rpcs3_game(game: GameResource, intent: LaunchIntent, is_shuffler: 
 		if FSM.dir_exists(extract_target):
 			FSM.delete_dir_recursive(extract_target)
 	
-	# Step 7: Verify extracted files
 	if not _ps3_game_has_files(final_extract_path):
 		push_error("[GameManager] RPCS3: Game files missing after extraction at: " + final_extract_path)
 		SystemManager.notifications.show_notification("Failed to install PS3 game - files missing", SystemManager.notifications.Type.ERROR)
 		return false
 	
-	# Step 8: Update intent to point to extracted folder
+	# Use the extracted folder; only persist it outside shuffler sessions.
 	intent.rom_path = final_extract_path
 	
-	# Also update game.file_path so create_launch_intent() picks up the extracted folder,
-	# but only persist it outside of shuffler sessions.
 	if not is_shuffler:
 		_store_file_path(game, final_extract_path)
 		print("[GameManager] RPCS3: Updated game.file_path to: " + final_extract_path)
@@ -1695,7 +1660,6 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 			return false
 		return _prepare_shadps4_zar(game, rom_path)
 
-	# Step 1: Extract TitleID from ZIP
 	if DEBUG_LOG: print("[GameManager] shadPS4: Extracting TitleID from ZIP...")
 	var zip_title_id = TitleIDParser.extract_ps4_title_id(rom_path)
 	if zip_title_id == "":
@@ -1704,39 +1668,29 @@ func _prepare_shadps4_game(game: GameResource, intent: LaunchIntent) -> bool:
 		return false
 	if DEBUG_LOG: print("[GameManager] shadPS4: TitleID from ZIP: " + zip_title_id)
 	
-	# If stored title_id doesn't match the ZIP, update it
-	var active_title_id = game.get_active_title_id()
-	if active_title_id != "" and active_title_id != zip_title_id:
-		print("[GameManager] shadPS4: WARNING - Stored TitleID " + active_title_id + " doesn't match ZIP TitleID " + zip_title_id)
-		print("[GameManager] shadPS4: Updating to correct TitleID from ZIP")
-	
-	if active_title_id != zip_title_id:
-		_store_title_id(game, zip_title_id)
-		print("[GameManager] shadPS4: Updated database with TitleID: " + zip_title_id)
+	# Store the newly extracted TitleID.
+	_store_title_id(game, zip_title_id)
+	print("[GameManager] shadPS4: Updated database with TitleID: " + zip_title_id)
 	
 	var title_id = game.get_active_title_id()
 	if DEBUG_LOG: print("[GameManager] shadPS4: Using TitleID: " + title_id)
 	
-	# Step 2: Determine extraction path (next to the ZIP in the ps4 roms folder)
 	var rom_parent_dir = rom_path.get_base_dir()
 	var extract_path = FSM.join_paths(rom_parent_dir, title_id)
 	if DEBUG_LOG: print("[GameManager] shadPS4: Extraction path: " + extract_path)
 	
-	# Step 3: Check if already extracted
 	if _shadps4_game_has_files(extract_path):
 		if DEBUG_LOG: print("[GameManager] shadPS4: Game already extracted at: " + extract_path)
 		return true
 	
 	if DEBUG_LOG: print("[GameManager] shadPS4: Game not extracted, will extract to: " + extract_path)
 	
-	# Step 4: Create extraction directory
 	if not FSM.dir_exists(extract_path):
 		if DEBUG_LOG: print("[GameManager] shadPS4: Creating extraction directory: " + extract_path)
 		if not FSM.make_dir_recursive(extract_path):
 			push_error("[GameManager] shadPS4: Failed to create extraction directory: " + extract_path)
 			return false
 	
-	# Step 5: Extract ZIP to extraction path
 	var shadps4_notify_id = SystemManager.notifications.show_notification(
 		"Extracting " + game.get_display_name() + "...",
 		SystemManager.notifications.Type.INFO,
@@ -1782,14 +1736,8 @@ func _prepare_shadps4_zar(game: GameResource, rom_path: String) -> bool:
 
 	if DEBUG_LOG: print("[GameManager] shadPS4: TitleID from ZAR: " + title_id)
 
-	var active_title_id = game.get_active_title_id()
-	if active_title_id != "" and active_title_id != title_id:
-		print("[GameManager] shadPS4: WARNING - Stored TitleID " + active_title_id + " doesn't match ZAR TitleID " + title_id)
-		print("[GameManager] shadPS4: Updating to correct TitleID from ZAR")
-
-	if active_title_id != title_id:
-		_store_title_id(game, title_id)
-		print("[GameManager] shadPS4: Updated database with TitleID: " + title_id)
+	_store_title_id(game, title_id)
+	print("[GameManager] shadPS4: Updated database with TitleID: " + title_id)
 
 	return true
 

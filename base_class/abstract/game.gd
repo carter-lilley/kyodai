@@ -113,17 +113,6 @@ const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 ## Steam App ID for Steam games (source == "steam")
 @export var steam_app_id: int = 0
 
-# Transient fields for sync tracking (not persisted)
-# Used by RomM sync flow via reflection/metascript.
-@warning_ignore("unused_private_class_variable")
-var _sync_db_done: bool = false
-@warning_ignore("unused_private_class_variable")
-var _sync_cover_done: bool = false
-@warning_ignore("unused_private_class_variable")
-var _sync_db_success: bool = false
-@warning_ignore("unused_private_class_variable")
-var _sync_processed: bool = false  # Guard to prevent double-processing
-
 ## Transient: RomM's own "main sibling" flag for this rom (rom_user.is_main_sibling),
 ## captured during sync to pick the canonical master entry for a sibling group.
 var romm_is_main_sibling: bool = false

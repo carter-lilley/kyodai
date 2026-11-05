@@ -63,7 +63,6 @@ func _build_content() -> void:
 	_option_button.placeholder_text = "Select a collection..."
 	_option_button.leading_icon = option_icon
 	_option_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_option_button.item_selected.connect(_on_collection_selected)
 	vbox.add_child(_option_button)
 	
 	_refresh_hint = Label.new()
@@ -94,9 +93,6 @@ func _on_confirm() -> void:
 		return
 	collection_selected.emit(id, collection_name)
 	dismiss()
-
-func _on_collection_selected(_index: int) -> void:
-	pass
 
 func _load_collections() -> void:
 	var raw = DataManager.get_collections()
@@ -155,6 +151,3 @@ func _on_action_pressed(label: String) -> void:
 		_on_confirm()
 	elif label == "Cancel":
 		_on_cancel()
-
-func _on_close_button_pressed() -> void:
-	dismiss()

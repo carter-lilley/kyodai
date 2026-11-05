@@ -40,7 +40,6 @@ vec3 calculate_particles(vec2 uv, float time) {
     vec3 circles = vec3(0.0);
     
     for (float k = 0.0; k < PARTICLE_COUNT; k++) {
-        float i = (k / 7.0) * 3.14159265359;
         float speed = k * 0.1;
         float DISTANCE = 0.2;
         

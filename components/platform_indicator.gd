@@ -13,7 +13,6 @@ signal filter_clicked()
 @onready var _platform_buttons: Array[M3Button] = []
 
 const MAX_PLATFORM_COUNT: int = 5
-const MIN_PLATFORM_COUNT: int = 1
 var _platform_count: int = MAX_PLATFORM_COUNT
 
 const WIDTH_THRESHOLD_5_SMALL: float = 720.0
@@ -342,28 +341,7 @@ func set_filter_active(is_active: bool) -> void:
 	_filter_button.icon_name = "filter-check" if is_active else "filter-check-outline"
 
 func show_search_mode(query: String):
-	if _platform_buttons.is_empty():
-		return
-
-	var center = _get_center_platform_index()
-
-	for i in range(_platform_count):
-		var btn = _platform_buttons[i]
-
-		if i == center:
-			btn.text = "SEARCH"
-			btn.disabled = false
-			btn.button_variant = M3Button.Variant.FILLED
-		else:
-			if abs(i - center) == 1:
-				var display_query = query
-				if display_query.length() > 12:
-					display_query = display_query.substr(0, 9) + "..."
-				btn.text = display_query
-			else:
-				btn.text = ""
-			btn.disabled = true
-			btn.button_variant = M3Button.Variant.ELEVATED
+	show_filter_mode("SEARCH", query)
 
 ## Mirror of search mode for an externally-applied filter (e.g. a studio chip
 ## in the details sheet): center reads the kind label, neighbors show the value.

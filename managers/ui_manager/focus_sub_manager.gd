@@ -23,8 +23,6 @@ extends Manager
 ## the manager enables transform notifications on whatever it tracks, so
 ## ancestor motion (sheet slides, dialog scale-ins) reaches the ring.
 
-const DEBUG_LOG: bool = false
-
 ## CanvasLayer-equivalent stacking layer for the ring canvas (max is 128).
 const CANVAS_LAYER: int = 128
 

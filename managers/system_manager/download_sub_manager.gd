@@ -109,7 +109,7 @@ const CHUNK_FALLBACK_TO_SINGLE_STREAM: bool = true
 const CHUNK_MAX_TOTAL_TIME_MS: int = 10 * 60 * 1000  # Hard ceiling per chunk (10 min)
 const CHUNK_WATCHDOG_INTERVAL_SEC: float = 10.0
 
-# Polling interval for HTTPClient (2 seconds between polls when no data)
+# Polling interval for HTTPClient (100 ms between polls when no data)
 const POLLING_INTERVAL_MS: int = 100
 
 # Per-download resume state file (sidecar next to destination)
@@ -187,12 +187,9 @@ class ChunkedDownloadInfo:
 	var temp_dir: String = ""
 	var final_path: String = ""
 	var partial_path: String = ""
-	var use_chunking: bool = false
 	var in_place_assembly: bool = false  # Write chunks directly to a sparse partial file
 	var final_file_mutex: Mutex = null  # Serializes writes to the partial file (if shared handle)
 	var progress_mutex: Mutex = Mutex.new()  # Guards temp_bytes_downloaded (written by worker threads)
-	var active_downloads: int = 0
-	var download_callback: Callable
 	var progress_timer: Timer = null  # Timer for polling chunk progress
 	var last_progress_update: float = 0.0  # Last progress value to reduce emissions
 	var headers: Array = []
@@ -1143,7 +1140,6 @@ func cancel(item_id: String) -> bool:
 			if item.notification_id != -1:
 				SystemManager.notifications.dismiss_notification(item.notification_id)
 				item.notification_id = -1
-			_cleanup_item(item)
 			_queue.remove_at(i)
 			queue_changed.emit()
 			# Settle completion watchers / download groups: without this a
@@ -1163,7 +1159,6 @@ func cancel(item_id: String) -> bool:
 			item.notification_id = -1
 		# Clean up chunked download resources if this was a chunked download
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 		queue_changed.emit()
 		download_completed.emit(item_id, false, "Cancelled")
 		_active_items.erase(item_id)
@@ -1398,7 +1393,6 @@ func _start_download(item: QueueItem):
 	if item.download_info.is_empty():
 		item.status = "failed"
 		item.error_message = "Failed to start download"
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
 		queue_changed.emit()
@@ -1410,7 +1404,6 @@ func _start_download(item: QueueItem):
 	if item.http_request == null:
 		item.status = "failed"
 		item.error_message = "Failed to start download"
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
 		queue_changed.emit()
@@ -1520,7 +1513,6 @@ func _check_range_and_start_chunked(item: QueueItem, headers: Array):
 			if item.download_info.is_empty():
 				item.status = "failed"
 				item.error_message = "Failed to start download"
-				_cleanup_item(item)
 				download_completed.emit(item.id, false, item.error_message)
 				_active_items.erase(item.id)
 				queue_changed.emit()
@@ -1576,7 +1568,6 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 		push_error("[SystemManager.download] Failed to create chunk temp directory: " + temp_dir)
 		item.status = "failed"
 		item.error_message = "Failed to create temp directory"
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
 		queue_changed.emit()
@@ -1590,7 +1581,6 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 	chunked_info.final_path = item.destination_path
 	chunked_info.total_chunks = num_chunks
 	chunked_info.concurrency = concurrency
-	chunked_info.use_chunking = true
 
 	# Decide whether to use in-place assembly.
 	# Desktop: create a sparse partial next to the destination.
@@ -1688,7 +1678,6 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 				push_error("[SystemManager.download] Failed to create Android partial file: " + chunked_info.partial_path)
 				item.status = "failed"
 				item.error_message = "Failed to create partial file"
-				_cleanup_item(item)
 				download_completed.emit(item.id, false, item.error_message)
 				_active_items.erase(item.id)
 				queue_changed.emit()
@@ -1772,16 +1761,12 @@ func _start_chunked_download(item: QueueItem, headers: Array):
 
 	# Progress is emitted by the progress timer polling worker-recorded byte counts
 
-## Downloads a single chunk on a worker thread using HTTPClient
-## Called by the thread pool - runs on a background thread
-## Uses connection pooling to reuse TLS connections across chunks
-## Downloads a single chunk on a worker thread using HTTPClient.
-## Returns a result dictionary with success, hashes, and retry hints.
-## Called by the thread pool - runs on a background thread.
 func _is_chunk_work_cancelled(item_id: String) -> bool:
 	"""True when the app is shutting down or the chunked download was cleaned up (cancelled)."""
 	return MemorySubManager.is_shutting_down() or not _chunked_downloads.has(item_id)
 
+## Downloads one chunk on a worker thread using a pooled HTTPClient connection.
+## Returns success, hashes, byte counts, and retry hints.
 func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	var url = chunk_data.url
 	var temp_path = chunk_data.temp_path
@@ -1813,12 +1798,10 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	var chunk_deadline_ms = chunk_start_time + CHUNK_MAX_TOTAL_TIME_MS
 	if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Starting chunk " + str(chunk_index) + " on thread " + str(thread_index) + " at time=" + str(chunk_start_time))
 
-	# Parse URL to get components
 	var url_parts = SystemManager.network.parse_url(url)
 
 	# Get or create connection from pool (thread-safe access)
 	var http: HTTPClient
-	var _was_reused = false
 
 	_connection_pool_mutex.lock()
 	if _download_connection_pools.has(item_id):
@@ -1838,7 +1821,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 			# Check if connection is still valid WITHOUT creating a new one under lock
 			var needs_new_connection = not _is_connection_valid(http)
 			if not needs_new_connection:
-				_was_reused = true
 				if DEBUG_LOG: print("[SystemManager.download] [DEBUG] Thread " + str(thread_index) + " reusing connection (status=" + str(http.get_status()) + ") for chunk " + str(chunk_index))
 			_connection_pool_mutex.unlock()
 
@@ -1867,10 +1849,9 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 		result.error = "Failed to get/create connection"
 		return result
 
-	# Prepare headers
+	# Supply required HTTP/1.1, keep-alive, and generic request headers when absent.
 	var request_headers = headers.duplicate()
 
-	# Add required Host header for HTTP/1.1
 	var has_host = false
 	for header in request_headers:
 		if header.to_lower().begins_with("host:"):
@@ -1879,7 +1860,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	if not has_host:
 		request_headers.append("Host: " + url_parts.host)
 
-	# Add User-Agent if not present
 	var has_user_agent = false
 	for header in request_headers:
 		if header.begins_with("User-Agent:"):
@@ -1888,7 +1868,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	if not has_user_agent:
 		request_headers.append("User-Agent: Kyodai-Launcher/1.0")
 
-	# Add Connection header for keep-alive
 	var has_connection = false
 	for header in request_headers:
 		if header.to_lower().begins_with("connection:"):
@@ -1897,7 +1876,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 	if not has_connection:
 		request_headers.append("Connection: keep-alive")
 
-	# Add Accept header
 	var has_accept = false
 	for header in request_headers:
 		if header.to_lower().begins_with("accept:"):
@@ -2088,7 +2066,6 @@ func _download_chunk_on_thread(chunk_data: Dictionary) -> Dictionary:
 				if range_match:
 					var range_start = int(range_match.get_string(1))
 					var range_end = int(range_match.get_string(2))
-					var _range_total = int(range_match.get_string(3))
 
 					if range_start == start_byte and range_end == end_byte:
 						content_range_valid = true
@@ -2246,21 +2223,18 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 		return
 
 	var chunked_info = _chunked_downloads[item_id]
-	var item = chunked_info.item
 	var chunk = chunked_info.chunks[chunk_index]
 
 	var success = false
 	var actual_hash = ""
 	var expected_hash = ""
 	var should_delete_partial = false
-	var _bytes_downloaded = 0
 
 	if result is Dictionary:
 		success = result.get("success", false)
 		actual_hash = result.get("actual_hash", "")
 		expected_hash = result.get("expected_hash", "")
 		should_delete_partial = result.get("should_delete_partial", false)
-		_bytes_downloaded = result.get("bytes_downloaded", 0)
 	elif result is bool:
 		success = result
 	else:
@@ -2300,23 +2274,7 @@ func _update_chunk_download_progress(item_id: String, chunk_index: int, result: 
 	_save_download_state(chunked_info)
 
 	# Update overall progress based on actual bytes
-	chunked_info.progress_mutex.lock()
-	var total_downloaded_bytes = 0
-	for c in chunked_info.chunks:
-		if c.completed:
-			total_downloaded_bytes += (c.end_byte - c.start_byte + 1)
-		else:
-			total_downloaded_bytes += c.temp_bytes_downloaded
-	chunked_info.progress_mutex.unlock()
-
-	var total_size = float(item.expected_file_size)
-	if total_size > 0:
-		var progress = float(total_downloaded_bytes) / total_size
-		progress = min(progress, 0.99)
-		if abs(progress - chunked_info.last_progress_update) >= _get_progress_threshold():
-			chunked_info.last_progress_update = progress
-			item.progress = progress
-			download_progress.emit(item_id, progress)
+	_poll_chunk_progress(item_id)
 
 ## Called when all chunks have been processed by the thread pool
 func _on_all_chunks_complete(item_id: String, headers: Array, _results: Dictionary = {}):
@@ -2515,7 +2473,6 @@ func _handle_failed_chunks_thread_pool(item_id: String, headers: Array):
 			_delete_download_state(item.destination_path)
 			if FSM.file_exists(item.destination_path):
 				FSM.delete_file(item.destination_path)
-			_cleanup_item(item)
 			download_completed.emit(item_id, false, item.error_message)
 			_active_items.erase(item_id)
 			queue_changed.emit()
@@ -2551,7 +2508,6 @@ func _start_single_stream_fallback(item_id: String, headers: Array):
 	if item.download_info.is_empty():
 		item.status = "failed"
 		item.error_message = "Failed to start single-stream fallback"
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
 		queue_changed.emit()
@@ -2829,7 +2785,6 @@ func _fail_flush_download(item_id: String, error_msg: String) -> void:
 	item.status = "failed"
 	item.error_message = error_msg
 	_cleanup_chunked_download(item_id)
-	_cleanup_item(item)
 	download_completed.emit(item_id, false, error_msg)
 	_active_items.erase(item_id)
 	queue_changed.emit()
@@ -2946,7 +2901,6 @@ func _reassemble_chunks(item_id: String):
 		item.status = "failed"
 		item.error_message = "Chunk files missing or corrupted before reassembly"
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 		download_completed.emit(item_id, false, item.error_message)
 		_active_items.erase(item_id)
 		queue_changed.emit()
@@ -2982,7 +2936,6 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		item.status = "failed"
 		item.error_message = "Plugin not available for reassembly"
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item_id)
 		queue_changed.emit()
@@ -3003,7 +2956,6 @@ func _reassemble_chunks_android(item_id: String, chunked_info: ChunkedDownloadIn
 		item.status = "failed"
 		item.error_message = "Failed to reassemble chunks"
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item_id)
 		queue_changed.emit()
@@ -3093,7 +3045,6 @@ func _reassemble_chunks_desktop(item_id: String, chunked_info: ChunkedDownloadIn
 			item.status = "failed"
 			item.error_message = "Failed to reassemble chunks"
 			_cleanup_chunked_download(item_id)
-			_cleanup_item(item)
 			download_completed.emit(item.id, false, item.error_message)
 			_active_items.erase(item_id)
 			queue_changed.emit()
@@ -3191,7 +3142,6 @@ func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_
 		item.status = "failed"
 		item.error_message = "Plugin not available for copy"
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 		download_completed.emit(item_id, false, item.error_message)
 		_active_items.erase(item_id)
 		queue_changed.emit()
@@ -3222,7 +3172,6 @@ func _plugin_copy_partial_to_final(item_id: String, partial_path: String, final_
 			item.status = "failed"
 			item.error_message = "Failed to copy download to destination"
 			_cleanup_chunked_download(item_id)
-			_cleanup_item(item)
 			download_completed.emit(item_id, false, item.error_message)
 			_active_items.erase(item_id)
 			queue_changed.emit()
@@ -3259,7 +3208,6 @@ func _godot_copy_partial_to_final(item_id: String, partial_path: String, final_p
 				item.status = "failed"
 				item.error_message = "Failed to copy download to destination"
 				_cleanup_chunked_download(item_id)
-				_cleanup_item(item)
 				download_completed.emit(item_id, false, item.error_message)
 				_active_items.erase(item_id)
 				queue_changed.emit()
@@ -3336,7 +3284,6 @@ func _finish_reassembly_success(item_id: String, item: QueueItem, reassembly_tem
 		item.status = "failed"
 		item.error_message = "Download corrupted: size mismatch (expected " + str(item.expected_file_size) + ", got " + str(final_size) + ")"
 		_cleanup_chunked_download(item_id)
-		_cleanup_item(item)
 
 		# Clean up the corrupted file
 		if FSM.file_exists(reassembly_temp_path):
@@ -3367,15 +3314,8 @@ func _cleanup_chunked_download(item_id: String):
 	var chunked_info = _chunked_downloads[item_id]
 
 	# Stop progress timer and watchdog
-	if chunked_info.progress_timer and is_instance_valid(chunked_info.progress_timer):
-		chunked_info.progress_timer.stop()
-		chunked_info.progress_timer.queue_free()
-		chunked_info.progress_timer = null
-
-	if chunked_info.watchdog_timer and is_instance_valid(chunked_info.watchdog_timer):
-		chunked_info.watchdog_timer.stop()
-		chunked_info.watchdog_timer.queue_free()
-		chunked_info.watchdog_timer = null
+	_stop_chunked_progress_timer(item_id)
+	_stop_chunked_watchdog_timer(item_id)
 
 	# Cancel any queued chunk tasks in the thread pool
 	if chunked_info.batch_id != -1:
@@ -3389,7 +3329,7 @@ func _cleanup_chunked_download(item_id: String):
 
 	# Clean up temp directory
 	if FSM.dir_exists(chunked_info.temp_dir):
-		_cleanup_temp_dir(chunked_info.temp_dir)
+		FSM.delete_dir_recursive(chunked_info.temp_dir)
 
 	# Close and clean up connection pool
 	_connection_pool_mutex.lock()
@@ -3484,7 +3424,6 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		item.status = "failed"
 		print("[SystemManager.download] Download failed for " + item.name + ": " + item.error_message)
 		_notify_download_failed(item)
-		_cleanup_item(item)
 		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, item.error_message)
 		_active_items.erase(item.id)
@@ -3499,7 +3438,6 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 		item.error_message = "Download file not found"
 		print("[SystemManager.download] Download file not found after completion: " + item.destination_path)
 		_notify_download_failed(item)
-		_cleanup_item(item)
 		_stop_foreground_service()  # Stop foreground service on failure
 		download_completed.emit(item.id, false, "Download file not found")
 		_active_items.erase(item.id)
@@ -3518,7 +3456,6 @@ func _on_file_download_complete(item: QueueItem, success: bool, error_msg: Strin
 			item.error_message = "Downloaded size mismatch (%d of %d bytes)" % [actual_size, item.expected_file_size]
 			print("[SystemManager.download] " + item.error_message + ": " + item.destination_path)
 			_notify_download_failed(item)
-			_cleanup_item(item)
 			_stop_foreground_service()
 			download_completed.emit(item.id, false, item.error_message)
 			_active_items.erase(item.id)
@@ -3549,7 +3486,6 @@ func _check_download_timeout(item_id: String):
 		start_time = prog.start_time_ms
 		last_progress = prog.last_progress_time_ms
 
-	var _item = _active_items[item_id]
 	var elapsed_since_start = current_time - start_time
 
 	# Check for overall timeout
@@ -3589,7 +3525,6 @@ func _fail_download(item_id: String, error_msg: String):
 			FSM.delete_file(item.destination_path)
 
 	_cleanup_download_tracking(item_id)
-	_cleanup_item(item)
 	_stop_foreground_service()  # Stop foreground service on failure
 
 	_notify_download_failed(item)
@@ -3653,7 +3588,6 @@ func _start_extraction(item: QueueItem):
 				item.status = "completed"
 				item.progress = 1.0
 				item.extracted_count = item.total_count
-				_cleanup_item(item)
 				_active_items.erase(item.id)
 				_stop_foreground_service()
 
@@ -3663,7 +3597,6 @@ func _start_extraction(item: QueueItem):
 			else:
 				item.status = "failed"
 				item.error_message = error_msg if error_msg != "" else "Extraction failed"
-				_cleanup_item(item)
 				_active_items.erase(item.id)
 				_stop_foreground_service()
 				extraction_completed.emit(item.id, false, item.error_message)
@@ -3734,11 +3667,6 @@ func _finish_download_completion(item: QueueItem):
 		_active_items.erase(item.id)
 		queue_changed.emit()
 		_process_queue()
-
-func _cleanup_item(item: QueueItem):
-	if item.notification_id != -1:
-		# Let notification auto-dismiss on completion/failure
-		pass
 
 # ==================== IMAGE DOWNLOADS (THROTTLED) ====================
 
@@ -4130,11 +4058,6 @@ func _start_image_download(url: String, cache_path: String, request_id: int, enq
 		_process_image_download_queue()
 	)
 
-## Helper function to recursively clean up a temp directory
-func _cleanup_temp_dir(dir_path: String) -> void:
-	FSM.delete_dir_recursive(dir_path)
-
-
 func _exit_tree() -> void:
 	Performance.remove_custom_monitor("download/image_active")
 	Performance.remove_custom_monitor("download/image_pending")
@@ -4152,8 +4075,6 @@ func shutdown() -> void:
 		cancel(item_id)
 
 	# Clear any queued items without starting them.
-	for item in _queue:
-		_cleanup_item(item)
 	_queue.clear()
 
 	# Close any leftover connection pools.

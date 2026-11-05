@@ -1,9 +1,7 @@
 class_name LibraryAppearanceSettingsView
 extends Control
 
-## Library Appearance settings page.
-## Replaces the Library Appearance tab extracted from SettingsView.
-## Builds controls directly from DataManager and owns preset UI.
+## Library Appearance controls and theme-preset UI.
 
 var _library_general_menu: SettingsMenu = null
 
@@ -81,8 +79,6 @@ func _apply_scale() -> void:
 
 func refresh_scale() -> void:
 	_apply_scale()
-	if has_method("refresh_theme"):
-		call("refresh_theme")
 
 func _create_preset_section(vbox: VBoxContainer) -> void:
 	var preset_section := SettingsSection.new("Theme Presets", "palette")

@@ -25,13 +25,6 @@ vec2 rotate2d(vec2 p, float angle) {
 	return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
-// Approximate signed distance to an ellipse, in pixels.
-float ellipse_sdf(vec2 p, vec2 center, vec2 radii, float angle) {
-	vec2 q = rotate2d(p - center, angle);
-	float d = length(q / radii) - 1.0;
-	return d * min(radii.x, radii.y);
-}
-
 // Approximate signed distance to a superellipse (n=2 ellipse, higher = boxier).
 float superellipse_sdf(vec2 p, vec2 center, vec2 radii, float exponent, float angle) {
 	vec2 q = rotate2d(p - center, angle);

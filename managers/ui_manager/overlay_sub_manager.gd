@@ -16,7 +16,7 @@ var _shuffler_dialog: ShufflerConfigDialog = null
 # Game details sheet (owned by OverlayManager, not a static singleton)
 var _game_details_sheet: GameDetailsSheet = null
 
-# Modal management (now uses M3Menu)
+# Modal management
 var _active_menu: M3Menu = null
 var _modal_context: Dictionary = {}
 # Anchor of the most recent context menu, used to restore focus to the
@@ -252,19 +252,6 @@ func _add_overlay_to_root(overlay: Node) -> void:
 
 # ==================== DS TRANSITION POLICIES ====================
 
-## What happens to each overlay type when dual-screen mode shifts.
-enum DSPolicy { DISMISS, REPARENT, LEAVE }
-
-const DS_POLICIES := {
-	"menu": DSPolicy.DISMISS,
-	"snackbar": DSPolicy.DISMISS,
-	"dialog": DSPolicy.DISMISS,
-	"tooltip": DSPolicy.DISMISS,
-	"sheet": DSPolicy.DISMISS,
-	"bottom_sheet": DSPolicy.DISMISS,
-	"search": DSPolicy.DISMISS,
-}
-
 ## Hidden persistent overlays (settings dialog, details sheet, search) tracked
 ## via WeakRefs so they can be reparented on DS shifts even while not shown.
 var _persistent_overlays: Array[WeakRef] = []
@@ -275,21 +262,15 @@ func register_persistent_overlay(overlay: M3Overlay) -> void:
 			return
 	_persistent_overlays.append(weakref(overlay))
 
-## Dismiss active overlays per DS_POLICIES. Call before the overlay parent
-## changes so nothing is stranded in a viewport that is going away.
+## Dismiss active overlays before the overlay parent changes so nothing is
+## stranded in a viewport that is going away.
 func apply_ds_dismiss_policies() -> void:
 	for overlay in M3Overlay.get_active_overlays():
 		# Opted-in persistent overlays ride the swap: reparent_persistent_overlays
 		# moves them to the new parent and on_viewport_settled re-stamps geometry.
 		if overlay.survive_ds_swap:
 			continue
-		match DS_POLICIES.get(overlay.overlay_type, DSPolicy.DISMISS):
-			DSPolicy.DISMISS:
-				overlay.dismiss()
-			DSPolicy.REPARENT:
-				overlay.ensure_overlay_parent()
-			DSPolicy.LEAVE:
-				pass
+		overlay.dismiss()
 
 ## Reparent hidden persistent overlays to the current overlay parent. Call
 ## after the "m3_overlay_parent" group has been updated for the new mode.

@@ -23,7 +23,7 @@ func _setup_shader() -> void:
 	var mat = _material as ShaderMaterial
 	mat.shader = preload("res://shaders/card/drop_shadow.gdshader")
 
-func _compute_draw_rect() -> Rect2:
+func get_draw_rect() -> Rect2:
 	if not media_container:
 		return Rect2()
 
@@ -36,9 +36,6 @@ func _compute_draw_rect() -> Rect2:
 	var margin_x = margin_ratio * card_size.x
 	var margin_y = margin_ratio * card_size.y
 	return Rect2(Vector2(-margin_x, -margin_y), card_size + Vector2(margin_x * 2.0, margin_y * 2.0))
-
-func get_draw_rect() -> Rect2:
-	return _compute_draw_rect()
 
 func _update_shader_params() -> void:
 	if not media_container:
@@ -59,7 +56,7 @@ func _update_shader_params() -> void:
 	var card_min = min(card_size.x, card_size.y)
 	var softness_pixels = shadow_softness * card_min
 
-	# Match _compute_draw_rect exactly: all three values are still ratios at
+	# Match get_draw_rect exactly: all three values are still ratios at
 	# this point. Converting them before computing margin double-scales the rect.
 	var margin_ratio = SHADOW_MARGIN_RATIO + max(abs(shadow_offset_x), abs(shadow_offset_y)) + shadow_softness
 	var margin_x = card_size.x * margin_ratio

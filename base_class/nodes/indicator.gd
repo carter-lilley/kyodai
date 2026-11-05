@@ -70,7 +70,6 @@ func set_status(status: Status, message: String = "", tooltip: String = "") -> v
 			_status_label.text = text_prefix + (message if not message.is_empty() else "Warning")
 	
 	if not tooltip.is_empty():
-		_tooltip_text = tooltip
 		_status_dot.tooltip_text = tooltip
 		_status_label.tooltip_text = tooltip
 
@@ -86,7 +85,6 @@ func get_status_text() -> String:
 	return _status_label.text if _status_label else ""
 
 func set_tooltip(tooltip: String) -> void:
-	_tooltip_text = tooltip
 	if _status_dot:
 		_status_dot.tooltip_text = tooltip
 	if _status_label:
@@ -95,5 +93,3 @@ func set_tooltip(tooltip: String) -> void:
 func refresh_theme() -> void:
 	if _status_label:
 		_status_label.refresh_theme()
-
-var _tooltip_text: String = ""

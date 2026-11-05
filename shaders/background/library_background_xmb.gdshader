@@ -7,19 +7,15 @@ shader_type canvas_item;
 uniform float time_scale : hint_range(0.0, 2.0) = 1.0;
 uniform bool show_dust = true;
 uniform float wave_intensity : hint_range(0.0, 5.0) = 0.812;
-uniform float star_threshold : hint_range(0.9, 1.0) = 1.0;
 uniform float wave_thickness : hint_range(0.5, 5.0) = 0.5;
 uniform float wave_amplitude : hint_range(0.0, 3.0) = 0.324;
 uniform float wave_vertical_offset : hint_range(-1.0, 1.0) = -0.2;
-uniform sampler2D noise_texture : filter_linear, repeat_enable;
 
 // Single user color - dust tint is derived from this
 uniform vec4 wave_color : source_color = vec4(0.04, 0.69, 0.87, 1.0);
 
 const float THRESHOLD = 0.99;
-const float MIN_DIST = 0.13;
 const float MAX_DIST = 40.0;
-const int MAX_DRAWS = 40;
 
 // Hash function (Dave Hoskins style)
 float hash12(vec2 p) {
@@ -28,12 +24,7 @@ float hash12(vec2 p) {
 	return float(n) * 2.328306437080797e-10;
 }
 
-// Value noise using texture
-float value2d_tex(vec2 p) {
-	return texture(noise_texture, p / vec2(1024.0, 1024.0)).r;
-}
-
-// Alternative value noise using hash
+// Value noise using hash
 float value2d_hash(vec2 p) {
 	vec2 pg = floor(p);
 	vec2 pc = p - pg;
@@ -70,10 +61,6 @@ float get_stars(vec2 p, float a, float t, float time) {
 	);
 	return smoothstep(a, a + t, s) * pow(value2d_hash(p * 0.1 + time) * 0.5 + 0.5, 8.3);
 }
-
-// Shorthand for .5+.5*sin/cos
-float s5(float x) { return 0.5 + 0.5 * sin(x); }
-float c5(float x) { return 0.5 + 0.5 * cos(x); }
 
 // Get dust particles
 float get_dust(vec2 p, vec2 size, float f, float time, vec2 resolution) {
@@ -114,22 +101,9 @@ float sdf(vec3 p, float time) {
 	return dist;
 }
 
-// Normal calculation
-vec3 norm(vec3 p, float time) {
-	const vec2 k = vec2(1.0, -1.0);
-	const float t = 0.001;
-	return normalize(
-		k.xyy * sdf(p + t * k.xyy, time) +
-		k.yyx * sdf(p + t * k.yyx, time) +
-		k.yxy * sdf(p + t * k.yxy, time) +
-		k.xxx * sdf(p + t * k.xxx, time)
-	);
-}
-
 // Raymarching with density accumulation for soft Vita-style waves
-vec2 raymarch(vec3 o, vec3 d, float omega, float time) {
+vec2 raymarch(vec3 o, vec3 d, float time) {
 	float t = 0.0;
-	float density = 0.0;
 	float step_size = 0.1;
 	float total_density = 0.0;
 	int samples = 0;
@@ -168,7 +142,7 @@ void fragment() {
 	vec3 o = vec3(0.0);
 	vec3 d = vec3((U - 0.5 * resolution) / resolution.y, 1.0);
 	
-	vec2 mg = raymarch(o, d, 1.2, time);
+	vec2 mg = raymarch(o, d, time);
 	float wave_density = mg.x;
 	float wave_glow = mg.y;
 	

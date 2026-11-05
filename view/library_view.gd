@@ -4,7 +4,6 @@ extends View
 const DEBUG_LOG: bool = false
 
 # games_grid is declared in base View class; initialize here
-@onready var margin_container: MarginContainer = $MarginContainer
 # The platform indicator lives in the top control bar (toolbar-owned); resolved
 # in _ready() via UIManager.toolbar.get_platform_indicator().
 var platform_indicator: PlatformIndicator = null
@@ -60,8 +59,6 @@ func _exit_tree() -> void:
 			DataManager.games_removed.disconnect(_on_games_removed)
 		if DataManager.sync_completed.is_connected(_on_sync_completed):
 			DataManager.sync_completed.disconnect(_on_sync_completed)
-		if DataManager.sync_progress.is_connected(_on_sync_progress):
-			DataManager.sync_progress.disconnect(_on_sync_progress)
 	if is_instance_valid(SystemManager) and SystemManager.download and SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.disconnect(_on_download_completed)
 	if is_instance_valid(LaunchManager) and LaunchManager.update and LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
@@ -95,8 +92,6 @@ func _connect_signals() -> void:
 		DataManager.games_removed.connect(_on_games_removed)
 	if not DataManager.sync_completed.is_connected(_on_sync_completed):
 		DataManager.sync_completed.connect(_on_sync_completed)
-	if not DataManager.sync_progress.is_connected(_on_sync_progress):
-		DataManager.sync_progress.connect(_on_sync_progress)
 	if SystemManager and SystemManager.download and not SystemManager.download.download_completed.is_connected(_on_download_completed):
 		SystemManager.download.download_completed.connect(_on_download_completed)
 	if LaunchManager and LaunchManager.update and not LaunchManager.update.update_session_finished.is_connected(_on_update_session_finished):
@@ -167,16 +162,6 @@ func _setup_search_overlay():
 	_search_overlay.name = "SearchOverlay"
 	_search_overlay.search_submitted.connect(_on_search_submitted)
 	_search_overlay.search_cancelled.connect(_on_search_cancelled)
-
-func _refresh_grid_dimensions() -> void:
-	"""Recalculate grid layout using the deterministic available size."""
-	if not games_grid:
-		return
-	if UIManager:
-		var available_size = UIManager.compute_grid_available_size(games_grid, self)
-		games_grid.recalculate_layout_with_size(available_size)
-	else:
-		games_grid.refresh_dimensions()
 
 func _setup_az_carousel() -> void:
 	"""Create the A-Z letter carousel as a child of the grid Control.
@@ -634,13 +619,7 @@ func _cycle_platform(direction: int) -> void:
 	if platform_indicator:
 		platform_indicator.update_display(_platforms, _current_platform_index)
 	
-	if _current_platform_index == -1:
-		_current_platform_slug = ""
-		_update_status("All Games - Loading...")
-	else:
-		var platform = _platforms[_current_platform_index]
-		_current_platform_slug = platform.slug
-		_update_status("%s - Loading..." % platform.name)
+	_current_platform_slug = "" if _current_platform_index == -1 else _platforms[_current_platform_index].slug
 	
 	# Reload the grid with new filter
 	_load_total_count_with_platform(false)
@@ -698,13 +677,7 @@ func _on_platform_selected(platform_index: int) -> void:
 	if platform_indicator:
 		platform_indicator.update_display(_platforms, _current_platform_index)
 	
-	if _current_platform_index == -1:
-		_current_platform_slug = ""
-		_update_status("All Games - Loading...")
-	else:
-		var platform = _platforms[_current_platform_index]
-		_current_platform_slug = platform.slug
-		_update_status("%s - Loading..." % platform.name)
+	_current_platform_slug = "" if _current_platform_index == -1 else _platforms[_current_platform_index].slug
 	
 	# Reload the grid with new filter
 	_load_total_count_with_platform(false)
@@ -724,7 +697,6 @@ func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Cal
 		return
 
 	_is_loading = true
-	_update_status("Loading library...")
 
 	# Query total count asynchronously
 	SystemManager.memory.queue_db_task(
@@ -741,7 +713,6 @@ func _load_total_count(preserve_cache: bool = false, on_complete: Callable = Cal
 			_total_games = count
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-			_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 			# Refresh A-Z letter navigation for the new result set
 			_load_letter_index()
@@ -801,27 +772,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				if DEBUG_LOG: print("[LibraryView] on_items_loaded callback: offset=", offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 		)
 
-func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
-	"""Update status label with current visible range and platform/search."""
-	if total_count == 0:
-		if _is_search_active:
-			_update_status("Search: No results found")
-		elif _current_platform_index == -1:
-			_update_status("No games found")
-		else:
-			var platform_name = _get_current_platform_name()
-			_update_status("%s - No games" % platform_name)
-	else:
-		var start_num = start_index + 1
-		var end_num = mini(end_index, total_count)
-		if _is_search_active:
-			_update_status("Search: %d-%d of %d results" % [start_num, end_num, total_count])
-		elif _current_platform_index == -1:
-			_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
-		else:
-			var platform_name = _get_current_platform_name()
-			_update_status("%s: %d-%d of %d" % [platform_name, start_num, end_num, total_count])
-
+func _on_visible_range_changed(start_index: int, _end_index: int, total_count: int):
 	# Highlight the current letter in the A-Z carousel. Right after one of our
 	# jumps, keep the highlight on the letter we jumped to (deterministic);
 	# once the intent expires, derive from the top of the viewport so manual
@@ -836,14 +787,6 @@ func _on_visible_range_changed(start_index: int, end_index: int, total_count: in
 			var after := _az_carousel.get_active_letter()
 			if after != "" and after != before:
 				_flash_az_letter(after)
-
-func _get_current_platform_name() -> String:
-	"""Get the display name of the current platform."""
-	if _current_platform_index == -1:
-		return "All Games"
-	elif _current_platform_index >= 0 and _current_platform_index < _platforms.size():
-		return _platforms[_current_platform_index].get("name", "Unknown")
-	return "Unknown"
 
 func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes.
@@ -892,7 +835,6 @@ func _on_database_ready():
 
 func _on_database_failed(_error: String):
 	_is_loading = false
-	_update_status("Database unavailable - check storage permissions, then restart the app")
 
 func _on_download_completed(item_id: String, success: bool, _message: String):
 	# During an update-all session, emulator downloads complete in bursts and
@@ -917,20 +859,11 @@ func _on_update_session_finished(_succeeded: Array, _failed: Array):
 		_load_total_count()
 
 func _on_games_removed(_platform_slug: String):
-	_reload_after_change()
-
-func _reload_after_change():
-	"""Reload after games added/removed."""
 	_load_total_count()
 
-func _on_sync_progress(percent: float, current: int, total: int):
-	_update_status("Syncing... %d/%d games (%.0f%%)" % [current, total, percent])
-
-func _on_sync_completed(success: bool, message: String):
+func _on_sync_completed(success: bool, _message: String):
 	_seen_library_generation = DataManager.library_generation
 	if success:
-		_update_status("Sync complete. Finalizing...")
-		
 		# Reload platforms list to pick up any new platforms
 		_load_platforms_list()
 		
@@ -942,12 +875,9 @@ func _on_sync_completed(success: bool, message: String):
 		# Clear cache (false) to prevent duplicate detection errors after sync
 		# Use call_deferred to let sync completion finish before heavy grid refresh
 		call_deferred("_deferred_reload_after_sync")
-	else:
-		_update_status("Sync failed: " + message)
 
 func _deferred_reload_after_sync():
 	_load_total_count(false)
-	_update_status("Library reloaded after sync")
 
 func on_view_show():
 	super.on_view_show()
@@ -1063,5 +993,3 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 
 						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 				)
-		"hide":
-			pass

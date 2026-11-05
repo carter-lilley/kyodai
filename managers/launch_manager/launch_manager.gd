@@ -19,7 +19,6 @@ const UpdateManager := preload("res://managers/launch_manager/update_sub_manager
 const AndroidTaskManager := preload("res://managers/launch_manager/android_task_sub_manager.gd")
 
 # Pending-launch orchestration state
-# emulator_id -> {game: GameResource, callback: Callable}
 var _pending_launches: Dictionary = {}  # emulator_id -> Array of {game, callback}
 var _in_flight_launches: Dictionary = {}  # romm_id -> true
 
@@ -419,7 +418,7 @@ func execute_launch(intent: LaunchIntent) -> bool:
 	return await process.execute_launch(intent)
 
 func _create_process_from_intent(intent: LaunchIntent) -> int:
-	return await process._create_process_from_intent(intent)
+	return await process._create_desktop_process(intent)
 
 # ============================================================================
 # Launch orchestration
@@ -465,7 +464,7 @@ func launch_shuffler_game(game: GameResource, rom_path_override: String, on_pid_
 			_end_launch(game.romm_id)
 			return
 
-		var pid = await process._create_process_from_intent(launch_intent)
+		var pid = await process._create_desktop_process(launch_intent)
 		if pid != -1:
 			print("[LaunchManager] Shuffler launch successful, PID: ", pid)
 		if on_pid_ready.is_valid():
@@ -867,11 +866,7 @@ func _ensure_prerequisites(game: GameResource, emulator_id: String, on_ready: Ca
 			_pending_core_downloads[core_key] = true
 			_pending_core_launches.append({"game": game, "platform_slug": game.platform_slug, "core_id": core_id_for_launch, "callback": on_ready})
 			
-			core.setup_platform_core(emulator_id, game.platform_slug, core_id_for_launch, func(_success: bool):
-				# Completion is handled by _on_core_download_completed via CoreManager signal.
-				# This lambda exists because setup_platform_core requires a callback.
-				pass
-			)
+			core.setup_platform_core(emulator_id, game.platform_slug, core_id_for_launch, Callable())
 			return false
 	
 	# Emulator is installed - check firmware
@@ -1006,14 +1001,11 @@ func _launch_with_emulator_check(game: GameResource) -> void:
 	
 	var on_ready = func():
 		# Sync saves then launch
-		if emulator_id != "":
-			print("[LaunchManager] Starting pre-launch save sync...")
-			DataManager.auto_download_saves_for_game(game, emulator_id, func():
-				print("[LaunchManager] Pre-launch save sync complete, launching game...")
-				_launch_game_internal(game, emulator_id)
-			)
-		else:
+		print("[LaunchManager] Starting pre-launch save sync...")
+		DataManager.auto_download_saves_for_game(game, emulator_id, func():
+			print("[LaunchManager] Pre-launch save sync complete, launching game...")
 			_launch_game_internal(game, emulator_id)
+		)
 		print("[LaunchManager] _launch_with_emulator_check: EXIT")
 	
 	var is_ready = await _ensure_prerequisites(game, emulator_id, on_ready)

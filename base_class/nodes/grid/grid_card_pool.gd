@@ -18,17 +18,6 @@ const GROWTH_PER_FRAME: int = 4
 ## full card instantiate + queue_free just for these flags).
 static var _capability_probe_cache: Dictionary = {}  # scene_path -> flags Dictionary
 
-const FLAG_KEYS: Array[String] = [
-	"focus_scale_enabled", "set_focus_scale", "set_game_with_priority",
-	"refresh_settings", "reset", "game_prop", "update_media_panel_size",
-	"update_display", "set_image_priority", "set_content_alignment",
-	"set_media_aspect_ratio", "refresh_effects",
-	"update_card_state_from_settings", "sync_visual_transform",
-	"sync_visual_offset", "mark_visuals_position_synced",
-	"unmark_visuals_position_synced", "show_loading_skeleton",
-	"begin_bulk_layout", "end_bulk_layout",
-]
-
 var _grid: VirtualScrollGridContainer = null
 
 var cards: Array[Control] = []      # pooled (inactive) cards; front = oldest

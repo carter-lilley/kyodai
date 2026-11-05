@@ -2,10 +2,6 @@
 
 [ext_resource type="Script" path="res://base_class/abstract/theme_preset.gd" id="1_ca4q8"]
 
-[sub_resource type="Gradient" id="Gradient_3yjc8"]
-offsets = PackedFloat32Array(0.12044818, 0.8053221)
-colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
-
 [sub_resource type="Gradient" id="Gradient_vxs45"]
 colors = PackedColorArray(0.20784314, 0.20784314, 0.20784314, 1, 0.20784314, 0.20784314, 0.20784314, 1)
 

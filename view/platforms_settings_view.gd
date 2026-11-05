@@ -1,4 +1,3 @@
-#platforms_settings_view.gd
 class_name PlatformsSettingsView
 extends View
 
@@ -13,9 +12,8 @@ var _render_generation: int = 0  # incremented each render to discard stale prec
 var _platforms_data_dirty: bool = true  # true when cached data should be refreshed from network
 var _platforms_data_loaded: bool = false  # true once we've loaded from DB or network at least once
 
-# Track platform selection state for lock-in behavior
-var _sync_triggered: bool = false  # Tracks if sync button was pressed
-var _last_active_platform_slug: String = ""  # Tracks last platform user interacted with
+# Last platform interacted with, used for focus restoration.
+var _last_active_platform_slug: String = ""
 
 var _romm_connection_panel: RommConnectionPanel = null
 
@@ -69,8 +67,6 @@ func refresh_scale() -> void:
 	for child in _cards_flow.get_children():
 		if child is PlatformCard:
 			child.custom_minimum_size.x = M3Units.dp(CARD_MIN_WIDTH_DP)
-	if has_method("refresh_theme"):
-		call("refresh_theme")
 
 func _build_sections() -> void:
 	"""Compose the page from SettingsSection cards: connection credentials,
@@ -839,9 +835,6 @@ func _get_frame_budget_us() -> int:
 func _get_dropdown_batch_size() -> int:
 	return 1 if SystemManager.platform.is_android() else 6
 
-func _populate_card_dropdown(card: PlatformCard, _index: int = 0) -> void:
-	card.populate_dropdown()
-
 func _exit_tree() -> void:
 	# Cards are intentionally kept alive (not returned to the pool) so reopening
 	# the settings screen is instant; they are reused if the platform data is
@@ -1008,9 +1001,6 @@ func _set_platform_emulator(slug: String, emulator_id: String, core_id: String =
 	if setting:
 		DataManager.set_setting(enabled_platforms, setting)
 
-func _save_settings():
-	DataManager.save_settings()
-
 func _on_emulator_download_requested(emulator_id: String, card: PlatformCard):
 	# Emulator downloads end in an APK install: gate on the install grant
 	# before anything queues (just-in-time session, see platform manager).
@@ -1174,9 +1164,6 @@ func _on_check_updates_pressed():
 	)
 
 func _on_sync_pressed():
-	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
-	_sync_triggered = true
-
 	if not SystemManager.network.is_online():
 		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
@@ -1189,9 +1176,6 @@ func _on_sync_pressed():
 	)
 
 func _on_full_sync_pressed():
-	# Lock in the selection - sync was triggered (even if it fails, user's intent was clear)
-	_sync_triggered = true
-
 	if not SystemManager.network.is_online():
 		SystemManager.notifications.show_notification("Not connected to RomM - check settings", SystemManager.notifications.Type.ERROR)
 		return
@@ -1296,9 +1280,6 @@ func restore_focus_to_last_active() -> void:
 		card.focus_sync_toggle()
 
 func on_view_show():
-	# Take snapshot of current enabled state before user makes changes
-	_sync_triggered = false
-
 	# Catch up if sync_completed fired while this view was disconnected;
 	# the handler marks data dirty and starts a fetch, so the block below
 	# skips its own load via the _is_fetching_platforms guard.
@@ -1314,7 +1295,7 @@ func on_view_show():
 	super.on_view_show()
 
 func on_view_hide():
-	_save_settings()
+	DataManager.save_settings()
 	super.on_view_hide()
 
 func _on_sync_completed(success: bool, _message: String) -> void:

@@ -8,6 +8,9 @@
 **/~*.tmp~
 **/~*.TMP~
 
+# REAPER audio peak caches
+*.reapeaks
+
 node_modules/
 
 # Exported application binaries (CI recreates build/ as needed)

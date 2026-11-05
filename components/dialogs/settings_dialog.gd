@@ -891,9 +891,7 @@ func _refresh_settings_menu_values_recursive(node: Node) -> void:
 		_refresh_settings_menu_values_recursive(child)
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE:
-		pass
-	elif what == NOTIFICATION_ENTER_TREE:
+	if what == NOTIFICATION_ENTER_TREE:
 		# Fires on every reparent (dual screen mode moves this dialog
 		# between the root viewport and the MainViewport SubViewport).
 		_reconnect_focus_follow()

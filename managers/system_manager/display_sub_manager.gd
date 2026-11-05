@@ -755,7 +755,6 @@ func _emit_swap_resize_notification() -> void:
 		viewport_size_changed.emit(_viewport_size)
 
 func set_resolution(choice : Vector2i):
-	#var chosen_res : Vector2i = settings_man.settings.resolutions[choice]
 	# Window API instead of DisplayServer.window_set_size — see
 	# restore_last_window_size() (X11 viewport-not-updating bug #105597).
 	get_window().size = choice
@@ -764,7 +763,7 @@ func set_resolution(choice : Vector2i):
 func _clamp_window_size(size: Vector2i) -> Vector2i:
 	var screen := DisplayServer.window_get_current_screen()
 	var screen_size := DisplayServer.screen_get_size(screen)
-	var min_size := Vector2i(400, 300)
+	var min_size := MIN_WINDOW_SIZE
 	return Vector2i(
 		clampi(size.x, min_size.x, screen_size.x),
 		clampi(size.y, min_size.y, screen_size.y)

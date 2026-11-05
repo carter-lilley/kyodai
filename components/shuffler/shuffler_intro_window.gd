@@ -1,12 +1,9 @@
 class_name ShufflerIntroWindow
 extends Window
 
-## Ported from the old game_shuffler's notif_intro: the incoming game's cover
-## flies up to center screen, slides aside while fading, and a clipped banner
-## sweeps in from the right edge revealing the title + platform/year before
-## everything fades out. Plays once per game per shuffler session while the
-## emulator boots. Purely presentational: unfocusable and click-through so
-## the game keeps controller/keyboard focus and mouse input.
+## Ported notif_intro animation: cover flies in and slides aside while a
+## clipped title/platform/year banner sweeps in, then both fade. Plays once
+## per game during boot; unfocusable and click-through so the game keeps input.
 
 signal intro_finished()
 
@@ -109,9 +106,7 @@ func _reset_for_present() -> void:
 	_banner.custom_minimum_size.x = 0.0
 	_present_generation += 1
 
-# ============================================================================
-# ANIMATION (ported beat-for-beat from notif_intro.gd)
-# ============================================================================
+# Animation (ported beat-for-beat from notif_intro.gd)
 
 func _play() -> void:
 	if not is_inside_tree() or _screen == Vector2.ZERO:
@@ -157,9 +152,7 @@ func _beat_three() -> void:
 	# Pooled by the manager for the whole session: hide, don't free.
 	hide()
 
-# ============================================================================
-# COVER LOADING (same cache pipeline as ShufflerChoiceWindow)
-# ============================================================================
+# Cover loading (same cache pipeline as ShufflerChoiceWindow)
 
 func _layout_cover() -> void:
 	var aspect := COVER_ASPECT_FALLBACK
@@ -187,9 +180,7 @@ func _load_cover(game: GameResource) -> void:
 			w._apply_texture(tex)
 	)
 
-# ============================================================================
-# TITLE FIT (port of autoscale_label.gd: shrink-to-fit, grows with the banner)
-# ============================================================================
+# Title fit (shrink-to-fit, grows with the banner)
 
 func _fit_title() -> void:
 	var avail := _banner.size.x - M3Units.dp(BANNER_MARGIN_DP) * 2.0

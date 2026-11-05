@@ -203,14 +203,6 @@ func _on_content_row_resized() -> void:
 func _on_tab_changed(_tab: int) -> void:
 	if visible and is_node_ready():
 		_reposition_open()
-		# TEMP DIAGNOSTICS
-		if _sheet_container:
-			M3Debug.geom("details_tier", "tab=%d content_min=%s stamped=%s button_row_parent=%s studio_visible=%s" % [
-				_tab, _sheet_container.get_combined_minimum_size(), _sheet_container.size,
-				button_row.get_parent().name if is_instance_valid(button_row) else "?",
-				studio_row.visible if is_instance_valid(studio_row) else "?"])
-			_dump_min_chain("tab%d-x" % _tab, _sheet_container, "x", 0)
-			_dump_min_chain("tab%d-y" % _tab, _sheet_container, "y", 0)
 
 func refresh_theme():
 	super.refresh_theme()
@@ -488,12 +480,6 @@ func _apply_responsive_layout() -> void:
 	var small := _is_viewport_narrow(DisplaySubManager.SMALL_VIEWPORT_DP)
 	var compact := small or _is_viewport_narrow(DisplaySubManager.COMPACT_VIEWPORT_DP)
 	var stacked := _is_viewport_narrow(STACKED_HEADER_VIEWPORT_DP)
-	# TEMP DIAGNOSTICS
-	var _vp = M3Overlay.get_sizing_viewport(get_viewport())
-	M3Debug.geom("details_tier", "viewport_px=%s scale=%.3f dp900=%.1f dp700=%.1f dp600=%.1f -> stacked=%s small=%s compact=%s (was stacked=%s small=%s compact=%s)" % [
-		_vp.get_visible_rect().size if _vp else Vector2.ZERO, M3Units.get_scale(),
-		M3Units.dp(STACKED_HEADER_VIEWPORT_DP), M3Units.dp(700.0), M3Units.dp(600.0),
-		stacked, small, compact, _stacked_header, _small_layout, _compact_layout])
 	var changed := false
 	if compact != _compact_layout:
 		_compact_layout = compact

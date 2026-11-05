@@ -84,18 +84,10 @@ static func _get_prod_keys_path(emulator_dir: String) -> String:
 
 # ==================== GameCube/Wii (Dolphin) ====================
 
-static func _is_valid_gamecube_game_id(game_id: String) -> bool:
-	if game_id.length() != 4:
+static func _is_valid_upper_alnum(value: String, expected_length: int) -> bool:
+	if value.length() != expected_length:
 		return false
-	for c in game_id:
-		if not ((c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')):
-			return false
-	return true
-
-static func _is_valid_maker_code(maker: String) -> bool:
-	if maker.length() != 2:
-		return false
-	for c in maker:
+	for c in value:
 		if not ((c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')):
 			return false
 	return true
@@ -120,7 +112,7 @@ static func extract_gamecube_game_id_from_existing_saves(emulator_dir: String) -
 							return ""
 						var game_id = header.slice(0, 4).get_string_from_ascii()
 						var maker = header.slice(4, 6).get_string_from_ascii()
-						if _is_valid_gamecube_game_id(game_id) and _is_valid_maker_code(maker):
+						if _is_valid_upper_alnum(game_id, 4) and _is_valid_upper_alnum(maker, 2):
 							return game_id
 						return ""
 					)
@@ -1030,24 +1022,6 @@ static func _extract_ps3_title_id_with_7z(zip_path: String) -> String:
 # PARAM.SFO PARSER (merged from param_sfo_parser.gd)
 # ============================================================================
 
-## Reads a PARAM.SFO file from disk and returns a dictionary with all fields
-## Returns empty dictionary if file cannot be parsed
-static func read_sfo(path: String) -> Dictionary:
-	if not FSM.file_exists(path):
-		push_error("[TitleIDParser] SFO file not found: " + path)
-		return {}
-	
-	var file := FSM.open_file_read(path)
-	if not file:
-		push_error("[TitleIDParser] Failed to open SFO file: " + path)
-		return {}
-	
-	var data := file.get_buffer(file.get_length())
-	file.close()
-	
-	return _read_sfo_from_bytes(data)
-
-
 ## Parses PARAM.SFO data from a byte array
 ## Returns empty dictionary if data cannot be parsed
 static func _read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
@@ -1146,15 +1120,6 @@ static func _read_sfo_from_bytes(data: PackedByteArray) -> Dictionary:
 	return result
 
 
-## Extracts the TitleID from a PARAM.SFO file
-## Returns empty string if TitleID cannot be found
-static func get_sfo_title_id(path: String) -> String:
-	if DEBUG_LOG: print("[TitleIDParser] get_sfo_title_id called for: " + path)
-	
-	var sfo_data := read_sfo(path)
-	return _extract_title_id_from_sfo_data(sfo_data)
-
-
 ## Extracts the TitleID from PARAM.SFO byte data
 ## Returns empty string if TitleID cannot be found
 static func get_title_id_from_sfo_bytes(data: PackedByteArray) -> String:
@@ -1183,22 +1148,6 @@ static func _extract_title_id_from_sfo_data(sfo_data: Dictionary) -> String:
 	
 	return title_id
 
-
-## Extracts the game title from a PARAM.SFO file
-## Returns empty string if title cannot be found  
-static func get_sfo_title(path: String) -> String:
-	var sfo_data := read_sfo(path)
-	if sfo_data.is_empty():
-		return ""
-	
-	# Title is stored in the "TITLE" field
-	var title: String = sfo_data.get("TITLE", "")
-	
-	if title == "" or title == "<binary>":
-		# Try shorter title field
-		title = sfo_data.get("STITLE", "")
-	
-	return title
 
 ## Extracts the full sigil result for a game based on its platform.
 ## Returns {title_id, save_id, raw_serial, usage, source, experimental} for
@@ -1234,8 +1183,3 @@ static func extract_for_game_result(game: GameResource, rom_path_override: Strin
 	if legacy_id == "":
 		return {}
 	return {"title_id": legacy_id, "save_id": "", "raw_serial": "", "usage": "", "source": "", "experimental": false}
-
-## Extracts TitleID/serial for a game based on its platform
-## Returns empty string if extraction fails or not needed
-static func extract_for_game(game: GameResource) -> String:
-	return extract_for_game_result(game).get("title_id", "")

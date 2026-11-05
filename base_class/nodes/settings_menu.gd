@@ -126,9 +126,6 @@ func _add_setting_row(content: Control, trailing: Array[Control] = []) -> void:
 	if not _building_property.is_empty():
 		_rows_by_property[_building_property] = {"section": _current_section, "row": row}
 
-func _add_setting_content(content: Control) -> void:
-	_current_section.add_content(content)
-
 ## Title + optional description block used at the leading edge of rows.
 func _make_label_block(settingsvar: SettingsVar) -> VBoxContainer:
 	var block := VBoxContainer.new()
@@ -640,7 +637,7 @@ func match_var_type(settingsvar : SettingsVar):
 			var button = M3Button.new()
 			button.text = settingsvar.display_name
 			button.button_variant = M3Button.Variant.TEXT
-			_add_setting_content(button)
+			_current_section.add_content(button)
 
 func _on_dual_screen_availability_changed(available: bool) -> void:
 	"""Update the dual_screen_mode switch when display availability changes."""

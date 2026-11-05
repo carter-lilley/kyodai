@@ -97,20 +97,16 @@ func _load_sfx_library() -> void:
 	# Load all SFX from assets/sfx/ directory
 	var sfx_files = {
 		"click_00": "res://assets/audio/sfx/click_00.wav",
-		"click_01": "res://assets/audio/sfx/click_01.wav",
 		"click_02": "res://assets/audio/sfx/click_02.wav",
 		"click_03": "res://assets/audio/sfx/click_03.wav",
 		"click_04": "res://assets/audio/sfx/click_04.wav",
-		"click_05": "res://assets/audio/sfx/click_05.wav",
 		"affirm_00": "res://assets/audio/sfx/affirm_00.wav",
 		"affirm_01": "res://assets/audio/sfx/affirm_01.wav",
 		"snap": "res://assets/audio/sfx/snap.wav",
 		"loading": "res://assets/audio/sfx/loading.wav",
 		"loading_2": "res://assets/audio/sfx/loading_2.wav",
 		"error": "res://assets/audio/sfx/error.wav",
-		"closing": "res://assets/audio/sfx/closing.wav",
-		"return": "res://assets/audio/sfx/return.wav",
-		"sfx": "res://assets/audio/sfx/sfx.wav"
+		"return": "res://assets/audio/sfx/return.wav"
 	}
 	
 	for sfx_name in sfx_files.keys():
@@ -167,13 +163,8 @@ func _setup_loop_player() -> void:
 	if sfx_bus_idx != -1:
 		# Use bus name as string, but verify it exists
 		_loop_player.bus = SFX_BUS
-		#print("[SystemManager.audio] Loop player connected to bus: " + _loop_player.bus + " (index: " + str(sfx_bus_idx) + ")")
 	else:
 		push_warning("[SystemManager.audio] SFX bus not found, loop player using Master")
-		#print("[SystemManager.audio] Available buses: ")
-		for i in range(AudioServer.bus_count):
-			pass
-			#print("  - " + AudioServer.get_bus_name(i))
 	
 	# Connect to finished signal for manual looping (more reliable than stream loop_mode)
 	_loop_player.finished.connect(_on_loop_player_finished)
@@ -187,20 +178,17 @@ func _setup_loop_player() -> void:
 
 func _check_loop_condition() -> void:
 	if not _loop_should_continue.is_valid():
-		#print("[SystemManager.audio] Loop condition callable invalid, stopping")
 		stop_loop()
 		return
 	
 	var should_continue = _loop_should_continue.call()
 	if not should_continue:
-		#print("[SystemManager.audio] Loop condition returned false, stopping")
 		stop_loop()
 
 func play_loop_while(sfx_name: String, should_continue: Callable, volume_db: float = 0.0, max_loops: int = 0) -> bool:
 	"""Play a looping sound while the should_continue callable returns true.
 	The callable is checked every 0.1 seconds. When it returns false, the loop stops.
 	max_loops > 0 cuts the loop off after that many total plays."""
-	#print("[SystemManager.audio] play_loop_while called for: " + sfx_name)
 
 	if not _sfx_library.has(sfx_name):
 		push_warning("[SystemManager.audio]: SFX not found: ", sfx_name)
@@ -208,7 +196,6 @@ func play_loop_while(sfx_name: String, should_continue: Callable, volume_db: flo
 
 	# Prevent duplicate loops
 	if _loop_player.playing:
-		#print("[SystemManager.audio] Loop already playing, ignoring duplicate call")
 		return true
 
 	# Use the preloaded stream
@@ -217,10 +204,8 @@ func play_loop_while(sfx_name: String, should_continue: Callable, volume_db: flo
 
 func play_loop_stream_while(stream: AudioStream, should_continue: Callable, volume_db: float = 0.0, max_loops: int = 0) -> bool:
 	"""Play a custom audio stream as a loop while the should_continue callable returns true."""
-	#print("[SystemManager.audio] play_loop_stream_while called")
 
 	if not stream:
-		#print("[SystemManager.audio] Stream is null!")
 		return false
 
 	# Stop any existing loop first
@@ -232,13 +217,6 @@ func play_loop_stream_while(stream: AudioStream, should_continue: Callable, volu
 	# Note: We use manual looping via finished signal instead of stream.loop_mode
 	# because loop_mode doesn't always work reliably with imported WAV files
 	
-	#print("[SystemManager.audio] Stream format: " + str(stream.get_class()))
-	#print("[SystemManager.audio] Stream length: " + str(stream.get_length()))
-	#print("[SystemManager.audio] SFX bus index: " + str(AudioServer.get_bus_index(SFX_BUS)))
-	#print("[SystemManager.audio] SFX bus volume (linear): " + str(db_to_linear(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(SFX_BUS)))))
-	#print("[SystemManager.audio] SFX bus muted: " + str(AudioServer.is_bus_mute(AudioServer.get_bus_index(SFX_BUS))))
-	#print("[SystemManager.audio] Master bus muted: " + str(AudioServer.is_bus_mute(AudioServer.get_bus_index("Master"))))
-	
 	# Store the stream to prevent garbage collection
 	_current_loop_stream = stream
 	
@@ -248,15 +226,8 @@ func play_loop_stream_while(stream: AudioStream, should_continue: Callable, volu
 	
 	_loop_player.stream = _current_loop_stream
 	_loop_player.volume_db = volume_db
-	#print("[SystemManager.audio] Loop player bus: " + _loop_player.bus)
-	#print("[SystemManager.audio] SFX bus volume: " + str(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(SFX_BUS))))
-	#print("[SystemManager.audio] Starting loop playback")
 	_loop_player.play()
-	#print("[SystemManager.audio] Loop player playing: " + str(_loop_player.playing))
-	#print("[SystemManager.audio] Stream valid: " + str(is_instance_valid(_loop_player.stream)))
-	#print("[SystemManager.audio] Playback position: " + str(_loop_player.get_playback_position()))
 	_loop_check_timer.start()
-	#print("[SystemManager.audio] Timer started")
 	
 	return true
 
@@ -266,19 +237,14 @@ func _on_loop_player_finished() -> void:
 	if _loop_check_timer.is_stopped():
 		return
 	
-	#print("[SystemManager.audio] Loop finished, checking if should continue...")
-	
 	# Check if we should continue looping
 	if not _loop_should_continue.is_valid():
-		#print("[SystemManager.audio] Loop callable invalid")
 		stop_loop()
 		return
 	
 	var should_continue = _loop_should_continue.call()
-	#print("[SystemManager.audio] Should continue: " + str(should_continue))
 	
 	if not should_continue:
-		#print("[SystemManager.audio] Loop condition returned false, not restarting")
 		stop_loop()
 		return
 
@@ -290,12 +256,10 @@ func _on_loop_player_finished() -> void:
 			return
 
 	# Restart playback
-	#print("[SystemManager.audio] Restarting loop")
 	_loop_player.play()
 
 func stop_loop() -> void:
 	"""Stop the current looping sound."""
-	#print("[SystemManager.audio] Stopping loop")
 	if _loop_player.playing:
 		_loop_player.stop()
 	_loop_check_timer.stop()
@@ -303,7 +267,6 @@ func stop_loop() -> void:
 	_loop_plays_remaining = 0
 	_loop_player.stream = null
 	_current_loop_stream = null
-	#print("[SystemManager.audio] Loop stopped and cleared")
 
 func is_loop_playing() -> bool:
 	"""Check if a loop is currently playing."""

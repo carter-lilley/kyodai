@@ -58,8 +58,7 @@ folder_colors={
 "res://effects/": "yellow",
 "res://managers/": "red",
 "res://shaders/": "yellow",
-"res://themes/": "teal",
-"res://ui/": "blue"
+"res://themes/": "teal"
 }
 
 [input]
@@ -144,10 +143,6 @@ random_game={
 [physics]
 
 3d/physics_engine="Jolt Physics"
-
-[plugins]
-
-onscreenkeyboard/enabled=true
 
 [rendering]
 

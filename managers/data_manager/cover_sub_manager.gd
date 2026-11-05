@@ -369,7 +369,7 @@ func get_cached_image_path(url: String) -> String:
 	return CACHE_FOLDER + url.md5_text() + "." + extension
 
 
-func _download_cover(url: String, callback: Callable, high_priority: bool = false, bulk: bool = false):
+func download_cover(url: String, callback: Callable, high_priority: bool = false, bulk: bool = false) -> void:
 	var cache_path = get_cached_image_path(url)
 
 	# Check if already cached
@@ -409,10 +409,6 @@ func _note_cover_write(cache_path: String) -> void:
 		})
 	if _cache_bytes_total >= 0 and _cache_bytes_total > get_max_cache_bytes():
 		enforce_cache_limit_async()
-
-
-func download_cover(url: String, callback: Callable, high_priority: bool = false, bulk: bool = false) -> void:
-	_download_cover(url, callback, high_priority, bulk)
 
 
 func _load_image_from_memory(buffer: PackedByteArray, _cache_path: String = "") -> Image:
@@ -480,7 +476,7 @@ func load_image(url: String, callback: Callable = Callable(), high_priority: boo
 
 func _load_image_from_network(url: String, cache_path: String, callback: Callable, high_priority: bool = false):
 	"""Download and load image from network using background thread."""
-	_download_cover(url, func(result):
+	download_cover(url, func(result):
 		# Check if file was downloaded successfully
 		if not FSM.file_exists(cache_path):
 			if callback.is_valid():
@@ -559,16 +555,9 @@ func get_random_cached_cover_path() -> String:
 # ==================== COMPREHENSIVE COVER FOLDING ====================
 
 func apply_cover_folding_to_database(callback: Callable = Callable()):
-	"""Apply cover folding globally across all games in the database.
-
-	This runs after all syncs complete and groups games with identical covers
-	across all batches and platforms. Skips games that are already RomM siblings.
-
-	NEW TWO-TIER SYSTEM:
-	- Games with identical covers get the same cover_group_id (hash of cover_url)
-	- Within each cover group, only the game with the lowest romm_id is visible (cover_group_master = 1)
-	- RomM siblings remain untouched (they have their own is_master_entry system)
-	"""
+	"""Globally group identical cover URLs by a hashed cover_group_id. The
+	lowest romm_id in each group becomes cover_group_master; games already in
+	RomM sibling groups keep their separate is_master_entry handling."""
 	if not data_manager.database.is_database_ready():
 		if callback.is_valid():
 			callback.call(0)

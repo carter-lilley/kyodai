@@ -3,7 +3,6 @@ shader_type canvas_item;
 #include "res://shaders/card/includes/card_common.gdshaderinc"
 
 // Swoop parameters
-uniform vec4 glass_color : source_color = vec4(0.2, 0.4, 1.0, 0.3);
 uniform vec4 swoop_color : source_color = vec4(0.06, 0.12, 0.3, 1.0);
 uniform float swoop_intensity : hint_range(0.0, 1.0) = 0.3;
 uniform float swoop_height : hint_range(0.0, 0.8) = 0.5;  // Y position of the line (0 = bottom, 1 = top)

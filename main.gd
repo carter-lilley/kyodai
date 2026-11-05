@@ -2,7 +2,6 @@ extends Control
 
 const DEBUG_LOG: bool = false
 # ShaderPrewarmer and StartupBenchmark are global classes; no preload consts.
-const FSM := preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 var tab_container: TabContainer
 var library_background: LibraryBackground
@@ -37,7 +36,6 @@ var _trimmed_for_launch: bool = false
 var _rendering_suspended: bool = false
 var _android_resume_reconciling: bool = false
 var _prev_viewport_update_mode: int = -1
-var _m3_theme: Theme = null
 
 ## Min interval between heavy NOTIFICATION_APPLICATION_RESUMED runs. Godot
 ## delivers RESUMED in pairs on Android (activity + render view), and activity
@@ -129,11 +127,6 @@ func _ready():
 	# still suppressed here, so nothing new paints during this frame.
 	await get_tree().process_frame
 
-	# Connect settings gear button (if present in scene; nav footer button is primary)
-	var settings_button = main_content_vbox.get_node_or_null("controlbar_background/controlbar_hbox/SettingsButton")
-	if settings_button:
-		settings_button.pressed.connect(_on_settings_button_pressed)
-
 	# Connect toolbar sub-manager signals (zoom slider, view-mode buttons,
 	# more-options menu, user avatar).
 	UIManager.toolbar.connect_signals()
@@ -176,12 +169,7 @@ func _ready():
 	if SystemManager and SystemManager.platform:
 		SystemManager.platform.trim_memory.connect(_on_android_trim_memory)
 
-	# Background-state input gate: _input propagates in reverse tree order
-	# (deepest/rightmost first), so the blocking set_input_as_handled() in
-	# Main._input runs AFTER the views have already consumed bumpers/right
-	# stick (platform carousel, A-Z carousel). This gate sits rightmost so it
-	# swallows controller input BEFORE any view sees it while an emulator is
-	# running. Re-pinned on every child addition to stay last.
+	# Keep the input gate rightmost so it swallows emulator input before views.
 	_input_gate = BackgroundInputGate.new()
 	_input_gate.name = "BackgroundInputGate"
 	child_entered_tree.connect(_on_main_child_entered_tree)
@@ -317,8 +305,7 @@ func _post_ready_startup() -> void:
 	if DEBUG_LOG: print("[Main] _post_ready_startup elapsed_us=", Time.get_ticks_usec() - post_start_us)
 
 func _apply_m3_theme() -> void:
-	_m3_theme = M3Theme.generate_theme()
-	self.theme = _m3_theme
+	theme = M3Theme.generate_theme()
 
 func refresh_theme() -> void:
 	# Called by UIManager when theme colors change (dark mode, primary color, etc.)
@@ -373,9 +360,6 @@ func _pre_create_settings_dialog() -> void:
 		var start_us := Time.get_ticks_usec()
 		await UIManager.pre_create_settings_dialog()
 		if DEBUG_LOG: print("[Main] pre_create_settings_dialog (initial burst) elapsed_us=", Time.get_ticks_usec() - start_us)
-
-func _on_settings_button_pressed() -> void:
-	UIManager.show_settings_dialog()
 
 func _on_tab_changed(view_name: String):
 	# Sync slider to the current view's grid; do not re-apply saved zoom here,
@@ -559,11 +543,7 @@ func _is_home_button_focused() -> bool:
 	var home_button = UIManager.find_home_button()
 	if not home_button or not home_button is Control:
 		return false
-	return home_button == _get_focus_owner()
-
-## DualScreenSetup lifecycle management
-## Keep DualScreenSetup in the tree so its SubViewports are freed with Main.
-## When not in use, disable processing and hide it to avoid input interference.
+	return home_button == UIManager.get_current_focus_owner()
 
 func _handle_ui_cancel() -> void:
 	"""Handle ui_cancel: return to Home unless blocked by overlay."""
@@ -717,10 +697,6 @@ func _input(event: InputEvent):
 	# Handle ui_cancel: return to Home unless blocked by overlay.
 	if event.is_action_pressed("ui_cancel"):
 		_handle_ui_cancel()
-
-func _get_focus_owner() -> Control:
-	"""Get the focused control (dual-screen and keyboard aware)."""
-	return UIManager.get_current_focus_owner()
 
 func _forward_input_to_second_viewport(event: InputEvent) -> bool:
 	"""Forward controller actions to the second viewport while the keyboard is displayed there."""
@@ -1226,8 +1202,6 @@ func _on_session_activated(session: GameSession, _legacy_pid: int) -> void:
 	# emulator launches); no-op if the pre-launch trim already ran.
 	_trim_memory("background")
 	_log_rss("session activated")
-	# Optional: Show overlay or dim the UI
-	# UIManager.set_dimmed(true)
 
 func _restore_platform_focus() -> void:
 	var platforms_view = UIManager.get_settings_dialog_platforms_view()
@@ -1313,7 +1287,6 @@ func _exit_tree() -> void:
 	# Drop cached node references; the actual nodes are freed with the tree.
 	_keyboard = null
 	_ui_layer = null
-	_m3_theme = null
 
 	# Disconnect signals we own.
 	if UIManager.is_connected("tab_changed", _on_tab_changed):

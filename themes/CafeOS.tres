@@ -5,10 +5,6 @@
 [sub_resource type="Gradient" id="Gradient_3yjc8"]
 colors = PackedColorArray(0.97878, 0.99, 0.9702, 1, 0.97878, 0.99, 0.9702, 1)
 
-[sub_resource type="Gradient" id="Gradient_jpx8s"]
-offsets = PackedFloat32Array(0.12044818, 0.8053221)
-colors = PackedColorArray(0.23529412, 0.2509804, 0.29803923, 1, 0.23529412, 0.2509804, 0.29803923, 1)
-
 [sub_resource type="Gradient" id="Gradient_basebg"]
 colors = PackedColorArray(0.93652, 0.954, 0.94089, 1, 0.85652, 0.874, 0.86089, 1)
 
@@ -63,7 +59,6 @@ values = {
 "dark_settings": {
 "bounce_intensity": 0.44,
 "bounce_softness": 7.4,
-"distortion": 0.5,
 "glass_color": Color(0.12941177, 0.12941177, 0.12941177, 0.5254902),
 "light_angle": 226.0,
 "light_height": -0.5,
@@ -82,7 +77,6 @@ values = {
 "settings": {
 "bounce_intensity": 0.2,
 "bounce_softness": 7.4,
-"distortion": 0.5,
 "glass_color": Color(0.8117647, 0.8117647, 0.8117647, 0),
 "light_angle": 231.0,
 "light_height": -0.5,

@@ -3,8 +3,6 @@ extends View
 
 const DEBUG_LOG: bool = false
 
-@onready var margin_container: MarginContainer = $MarginContainer
-
 var _total_games: int = 0
 var _db_games_count: int = 0
 var _steam_games_count: int = 0
@@ -26,10 +24,6 @@ var _database_ready_handled: bool = false
 # Steam games storage - kept separate but merged by last_played
 var _steam_games: Array[GameResource] = []
 var _steam_loaded: bool = false
-
-# Track which indices in the grid are Steam games
-# This maps virtual index -> true if it's a Steam game
-var _steam_indices: Dictionary = {}
 
 # Cached merged list of DB + Steam games (rebuilt when dirty)
 var _merged_games_cache: Array[GameResource] = []
@@ -61,7 +55,6 @@ func _ready():
 	games_grid.setup(card_scene, 0, initial_zoom)
 	if DEBUG_LOG: print("[HomeView] games_grid.setup elapsed_us=", Time.get_ticks_usec() - phase_start_us)
 	games_grid.items_requested.connect(_on_items_requested)
-	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
 	# Setup vertical layout from settings
@@ -158,7 +151,6 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 
 	_is_loading = true
 	_total_count_load_pending = true
-	_update_status("Loading recent games...")
 
 	# Load Steam games first (they're small and cached). When preserving the
 	# cache and Steam games are already loaded, skip this so we don't mark
@@ -189,9 +181,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 		_steam_games_count = _steam_games.size()
 		_total_games = _db_games_count + _steam_games_count
 
-		# Clear the index tracking when total changes significantly
+		# Clear the cached windows when total changes significantly
 		if not preserve_cache:
-			_steam_indices.clear()
 			_merged_games_cache.clear()
 			_merged_cache_start = 0
 			_merged_cache_end = 0
@@ -208,15 +199,12 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			if DEBUG_LOG: print("[DEBUG] _load_total_count sync: _total_games=%d, _db_games_count=%d, _steam_games_count=%d" % [_total_games, _db_games_count, _steam_games_count])
 
 		if _db_games_count == 0:
-			_update_status("No downloaded games found")
 			# Trigger scan if no DB games found (may have been wiped from DB but files exist)
 			if trigger_scan_if_empty:
 				if DEBUG_LOG: print("[DEBUG] Triggering scan because _db_games_count == 0")
 				_scan_for_downloaded_games()
 			else:
 				if DEBUG_LOG: print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
-		else:
-			_update_status("Showing 0-0 of %d games" % _total_games)
 		_is_loading = false
 		if DEBUG_LOG: print("[HomeView] _load_total_count total elapsed_us=", Time.get_ticks_usec() - load_start_us)
 		if on_complete.is_valid():
@@ -241,9 +229,8 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 			_steam_games_count = _steam_games.size()
 			_total_games = _db_games_count + _steam_games_count
 
-			# Clear the index tracking when total changes significantly
+			# Clear the cached windows when total changes significantly
 			if not preserve_cache:
-				_steam_indices.clear()
 				_merged_games_cache.clear()
 				_merged_cache_start = 0
 				_merged_cache_end = 0
@@ -257,15 +244,12 @@ func _load_total_count(preserve_cache: bool = false, trigger_scan_if_empty: bool
 				if DEBUG_LOG: print("[DEBUG] _load_total_count async: _total_games=%d, _db_games_count=%d, _steam_games_count=%d" % [_total_games, _db_games_count, _steam_games_count])
 
 			if _db_games_count == 0:
-				_update_status("No downloaded games found")
 				# Trigger scan if no DB games found (may have been wiped from DB but files exist)
 				if trigger_scan_if_empty:
 					if DEBUG_LOG: print("[DEBUG] Triggering scan because _db_games_count == 0")
 					_scan_for_downloaded_games()
 				else:
 					if DEBUG_LOG: print("[DEBUG] NOT triggering scan because trigger_scan_if_empty=false")
-			else:
-				_update_status("Showing 0-0 of %d games" % _total_games)
 			_is_loading = false
 			if on_complete.is_valid():
 				on_complete.call()
@@ -324,14 +308,11 @@ func _scan_for_downloaded_games():
 		return
 	_is_scanning = true
 	if DEBUG_LOG: print("[DEBUG] _scan_for_downloaded_games called")
-	_update_status("Scanning for downloaded games...")
 	DataManager.scan_for_downloaded_games(func(found_count: int):
 		_is_scanning = false
 		if DEBUG_LOG: print("[DEBUG] Scan callback called with found_count: %d" % found_count)
 		# Grid refresh on found_count > 0 is handled by _on_scan_completed
 		# (signal-driven, fires no matter who started the scan).
-		if found_count <= 0:
-			_update_status("No downloaded games found")
 	)
 
 func _on_scan_completed(found_count: int):
@@ -375,8 +356,7 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			if not is_instance_valid(games_grid) or not games_grid.is_load_pending(offset):
 				return {
 					"games": [] as Array[GameResource],
-					"offset": offset,
-					"steam_indices": {}
+					"offset": offset
 				}
 			var db_start_us := Time.get_ticks_usec()
 			var request_end = offset + limit
@@ -404,27 +384,20 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 				_merged_cache_start = fetch_offset
 				_merged_cache_end = fetch_offset + _merged_games_cache.size()
 				_merged_cache_dirty = false
-			else:
-				pass
 			
 			# Slice the cached merged list using virtual-index offsets.
 			var result: Array[GameResource] = []
-			var result_steam_indices: Dictionary = {}
 			
 			for i in range(limit):
 				var virtual_idx = offset + i
 				var cache_idx = virtual_idx - _merged_cache_start
 				if cache_idx >= 0 and cache_idx < _merged_games_cache.size():
-					var game = _merged_games_cache[cache_idx]
-					result.append(game)
-					if game.source == "steam":
-						result_steam_indices[i] = true
+					result.append(_merged_games_cache[cache_idx])
 			
 			if DEBUG_LOG: print("[HomeView] DB task: offset=", offset, " limit=", limit, " cache_hit=", cache_hit, " db_elapsed_us=", Time.get_ticks_usec() - db_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 			return {
 				"games": result,
-				"offset": offset,
-				"steam_indices": result_steam_indices
+				"offset": offset
 			},
 		func(result):
 			if not is_instance_valid(games_grid):
@@ -439,11 +412,6 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false):
 			var callback_start_us := Time.get_ticks_usec()
 			var games = result["games"] as Array[GameResource]
 			var response_offset = result["offset"] as int
-			var steam_indices = result["steam_indices"] as Dictionary
-			
-			for idx in steam_indices.keys():
-				_steam_indices[response_offset + idx] = true
-			
 			games_grid.on_items_loaded(games, response_offset, is_preload)
 			if DEBUG_LOG: print("[HomeView] on_items_loaded callback: offset=", response_offset, " count=", games.size(), " elapsed_us=", Time.get_ticks_usec() - callback_start_us, " total_request_us=", Time.get_ticks_usec() - request_start_us)
 	)
@@ -484,15 +452,6 @@ func _merge_all_games_by_last_played(db_games: Array[GameResource], steam_games:
 	
 	return merged
 
-func _on_visible_range_changed(start_index: int, end_index: int, total_count: int):
-	"""Update status label with current visible range."""
-	if total_count == 0:
-		_update_status("No downloaded games found")
-	else:
-		var start_num = start_index + 1
-		var end_num = mini(end_index, total_count)
-		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
-
 func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> void:
 	"""Rebuild the grid to reflect card size/orientation changes.
 	
@@ -527,11 +486,6 @@ func rebuild_grid(refresh_effects: bool = false, preserve_data: bool = true) -> 
 		else:
 			if not _total_count_load_pending:
 				_load_total_count(false, false)
-
-## Returns true when intro animations are complete and cards can accept focus
-## Note: Intro animations have been removed, so this always returns true
-func are_intro_animations_complete() -> bool:
-	return true
 
 func _on_download_completed(_item_id: String, success: bool, _message: String):
 	# During an update-all session, emulator downloads complete in bursts and
@@ -576,7 +530,6 @@ func _prefetch_first_page_deferred() -> void:
 func _on_database_failed(_error: String):
 	_is_loading = false
 	_total_count_load_pending = false
-	_update_status("Database unavailable - check storage permissions, then restart the app")
 
 func _on_game_launched(game: GameResource):
 	"""Called when a game is launched - refresh grid to resort by last_played."""
@@ -595,8 +548,6 @@ func _on_game_launched(game: GameResource):
 			_steam_games.sort_custom(func(a: GameResource, b: GameResource) -> bool:
 				return a.last_played > b.last_played
 			)
-			# Clear Steam indices since the order changed
-			_steam_indices.clear()
 
 	# Reload data to get new sort order (don't preserve cache)
 	# Don't reload Steam games - we just updated the cache with new timestamps
@@ -613,22 +564,11 @@ func _on_game_home_visibility_changed(_game: GameResource):
 	when this view isn't current — on_view_show catches up on return."""
 	if not UIManager.is_current_view(view_name):
 		return
-	_steam_indices.clear()
 	_merged_games_cache.clear()
 	_merged_cache_start = 0
 	_merged_cache_end = 0
 	_merged_cache_dirty = true
 	_load_total_count(false, false)
-
-func _refresh_grid_dimensions() -> void:
-	"""Recalculate grid layout using the deterministic available size."""
-	if not games_grid:
-		return
-	if UIManager:
-		var available_size = UIManager.compute_grid_available_size(games_grid, self)
-		games_grid.recalculate_layout_with_size(available_size)
-	else:
-		games_grid.refresh_dimensions()
 
 func _input(event: InputEvent) -> void:
 	"""Handle random-game input when this view is active."""
@@ -762,9 +702,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 							_steam_games_count = _steam_games.size()
 							_total_games = _db_games_count + _steam_games_count
 					
-					# Clear cache and refresh completely
-					_steam_indices.clear()
-					
 					# Force refresh the grid (don't preserve cache to remove the deleted game)
 					_load_total_count(false, false, func():
 						# Re-enable grid interaction
@@ -819,7 +756,6 @@ func _on_modal_item_selected(item_id: String, context: Dictionary):
 				DataManager.update_game_hidden_from_home(romm_id, true)
 				SystemManager.notifications.show_notification("Hidden from Home - find it in Library to unhide", SystemManager.notifications.Type.INFO)
 				# Drop cached windows holding the hidden game, then reload.
-				_steam_indices.clear()
 				_merged_games_cache.clear()
 				_merged_cache_start = 0
 				_merged_cache_end = 0

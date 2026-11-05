@@ -17,7 +17,6 @@ var settings: Settings
 var _is_dirty: bool = false
 
 func _init() -> void:
-	#print("[SettingsSubManager]: initialized.")
 	load_settings()
 
 ## === Accessors ===
@@ -29,10 +28,8 @@ func get_settings() -> Dictionary:
 	for property in settings.get_property_list():
 		if settings.get(property.name) is SettingsVar: #Check each property for SettingsVars
 			dictionary[property.name] = settings.get(property.name) #Property name is key, SettingsVAR is value. 
-			#print("Storing ", property.value)
 	return dictionary
 
-# I hate this function. Its so messy. Fix pls. 
 func get_settings_by_subgroup() -> Dictionary:
 	var dictionary: Dictionary[String, Array] = {}
 	if not settings:
@@ -44,12 +41,8 @@ func get_settings_by_subgroup() -> Dictionary:
 		if property.usage == 256:  # 								If it's a @export subgroup..
 			if not subgroup == "": # 								And we already have a previous subgroup
 				# Only add subgroup if it has non-INTERNAL settings
-				#print("[SettingsSubManager] Checking subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
 				if settingsvars.size() > 0:
 					dictionary[subgroup] = settingsvars.duplicate()
-					#print("[SettingsSubManager] Added subgroup '", subgroup, "' to dictionary")
-				#else:
-					#print("[SettingsSubManager] Skipping empty subgroup '", subgroup, "'")
 			subgroup = property.name
 			settingsvars.clear()										# And then clear the array for re-use.
 		if settings.get(property.name) is SettingsVar and not subgroup == "": 			#	If we've caught a SettingsVar and we already have a previous subgroup
@@ -57,15 +50,9 @@ func get_settings_by_subgroup() -> Dictionary:
 			# Skip INTERNAL settings - they shouldn't appear in the auto-generated menu
 			if settingsvar.state != SettingsVar.SettingState.INTERNAL:
 				settingsvars.append(settingsvar)
-				#print("[SettingsSubManager] Added setting '", property.name, "' to subgroup '", subgroup, "'")
-			#else:
-				#print("[SettingsSubManager] Skipping INTERNAL setting '", property.name, "' in subgroup '", subgroup, "'")
 	# Only add last subgroup if it has non-INTERNAL settings
 	if settingsvars.size() > 0:
-		#print("[SettingsSubManager] Adding final subgroup '", subgroup, "' with ", settingsvars.size(), " settings")
 		dictionary[subgroup] = settingsvars.duplicate()
-	else:
-		pass  # Skipping final empty subgroup
 	return dictionary
 
 func enable_setting(_name:String):

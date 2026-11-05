@@ -98,7 +98,6 @@ func _ready():
 				database_failed.emit(err_msg)
 				SystemManager.notifications.show_notification("Fatal error: " + err_msg + "\nApp cannot function without database access.", SystemManager.notifications.Type.ERROR)
 	)
-	cover._ensure_cache_folder()
 	database_ready.connect(_on_database_ready_for_collections)
 
 	# Wire settings sub-manager signals through the DataManager facade

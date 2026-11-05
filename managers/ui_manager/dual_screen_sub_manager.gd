@@ -233,14 +233,6 @@ func _enable_dual_screen_viewport_mode() -> void:
 	# Reparent keyboard to SecondViewport for fullscreen display on secondary screen
 	_reparent_keyboard_to_second_viewport(second_viewport)
 
-	# Sync current game to second screen hero
-	var current_game = null
-	if _hero_image:
-		if _hero_image.has_method("get_current_game"):
-			current_game = _hero_image.get_current_game()
-			if current_game and _hero_image.has_method("set_game"):
-				_hero_image.set_game(current_game)
-
 	# Position and make dual screen setup visible
 	# MainViewportContainer will be at (0,0) relative to this, so position at (0,0)
 	if dual_screen_setup:
@@ -398,11 +390,7 @@ func _reset_keyboard_state() -> void:
 	_keyboard_is_in_second_viewport = false
 
 func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
-	"""Reparent RootLayout into MainViewport for dual screen.
-
-	The RootLayout contains the full UI hierarchy including InnerLayout (which holds
-	M3 nav and ContentWrapper), so we only need to reparent RootLayout.
-	"""
+	"""Reparent RootLayout and UILayer into MainViewport for dual-screen mode."""
 	if _is_nodes_reparented:
 		return
 	# Store original parent
@@ -466,11 +454,7 @@ func _reparent_ui_to_main_viewport(main_viewport: SubViewport) -> void:
 	ui_manager.navigation.call_deferred("_setup_nav_focus_neighbors")
 
 func _restore_ui_to_original_parents() -> void:
-	"""Restore RootLayout to its original parent.
-
-	RootLayout contains the full UI hierarchy including InnerLayout (which holds
-	M3 nav and ContentWrapper), so restoring RootLayout restores everything.
-	"""
+	"""Restore RootLayout and UILayer to their original parents."""
 	if not _is_nodes_reparented:
 		return
 
@@ -563,10 +547,7 @@ func _setup_desktop_dual_screen(_second_screen_index: int) -> void:
 	_hero_image.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_hero_image.offset_bottom = 0
 	_hero_image.position = Vector2.ZERO
-	# DISABLED: Setting size on FULL_RECT controls fights Godot's layout system
-	# and causes wrong sizes when the parent resizes between deferral and execution.
-	# Anchors handle sizing automatically.
-	# _hero_image.set_deferred("size", Vector2(screen_rect.size))
+	# FULL_RECT anchors own sizing during parent resizes.
 
 	# Add window to scene tree
 	get_tree().root.add_child(_hero_secondary_window)

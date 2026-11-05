@@ -55,7 +55,7 @@ func _ready():
 	content_slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	
 	_build_content()
-	_build_actions()
+	_rebuild_actions()
 
 func show_overlay():
 	super.show_overlay()
@@ -213,9 +213,6 @@ func _build_content() -> void:
 
 	content_slot.add_child(_filters_page)
 
-func _build_actions() -> void:
-	_rebuild_actions()
-
 func _rebuild_actions() -> void:
 	clear_actions()
 	if _page == 0:
@@ -314,8 +311,7 @@ func _load_platforms_deferred() -> void:
 			return _create_loading_card(payload, index),
 		SystemManager.memory.BatchMode.SYNC,
 		3,
-		func(_processed: int, _total: int):
-			pass,
+		Callable(),
 		func(_results: Array):
 			_active_batch_id = -1
 			if not is_inside_tree():
@@ -345,14 +341,12 @@ func _precompute_and_populate(card_payloads: Array[Dictionary], enabled_platform
 	"""Heavy registry/filesystem lookups run once up front (main thread, as
 	before), then phase B fills each loading card and flips it live."""
 	var platform_emulator_cache: Dictionary = {}
-	var platform_default_core_cache: Dictionary = {}
 	var precomputed_status: Dictionary = {}
 	var unique_emulators: Array[String] = []
 
 	for payload in card_payloads:
 		var slug: String = payload.slug
 		platform_emulator_cache[slug] = LaunchManager.get_emulators_for_platform(slug)
-		platform_default_core_cache[slug] = LaunchManager.get_default_core_id_for_platform("retroarch", slug)
 		for emulator in platform_emulator_cache[slug]:
 			var emu_id = emulator.get("id", "")
 			if emu_id != "" and not unique_emulators.has(emu_id):
@@ -373,15 +367,13 @@ func _precompute_and_populate(card_payloads: Array[Dictionary], enabled_platform
 				payload.slug,
 				enabled_platforms,
 				precomputed_status,
-				platform_emulator_cache,
-				platform_default_core_cache
+				platform_emulator_cache
 			)
 			card.set_loading(false)
 			return card,
 		SystemManager.memory.BatchMode.SYNC,
 		3,
-		func(_processed: int, _total: int):
-			pass,
+		Callable(),
 		func(_results: Array):
 			_active_batch_id = -1
 			_loading_platforms = false
@@ -398,8 +390,7 @@ func _precompute_and_populate(card_payloads: Array[Dictionary], enabled_platform
 				_populate_card_dropdown,
 				SystemManager.memory.BatchMode.SYNC,
 				3,
-				func(_processed: int, _total: int):
-					pass,
+				Callable(),
 				func(_dropdown_results: Array):
 					_active_batch_id = -1
 			)
@@ -413,8 +404,7 @@ func _populate_shuffler_card(
 	slug: String,
 	enabled_platforms: Dictionary,
 	precomputed_status: Dictionary,
-	platform_emulator_cache: Dictionary,
-	_platform_default_core_cache: Dictionary
+	platform_emulator_cache: Dictionary
 ) -> void:
 	card._bulk_reset = true
 	card.registry_default_core_id = LaunchManager.get_shuffler_default_core_for_platform(slug)
@@ -497,10 +487,8 @@ func _on_toggle_all_pressed() -> void:
 		card.set_block_signals(true)
 		card.is_sync_enabled = not all_selected
 		card.set_block_signals(false)
-	if all_selected:
-		_selected_platforms.clear()
-	else:
-		_selected_platforms.clear()
+	_selected_platforms.clear()
+	if not all_selected:
 		for slug in _platform_cards:
 			_selected_platforms.append(slug)
 	_update_toggle_all_button()

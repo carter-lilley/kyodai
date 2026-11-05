@@ -98,6 +98,3 @@ func _on_action_pressed(label: String) -> void:
 		_on_confirm()
 	elif label == "Cancel":
 		_on_cancel()
-
-func _on_close_button_pressed() -> void:
-	dismiss()

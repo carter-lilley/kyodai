@@ -407,11 +407,7 @@ func _create_effect_ui(effect_data: Dictionary, index: int) -> void:
 		var current_settings = effect_data.get("settings", {})
 		for setting in schema:
 			if current_settings.has(setting.property_name):
-				var saved_value = current_settings[setting.property_name]
-				if saved_value is Gradient:
-					setting.value = saved_value
-				else:
-					setting.value = saved_value
+				setting.value = current_settings[setting.property_name]
 		
 		# Untitled section: a plain card groups the effect's settings without
 		# adding a header inside the collapsible row.

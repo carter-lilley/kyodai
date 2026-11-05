@@ -181,7 +181,6 @@ static func add_shortcut(shortcuts: Dictionary, game_data: Dictionary) -> Dictio
 	var app_name: String = game_data.get("name", "Unknown")
 	
 	var result := generate_app_id(exe_path, app_name)
-	var _app_id_64: int = result.app_id_64  # 64-bit for shortcuts.vdf
 	var app_id_32: int = result.app_id_32  # 32-bit for grid files
 	
 	# Create shortcut entry with 32-bit appid (Steam expects INT32, not UINT64)
@@ -222,11 +221,9 @@ static func _extract_exe_path(full_command: String) -> String:
 			return full_command.substr(1, second_quote - 1)
 	return full_command
 
-## Generates unique AppIDs for a non-Steam game
-## Returns both 64-bit (for shortcuts.vdf) and 32-bit (for grid files)
-## Formula: 
-##   32-bit: crc32(exe + name) | 0x80000000
-##   64-bit: (32-bit << 32) | 0x02000000
+## Generates a unique 32-bit AppID for a non-Steam game.
+## Returns a Dictionary containing "app_id_32" for shortcuts and grid files.
+## Formula: crc32(exe + name) | 0x80000000
 static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
 	# Steam wraps exe path in quotes for the CRC calculation
 	var key := '"' + exe_path + '"' + app_name
@@ -235,29 +232,7 @@ static func generate_app_id(exe_path: String, app_name: String) -> Dictionary:
 	# Mask to ensure unsigned 32-bit
 	var app_id_32: int = ((crc & 0xFFFFFFFF) | 0x80000000) & 0xFFFFFFFF
 	
-	# Construct 64-bit appid using PackedByteArray to avoid signed overflow
-	# Steam stores: Low 32 bits = app_id_32, High 32 bits = 0x02000000
-	# This means: app_id_64 = (0x02000000 << 32) | app_id_32
-	var bytes := PackedByteArray()
-	bytes.resize(8)
-	bytes.encode_u32(0, app_id_32)  # Low 32 bits at offset 0
-	bytes.encode_u32(4, 0x02000000)  # High 32 bits at offset 4
-	
-	# Decode as unsigned 64-bit int (little endian)
-	var app_id_64: int = bytes.decode_u64(0)
-	
-	return {
-		"app_id_32": app_id_32,
-		"app_id_64": app_id_64
-	}
-
-## Debug function to calculate AppID
-static func debug_calculate_app_ids(full_command: String, app_name: String) -> void:
-	# Extract exe path from full command (first quoted string, without quotes)
-	var exe_path := _extract_exe_path(full_command)
-	
-	# Calculate AppIDs
-	var _result := generate_app_id(exe_path, app_name)
+	return {"app_id_32": app_id_32}
 
 ## CRC32 implementation using reversed polynomial (standard CRC32)
 ## Standard CRC32: crc = (CRC32(exe + name) \u0026 0xFFFFFFFF) | 0x80000000

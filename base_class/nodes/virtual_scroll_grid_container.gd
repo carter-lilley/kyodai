@@ -72,7 +72,6 @@ var grid_vertical: bool = true:
 ## Batch-apply grid orientation settings to avoid redundant rebuilds.
 ## Call this instead of setting view_mode/grid_vertical/focus_scale individually.
 func set_grid_orientation(p_view_mode: ViewMode, p_grid_vertical: bool, p_focus_scale: float) -> void:
-	var _old_focused: int = _focus.last_index
 	var needs_refresh: bool = _apply_view_mode_and_vertical(p_view_mode, p_grid_vertical)
 	needs_refresh = _apply_focus_scale(p_focus_scale) or needs_refresh
 
@@ -148,7 +147,6 @@ func _batch_apply_layout_state() -> void:
 
 	# Apply structure first so zoom/padding math uses the correct geometry.
 	# Then apply padding before zoom because separation affects available space.
-	var _old_focused: int = _focus.last_index
 
 	var structure_changed: bool = _apply_view_mode_and_vertical(new_mode, state.grid_vertical)
 	var padding_changed: bool = _apply_grid_padding(state.grid_padding)
@@ -169,8 +167,8 @@ func _batch_apply_layout_state() -> void:
 	# Apply the flag (also converged in _refresh_cached_settings), but detect
 	# changes against the layout-applied cache: it reflects what is actually
 	# built (spacers, snap state), not what flag is set.
-	_apply_pagination_enabled(state.pagination_enabled)
-	_apply_staggered(state.grid_staggered)
+	pagination_enabled = state.pagination_enabled
+	staggered = state.grid_staggered
 	var pagination_changed: bool = pagination_enabled != _last_layout_pagination
 	var staggered_changed: bool = staggered != _last_layout_staggered
 
@@ -351,11 +349,6 @@ var target_card_width_ratio: float:
 		_sync_zoom_model_inputs()
 		return _zoom_model.get_ratio()
 	set(value):
-		if _batching_layout:
-			# Internal sync from the layout pass: the ratio derives from
-			# structure, so this only seeds the pending ratio.
-			_zoom_model.sync_ratio(value)
-			return
 		# Ensure cached display/ratio settings are fresh before snapping; direct
 		# assignments from views can otherwise use stale base dimensions.
 		_refresh_cached_settings()
@@ -463,7 +456,6 @@ var _virtual_end: int:
 # Async buffer expansion: load only a small synchronous buffer at startup, then
 # fill the rest of the visual buffer over subsequent frames to avoid a startup
 # hitch while keeping the full scroll buffer.
-const STARTUP_BUFFER_LINES: int = 1
 var _current_buffer_lines: int = visual_buffer_lines
 
 # Cached card capability flags — set once in _instantiate_card_pool() to avoid
@@ -488,8 +480,6 @@ var _card_has_unmark_visuals_position_synced: bool = false
 var _card_has_show_loading_skeleton: bool = false
 var _card_has_begin_bulk_layout: bool = false
 var _card_has_end_bulk_layout: bool = false
-
-var _last_applied_zoom: float = 0.0  # Track last zoom to avoid unnecessary updates
 
 # Layout input cache — used to skip redundant _recalculate_layout() work
 var _last_layout_view_mode: ViewMode = ViewMode.GRID
@@ -1010,8 +1000,8 @@ func _refresh_cached_settings() -> void:
 	# learn it via the changed() signal, which fires before grids connect at
 	# startup and never reaches lazily created views — leaving the member out
 	# of sync with the persisted setting (double-click menu bug).
-	_apply_pagination_enabled(state.pagination_enabled)
-	_apply_staggered(state.grid_staggered)
+	pagination_enabled = state.pagination_enabled
+	staggered = state.grid_staggered
 
 	# Initialize last-layout tracking on the first cache so the first real
 	# layout doesn't treat the initial state as a "change" and re-snap the
@@ -1028,11 +1018,8 @@ var _is_recalculating_layout: bool = false
 # pass when the current recalc finishes, so no resize is ever dropped.
 var _resize_pending: bool = false
 
-# Throttle window resize: ignore tiny size jitters and avoid duplicate back-to-back
-# recalculations caused by scrollbar visibility toggling.
-var _resize_debounce_frames: int = 0
+# Ignore tiny size jitters and duplicate recalculations caused by scrollbar visibility toggling.
 const RESIZE_IGNORE_DELTA: float = 2.0
-const RESIZE_FRAME_DELAY: int = 1
 
 func _gui_input(event: InputEvent) -> void:
 	# Wheel over the grid's outer margin (the inset area around the scroll
@@ -1050,11 +1037,6 @@ func _run_frame_work(_delta: float):
 	# Reveal fallback: if a sort never consumed the pending reveal (hidden view,
 	# container quirk), reveal after 3 frames rather than leaving cards hidden.
 	_visual_sync.check_reveal_fallback()
-
-	if _resize_debounce_frames > 0:
-		_resize_debounce_frames -= 1
-		if _resize_debounce_frames == 0:
-			_on_resize_debounced()
 
 	# A programmatic scroll-and-focus sequence has settled (completed or was
 	# interrupted): lift follow-focus suppression and focus the target card if
@@ -1091,7 +1073,7 @@ func _run_frame_work(_delta: float):
 	_sweep_missing_data_at_idle()
 
 	# Top up the card pool a few per frame after zoom-out/resize grew the layout.
-	_process_pool_growth()
+	_pool.process_growth()
 
 	# Finish deferred visual setup for off-screen buffer cards.
 	_window.process_pending_visual_setup()
@@ -1174,7 +1156,7 @@ func settle_startup() -> void:
 		_recalculate_layout()
 	elif view_mode == ViewMode.GRID:
 		# No saved level: lock in N from the saved ratio now that the size is final.
-		_set_grid_n_silent(_get_nearest_level_for_ratio(target_card_width_ratio))
+		_set_grid_n_silent(_zoom_model.nearest_grid_stop(target_card_width_ratio))
 		_recalculate_layout()
 	else:
 		target_card_width_ratio = _calculate_snapped_ratio(target_card_width_ratio)
@@ -1195,10 +1177,6 @@ func settle_startup_with_buffer(startup_buffer_lines: int) -> void:
 	_current_buffer_lines = startup_buffer_lines
 	settle_startup()
 	_current_buffer_lines = previous_buffer_lines
-	_expand_buffer_async()
-
-func _expand_buffer_async() -> void:
-	"""Schedule the remaining off-screen buffer cards to be added over frames."""
 	_window.pending_buffer_expansion = true
 
 
@@ -1294,8 +1272,6 @@ func get_snap_ratios_ascending() -> Array[float]:
 	_sync_zoom_model_inputs()
 	return _zoom_model.get_snap_ratios_ascending()
 
-## Returns the snap ratio for the given zoom level using the current grid's
-## available size. Used to apply the shared zoom level across views.
 ## Index of the current zoom within the mode's stop list (0 = largest cards).
 ## Pass from_ratio to resolve a level for an arbitrary ratio (e.g. a saved one)
 ## instead of the grid's current zoom. Does not mutate zoom state.
@@ -1380,15 +1356,6 @@ func _set_grid_n_silent(n: int) -> bool:
 	_zoom_model.set_grid_n(n)
 	return true
 
-## Maps a viewport-area ratio to the nearest items-per-line stop.
-func _get_nearest_level_for_ratio(p_ratio: float) -> int:
-	_sync_zoom_model_inputs()
-	if view_mode != ViewMode.GRID:
-		return 2
-	return _zoom_model.nearest_grid_stop(p_ratio)
-
-## The effective items-per-line for GRID layout. Derives from the ratio once a
-## trustworthy size is available; 0 means "stay on the ratio path".
 ## Whole lines (rows when vertical, columns when horizontal) that fit in the
 ## viewport on the scroll axis. Groundwork for paged scrolling.
 func get_lines_per_page() -> int:
@@ -1402,23 +1369,10 @@ func get_lines_per_page() -> int:
 func _is_pagination_active() -> bool:
 	return pagination_enabled and view_mode == ViewMode.GRID
 
-func _apply_pagination_enabled(p_enabled: bool) -> bool:
-	if pagination_enabled == p_enabled:
-		return false
-	pagination_enabled = p_enabled
-	return true
-
-func _apply_staggered(p_staggered: bool) -> bool:
-	if staggered == p_staggered:
-		return false
-	staggered = p_staggered
-	return true
-
 ## Staggered brick layout only applies to the vertical grid.
 func _is_staggered_active() -> bool:
 	return staggered and view_mode == ViewMode.GRID and vertical
 
-## Scroll-axis extent of one page's cards (no trailing separation).
 ## Blank space between page groups in the scroll direction: the leftover slack
 ## plus one full stride, so the next page always starts beyond the viewport's
 ## far edge and neighbors are never visible at rest (no culling needed).
@@ -1431,18 +1385,11 @@ func _get_page_period() -> float:
 	_sync_geometry()
 	return _geometry.page_period()
 
-## Scroll offset subtracted from page-start targets so each page sits centered
-## in the viewport (blank slack split into balanced gutters on both sides).
 ## Total line count (rows/columns) across all items.
 func _get_page_count() -> int:
 	_sync_geometry()
 	return _geometry.page_count()
 
-## Leading blank pad before slot 0: equals the center offset so page 0's
-## centered target lands exactly at scroll 0 instead of clamping flush-left.
-## Trailing blank pad after the last line: enough for even a PARTIAL last page
-## to reach its centered scroll target (its content plus this pad spans the
-## same centered extent as a full page).
 ## Snapped scroll position for page `page` (centered, clamped to range).
 ## With the leading pad in the slot transform, targets are simply k * period.
 func _get_page_scroll_target(page: int) -> float:
@@ -1705,10 +1652,7 @@ func _recalculate_layout():
 		if DEBUG_LOG: print("[Grid] _recalculate_layout changes: structure=", structure_changed, " focus=", focus_changed, " card_geom=", card_geometry_changed, " separation=", separation_changed, " available=", available_changed, " display_or_ratio=", display_or_ratio_changed, " total_items=", total_items_changed, " pagination=", pagination_changed)
 
 	if not _force_layout_once and not structure_changed and not focus_changed and not card_geometry_changed and not separation_changed and not available_changed and not display_or_ratio_changed and not total_items_changed and not pagination_changed and not staggered_changed:
-		# Resets (_refresh_buffer, refresh_dimensions) can zero the flow
-		# container's min size outside a recalc, and the CenterContainer sizes
-		# the flow to its minimum — skipping here would leave the grid wrapped
-		# to one column. Both calls are idempotent and write-cached.
+		# Keep extent and margin writes fresh; both calls are idempotent and write-cached.
 		_update_layout()
 		_update_margin()
 		_finish_recalculate()
@@ -1841,9 +1785,6 @@ func _recalculate_layout():
 	# exactly even while the live scrollbar range is stale mid-frame.
 	if restored_scroll >= 0.0:
 		_write_scroll_during_recalc(restored_scroll)
-
-	if not is_equal_approx(current_zoom, _last_applied_zoom):
-		_last_applied_zoom = current_zoom
 
 	var update_card_geometry = card_geometry_changed or structure_changed
 	var update_focus = focus_changed
@@ -2093,21 +2034,11 @@ func refresh_dimensions() -> void:
 	# Re-snap zoom to ensure it fits the new dimensions/margins
 	var current_ratio = target_card_width_ratio
 	var snapped_ratio = _calculate_snapped_ratio(current_ratio)
-	# Force a full layout pass: the ratio setter no-ops when the snapped ratio
-	# equals the current one, which would skip the recalc entirely.
+	# Force a full layout pass past the recalc input-cache early exit.
 	_last_layout_available_size = Vector2.ZERO
 	_force_layout_once = true
 	target_card_width_ratio = snapped_ratio
 	_recalculate_layout()
-
-	var current_zoom = _calculate_zoom()
-	var zoom_changed = not is_equal_approx(current_zoom, _last_applied_zoom)
-	if zoom_changed:
-		_last_applied_zoom = current_zoom
-
-	# _recalculate_layout() (triggered by the target_card_width_ratio setter above)
-	# already loops through active cards and calls refresh_settings(), so the
-	# manual refresh loop that used to live here was completely redundant.
 
 func setup(card_scene_resource: PackedScene, total_items: int, initial_target_ratio: float = -1.0):
 	_card_scene = card_scene_resource
@@ -2162,7 +2093,7 @@ func _instantiate_card_pool():
 
 	# Instantiate only the first visible screen synchronously so startup paints
 	# sooner; the rest of the pool is topped up a few per frame by
-	# _process_pool_growth (off-screen buffer cards don't need to exist yet).
+	# _pool.process_growth (off-screen buffer cards don't need to exist yet).
 	# Hidden views have no valid size: skip both the seed and the pending
 	# growth — they build their pool under the transition cover on first show
 	# via _ensure_pool_capacity.
@@ -2218,9 +2149,6 @@ func _ensure_pool_capacity() -> void:
 		var live_cards = _pool.cards.size() + _active_cards.size()
 		_pool.pending_growth = maxi(_pool.pending_growth, required - live_cards)
 	_pool.max_pool_size = required
-
-func _process_pool_growth() -> void:
-	_pool.process_growth()
 
 func _compute_pool_size(available: Vector2) -> int:
 	if _total_items <= 0 or not _scroll_container:
@@ -2739,7 +2667,6 @@ func _update_margin_writes():
 	var last_idx = _active_cards[_active_cards.size() - 1].get_meta("virtual_index", 0)
 	_last_margin_virtual_start = first_idx
 	_last_margin_virtual_end = last_idx
-	var _num_active = last_idx - first_idx + 1
 	var items_per_line = _get_items_per_line()
 	var stride = _get_normal_stride()
 	var focus_overflow = _get_focus_overflow()
@@ -3086,7 +3013,6 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 	var visible_start_idx: int = _visible_start_idx
 	var visible_end_idx: int = _visible_end_idx
 
-	var _assigned_count = 0
 	for card in _active_cards:
 		var idx = card.get_meta("virtual_index", -1)
 		if idx >= offset and idx < offset + items.size():
@@ -3102,7 +3028,6 @@ func on_items_loaded(items: Array[GameResource], offset: int, _is_preload: bool 
 				else:
 					card.game = items[data_idx]
 				_data.touch(idx)
-				_assigned_count += 1
 
 	_update_card_priorities(visible_start_idx, visible_end_idx)
 	_window.flush_pending_visual_setup_for_visible_zone()

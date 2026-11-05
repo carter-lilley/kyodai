@@ -359,9 +359,6 @@ func resolve_default_save_directory(emulator_id: String, platform_slug: String =
 	if emulator.is_empty():
 		return ""
 	
-	var paths = emulator.get("paths", {})
-	var _saves = paths.get("default_saves", {})
-	
 	# Check core-specific config first (for RetroArch multi-core saves)
 	var config: Dictionary = _get_save_config(emulator_id, platform_slug, core_id)
 	
@@ -1666,14 +1663,9 @@ func discover_local_shadps4_save(directory: String, title_id: String) -> Array[D
 	
 	return results
 
-## Discovers local Xenia saves for an Xbox 360 game
-## Xenia saves are in content/PROFILE_ID/TITLE_ID/ (PROFILE_ID varies per user)
-## We search recursively from the content directory for matching TITLE_ID folders
-##
-## The xenia config TOML beside a content dir names the active save profile
-## ([Profiles] logged_profile_slot_0_xuid). The storage root is the content
-## dir's parent in every default layout; custom content_root installs fall
-## through to the folder heuristics in _xenia_active_profile.
+## Xenia saves live in content/PROFILE_ID/TITLE_ID. The adjacent config TOML's
+## [Profiles] logged_profile_slot_0_xuid selects the active profile; custom
+## content_root installs fall back to _xenia_active_profile's folder heuristics.
 const XENIA_CONFIG_FILENAMES := ["xenia-edge.config.toml", "xenia.config.toml", "xenia-canary.config.toml"]
 
 func _xenia_logged_profile_xuid(content_dir: String) -> String:
@@ -2172,9 +2164,6 @@ func _zip_psp_save(source_path: String, title_id: String, zip_path: String, max_
 	FSM.delete_dir_recursive(stage_dir)
 	return zip_success
 
-func _sanitize_filename(file_name: String) -> String:
-	return file_name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_")
-
 func _find_first_subdir(dir_path: String) -> String:
 	var items = FSM.list_dir(dir_path)
 	for item in items:
@@ -2558,12 +2547,10 @@ func _format_conflict_timestamp(unix_time: int) -> String:
 	if unix_time <= 0:
 		return "Unknown"
 
-	var dict = Time.get_datetime_dict_from_unix_time(unix_time)
-
 	var tz_info = Time.get_time_zone_from_system()
 	var tz_offset_minutes = tz_info.get("bias", 0)
 	var adjusted_unix = unix_time + (tz_offset_minutes * 60)
-	dict = Time.get_datetime_dict_from_unix_time(adjusted_unix)
+	var dict = Time.get_datetime_dict_from_unix_time(adjusted_unix)
 	var month_names = ["January", "February", "March", "April", "May", "June",
 					"July", "August", "September", "October", "November", "December"]
 

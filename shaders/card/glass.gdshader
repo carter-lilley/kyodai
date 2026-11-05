@@ -66,7 +66,6 @@ void fragment() {
 	// Glass covers the full card edge (no border inset for glass shape)
 	// The border effect overlays on top at the outer edge
 	vec2 glass_size = card_size;
-	vec2 glass_offset = vec2(0.0);
 	vec2 glass_pixel_pos = pixel_pos;
 	
 	// Use precomputed corner radius for consistent edge alignment with base/border

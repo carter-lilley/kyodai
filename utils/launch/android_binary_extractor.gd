@@ -48,9 +48,8 @@ static func extract_all_binaries() -> void:
 
 	print("[AndroidBinaryExtractor] Extracting bundled tools...")
 
-	if SystemManager.platform.is_android():
-		pass # sigil ships as jniLibs libsigil.so; see SigilRunner._get_sigil_path()
-	elif SystemManager.platform.is_windows():
+	# On Android sigil ships as jniLibs libsigil.so; see SigilRunner._get_sigil_path().
+	if SystemManager.platform.is_windows():
 		_extract_tools({
 			"res://bin/sigil/win/sigil.exe": "sigil.exe",
 			"res://bin/7z/windows/7za.exe": "7za.exe",

@@ -169,7 +169,6 @@ func _start_transition(mode: TransitionMode = TransitionMode.COLD):
 
 	var texture = card_info.texture
 	var card_rect = card_info.rect
-	var _card = card_info.card
 	var start_corner_radius = card_info.corner_radius
 
 	# No focused GameCard (e.g. shuffler launches) -> play a simple fade overlay

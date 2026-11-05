@@ -252,12 +252,8 @@ func stage_recycle_and_fill(allow_recycle: bool) -> bool:
 func reassign_to_window() -> bool:
 	var structure_changed := false
 	var target_count: int = _grid._buffer_target_end - _grid._buffer_target_start
-	# No prune_pending_outside here: teleports re-index the surviving cards in
-	# place, so the old window's in-flight data requests usually still overlap
-	# the new window — pruning them strands skeletons (the DB task then lands
-	# empty via is_load_pending and idle passes never re-request). Stale
-	# results that do land are harmless cache entries under the LRU cap.
-	# Genuine far jumps prune in stage_recycle_and_fill's full-recycle path.
+	# Keep in-flight requests: stale results are harmless under the LRU cap,
+	# and the idle missing-data sweep re-finds anything still needed.
 	MemorySubManager.clear_pending_low_priority_image_tasks()
 	if SystemManager.download:
 		SystemManager.download.clear_pending_low_priority_image_downloads()

@@ -956,10 +956,6 @@ func _game_for_pending_session(romm_id: int) -> GameResource:
 func _try_reattach_pending_session(record: Dictionary) -> Variant:
 	if GameSession.backend_from_string(str(record.get("backend", ""))) == GameSession.Backend.ANDROID_TASK:
 		return await _try_reattach_android_session(record)
-	if str(record.get("policy", {}).get("origin", "")) == "shuffler":
-		# A shuffler's interactive bag cannot be reconstructed at boot. Let the
-		# registry close those records instead of attaching them to ordinary UI.
-		return false
 	if GameSession.backend_from_string(str(record.get("backend", ""))) != GameSession.Backend.DESKTOP_PROCESS:
 		# Android task reconciliation is introduced with the privileged task
 		# backend. Until then, retain the legacy conservative recovery behavior.
@@ -1023,11 +1019,7 @@ func _try_reattach_pending_session(record: Dictionary) -> Variant:
 	_background_dead_streak = 0
 	_android_emulator_package = ""
 
-	var alive := false
-	if SystemManager.platform.is_linux():
-		alive = _linux_target_alive()
-	else:
-		alive = await is_running_async(_background_active_pid)
+	var alive := _linux_target_alive()
 	if not alive:
 		_background_active_game = null
 		_background_active_pid = -1
@@ -1613,11 +1605,6 @@ func _execute_desktop(intent: LaunchIntent) -> bool:
 	launch_manager.launch_completed.emit(true, "Game launched successfully")
 	return true
 
-## Creates a process from a launch intent without entering background state.
-## Coroutine: returns the PID or -1 on failure.
-func _create_process_from_intent(intent: LaunchIntent) -> int:
-	return await _create_desktop_process(intent)
-
 ## Removes a stale portable config that points to the wrong home directory
 ## (e.g. /home/user/... on /home/carter). The file is backed up first so the
 ## user can restore it if needed. Returns true if a stale config was reset.
@@ -2202,7 +2189,6 @@ func _execute_android(intent: LaunchIntent) -> bool:
 		if intent.core_name != "":
 			var core_filename = intent.core_name + "_libretro_android.so"
 			# Cores are downloaded to {emulator_dir}/cores
-			var _emulator_dir = launch_manager.registry._get_emulator_directory(intent.emulator_id)
 			# Use real filesystem path - with MANAGE_EXTERNAL_STORAGE, RetroArch can read directly
 			core_path = FSM.resolve_emulator_path("cores/" + core_filename, intent.emulator_id, "", FSM.PathFormat.ABSOLUTE)
 			if DEBUG_LOG: print("[ProcessManager] Core path for sideload: " + core_path)

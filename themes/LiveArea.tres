@@ -24,7 +24,6 @@ values = {
 "settings": {
 "bounce_intensity": 0.38,
 "bounce_softness": 2.5,
-"distortion": 0.5,
 "glass_color": Color(0.5411765, 0.4745098, 0.44705883, 0.07450981),
 "light_angle": 299.0,
 "light_height": 0.46,
@@ -73,7 +72,6 @@ values = {
 "effect_id": "xmb",
 "settings": {
 "show_dust": false,
-"star_threshold": 0.99,
 "time_scale": 0.9,
 "wave_amplitude": 0.3,
 "wave_color": Color(0.042000007, 0.28139997, 0.84, 1),

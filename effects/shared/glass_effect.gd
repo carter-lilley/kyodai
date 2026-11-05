@@ -67,7 +67,6 @@ func _update_shader_params() -> void:
 		swoop_mat.set_shader_parameter("card_size", media_container.size)
 		swoop_mat.set_shader_parameter("corner_radius_ratio", media_container.corner_radius_ratio)
 		swoop_mat.set_shader_parameter("corner_radius_pixels", media_container.get_corner_radius_pixels())
-		swoop_mat.set_shader_parameter("glass_color", glass_color)
 		swoop_mat.set_shader_parameter("swoop_color", swoop_color)
 		swoop_mat.set_shader_parameter("swoop_intensity", swoop_intensity)
 		swoop_mat.set_shader_parameter("swoop_height", swoop_height)

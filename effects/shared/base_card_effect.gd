@@ -38,6 +38,3 @@ func _update_shader_params() -> void:
 	var shimmer_base := M3Theme.get_elevation_surface(5)
 	_set_shader_param("loading_base_color", shimmer_base)
 	_set_shader_param("loading_shimmer_color", shimmer_base.lightened(0.18))
-
-func get_settings_schema() -> Array[SettingsVar]:
-	return []

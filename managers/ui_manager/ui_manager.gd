@@ -34,7 +34,7 @@ var _library_background: LibraryBackground = null
 # instead of querying DataManager directly for card/grid settings.
 var card_settings_state: CardSettingsState = null
 
-# Layout management - NEW ARCHITECTURE
+# Layout management
 var _root_control: Control = null  # Plain control, never replaced
 var _inner_layout: BoxContainer = null  # VBox or HBox, replaced only on orientation change
 var _main_content_vbox: VBoxContainer = null  # Never replaced, never cleared
@@ -524,15 +524,8 @@ func get_view_grid(target_view: View) -> VirtualScrollGridContainer:
 func apply_to_all_grids(callable: Callable) -> void:
 	if not view:
 		return
-	for view_name in view._views.keys():
-		if not _is_grid_view_name(view_name):
-			continue
-		var v = view.get_view(view_name)
-		if not v:
-			continue
-		var grid = get_view_grid(v)
-		if grid:
-			callable.call(grid)
+	for grid in view.get_all_grids():
+		callable.call(grid)
 
 ## Find the View that owns a given grid, if any.
 func get_view_for_grid(grid: VirtualScrollGridContainer) -> View:
@@ -1000,7 +993,7 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 			pass
 
 # ============================================================================
-# Hero / library background helpers (moved from removed HeroBackgroundManager)
+# Hero / library background helpers
 # ============================================================================
 
 func get_hero_image() -> HeroImage:
@@ -1008,17 +1001,8 @@ func get_hero_image() -> HeroImage:
 		return dual_screen.get_hero_image()
 	return null
 
-func _apply_library_background_config() -> void:
-	"""Apply the current library background configuration from settings."""
-	if not _library_background or not DataManager:
-		return
-	var config_setting = DataManager.get_setting("library_background_config")
-	if config_setting and config_setting.value is Dictionary:
-		_library_background.set_background_config(config_setting.value)
-
 func _on_hero_game_changed(game: GameResource) -> void:
-	"""Handle hero game change from views. Updates both the main hero and the
-	second-screen copy when dual screen is active."""
+	"""Update the resolved hero from the focused view's game."""
 	var hero_image = get_hero_image()
 	if not hero_image:
 		return
@@ -1042,8 +1026,6 @@ func _on_hero_game_changed(game: GameResource) -> void:
 
 	if game:
 		hero_image.set_game(game)
-		if dual_screen and dual_screen._dual_screen_active:
-			dual_screen.set_hero_game(game)
 	else:
 		hero_image.clear()
 

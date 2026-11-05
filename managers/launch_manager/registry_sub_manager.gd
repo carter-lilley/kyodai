@@ -877,13 +877,6 @@ func _normalize_version(version: String) -> String:
 		return match_result.get_string(1).replace("_", ".")
 	return version.replace("_", ".")
 
-## Checks if a version string looks like semver
-func _is_semver(version: String) -> bool:
-	var normalized = _normalize_version(version)
-	var regex = RegEx.new()
-	regex.compile("^[0-9]+(\\.[0-9]+)*")
-	return regex.search(normalized) != null
-
 ## Returns true if a version string looks like an ISO 8601 date
 func _is_date_version(version: String) -> bool:
 	return _parse_iso_date(version) > 0

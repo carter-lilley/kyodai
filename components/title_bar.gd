@@ -1,17 +1,9 @@
 class_name TitleBar
 extends PanelContainer
 
-## Custom window title bar for windowed mode on desktop platforms. The native
-## frame is stripped (see DisplaySubManager.apply_window_chrome) and this
-## full-bleed strip replaces it: title + drag area on the left, and
-## minimize/maximize/close buttons on the right.
-##
-## Lives on UIManager's ChromeLayer (OverlayLayers.CHROME), a CanvasLayer above
-## every app overlay, so the window controls always render on top and stay
-## clickable while dialogs, menus, or transition overlays are open. The layout
-## hole it leaves in the root layout is filled by a spacer row UIManager keeps
-## in sync with this bar's visibility.
-## Hidden whenever the window chrome is inactive (fullscreen, unsupported OS).
+## Desktop title bar replacing the stripped native frame: drag/title area and
+## minimize/maximize/close controls. Lives above overlays on ChromeLayer;
+## UIManager synchronizes its layout spacer and hides it with inactive chrome.
 
 const BAR_HEIGHT_DP: float = 36
 const TITLE_PAD_DP: float = 12

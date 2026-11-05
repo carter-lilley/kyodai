@@ -16,7 +16,6 @@ var _margin: MarginContainer
 var _image: TextureRect
 var _frame: PanelContainer
 var _close_button: M3IconButton
-var _url: String = ""
 var _viewport: Viewport = null
 var _anim_tween: Tween = null
 
@@ -224,7 +223,6 @@ static func show_image(texture: Texture2D, url: String = "", summoner: Control =
 	if texture:
 		viewer._image.texture = texture
 	elif url != "":
-		viewer._url = url
 		M3Shimmer.attach(viewer._image, 0.05)
 		DataManager.load_image(url, func(loaded: Texture2D, _r: int):
 			if not is_instance_valid(viewer) or not is_instance_valid(viewer._image):

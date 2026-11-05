@@ -28,9 +28,6 @@ var _sync_state: SyncState = SyncState.IDLE
 
 ## Total plays of the sync loading SFX before it cuts itself off.
 const SYNC_LOOP_MAX_PLAYS: int = 4
-var _sync_platforms_list: Array = []        # Platforms to sync
-var _sync_current_platform_idx: int = 0     # Current platform index (0-based)
-var _sync_current_platform_data: Dictionary = {}  # Current platform info
 var _sync_current_offset: int = 0           # Current batch offset
 var _sync_current_total: int = 0            # Total games in current platform
 var _sync_precalc_platform_total: int = 0   # Pre-calculated total for current platform
@@ -39,7 +36,6 @@ var _sync_total_synced: int = 0             # Total synced across all platforms
 var _sync_final_callback: Callable = Callable()
 
 # Incremental sync state
-var _sync_force_full: bool = false          # Force full sync flag
 var _sync_current_updated_after: String = ""  # updated_after timestamp for current platform
 
 # Server-deletion reconciliation state (full syncs only)
@@ -63,7 +59,6 @@ var _sync_covers_done: int = 0
 var _sync_platform: String = ""
 var _sync_platform_index: int = 0  # Current platform number (1-based)
 var _sync_platform_count: int = 0  # Total platforms
-var _sync_platform_total: int = 0  # Games in current platform
 
 # Tracks whether a sync is running (used to suppress per-card cover downloads)
 var _sync_batch_mode: bool = false
@@ -317,14 +312,11 @@ func sync_enabled_platforms(callback: Callable = Callable(), force_full_sync: bo
 	_sync_covers_done = 0
 	_sync_platform = ""
 	_sync_state = SyncState.PRECHECK_DISABLED
-	_sync_platforms_list = []
-	_sync_current_platform_idx = 0
 	_sync_current_offset = 0
 	_sync_current_total = 0
 	_sync_current_synced = 0
 	_sync_total_synced = 0
 	_sync_final_callback = callback
-	_sync_force_full = force_full_sync
 	_sync_current_updated_after = ""
 	_sync_seen_ids = []
 	_sync_platform_fully_enumerated = false
@@ -422,9 +414,7 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	# We'll discover per-platform totals as we fetch the first batch of each
 	print("[SyncThread] Starting sync of %d platforms..." % enabled_platforms.size())
 	_sync_state = SyncState.PLATFORM_ITERATING
-	_sync_platforms_list = enabled_platforms
 	_sync_platform_count = enabled_platforms.size()
-	_sync_current_platform_idx = 0
 	_sync_current = 0
 	_sync_total = 0  # Will accumulate as we discover totals
 	_sync_covers_total = 0
@@ -464,7 +454,6 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 	_queue_backfill_covers()
 
 	for platform_idx in range(enabled_platforms.size()):
-		_sync_current_platform_idx = platform_idx
 		var platform = enabled_platforms[platform_idx]
 		_sync_platform = platform.name
 		_sync_platform_index = platform_idx + 1
@@ -477,12 +466,6 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 		if platform_id == 0:
 			print("[SyncThread] Skipping platform '%s' - no ID found" % platform.name)
 			continue
-
-		_sync_current_platform_data = {
-			"id": platform_id,
-			"slug": platform.slug,
-			"name": platform.name
-		}
 
 		# Update foreground service
 		_defer_on_main("_update_sync_fg_service", [platform.name, _sync_current, _sync_total])
@@ -591,7 +574,6 @@ func _run_sync_threaded(enabled_platforms: Array, disabled_platforms: Array[Stri
 				continue
 
 			_sync_current_total = total
-			_sync_platform_total = total
 
 			# Full syncs enumerate every server-side romm_id for this platform;
 			# track them so reconciliation can delete locally-stale rows after
@@ -1479,18 +1461,11 @@ func _set_last_sync_time_sync(platform_slug: String, timestamp: String):
 
 
 func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_progress: bool = false) -> int:
-	"""Process a batch of games on the sync thread.
-
-	Phases:
-	1. Create GameResources (sync thread CPU work)
-	2. Sibling checks + DB inserts (single combined DB task per batch)
-	3. Collect cover URLs and dispatch to main thread for async download
-	4. Optional: Emit incremental progress updates during processing
-	"""
+	"""Create GameResources, insert/fold them in one DB task, then dispatch
+	covers and optional incremental progress from the sync thread."""
 	if items.is_empty():
 		return 0
 
-	var batch_start = Time.get_ticks_msec()
 	var base_count = _sync_current  # Starting count before this batch
 
 	# Phase 1: Create GameResources with incremental progress
@@ -1498,7 +1473,7 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 	var progress_chunk_size = 25  # Emit progress every 25 games
 
 	for i in range(items.size()):
-		var game = _create_game_from_data(items[i], platform_slug, false)
+		var game = _create_game_from_data(items[i], platform_slug)
 		if game != null:
 			games.append(game)
 
@@ -1512,14 +1487,11 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 		return 0
 
 	# Phase 2: Sibling checks + DB inserts in ONE combined DB task
-	var db_start = Time.get_ticks_msec()
 	var inserted = _check_and_insert_games_sync(games)
-	var _db_time = Time.get_ticks_msec() - db_start
 
 	# Phase 3: Collect unique cover URLs and queue them for interleaved
 	# dispatch during the sync. Gated on the download budget so we don't fetch
 	# covers that evict-on-insert would immediately swap out.
-	var cover_start = Time.get_ticks_msec()
 	var new_urls: Array[String] = []
 	_sync_covers_mutex.lock()
 	for game in games:
@@ -1543,16 +1515,12 @@ func _process_batch_sync(items: Array, platform_slug: String, emit_incremental_p
 			_sync_covers_pending.append(url)
 			_sync_covers_pending_set[url] = true
 	_sync_covers_mutex.unlock()
-	var _cover_time = Time.get_ticks_msec() - cover_start
 
 	# Interleave cover downloads with the sync instead of doing it all at the
 	# end: dispatch pending covers every few seconds so network work overlaps
 	# the sync's network waits.
 	if Time.get_ticks_msec() - _sync_last_cover_dispatch_ms > COVER_DISPATCH_INTERVAL_MS:
 		_dispatch_covers_to_main_thread()
-
-	var _total_time = Time.get_ticks_msec() - batch_start
-	# Batch timing logging removed for cleaner sync output
 
 	return inserted
 
@@ -1918,32 +1886,6 @@ func _show_sync_notification():
 	)
 
 
-func _check_siblings_in_db(romm_id: int, siblings: Array[Dictionary]) -> bool:
-	"""Check if any sibling (NOT including self) exists in DB - to be run on DB thread."""
-	if not data_manager.database.is_database_ready():
-		return false
-
-	# Build list of sibling IDs to check (excluding self)
-	var ids_to_check = []
-	for sibling in siblings:
-		var sid = sibling.get("id", 0)
-		if sid != 0 and sid != romm_id:  # Exclude self
-			ids_to_check.append(sid)
-
-	if ids_to_check.is_empty():
-		return false
-
-	# Check if any siblings already exist as master entries
-	var placeholders = ", ".join(ids_to_check.map(func(_id): return "?"))
-	var query = "SELECT COUNT(*) as count FROM games WHERE romm_id IN (%s) AND is_master_entry = 1" % placeholders
-
-	var query_result = data_manager.database.query_array(query, ids_to_check)
-	if query_result.size() > 0:
-		return query_result[0]["count"] > 0
-
-	return false
-
-
 func _assign_sibling_masters(games: Array[GameResource]) -> Dictionary:
 	"""Pick exactly one master entry per fold group in this batch.
 
@@ -2247,7 +2189,7 @@ func _uf_union(parent: Dictionary, a: int, b: int) -> void:
 		parent[rb] = ra
 
 
-func _create_game_from_data(data: Dictionary, platform_slug: String, check_siblings: bool = true) -> GameResource:
+func _create_game_from_data(data: Dictionary, platform_slug: String) -> GameResource:
 	var game = GameResource.new()
 	game.id = str(data.get("id", ""))
 	game.romm_id = data.get("id", 0)
@@ -2366,14 +2308,8 @@ func _create_game_from_data(data: Dictionary, platform_slug: String, check_sibli
 		game.backlogged = rom_user.get("backlogged", false) == true
 		game.hidden = rom_user.get("hidden", false) == true
 
-	# Determine if this should be a master entry
-	# A game is a master if RomM flags it as the main sibling, or if none of
-	# its siblings already exist in our database as a master entry
-	if check_siblings:
-		game.is_master_entry = game.romm_is_main_sibling or not _check_siblings_in_db(game.romm_id, siblings)
-	else:
-		# During batch sync, we'll check siblings separately
-		game.is_master_entry = true  # Default, will be updated by batch check
+	# Batch master selection is finalized by _assign_sibling_masters.
+	game.is_master_entry = true
 
 	# Mark games without cover art so filtering can be applied dynamically
 	if game.cover_url == "" or game.cover_url == "null" or game.cover_url == "<null>" or game.cover_url == "None":

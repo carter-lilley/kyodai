@@ -111,15 +111,12 @@ static func swap_effect_list(config: Dictionary, to_dark: bool) -> Dictionary:
 		out[list_key] = new_list
 	return out
 
-static func swap_background_config(config: Dictionary, to_dark: bool) -> Dictionary:
-	return swap_effect_list(config, to_dark)
-
 static func on_dark_mode_changed(to_dark: bool) -> void:
 	if not DataManager:
 		return
 	var bg = DataManager.get_setting("library_background_config")
 	if bg and bg.value is Dictionary:
-		DataManager.set_setting(swap_background_config(LibraryBackground.normalize_config(bg.value), to_dark), bg)
+		DataManager.set_setting(swap_effect_list(LibraryBackground.normalize_config(bg.value), to_dark), bg)
 	var card = DataManager.get_setting("card_effect_config")
 	if card and card.value is Dictionary:
 		DataManager.set_setting(swap_effect_list(card.value, to_dark), card)

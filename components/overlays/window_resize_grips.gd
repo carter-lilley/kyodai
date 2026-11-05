@@ -1,18 +1,10 @@
 class_name WindowResizeGrips
 extends Control
 
-## Invisible resize grips for the borderless window. Stripping the native
-## frame also strips its resize borders, so all four edges and all four
-## corners get thin transparent strips that hand off to Window.start_resize()
-## — the OS interactive resize loop (correct cursors, window-manager snap
-## behavior, and true diagonal corner resize included; Godot 4.7's
-## WindowResizeEdge covers all eight directions).
-##
-## The top strips overlay the top GRIP_DP px of the title bar row; its drag
-## area and window buttons keep everything below that. Pressing the very top
-## resizes instead of moving, matching native resize borders.
-## Hidden while the chrome is inactive or the window is maximized, matching
-## native behavior.
+## Invisible edge/corner strips that restore native OS resizing to the
+## borderless window via Window.start_resize(). Top strips take the top
+## GRIP_DP px of the title bar; normal dragging/buttons remain below.
+## Hidden while chrome is inactive or the window is maximized.
 
 ## Grip thickness in dp; scales with the UI so it stays hittable on HiDPI.
 const GRIP_DP: float = 6
@@ -25,8 +17,6 @@ const GRIP_DP: float = 6
 const WAYLAND_RELEASE_GRACE_MS: int = 150
 
 var _press_ms: int = 0
-
-var _active: bool = false
 
 var _left: Control = null
 var _right: Control = null
@@ -198,7 +188,6 @@ func _refresh_state() -> void:
 	# Sync unconditionally (no change-guard): a guard would leave the default
 	# visible=true stuck when the node is created while chrome is inactive
 	# (fullscreen startup), and would skip the first transition either way.
-	_active = active
 	visible = active
 
 

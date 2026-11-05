@@ -50,7 +50,6 @@ func is_platform_shuffle_default_disabled(slug: String) -> bool:
 	return slug in SHUFFLER_PLATFORM_DEFAULT_DISABLED
 # Cached reroll-button state, re-applied to each freshly summoned palette.
 var _controls_reroll_enabled: bool = true
-var _main_window: Window = null
 var _total_downloads: int = 0
 var _pending_downloads: int = 0
 var _pending_preparations: int = 0
@@ -143,7 +142,6 @@ const PCSX2_MEMORY_CARD_VALUES := {
 }
 
 func _ready():
-	_main_window = get_tree().root
 	if SystemManager.platform.is_windows():
 		_window_backend = WindowBackend.WINDOWS_AHK
 		if SystemManager.platform.is_packaged():
@@ -1076,8 +1074,7 @@ func _download_entry(entry: Dictionary) -> void:
 			var completed = _total_downloads - _pending_downloads
 			download_progress.emit(completed, _total_downloads)
 			_pending_downloads -= 1
-			if DEBUG_LOG:
-				if DEBUG_LOG: print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
+			if DEBUG_LOG: print("[ShufflerSubManager] Download callback for " + game.title + ": success=" + str(success) + " pending_downloads=" + str(_pending_downloads))
 			# Resolved through the entry, never through a captured slot number:
 			# pick-3 rejections can remove entries (renumbering slots) while
 			# this download is in flight, which is exactly when the old
@@ -1147,8 +1144,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 	entry.status = ShufflerBag.EntryStatus.PREPARING
 	var game = entry.game
 	var emulator_id = LaunchManager.resolve_emulator_for_game(game)
-	if DEBUG_LOG:
-		if DEBUG_LOG: print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
+	if DEBUG_LOG: print("[ShufflerSubManager] Preparing entry " + str(index) + ": " + _format_entry(entry) + " emulator=" + emulator_id)
 
 	# Only emulators whose launch can require prep (archive extraction /
 	# title-id-based launch paths) go through preparation. Xenia-family
@@ -1158,8 +1154,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 	if emulator_id == "" or not (emulator_id.begins_with("vita3k") or prep_architecture in ["rpcs3", "xenia"]):
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
-		if DEBUG_LOG:
-			if DEBUG_LOG: print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
+		if DEBUG_LOG: print("[ShufflerSubManager] Ready (no prep needed): " + game.title)
 		game_ready.emit(index)
 		_maybe_complete_reroll(entry)
 		return
@@ -1187,8 +1182,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 			entry.temp_path = prepared_path
 		entry.status = ShufflerBag.EntryStatus.READY
 		_pending_preparations -= 1
-		if DEBUG_LOG:
-			if DEBUG_LOG: print("[ShufflerSubManager] Ready after prep: " + game.title)
+		if DEBUG_LOG: print("[ShufflerSubManager] Ready after prep: " + game.title)
 		game_ready.emit(index)
 		_maybe_complete_reroll(entry)
 	else:
@@ -1197,8 +1191,7 @@ func _prepare_entry(entry: Dictionary) -> void:
 		if not await _try_replace_with_candidate(entry):
 			_fail_entry(entry, "[ShufflerSubManager] Failed to prepare " + game.title + " for shuffler session")
 
-	if DEBUG_LOG:
-		if DEBUG_LOG: print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
+	if DEBUG_LOG: print("[ShufflerSubManager] _prepare_entry done for " + str(index) + ": " + _format_entry(entry))
 	_check_all_preparations_complete()
 
 func _check_all_preparations_complete() -> void:

@@ -180,10 +180,6 @@ var _suppress_next_press: bool = false
 # of waiting for release.
 var _hold_timer: Timer = null
 
-# Cached on _enter_tree so _can_accept_focus() doesn't walk the parent chain
-# for every input event (hundreds of pooled cards x every event adds up).
-var _cached_home_view: Node = null
-
 func _on_rs_items_recreated() -> void:
 	# Rebuild the node-less effect stacks as soon as the RenderingServer items
 	# are recreated (called from M3Card._enter_tree before _update_media_panel_size).
@@ -197,7 +193,6 @@ func _on_rs_items_recreated() -> void:
 
 func _enter_tree():
 	super._enter_tree()
-	_cached_home_view = _find_home_view()
 	# Cards are pooled: _ready runs once, but snapshot ownership changes on
 	# every removal/reinsertion. Reconnect and reapply on every tree entry.
 	if LaunchManager and not LaunchManager.session_changed.is_connected(_on_session_changed):
@@ -1385,20 +1380,9 @@ func _trigger_long_press() -> void:
 	UIManager.show_game_context_menu(game.romm_id, self, _get_show_delete(), _is_in_home_view())
 
 func _can_accept_focus() -> bool:
-	if is_instance_valid(_cached_home_view) and _cached_home_view.has_method("are_intro_animations_complete"):
-		if not _cached_home_view.are_intro_animations_complete():
-			return false
 	if LaunchTransitionOverlay.is_transition_active:
 		return false
 	return true
-
-func _find_home_view() -> Node:
-	var current = get_parent()
-	while current:
-		if current is HomeView:
-			return current
-		current = current.get_parent()
-	return null
 
 func _apply_content_scale() -> void:
 	super._apply_content_scale()

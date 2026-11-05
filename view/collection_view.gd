@@ -1,7 +1,6 @@
 class_name CollectionView
 extends View
 
-@onready var margin_container: MarginContainer = $MarginContainer
 @onready var title_label: M3Label = $MarginContainer/VBoxContainer/CollectionTitle
 
 @export var collection_id: int = 0
@@ -98,7 +97,6 @@ func _ready():
 		initial_zoom = zoom_state.card_zoom_ratio if zoom_state.layout_mode == 0 else zoom_state.card_zoom_list_ratio
 	games_grid.setup(card_scene, 0, initial_zoom)
 	games_grid.items_requested.connect(_on_items_requested)
-	games_grid.visible_range_changed.connect(_on_visible_range_changed)
 	games_grid.item_created.connect(_on_card_created)
 	
 	_update_grid_orientation()
@@ -128,13 +126,6 @@ func _on_collection_membership_changed(changed_id: int, _romm_id: int) -> void:
 	# An add-to-collection changes this view's membership.
 	if changed_id == collection_id:
 		_load_total_count(false)
-
-func _get_empty_status_text() -> String:
-	if favorites_mode:
-		return "No favorites yet"
-	if not platform_slug.is_empty():
-		return "No games for this platform"
-	return "No games in this collection"
 
 func _on_database_ready() -> void:
 	# One-shot: the manual is_database_ready() path and the signal can both
@@ -171,16 +162,6 @@ func _on_setting_changed(_value: Variant, setting: SettingsVar) -> void:
 	if setting.property_name in ["hide_games_without_covers", "fold_romm_siblings"]:
 		_load_total_count(false)
 
-func _refresh_grid_dimensions() -> void:
-	"""Recalculate grid layout using the deterministic available size."""
-	if not games_grid:
-		return
-	if UIManager:
-		var available_size = UIManager.compute_grid_available_size(games_grid, self)
-		games_grid.recalculate_layout_with_size(available_size)
-	else:
-		games_grid.refresh_dimensions()
-
 func _load_total_count(preserve_cache: bool = false) -> void:
 	if not platform_slug.is_empty():
 		_load_platform_total_count(preserve_cache)
@@ -190,10 +171,8 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 			_total_games = 0
 			if games_grid:
 				games_grid.set_total_count(0)
-			_update_status(_get_empty_status_text())
 		return
 	_is_loading = true
-	_update_status("Loading collection...")
 	
 	MemorySubManager.queue_db_task(
 		func():
@@ -207,16 +186,11 @@ func _load_total_count(preserve_cache: bool = false) -> void:
 			_total_games = count
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-			if count == 0:
-				_update_status(_get_empty_status_text())
-			else:
-				_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
 
 func _load_platform_total_count(preserve_cache: bool = false) -> void:
 	_is_loading = true
-	_update_status("Loading platform...")
 
 	MemorySubManager.queue_db_task(
 		func():
@@ -230,10 +204,6 @@ func _load_platform_total_count(preserve_cache: bool = false) -> void:
 			_total_games = count
 			var available_size = UIManager.compute_grid_available_size(games_grid, self) if UIManager else Vector2.ZERO
 			games_grid.set_total_count_with_available_size(count, available_size, preserve_cache)
-			if count == 0:
-				_update_status(_get_empty_status_text())
-			else:
-				_update_status("Showing 0-0 of %d games" % count)
 			_is_loading = false
 	)
 
@@ -280,14 +250,6 @@ func _on_items_requested(offset: int, limit: int, is_preload: bool = false) -> v
 				return
 			games_grid.on_items_loaded(games, offset, is_preload)
 	)
-
-func _on_visible_range_changed(start_index: int, end_index: int, total_count: int) -> void:
-	if total_count == 0:
-		_update_status(_get_empty_status_text())
-	else:
-		var start_num = start_index + 1
-		var end_num = mini(end_index, total_count)
-		_update_status("Showing %d-%d of %d games" % [start_num, end_num, total_count])
 
 func _input(event: InputEvent) -> void:
 	if not UIManager.is_current_view(view_name):
@@ -421,5 +383,3 @@ func _on_modal_item_selected(item_id: String, context: Dictionary) -> void:
 						
 						UIManager.show_confirm("File Not Found", "Game files for " + game.title + " were not found on disk. Remove from library anyway?", on_confirm, on_cancel, Callable(), {"cancel_text": "Cancel", "accept_text": "Remove"})
 			)
-		"hide":
-			pass

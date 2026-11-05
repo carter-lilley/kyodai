@@ -17,7 +17,6 @@ enum Page {
 
 var _current_page: int = Page.WELCOME
 var _pages: Array[VBoxContainer] = []
-var _is_romm_skipped: bool = false
 
 # Page content references
 var _games_path_field: M3TextField
@@ -330,12 +329,8 @@ func _update_actions():
 			add_action("Next", _on_next_pressed, true)
 
 		Page.ANDROID_PERMISSIONS:
-			if SystemManager.platform.is_android():
-				add_action("Back", _on_back_pressed, false)
-				add_action("Next", _on_next_pressed, true)
-			else:
-				add_action("Back", _on_back_pressed, false)
-				add_action("Next", _on_next_pressed, true)
+			add_action("Back", _on_back_pressed, false)
+			add_action("Next", _on_next_pressed, true)
 
 		Page.ROMM_CONNECTION:
 			add_action("Back", _on_back_pressed, false)
@@ -419,7 +414,6 @@ func _validate_android_storage_paths() -> bool:
 	return true
 
 func _on_skip_pressed():
-	_is_romm_skipped = true
 	if _romm_connection_panel:
 		_romm_connection_panel.save_to_settings(true)
 	DataManager.save_settings()

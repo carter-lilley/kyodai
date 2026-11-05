@@ -16,7 +16,6 @@ const BATTERY_ICON_SIZE_DP: int = 16
 const LABEL_FONT_SIZE_DP: int = 13
 const BATTERY_LOW_PERCENT: int = 20
 const POLL_INTERVAL_S: float = 8.0
-const BATTERY_POLLS_PER_INTERVAL: int = 1
 
 const ANDROID_BATTERY_CAPACITY_PATH := "/sys/class/power_supply/battery/capacity"
 const ANDROID_BATTERY_STATUS_PATH := "/sys/class/power_supply/battery/status"
@@ -38,7 +37,6 @@ var _battery_icon: FontIcon = null
 var _wifi_icon: FontIcon = null
 var _hbox: HBoxContainer = null
 var _poll_timer: Timer = null
-var _poll_count: int = 0
 var _battery_query_running: bool = false
 var _battery_state: int = PowerState.UNKNOWN
 var _battery_percent: int = -1
@@ -47,10 +45,6 @@ var _wifi_state: int = WifiState.UNKNOWN
 var _wifi_percent: int = -1
 var _background: StyleBoxFlat = null
 var _clock_font: FontVariation = null
-
-
-static func _create_clock_font() -> FontVariation:
-	return M3Theme.get_font_at_weight(CLOCK_FONT_WEIGHT)
 
 
 func _ready() -> void:
@@ -155,10 +149,8 @@ func _notification(what: int) -> void:
 
 func _on_poll() -> void:
 	_update_clock()
-	_poll_count += 1
-	if _poll_count % BATTERY_POLLS_PER_INTERVAL == 0:
-		_refresh_battery()
-		_refresh_wifi()
+	_refresh_battery()
+	_refresh_wifi()
 
 
 func set_polling_enabled(enabled: bool) -> void:
@@ -546,7 +538,7 @@ func _apply_colors() -> void:
 	if _background:
 		_background.bg_color = Color.BLACK if M3Theme.is_dark_mode else Color.WHITE
 	if _clock_font == null:
-		_clock_font = _create_clock_font()
+		_clock_font = M3Theme.get_font_at_weight(CLOCK_FONT_WEIGHT)
 	if _clock_label:
 		_clock_label.add_theme_font_override("font", _clock_font)
 		_clock_label.add_theme_font_size_override("font_size", int(M3Units.dp(LABEL_FONT_SIZE_DP)))

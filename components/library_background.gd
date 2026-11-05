@@ -156,7 +156,7 @@ func _build_layers() -> void:
 	for entry in _config.get("effects", []):
 		if not entry is Dictionary:
 			continue
-		var effect := _create_effect(entry.get("effect_id", ""))
+		var effect := EffectRegistry.create_background_effect(entry.get("effect_id", ""))
 		if not effect:
 			continue
 		if effect.render_scale < 1.0:
@@ -207,9 +207,6 @@ func _build_overlays() -> void:
 		effect.set_z_index(1)  # above sibling layer canvas items
 		effect.set_offset_rect(Rect2(Vector2.ZERO, size))
 		_overlays.append({"entry": entry, "effect": effect, "media": media})
-
-func _create_effect(effect_id: String) -> BackgroundEffect:
-	return EffectRegistry.create_background_effect(effect_id)
 
 # Public API for updating background configuration
 func set_background_config(config: Dictionary) -> void:

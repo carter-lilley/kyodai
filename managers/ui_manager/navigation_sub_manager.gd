@@ -202,11 +202,11 @@ func _rebuild_nav_and_layout() -> void:
 		if _inner_layout and _inner_layout.get_parent() == _root_control:
 			_root_control.remove_child(_inner_layout)
 			_inner_layout.queue_free()
-		_inner_layout = _create_inner_layout(is_horizontal)
+		_inner_layout = ui_manager._create_inner_layout(is_horizontal)
 		_root_control.add_child(_inner_layout)
 	elif not _inner_layout:
 		# First-time initialization
-		_inner_layout = _create_inner_layout(is_horizontal)
+		_inner_layout = ui_manager._create_inner_layout(is_horizontal)
 		_root_control.add_child(_inner_layout)
 
 	# Create new nav node
@@ -233,13 +233,7 @@ func _rebuild_nav_and_layout() -> void:
 	call_deferred("_refresh_nav_layout")
 
 func _refresh_current_view_grid() -> void:
-	"""Refresh the current view's grid after a nav layout change.
-
-	Reparenting ContentWrapper changes the grid's available size without a
-	viewport resize, so the grid's SystemManager.display-driven recalc won't fire.
-	We compute the expected available size deterministically and recalc once.
-	The hidden Home/Library view is marked for rebuild so it also recalculates
-	when next shown."""
+	"""Refresh the current grid after the deferred nav layout pass."""
 	if not ui_manager or not ui_manager.view:
 		return
 
@@ -276,17 +270,10 @@ func _refresh_nav_layout() -> void:
 	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
 		_inner_layout.queue_sort()
 
-	# Refresh the current grid now that the nav node has finalized its size and
-	# the layout has been queued to sort. This ensures the grid computes its
-	# available size from the final nav dimensions rather than a transient value.
 	_refresh_current_view_grid()
 
 func refresh_for_screen_swap() -> void:
-	"""Public entry point called from main.gd after a dual-screen swap.
-
-	Recomputes the nav layout and forces the current grid to refresh so the UI
-	matches the new SubViewport size after the swap has settled. The grid refresh
-	is handled inside _refresh_nav_layout()."""
+	"""Reapply nav/grid sizing and focus neighbors after a dual-screen swap."""
 	print("[NavigationManager] refresh_for_screen_swap")
 	_refresh_nav_layout()
 	if _inner_layout and is_instance_valid(_inner_layout) and _inner_layout is Container:
@@ -295,20 +282,6 @@ func refresh_for_screen_swap() -> void:
 	# paths, so the stored focus_neighbor NodePaths go stale. Re-wire them once
 	# the tree has settled.
 	call_deferred("_setup_nav_focus_neighbors")
-
-func _create_inner_layout(is_horizontal: bool) -> BoxContainer:
-	"""Create the inner layout container (VBox or HBox)."""
-	var layout: BoxContainer
-	if is_horizontal:
-		layout = VBoxContainer.new()
-	else:
-		layout = HBoxContainer.new()
-
-	layout.name = "InnerLayout"
-	layout.set_anchors_preset(Control.PRESET_FULL_RECT)
-	layout.add_theme_constant_override("separation", 0)
-
-	return layout
 
 ## Push the whole inner layout (nav rail/bar AND content wrapper) below the
 ## window-chrome strip. The custom title bar floats full-width on the
@@ -1116,8 +1089,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			if SystemManager.audio:
 				SystemManager.audio.play_sfx("click_03")
 
-# ==================== UNIFIED DIRECTIONAL INPUT / AUTO-REPEAT ====================
-
 func handle_directional_input(event: InputEvent) -> bool:
 	"""Handle directional input events. Returns true if the event was consumed."""
 	# Let the on-screen keyboard handle its own controller navigation.
@@ -1328,11 +1299,8 @@ func _try_nav_to_grid(dir: String) -> bool:
 	return false
 
 func _enter_grid() -> bool:
-	var current_view = UIManager.get_current_view()
-	if not current_view:
-		return false
-	var grid = current_view.get("games_grid")
-	if not grid or not grid is VirtualScrollGridContainer:
+	var grid := _get_current_grid()
+	if not grid:
 		return false
 	grid.focus_last_or_first_card()
 	return true

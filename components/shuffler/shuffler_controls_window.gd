@@ -121,8 +121,7 @@ func _ready():
 	if root:
 		root.focus_mode = Control.FOCUS_ALL
 
-	# Use the custom cursor inside the controls window. The AHK overlay handles
-	# rendering the same cursor everywhere else during a shuffler session.
+	# Use the custom cursor inside the controls window.
 	_apply_custom_cursor()
 	tree_exiting.connect(_restore_default_cursor)
 

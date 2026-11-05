@@ -29,7 +29,6 @@ var _activity_timer: Timer = null
 # Note: Pooling is disabled on Android to save memory, enabled on desktop for performance
 var _request_pool: Array[HTTPRequest] = []
 var _max_pool_size: int = 6
-var _active_request_count: int = 0
 
 # Response cache for client-side hash-based caching
 # endpoint -> {hash, data}
@@ -223,18 +222,17 @@ func get_client_device_identifier() -> String:
 ## status is 0 on transport failure (error set), otherwise the HTTP code and
 ## data is the parsed JSON body ({} when unparseable/empty).
 func _post_json_unauthenticated(base_url: String, path: String, payload: Dictionary, callback: Callable) -> void:
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	http.timeout = 30.0
 	var url = base_url.rstrip("/") + "/api" + path
 	var headers = ["Content-Type: application/json"]
 	var error = http.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(payload))
 	if error != OK:
-		_finish_pooled_request(http)
+		_return_request(http)
 		callback.call({"status": 0, "data": {}, "error": "Failed to start request: " + str(error)})
 		return
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_finish_pooled_request(http)
+		_return_request(http)
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call({"status": 0, "data": {}, "error": "Request failed with result: " + str(result)})
 			return
@@ -250,16 +248,15 @@ func _post_json_unauthenticated(base_url: String, path: String, payload: Diction
 ## may not point there yet during first-run pairing).
 ## callback(version: String, error: String) - version is "" when unknown.
 func fetch_server_version(base_url: String, callback: Callable) -> void:
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	http.timeout = 15.0
 	var error = http.request(base_url.rstrip("/") + "/api/heartbeat", [], HTTPClient.METHOD_GET)
 	if error != OK:
-		_finish_pooled_request(http)
+		_return_request(http)
 		callback.call("", "Failed to start request: " + str(error))
 		return
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_finish_pooled_request(http)
+		_return_request(http)
 		if result != HTTPRequest.RESULT_SUCCESS:
 			callback.call("", "Server unreachable (result " + str(result) + ")")
 			return
@@ -424,18 +421,6 @@ func _return_request(http: HTTPRequest) -> void:
 	else:
 		http.queue_free()
 
-func _create_http_request() -> HTTPRequest:
-	"""Deprecated: Use _get_pooled_request() instead."""
-	return _get_pooled_request()
-
-func _cleanup_http_request(http: HTTPRequest) -> void:
-	"""Deprecated: Use _return_request() instead."""
-	_return_request(http)
-
-func _finish_pooled_request(http: HTTPRequest) -> void:
-	_active_request_count -= 1
-	_cleanup_http_request(http)
-
 func _get_auth_header() -> String:
 	if _token != "":
 		return "Bearer " + _token
@@ -494,13 +479,9 @@ func get_auth_headers_for_url(url: String) -> Array:
 
 # ==================== CACHE HELPERS ====================
 
-func _get_cache_key(endpoint: String) -> String:
-	"""Generate a cache key for an endpoint."""
-	return endpoint
-
 func _get_cached_response(endpoint: String) -> Dictionary:
 	"""Get cached response data for an endpoint if it exists."""
-	var key = _get_cache_key(endpoint)
+	var key = endpoint
 	if _response_cache.has(key):
 		# Refresh LRU order on access
 		var idx = _response_cache_order.find(key)
@@ -512,7 +493,7 @@ func _get_cached_response(endpoint: String) -> Dictionary:
 
 func _store_cached_response(endpoint: String, response_hash: String, data: Variant):
 	"""Store response data in cache with its hash."""
-	var key = _get_cache_key(endpoint)
+	var key = endpoint
 
 	# If key already exists, just update and refresh LRU order
 	if _response_cache.has(key):
@@ -589,8 +570,7 @@ const RETRYABLE_RESULTS := [
 ]
 
 func make_request(endpoint: String, callback: Callable, authenticated: bool = true, use_cache: bool = false, _retries_left: int = 1):
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 
 	# JSON API calls must fail within a bounded time: a hung request never
 	# emits request_completed, which would also defeat the retry logic below.
@@ -611,12 +591,12 @@ func make_request(endpoint: String, callback: Callable, authenticated: bool = tr
 
 	if error != OK:
 		callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
 		WarmupBudget.tag("net_handler")
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1014,9 +994,8 @@ const HTTP_GET_TIMEOUT_SECONDS: float = 45.0
 ## Makes a generic HTTP GET request - returns body bytes and status via callback
 ## callback(success: bool, body: PackedByteArray, status_code: int, error_message: String)
 func http_get(url: String, headers: Array = [], callback: Callable = Callable()) -> HTTPRequest:
-	var http = _create_http_request()
+	var http = _get_pooled_request()
 	http.timeout = HTTP_GET_TIMEOUT_SECONDS
-	_active_request_count += 1
 
 	# Raw spaces are never valid in a request line; tolerate unencoded URLs
 	# from any source (e.g. DB rows synced before build_media_url encoding).
@@ -1027,11 +1006,11 @@ func http_get(url: String, headers: Array = [], callback: Callable = Callable())
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, PackedByteArray(), 0, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return null
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if not callback.is_valid():
 			return
@@ -1207,8 +1186,7 @@ func _use_threads_for_downloads() -> bool:
 ## Checks if the server supports HTTP Range requests
 ## callback(supports_range: bool, error_message: String)
 func check_range_support(url: String, headers: Array = [], callback: Callable = Callable()) -> void:
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 
 	# Add HEAD method to check capabilities without downloading
 	var error = http.request(url, headers, HTTPClient.METHOD_HEAD)
@@ -1216,16 +1194,15 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 	if error != OK:
 		if callback.is_valid():
 			callback.call(false, "Failed to start HEAD request: " + str(error), 0)
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, _response_code, response_headers, _body):
-		_active_request_count -= 1
 
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if callback.is_valid():
 				callback.call(false, "HEAD request failed: " + str(result), 0)
-			_cleanup_http_request(http)
+			_return_request(http)
 			return
 
 		# Check for Accept-Ranges header
@@ -1244,7 +1221,7 @@ func check_range_support(url: String, headers: Array = [], callback: Callable = 
 		if callback.is_valid():
 			callback.call(supports_range, "", content_length)
 
-		_cleanup_http_request(http)
+		_return_request(http)
 	)
 
 # ==================== UTILITY ====================
@@ -1321,19 +1298,18 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 		_fetch_repo_release_from_list(base_url, repo, headers, match_asset, callback)
 		return
 
-	var http = _create_http_request()
+	var http = _get_pooled_request()
 	http.timeout = 15.0
-	_active_request_count += 1
 
 	var error = http.request(url, headers)
 
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error), 0, "", "", "")
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-			_finish_pooled_request(http)
+			_return_request(http)
 
 			if result == HTTPRequest.RESULT_TIMEOUT:
 				callback.call("", "", "Request timed out", 0, "", "", "")
@@ -1374,19 +1350,18 @@ func fetch_repo_release(repo: String, asset_pattern: String, callback: Callable,
 ## there): picks the newest non-draft release from the full list, prereleases
 ## included, and runs the same asset matching.
 func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Array, match_asset: Callable, callback: Callable):
-	var http = _create_http_request()
+	var http = _get_pooled_request()
 	http.timeout = 15.0
-	_active_request_count += 1
 
 	var error = http.request(base_url + "/repos/" + repo + "/releases?per_page=10", headers)
 
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error), 0, "", "", "")
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-			_finish_pooled_request(http)
+			_return_request(http)
 
 			if result == HTTPRequest.RESULT_TIMEOUT:
 				callback.call("", "", "Request timed out", 0, "", "", "")
@@ -1412,19 +1387,18 @@ func _fetch_repo_release_from_list(base_url: String, repo: String, headers: Arra
 			)
 
 func fetch_scraped_release(scrape_url: String, version_pattern: String, url_template: String, callback: Callable, match_strategy: String = "first", json_path: String = ""):
-	var http = _create_http_request()
+	var http = _get_pooled_request()
 	http.timeout = 15.0
-	_active_request_count += 1
 
 	var error = http.request(scrape_url, ["User-Agent: Kyodai-Launcher"])
 
 	if error != OK:
 		callback.call("", "", "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			callback.call("", "", "Request timed out")
@@ -1633,19 +1607,18 @@ func upload_save(rom_id: int, file_path: String, emulator: String = "", slot: St
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 
 	print("[SystemManager.network] upload_save URL: " + url)
 	var error = http.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start upload: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1725,19 +1698,18 @@ func upload_screenshot(rom_id: int, file_path: String, callback: Callable = Call
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 
 	print("[SystemManager.network] upload_screenshot URL: " + url)
 	var error = http.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start upload: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1887,17 +1859,16 @@ func register_device(_device_name: String, platform: String, client: String, cli
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -1943,17 +1914,16 @@ func _make_json_request(endpoint: String, method: HTTPClient.Method, body_dict: 
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	var error = http.request(url, headers, method, JSON.stringify(body_dict))
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -2069,17 +2039,16 @@ func _make_form_request(endpoint: String, method: HTTPClient.Method, fields: Dic
 	for key in fields.keys():
 		pairs.append(str(key).uri_encode() + "=" + str(fields[key]).uri_encode())
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	var error = http.request(url, headers, method, "&".join(pairs))
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -2141,17 +2110,16 @@ func fetch_platform_firmware(platform_slug: String, callback: Callable = Callabl
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	var error = http.request(url, headers, HTTPClient.METHOD_GET)
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -2208,8 +2176,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 	if not FSM.dir_exists(dest_dir):
 		FSM.make_dir_recursive(dest_dir)
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 
 	# Set up file download
 	http.download_file = destination_path
@@ -2241,7 +2208,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 			progress_timer.queue_free()
 		if callback.is_valid():
 			callback.call(false, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, _response_body):
@@ -2249,7 +2216,7 @@ func download_firmware_zip(firmware_id: int, file_name: String, destination_path
 			progress_timer.stop()
 			progress_timer.queue_free()
 
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -2287,17 +2254,16 @@ func confirm_save_downloaded(save_id: int, device_id: String, callback: Callable
 		"Authorization: " + _get_auth_header()
 	]
 
-	var http = _create_http_request()
-	_active_request_count += 1
+	var http = _get_pooled_request()
 	var error = http.request(url, headers, HTTPClient.METHOD_POST, body)
 	if error != OK:
 		if callback.is_valid():
 			callback.call({}, "Failed to start request: " + str(error))
-		_finish_pooled_request(http)
+		_return_request(http)
 		return
 
 	http.request_completed.connect(func(result, response_code, _response_headers, response_body):
-		_finish_pooled_request(http)
+		_return_request(http)
 
 		if response_code == 401:
 			authentication_failed.emit()
@@ -2352,6 +2318,5 @@ func shutdown() -> void:
 			http.queue_free()
 	_request_pool.clear()
 
-	_active_request_count = 0
 	_response_cache.clear()
 	_response_cache_order.clear()

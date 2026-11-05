@@ -9,20 +9,11 @@ func _ready():
 func _setup_shader() -> void:
 	var mat = material as ShaderMaterial
 	mat.shader = preload("res://shaders/background/library_background_xmb.gdshader")
-	
-	# Set up noise texture for XMB shader
-	var noise = FastNoiseLite.new()
-	var noise_texture = NoiseTexture2D.new()
-	noise_texture.width = 1024
-	noise_texture.height = 1024
-	noise_texture.noise = noise
-	_set_shader_param("noise_texture", noise_texture)
 
 func _apply_settings() -> void:
 	_set_shader_param("time_scale", _settings.get("time_scale", 1.0))
 	_set_shader_param("show_dust", _settings.get("show_dust", true))
 	_set_shader_param("wave_intensity", _settings.get("wave_intensity", 0.812))
-	_set_shader_param("star_threshold", _settings.get("star_threshold", 1.0))
 	
 	# Wave color (drives background gradient and dust)
 	_set_shader_param("wave_color", _settings.get("wave_color", Color(0.04, 0.69, 0.87, 1.0)))

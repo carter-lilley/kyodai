@@ -96,7 +96,7 @@ func run(romm_id: int) -> void:
 		return
 
 	print("[HeadlessLauncher] Launching: ", intent)
-	var pid: int = await LaunchManager.process._create_process_from_intent(intent)
+	var pid: int = await LaunchManager.process._create_desktop_process(intent)
 	if pid <= 0:
 		_exit(1, "Failed to start emulator process")
 		return

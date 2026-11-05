@@ -82,20 +82,12 @@ func _ready():
 	data_manager = get_parent()
 
 
-func _db_lock():
+func lock() -> void:
 	_db_mutex.lock()
 
 
-func _db_unlock():
-	_db_mutex.unlock()
-
-
-func lock() -> void:
-	_db_lock()
-
-
 func unlock() -> void:
-	_db_unlock()
+	_db_mutex.unlock()
 
 
 ## Logs failed SQL statements even when SQLite verbosity is QUIET. Silent
@@ -111,7 +103,7 @@ func _log_query_failure(query: String) -> void:
 
 
 func query_array(query: String, bindings: Array = []) -> Array:
-	_db_lock()
+	lock()
 	var result: Array
 	var success: bool
 	if bindings.is_empty():
@@ -121,7 +113,7 @@ func query_array(query: String, bindings: Array = []) -> Array:
 	result = _db.query_result.duplicate() if success else []
 	if not success:
 		_log_query_failure(query)
-	_db_unlock()
+	unlock()
 	return result
 
 
@@ -158,7 +150,7 @@ func query_array_async(query: String, bindings: Array = []) -> Array:
 
 
 func query_bool(query: String, bindings: Array = []) -> bool:
-	_db_lock()
+	lock()
 	var success: bool
 	if bindings.is_empty():
 		success = _db.query(query)
@@ -166,7 +158,7 @@ func query_bool(query: String, bindings: Array = []) -> bool:
 		success = _db.query_with_bindings(query, bindings)
 	if not success:
 		_log_query_failure(query)
-	_db_unlock()
+	unlock()
 	return success
 
 
@@ -389,7 +381,7 @@ func ensure_schema_alignment() -> bool:
 	if not _is_db_ready:
 		return false
 	var repaired: Array[String] = []
-	_db_lock()
+	lock()
 	for table in _EXPECTED_SCHEMA:
 		var existing := {}
 		for row in query_array_unlocked("PRAGMA table_info(" + table + ")"):
@@ -400,7 +392,7 @@ func ensure_schema_alignment() -> bool:
 			if not existing.has(col):
 				if query_bool_unlocked("ALTER TABLE " + table + " ADD COLUMN " + col + " " + _EXPECTED_SCHEMA[table][col]):
 					repaired.append(table + "." + col)
-	_db_unlock()
+	unlock()
 	if not repaired.is_empty():
 		push_warning("[DatabaseManager] Schema drift repaired - added missing columns: " + ", ".join(repaired))
 		# May run on the DB worker thread; marshal the notification to the main thread.
@@ -520,10 +512,10 @@ func record_variant_download(group_ids: Array, downloaded_id: int, file_path: St
 		group_ids.append(downloaded_id)
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var ok = query_bool_unlocked("UPDATE games SET has_local_copy = 1, file_path = ? WHERE romm_id = ?", [file_path, downloaded_id])
 			var info := refresh_group_download_cache_unlocked(group_ids)
-			_db_unlock()
+			unlock()
 			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
 		func(result):
 			# null when the queue dropped the task (overflow).
@@ -551,7 +543,7 @@ func record_variants_deleted(group_ids: Array, deleted_ids: Array, callback: Cal
 			group_ids.append(deleted_id)
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var ok := true
 			for deleted_id in deleted_ids:
 				if not query_bool_unlocked("UPDATE games SET has_local_copy = 0, file_path = '' WHERE romm_id = ?", [deleted_id]):
@@ -559,7 +551,7 @@ func record_variants_deleted(group_ids: Array, deleted_ids: Array, callback: Cal
 			if reconcile_root != "":
 				_clear_missing_group_files_unlocked(group_ids, deleted_ids, reconcile_root)
 			var info := refresh_group_download_cache_unlocked(group_ids)
-			_db_unlock()
+			unlock()
 			return {"success": ok, "master_id": info.get("master_id", 0), "cache": info.get("cache", [])},
 		func(result):
 			# null when the queue dropped the task (overflow).
@@ -904,7 +896,7 @@ func _row_to_game(row: Dictionary) -> GameResource:
 	return game
 
 
-func _get_db_platform_slugs() -> Array[String]:
+func get_db_platform_slugs() -> Array[String]:
 	"""Get list of platform slugs that have games in the database"""
 	var slugs: Array[String] = []
 	if not _is_db_ready:
@@ -919,7 +911,7 @@ func _get_db_platform_slugs() -> Array[String]:
 	return slugs
 
 
-func _get_enabled_platforms() -> Array:
+func get_enabled_platforms() -> Array:
 	var result = []
 	var setting = DataManager.get_setting("enabled_platforms")
 	if not setting or not setting.value is Dictionary:
@@ -946,25 +938,17 @@ func _get_enabled_platforms() -> Array:
 	return result
 
 
-func get_enabled_platforms() -> Array:
-	return _get_enabled_platforms()
-
-
-func get_db_platform_slugs() -> Array[String]:
-	return _get_db_platform_slugs()
-
-
 func _get_enabled_platform_slugs() -> Array[String]:
 	"""Get list of platform slugs that are currently enabled for sync."""
 	var slugs: Array[String] = []
-	var enabled = _get_enabled_platforms()
+	var enabled = get_enabled_platforms()
 	for platform in enabled:
 		slugs.append(platform.slug)
 
 	# Android/fallback: if no platforms are enabled in settings but we have games in the DB,
 	# return all distinct platform slugs from the database so home view isn't empty.
 	if slugs.size() == 0 and _is_db_ready:
-		var db_slugs = _get_db_platform_slugs()
+		var db_slugs = get_db_platform_slugs()
 		if db_slugs.size() > 0:
 			print("[DatabaseManager] enabled_platforms is empty; falling back to %d platform(s) found in database" % db_slugs.size())
 			return db_slugs
@@ -1124,7 +1108,7 @@ func _scan_and_update_downloaded_games(root_folder: String) -> int:
 
 	# Transactional update of all changed rows, then rebuild group caches.
 	var updated_count := 0
-	_db_lock()
+	lock()
 	var tx_ok = query_bool_unlocked("BEGIN IMMEDIATE TRANSACTION")
 	if tx_ok:
 		for romm_id in matched.keys():
@@ -1170,7 +1154,7 @@ func _scan_and_update_downloaded_games(root_folder: String) -> int:
 	else:
 		query_bool_unlocked("ROLLBACK")
 		updated_count = 0
-	_db_unlock()
+	unlock()
 	return updated_count
 
 
@@ -1281,7 +1265,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 	# Queue all database operations on the DB thread to avoid race conditions
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			# First, get all games for this platform to delete their covers
 			var query_result = query_array_unlocked("SELECT cover_url FROM games WHERE platform_slug = ?", [platform_slug])
 			var cover_urls: Array[String] = []
@@ -1295,7 +1279,7 @@ func remove_platform_games(platform_slug: String, callback: Callable = Callable(
 			query_bool_unlocked("DELETE FROM game_filter_values WHERE game_id IN (SELECT romm_id FROM games WHERE platform_slug = ?)", [platform_slug])
 			var success = query_bool_unlocked("DELETE FROM games WHERE platform_slug = ?", [platform_slug])
 
-			_db_unlock()
+			unlock()
 			return {
 				"success": success,
 				"cover_urls": cover_urls,
@@ -1342,7 +1326,7 @@ func update_game(game: GameResource, callback: Callable = Callable()) -> bool:
 
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var query = """
 				UPDATE games SET
 					title = ?,
@@ -1411,7 +1395,7 @@ WHERE romm_id = ?
 			var success = query_bool_unlocked(query, bindings)
 			if success:
 				replace_game_filter_values_unlocked(game)
-			_db_unlock()
+			unlock()
 			return success,
 
 		func(success):
@@ -1432,9 +1416,9 @@ func update_game_title_id(romm_id: int, title_id: String, callback: Callable = C
 
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var success = query_bool_unlocked("UPDATE games SET title_id = ? WHERE romm_id = ?", [title_id, romm_id])
-			_db_unlock()
+			unlock()
 			return success,
 
 		# success is null when the queue dropped the task (overflow).
@@ -1453,9 +1437,9 @@ func update_game_save_info(romm_id: int, save_id: String, save_usage: String, ca
 
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var success = query_bool_unlocked("UPDATE games SET save_id = ?, save_usage = ? WHERE romm_id = ?", [save_id, save_usage, romm_id])
-			_db_unlock()
+			unlock()
 			return success,
 
 		func(success):
@@ -1473,9 +1457,9 @@ func update_game_siblings(romm_id: int, siblings: Array[Dictionary], callback: C
 
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var success = query_bool_unlocked("UPDATE games SET siblings = ? WHERE romm_id = ?", [JSON.stringify(siblings), romm_id])
-			_db_unlock()
+			unlock()
 			return success,
 
 		func(success):
@@ -1493,9 +1477,9 @@ func update_game_m3u_path(romm_id: int, m3u_path: String, callback: Callable = C
 
 	MemorySubManager.queue_db_task(
 		func():
-			_db_lock()
+			lock()
 			var success = query_bool_unlocked("UPDATE games SET m3u_path = ? WHERE romm_id = ?", [m3u_path, romm_id])
-			_db_unlock()
+			unlock()
 			return success,
 
 		func(success):
@@ -1622,14 +1606,14 @@ func set_all_favorites(favorite_romm_ids: Array) -> bool:
 func _set_all_favorites_sync(favorite_romm_ids: Array) -> bool:
 	# Caller must be on the DB worker thread (or otherwise serialized); the two
 	# UPDATEs are atomic under one lock hold.
-	_db_lock()
+	lock()
 	var success = query_bool_unlocked("UPDATE games SET is_favorite = 0", [])
 	if not favorite_romm_ids.is_empty():
 		var placeholders: Array[String] = []
 		for id in favorite_romm_ids:
 			placeholders.append("?")
 		success = query_bool_unlocked("UPDATE games SET is_favorite = 1 WHERE romm_id IN (%s)" % ",".join(placeholders), favorite_romm_ids) and success
-	_db_unlock()
+	unlock()
 	return success
 
 
@@ -2087,12 +2071,8 @@ func get_total_games_count(platform_slug: String = "", filters: Dictionary = {})
 		bindings = [platform_slug] + filter_parts[1]
 
 	var query_result = query_array(query, bindings)
-	if query_result.size() > 0:
-		var result = query_result
-		if result != null and result.size() > 0:
-			var row = result[0]
-			if row != null and row.has("count"):
-				return int(row["count"])
+	if not query_result.is_empty() and query_result[0].has("count"):
+		return int(query_result[0]["count"])
 	return 0
 
 
@@ -2245,10 +2225,10 @@ func add_collection_roms(collection_id: int, rom_ids: Array) -> void:
 		return
 	if rom_ids.is_empty():
 		return
-	_db_lock()
+	lock()
 	for rom_id in rom_ids:
 		query_bool_unlocked("INSERT OR IGNORE INTO collection_roms (collection_id, romm_id) VALUES (?, ?)", [collection_id, rom_id])
-	_db_unlock()
+	unlock()
 
 
 func clear_all_collections() -> void:

@@ -4,7 +4,6 @@
 ## resolver only enforces BIOS/firmware paths and boot settings.
 class_name MelondsIniResolver
 
-const CSM = preload("res://managers/system_manager/config_sub_manager.gd")
 const FSM = preload("res://managers/system_manager/filesystem_sub_manager.gd")
 
 ## Resolves one placement from the context RSM built.

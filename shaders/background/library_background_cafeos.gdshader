@@ -19,9 +19,8 @@ uniform float ray_step_size : hint_range(0.0001, 0.01) = 0.002;
 uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.9;
 uniform float edge_softness : hint_range(0.0, 1.0) = 1.0;
 
-// Blur Settings (implemented as capped LOD bias, not a re-raymarch kernel)
 uniform float blur_amount : hint_range(0.0, 0.02) = 0.004;
-uniform int blur_kernel_size : hint_range(1, 7) = 6;  // UNUSED (kept for preset compat)
+uniform int blur_kernel_size : hint_range(1, 7) = 6;  // Used by the re-raymarched blur loop below.
 
 // Weighted silhouette test: pixels below alpha_threshold stay fully culled
 // (matching the original hard cutoff), fading in only above it.
